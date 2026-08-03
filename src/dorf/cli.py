@@ -1,0 +1,2702 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import shlex
+import signal
+import subprocess
+import urllib.parse
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from time import sleep
+
+import typer
+
+from dorf import Dorf, __version__
+from dorf.adapters.agents.codex import CodexDriver
+from dorf.adapters.agents.codex_config import (
+    AgentConfigValidationError,
+    CodexConfig,
+    resolve_codex_config,
+)
+from dorf.adapters.environments import (
+    IncusConfig,
+    IncusDoctor,
+    IncusEnvironment,
+    IncusRunnerProbe,
+)
+from dorf.codex_room import (
+    CodexRoomEnvironment,
+    new_codex_room_environment,
+    recorded_codex_room_environment,
+)
+from dorf.coding_workspace import (
+    GitAuthorIdentity,
+    coding_job_goal,
+    install_git_credentials,
+    prepare_git_workspace,
+    reset_git_workspace,
+)
+from dorf.command_runner import (
+    CommandInterrupted,
+    argv_command,
+    shell_command,
+)
+from dorf.core_setup import CoreSetup, CoreSetupFailed, CoreSetupPaused
+from dorf.deployment_profile import (
+    DeploymentProfile,
+    DeploymentProfileError,
+    load_optional_deployment_profile,
+    set_default_provider_connection,
+)
+from dorf.github_app import (
+    GitHubAppConfigError,
+    GitHubAppManifestFlow,
+    GitHubAppManifestFlowError,
+    GitHubAppTokenClient,
+    GitHubAppVerificationError,
+    GitHubInstallationToken,
+    GitHubIssue,
+    GitHubRepositoryClient,
+    GitHubRepositoryError,
+    github_app_paths,
+    load_github_app_config,
+    private_key_permissions_are_locked_down,
+)
+from dorf.host_setup import (
+    ArchIncusHostState,
+    HostSetupError,
+    host_os_id,
+    initialize_pristine_incus,
+    inspect_arch_incus_host,
+    install_incus_on_arch,
+    repair_arch_incus_host,
+)
+from dorf.job_input_dispatcher import launch_job_input_dispatcher
+from dorf.provider_gateway import (
+    DeviceAuthorization,
+    ProviderConnection,
+    ProviderGateway,
+    ProviderGatewayError,
+)
+from dorf.repo_contract import (
+    CONTRACT_FILENAME,
+    ContractValidationError,
+    RepoContract,
+    load_repo_contract,
+)
+from dorf.report_collector import launch_assignment_report_collector
+from dorf.runtime import (
+    AssignedJobWaitResult,
+    InvalidJobNameError,
+    InvalidWorkerNameError,
+    JobArtifact,
+    JobBinding,
+    JobInspection,
+    JobRuntime,
+    JobUnsettledError,
+    NewJob,
+    NewWorker,
+    TimelineEvent,
+    WorkerAlreadyAttachedError,
+    WorkerBinding,
+    WorkerInspection,
+    WorkerOfflineError,
+    WorkerRuntime,
+    WorkerUnsettledError,
+    WorkerWaitResult,
+)
+from dorf.sdk import (
+    DedicatedWorkerCleanupError,
+    DorfResourceNotFoundError,
+    EnvironmentPrerequisitesError,
+)
+from dorf.setup_diagnostics import (
+    SetupDiagnostic,
+    sanitize_setup_diagnostic,
+    write_setup_diagnostic,
+)
+from dorf.workflows import (
+    CodingJob,
+    CodingStore,
+    CodingWorkflow,
+    WorkflowFailure,
+    WorkflowOutcome,
+    run_coding_job_command,
+)
+
+app = typer.Typer(help="Manage durable Workers and Jobs in isolated Rooms.")
+worker_app = typer.Typer(help="Manage durable Workers and their current Rooms.")
+job_app = typer.Typer(help="Manage goal-backed Jobs and their Assignments.")
+job_artifact_app = typer.Typer(help="List and export retained Job artifacts.")
+github_app = typer.Typer(help="Manage Dorf GitHub App credentials.")
+provider_app = typer.Typer(help="Manage shared model-provider connections.")
+app.add_typer(worker_app, name="worker")
+app.add_typer(job_app, name="job")
+job_app.add_typer(job_artifact_app, name="artifact")
+app.add_typer(github_app, name="github")
+app.add_typer(provider_app, name="provider")
+COMMAND_ARGV_ARGUMENT = typer.Argument(..., help="Command argv to run after --.")
+REVIEW_AGENT_OPTION = typer.Option(
+    None,
+    "--agent",
+    help="Review agent to run. Repeat to run more than one.",
+)
+ARTIFACT_DESTINATION_OPTION = typer.Option(
+    ...,
+    "--to",
+    help="Existing destination directory. The recorded artifact filename is preserved.",
+)
+ARTIFACT_OVERWRITE_OPTION = typer.Option(
+    False,
+    "--overwrite",
+    help="Explicitly replace an existing destination file.",
+)
+DORF_BRANCH_PREFIX = "dorf/"
+PROTECTED_BRANCHES = frozenset({"main", "master", "trunk"})
+
+
+@dataclass(frozen=True)
+class GitTarget:
+    repo: Path
+    branch: str
+    start_sha: str
+
+
+@dataclass(frozen=True)
+class CodingTask:
+    summary: str
+    prompt: str
+
+
+@dataclass(frozen=True)
+class GitBackedJobBranch:
+    repo_full_name: str
+    base_sha: str
+    metadata: dict[str, str]
+    token: str
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    version: bool = typer.Option(False, "--version", help="Show the dorf version."),
+) -> None:
+    if version:
+        typer.echo(__version__)
+        raise typer.Exit
+
+
+@app.command()
+def setup() -> None:
+    """Prepare Dorf and prove the complete local Worker path."""
+    typer.echo("◆ Dorf")
+    typer.echo("  Durable workers in private local Rooms")
+    typer.echo()
+    typer.echo("Checking this machine")
+    try:
+        result = CoreSetup(
+            provider_connector=connect_setup_provider,
+            incus_installer=install_setup_incus,
+            incus_access_repairer=repair_setup_incus_access,
+            incus_initializer=initialize_setup_incus,
+        ).run(emit=typer.echo)
+    except CoreSetupPaused as error:
+        echo_setup_stop(error)
+        raise typer.Exit(1) from error
+    except CoreSetupFailed as error:
+        echo_setup_stop(error)
+        raise typer.Exit(1) from error
+
+    typer.echo()
+    typer.echo("Dorf is ready.")
+    typer.echo(f"Provider: {result.provider_connection}")
+    typer.echo(f"Image: {result.image_fingerprint[:12]}")
+    typer.echo()
+    typer.echo("Next:")
+    typer.echo("  dorf worker spawn ada")
+
+
+def echo_setup_stop(error: CoreSetupPaused | CoreSetupFailed) -> None:
+    """Render one stable result and persist its portable diagnostic bundle."""
+    echo_diagnostic_stop(
+        "Setup",
+        error.to_diagnostic(),
+        resume_command="dorf setup",
+    )
+
+
+def echo_diagnostic_stop(
+    command_label: str,
+    diagnostic: SetupDiagnostic,
+    *,
+    resume_command: str,
+) -> None:
+    """Render and persist one bounded diagnostic result."""
+    diagnostic = sanitize_setup_diagnostic(diagnostic)
+    typer.echo()
+    typer.echo(f"{command_label} {diagnostic.status}", err=True)
+    typer.echo(diagnostic.summary, err=True)
+    bundle: Path | None = None
+    try:
+        bundle = write_setup_diagnostic(diagnostic)
+    except OSError as bundle_error:
+        typer.echo(
+            f"Diagnostic bundle unavailable: {bundle_error}",
+            err=True,
+        )
+    if bundle is not None:
+        typer.echo("Human-readable diagnostic:", err=True)
+        typer.echo(f"  {bundle / 'diagnostic.md'}", err=True)
+        typer.echo("Agent-readable diagnostic:", err=True)
+        typer.echo(f"  {bundle / 'diagnostic.json'}", err=True)
+    if diagnostic.safe_actions:
+        typer.echo(f"Next: {diagnostic.safe_actions[0]}", err=True)
+    typer.echo(f"Then rerun: {resume_command}", err=True)
+
+
+def install_setup_incus(probe: IncusRunnerProbe) -> None:
+    """Explain and apply the first reviewed host installation recipe."""
+    try:
+        detected_os_id = host_os_id()
+    except HostSetupError as error:
+        raise CoreSetupPaused(
+            f"Dorf could not identify this Linux distribution: {error}",
+            remediation=(
+                "Install Incus using https://linuxcontainers.org/incus/docs/main/installing/."
+            ),
+            owner="host",
+            classification="unsupported",
+        ) from error
+    if detected_os_id != "arch":
+        raise CoreSetupPaused(
+            f"Automatic Incus installation is not supported for {detected_os_id or 'this host'}.",
+            remediation=(
+                "Install Incus using https://linuxcontainers.org/incus/docs/main/installing/."
+            ),
+            owner="host",
+            classification="unsupported",
+        )
+    typer.echo()
+    typer.echo("Incus is not installed")
+    typer.echo("Incus provides the isolated virtual machines Dorf calls Rooms.")
+    typer.echo("Installing it will:")
+    typer.echo("• update Arch packages required by the rolling-release package set")
+    typer.echo("• install and start the local Incus service")
+    typer.echo("• add your user to incus-admin, which has root-equivalent machine access")
+    typer.echo("No remote Incus API will be enabled.")
+    if not typer.confirm("Install Incus now?", default=True):
+        raise CoreSetupPaused(
+            "Incus installation was declined; no machine changes were made.",
+            remediation="Install Incus when you are ready.",
+            owner="host",
+            approval_required_actions=("Install and enable Incus on this host.",),
+        )
+    try:
+        install_incus_on_arch(probe)
+    except HostSetupError as error:
+        raise CoreSetupFailed(
+            f"Incus installation failed: {error}",
+            owner="packaging",
+        ) from error
+    typer.echo("✓ Incus installed and local service enabled")
+
+
+def initialize_setup_incus(
+    probe: IncusRunnerProbe,
+    config: IncusConfig,
+) -> None:
+    """Explain and apply Incus's bounded pristine local initialization."""
+    typer.echo()
+    typer.echo("Incus needs local storage and a private VM network")
+    typer.echo("Dorf will create:")
+    typer.echo("• a local directory-backed storage pool")
+    typer.echo(f"• a private NAT bridge named {config.network}")
+    typer.echo("No remote Incus API will be enabled.")
+    if not typer.confirm("Initialize Incus now?", default=True):
+        raise CoreSetupPaused(
+            "Incus initialization was declined; no resources were created.",
+            remediation="Initialize Incus when you are ready.",
+            owner="incus",
+            approval_required_actions=(
+                "Create local Incus storage and the private incusbr0 network.",
+            ),
+        )
+    try:
+        initialize_pristine_incus(probe, config=config)
+    except HostSetupError as error:
+        raise CoreSetupFailed(
+            f"Incus initialization failed: {error}",
+            owner="incus",
+            classification="configuration",
+        ) from error
+    typer.echo("✓ Local Incus storage initialized")
+    typer.echo(f"✓ Private VM network created · {config.network}")
+
+
+def repair_setup_incus_access(probe: IncusRunnerProbe) -> None:
+    """Resume only reviewed Arch service and administrator-group changes."""
+    try:
+        state = inspect_arch_incus_host(probe)
+    except HostSetupError as error:
+        raise CoreSetupPaused(
+            f"Dorf could not inspect this Incus installation: {error}",
+            remediation=(
+                "Follow https://linuxcontainers.org/incus/docs/main/installing/ for this host."
+            ),
+            owner="host",
+        ) from error
+    if state.needs_privileged_repair:
+        _explain_incus_access_repair(state)
+        if not typer.confirm("Repair local Incus access now?", default=True):
+            raise CoreSetupPaused(
+                "Incus access repair was declined; no machine changes were made.",
+                remediation="Repair the reported Incus service or group state when ready.",
+                owner="host",
+                approval_required_actions=(
+                    "Enable the Incus service or configure incus-admin membership.",
+                ),
+            )
+        try:
+            repair_arch_incus_host(probe, state=state)
+        except HostSetupError as error:
+            raise CoreSetupFailed(
+                f"Incus access repair failed: {error}",
+                owner="host",
+                classification="configuration",
+            ) from error
+        typer.echo("✓ Local Incus service and administrator membership repaired")
+    if not state.admin_membership_effective and os.geteuid() != 0:
+        raise CoreSetupPaused(
+            "Incus administrator membership is configured but not active in this login.",
+            remediation="Sign out and back in so incus-admin membership takes effect.",
+            owner="host",
+        )
+
+
+def _explain_incus_access_repair(state: ArchIncusHostState) -> None:
+    typer.echo()
+    typer.echo("Incus is installed, but its local access setup is incomplete.")
+    typer.echo("Dorf needs administrator permission to:")
+    if not state.service_enabled or not state.service_active:
+        typer.echo("• enable and start the local Incus service")
+    if not state.admin_membership_configured:
+        typer.echo("• add your user to incus-admin, which has root-equivalent access")
+    typer.echo("No remote Incus API will be enabled.")
+
+
+def connect_setup_provider(gateway: ProviderGateway) -> str:
+    """Guide one first-run provider choice without exposing connection plumbing."""
+    typer.echo("No model connection is configured.")
+    typer.echo("1. ChatGPT subscription · recommended")
+    typer.echo("2. OpenAI API key")
+    choice = typer.prompt("Choose", default="1")
+    while choice not in {"1", "2"}:
+        typer.echo("Choose 1 or 2.", err=True)
+        choice = typer.prompt("Choose", default="1")
+    if choice == "1":
+        connection = gateway.connect_chatgpt_subscription(
+            name="personal-chatgpt",
+            on_authorization=echo_device_authorization,
+        )
+    else:
+        credential = os.environ.get("OPENAI_API_KEY")
+        if not credential:
+            credential = typer.prompt("OpenAI API key", hide_input=True)
+        connection = gateway.connect_openai_api_key(
+            name="openai-api",
+            api_key=credential,
+        )
+    typer.echo(f"✓ Connected · {connection.name}")
+    return connection.name
+
+
+@provider_app.command("connect")
+def provider_connect(
+    provider: str = typer.Argument(..., help="Provider to connect."),
+    name: str = typer.Option(..., "--name", help="Stable connection name."),
+    subscription: bool = typer.Option(
+        False,
+        "--subscription",
+        help="Connect an interactive subscription.",
+    ),
+    api_key: bool = typer.Option(
+        False,
+        "--api-key",
+        help="Connect an API key read from OPENAI_API_KEY or a hidden prompt.",
+    ),
+) -> None:
+    """Connect one named upstream provider credential."""
+    provider = provider.strip().lower()
+    try:
+        with ProviderGateway.open() as gateway:
+            if provider == "chatgpt" and subscription and not api_key:
+                connection = gateway.connect_chatgpt_subscription(
+                    name=name,
+                    on_authorization=echo_device_authorization,
+                )
+            elif provider == "openai" and api_key and not subscription:
+                credential = os.environ.get("OPENAI_API_KEY")
+                if not credential:
+                    credential = typer.prompt("OpenAI API key", hide_input=True)
+                connection = gateway.connect_openai_api_key(
+                    name=name,
+                    api_key=credential,
+                )
+            else:
+                typer.echo(
+                    "Choose chatgpt --subscription or openai --api-key",
+                    err=True,
+                )
+                raise typer.Exit(2)
+    except (ProviderGatewayError, ValueError) as error:
+        echo_provider_error(error)
+        raise typer.Exit(1) from error
+    try:
+        set_default_provider_connection(connection.name)
+    except (DeploymentProfileError, OSError) as error:
+        echo_provider_connection(connection)
+        typer.echo(
+            f"Connected, but could not select {connection.name} as the default: {error}",
+            err=True,
+        )
+        raise typer.Exit(1) from error
+    echo_provider_connection(connection)
+    typer.echo(f"Default for new Rooms: {connection.name}")
+
+
+@provider_app.command("list")
+def provider_list() -> None:
+    """List durable provider connections without exposing credentials."""
+    try:
+        with ProviderGateway.open() as gateway:
+            connections = gateway.list_connections()
+    except ProviderGatewayError as error:
+        echo_provider_error(error)
+        raise typer.Exit(1) from error
+    if not connections:
+        typer.echo("No provider connections.")
+        return
+    for connection in connections:
+        echo_provider_connection(connection)
+
+
+@provider_app.command("status")
+def provider_status(
+    name: str = typer.Argument(..., help="Stable connection name."),
+) -> None:
+    """Inspect one provider connection and its remediation."""
+    try:
+        with ProviderGateway.open() as gateway:
+            connection = gateway.connection_status(name)
+    except (ProviderGatewayError, ValueError) as error:
+        echo_provider_error(error)
+        raise typer.Exit(1) from error
+    echo_provider_connection(connection)
+    if connection.plan is not None:
+        typer.echo(f"plan: {connection.plan}")
+    if connection.remediation is not None:
+        typer.echo(f"remediation: {connection.remediation}")
+    if connection.status != "connected":
+        raise typer.Exit(1)
+
+
+@provider_app.command("disconnect")
+def provider_disconnect(
+    name: str = typer.Argument(..., help="Stable connection name."),
+) -> None:
+    """Disconnect one provider connection and invalidate its upstream credential."""
+    try:
+        with ProviderGateway.open() as gateway:
+            removed = gateway.disconnect_connection(name)
+    except (ProviderGatewayError, ValueError) as error:
+        echo_provider_error(error)
+        raise typer.Exit(1) from error
+    if not removed:
+        typer.echo(f"Provider connection not found: {name}", err=True)
+        typer.echo("remediation: Run: dorf provider list", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Disconnected provider connection: {name}")
+
+
+def echo_device_authorization(authorization: DeviceAuthorization) -> None:
+    typer.echo(f"Open: {authorization.verification_url}")
+    typer.echo(f"Code: {authorization.user_code}")
+
+
+def echo_provider_connection(connection: ProviderConnection) -> None:
+    typer.echo(
+        f"{connection.name} · {connection.provider} · {connection.auth_mode} · {connection.status}"
+    )
+
+
+def echo_provider_error(error: Exception) -> None:
+    typer.echo(str(error), err=True)
+    remediation = getattr(error, "remediation", None)
+    if isinstance(remediation, str) and remediation:
+        typer.echo(f"remediation: {remediation}", err=True)
+
+
+@worker_app.command("spawn")
+def worker_spawn(
+    name: str = typer.Argument(..., help="Stable Worker name."),
+    provider_connection: str | None = typer.Option(
+        None,
+        "--provider-connection",
+        help="Override the global Provider Connection for this Room.",
+    ),
+) -> None:
+    """Summon a Worker into its initial Room without creating a Job."""
+    try:
+        profile = load_optional_deployment_profile()
+    except DeploymentProfileError as error:
+        typer.echo(f"Could not load the global deployment profile: {error}", err=True)
+        raise typer.Exit(1) from error
+    selected_provider = provider_connection or (
+        profile.provider_connection if profile is not None else None
+    )
+    if selected_provider is None:
+        typer.echo(
+            "Dorf setup is incomplete: no default Provider Connection is configured.",
+            err=True,
+        )
+        typer.echo(
+            "remediation: Run: dorf provider connect --help",
+            err=True,
+        )
+        raise typer.Exit(1)
+    dorf = open_dorf(
+        deployment_profile=profile,
+        provider_connection=selected_provider,
+    )
+    try:
+        binding = dorf.spawn_worker(name)
+    except EnvironmentPrerequisitesError as error:
+        echo_environment_prerequisite_failures(error.failures)
+        raise typer.Exit(1) from error
+    except (InvalidWorkerNameError, RuntimeError, ValueError) as error:
+        typer.echo(f"Could not spawn Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    echo_worker_binding(
+        binding,
+        current_job_name=dorf.current_job_for_worker(binding.worker.name),
+    )
+    if binding.room.status != "ready" or binding.worker.status not in {
+        "ready",
+        "assigned",
+    }:
+        raise typer.Exit(1)
+
+
+def echo_worker_binding(
+    binding: WorkerBinding,
+    *,
+    current_job_name: str | None = None,
+) -> None:
+    worker = binding.worker
+    room = binding.room
+    typer.echo(f"{worker.name} · {worker.status}")
+    typer.echo(f"harness: {worker.harness_type}")
+    typer.echo(f"provenance: {worker.provenance}")
+    typer.echo(f"lifecycle policy: {worker.lifecycle_policy}")
+    typer.echo(f"room: {room.status} ({room.provider_id})")
+    typer.echo(f"workspace: {room.workspace}")
+    typer.echo(f"general conversation: {worker.general_conversation_id or 'not started'}")
+    typer.echo(f"current Job: {current_job_name or 'none'}")
+    if worker.error:
+        typer.echo(f"Worker error: {worker.error}", err=True)
+    if room.error:
+        typer.echo(f"Room error: {room.error}", err=True)
+
+
+@worker_app.command("end")
+def worker_end(
+    name: str = typer.Argument(..., help="Worker identity to end."),
+    interrupt: bool = typer.Option(False, "--interrupt", help="Cancel unsettled direct work."),
+) -> None:
+    """Destroy an idle Worker's exact Room and retain its ended identity."""
+    dorf = open_dorf()
+    try:
+        result = dorf.end_worker(name, interrupt=interrupt)
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except (WorkerUnsettledError, RuntimeError) as error:
+        typer.echo(f"Could not end Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    if result.already_ended:
+        typer.echo(f"Worker already ended: {name}")
+        return
+    typer.echo(f"Ended Worker: {result.worker.name}")
+    assert result.room is not None
+    typer.echo(f"Room destroyed: {result.room.provider_id}")
+
+
+@worker_app.command("recover")
+def worker_recover(
+    name: str = typer.Argument(..., help="Worker identity to recover."),
+) -> None:
+    """Reconcile current-Room conversations and restart replaceable controllers."""
+    dorf = open_dorf()
+    try:
+        result = dorf.recover_worker(name)
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"Could not recover Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Recovered Worker: {name}")
+    typer.echo(f"Room: preserved ({result.binding.room.provider_id}, {result.room_outcome})")
+    typer.echo(f"Worker turns reconciled: {len(result.worker_turns)}")
+    typer.echo(f"Job turns reconciled: {len(result.job_turns)}")
+    typer.echo(
+        "Worker delivery: "
+        + ("started" if result.worker_dispatcher_started else "already running or unavailable")
+    )
+    if result.job_name:
+        typer.echo(
+            "Job delivery: "
+            + ("started" if result.job_dispatcher_started else "already running or unavailable")
+        )
+        collector_status = (
+            "started" if result.report_collector_started else "already running or unavailable"
+        )
+        typer.echo(f"Report collector: {collector_status}")
+
+
+@worker_app.command("attach")
+def worker_attach(
+    name: str = typer.Argument(..., help="Worker whose current Room to enter."),
+) -> None:
+    """Enter the current Room at /workspace until the interactive shell exits."""
+    dorf = open_dorf()
+    try:
+        binding = dorf.get_worker_binding(name)
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    if binding is None:
+        worker = dorf.get_worker(name)
+        detail = "not found" if worker is None else "offline with no current Room"
+        typer.echo(f"Could not attach to Worker {name}: {detail}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Entering {name} Room at {binding.room.workspace}. Exit the shell to leave.")
+    try:
+        with attachment_interrupt_handlers():
+            result = dorf.attach_worker(name)
+    except (WorkerAlreadyAttachedError, WorkerOfflineError, RuntimeError) as error:
+        typer.echo(f"Could not attach to Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    except KeyboardInterrupt as error:
+        typer.echo(f"Attachment interrupted: {name}", err=True)
+        raise typer.Exit(130) from error
+    typer.echo(f"Attachment ended: {result.worker_name}")
+    if result.exit_code != 0:
+        raise typer.Exit(result.exit_code)
+
+
+@contextmanager
+def attachment_interrupt_handlers() -> Iterator[None]:
+    """Turn ordinary terminal disconnect signals into unwindable cleanup."""
+    previous = {signum: signal.getsignal(signum) for signum in (signal.SIGHUP, signal.SIGTERM)}
+
+    def interrupt(signum, frame) -> None:
+        raise KeyboardInterrupt
+
+    try:
+        for signum in previous:
+            signal.signal(signum, interrupt)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+@worker_app.command("inspect")
+def worker_inspect(
+    name: str = typer.Argument(..., help="Worker name."),
+) -> None:
+    """Inspect Worker, general-conversation, and current-Room facts read-only."""
+    dorf = open_dorf()
+    try:
+        inspection = dorf.inspect_worker(name)
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"Could not inspect Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    echo_worker_inspection(inspection)
+
+
+def echo_worker_inspection(inspection: WorkerInspection) -> None:
+    worker = inspection.worker
+    room = inspection.room
+    effective_status = (
+        "ended"
+        if worker.status == "ended"
+        else worker.status
+        if inspection.room_observation == "available"
+        else "offline"
+    )
+    typer.echo(f"{worker.name} · {effective_status}")
+    typer.echo(f"harness: {worker.harness_type}")
+    typer.echo(f"provenance: {worker.provenance}")
+    typer.echo(f"lifecycle policy: {worker.lifecycle_policy}")
+    if room is None:
+        typer.echo("room: absent")
+        typer.echo("workspace: unavailable")
+    else:
+        room_line = f"room: {inspection.room_observation} (recorded {room.status})"
+        if inspection.room_observation_error:
+            room_line = f"{room_line}: {inspection.room_observation_error}"
+        typer.echo(room_line)
+        typer.echo(f"workspace: {room.workspace}")
+    if inspection.presence is None:
+        typer.echo("human presence: detached")
+    else:
+        typer.echo(
+            f"human presence: attached at {inspection.presence.workspace} "
+            f"since {inspection.presence.attached_at}"
+        )
+    conversation = inspection.conversation
+    if conversation is None:
+        typer.echo("general: not started")
+    else:
+        native = conversation.native_conversation_id or "native thread not started"
+        typer.echo(f"general: {conversation.status} ({native})")
+        typer.echo(f"conversation defaults: {conversation.model} ({conversation.reasoning_effort})")
+    if inspection.latest_turn is None:
+        typer.echo("activity: no turn delivered")
+    else:
+        turn = inspection.latest_turn
+        typer.echo(f"activity: direct message {turn.status} ({turn.phase})")
+    typer.echo(f"queued messages: {inspection.queued_messages}")
+    typer.echo(f"current Job: {inspection.current_job_name or 'none'}")
+    typer.echo(f"facts observed: {inspection.observed_at}")
+    typer.echo(f"worker updated: {worker.updated_at}")
+
+
+@worker_app.command("wait")
+def worker_wait(
+    name: str = typer.Argument(..., help="Worker name."),
+    message_id: str | None = typer.Option(
+        None, "--message", help="Wait for this exact admitted message ID."
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        min=0,
+        help="Stop waiting after this many seconds.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a structured outcome."),
+) -> None:
+    """Wait read-only for one pinned direct-message outcome."""
+    dorf = open_dorf()
+    try:
+        result = dorf.wait_for_worker_message(
+            name,
+            message_id=message_id,
+            timeout=timeout,
+        )
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"Could not wait for Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    echo_worker_wait_result(name, result, json_output=json_output)
+    if result.outcome == "working" and timeout is not None:
+        raise typer.Exit(75)
+
+
+def echo_worker_wait_result(
+    name: str,
+    result: WorkerWaitResult,
+    *,
+    json_output: bool,
+) -> None:
+    payload = {
+        "detail": result.detail,
+        "message_id": result.message_id,
+        "observed_at": result.observed_at,
+        "outcome": result.outcome,
+        "response": result.response,
+        "sequence": result.sequence,
+        "worker": name,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+    typer.echo(f"Worker {name}: {result.outcome}")
+    typer.echo(f"Message: {result.sequence} ({result.message_id})")
+    if result.response:
+        typer.echo("Response:")
+        typer.echo(result.response)
+    if result.detail:
+        label = "Need" if result.outcome in {"blocked", "pending-approval"} else "Detail"
+        typer.echo(f"{label}: {result.detail}")
+    typer.echo(f"Observed: {result.observed_at}")
+
+
+@worker_app.command("message")
+def worker_message(
+    name: str = typer.Argument(..., help="Worker name."),
+    message: str = typer.Argument(..., help="Natural-language direct message."),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Codex model for this turn; the first message also sets the default.",
+    ),
+    reasoning_effort: str | None = typer.Option(
+        None,
+        "--reasoning-effort",
+        help="Reasoning effort for this turn; the first message also sets the default.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a structured receipt."),
+) -> None:
+    """Admit one durable direct message and start detached delivery."""
+    dorf = open_dorf()
+    try:
+        worker = dorf.get_worker(name)
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    if worker is None:
+        typer.echo(f"Could not message Worker {name}: Worker not found", err=True)
+        raise typer.Exit(1)
+    try:
+        admitted = dorf.message_worker(
+            name,
+            message,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    except (
+        DorfResourceNotFoundError,
+        AgentConfigValidationError,
+        InvalidWorkerNameError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        typer.echo(f"Could not message Worker {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    receipt = {
+        "delivery": "started" if admitted.dispatcher_started else "pending",
+        "message_id": admitted.message.id,
+        "sequence": admitted.message.sequence,
+        "status": "queued",
+        "worker": name,
+    }
+    if json_output:
+        typer.echo(json.dumps(receipt, sort_keys=True))
+        return
+    typer.echo(f"Queued direct message {receipt['sequence']} for Worker {name}")
+    if receipt["delivery"] == "started":
+        typer.echo("Delivery dispatcher started")
+    else:
+        typer.echo("Delivery pending; the durable queue item was retained")
+
+
+@job_app.command("assign")
+def job_assign(
+    name: str = typer.Argument(..., help="Stable Job name."),
+    worker_name: str = typer.Option(..., "--to", help="Existing ready Worker."),
+    goal: str = typer.Option(..., "--goal", help="Complete goal version 1."),
+    model: str | None = typer.Option(None, "--model", help="Job conversation model."),
+    reasoning_effort: str | None = typer.Option(
+        None,
+        "--reasoning-effort",
+        help="Job conversation reasoning effort.",
+    ),
+) -> None:
+    """Create a goal-backed Job and assign it to an existing Worker."""
+    dorf = open_dorf()
+    try:
+        worker = dorf.get_worker(worker_name)
+    except InvalidWorkerNameError as error:
+        typer.echo(f"Invalid Worker name: {error}", err=True)
+        raise typer.Exit(1) from error
+    if worker is None:
+        typer.echo(f"Could not assign Job {name}: Worker not found: {worker_name}", err=True)
+        raise typer.Exit(1)
+    worker_binding = dorf.get_worker_binding(worker_name)
+    if worker_binding is None:
+        typer.echo(f"Could not assign Job {name}: Worker is Roomless: {worker_name}", err=True)
+        raise typer.Exit(1)
+    try:
+        result = dorf.assign_job(
+            name,
+            worker_name=worker_name,
+            goal=goal,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    except (
+        DorfResourceNotFoundError,
+        AgentConfigValidationError,
+        InvalidJobNameError,
+        InvalidWorkerNameError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        typer.echo(f"Could not assign Job {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    binding = result.binding
+    typer.echo(f"{binding.job.name} · {binding.job.status}")
+    typer.echo(f"goal v1: {binding.job.goal}")
+    typer.echo(
+        f"assigned: {binding.assignment.worker_name} (generation {binding.assignment.generation})"
+    )
+    typer.echo(f"workspace: {binding.assignment.workspace}")
+    typer.echo(
+        f"Initial goal {result.initial_input.sequence} queued "
+        f"({result.initial_input.id}); delivery dispatcher started"
+        if result.dispatcher_started
+        else (
+            f"Initial goal {result.initial_input.sequence} queued "
+            f"({result.initial_input.id}); dispatcher unavailable"
+        )
+    )
+
+
+@job_app.command("message")
+def job_message(
+    name: str = typer.Argument(..., help="Job name."),
+    message: str = typer.Argument(..., help="Natural-language Job message."),
+    model: str | None = typer.Option(None, "--model", help="Model override for this turn."),
+    reasoning_effort: str | None = typer.Option(
+        None, "--reasoning-effort", help="Reasoning-effort override for this turn."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit a structured receipt."),
+) -> None:
+    """Admit one ordinary Job input without changing its pinned goal."""
+    dorf = open_dorf()
+    try:
+        admitted = dorf.message_job(
+            name,
+            message,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    except InvalidJobNameError as error:
+        typer.echo(f"Invalid Job name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except (
+        DorfResourceNotFoundError,
+        AgentConfigValidationError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        typer.echo(f"Could not message Job {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    receipt = {
+        "delivery": "started" if admitted.dispatcher_started else "pending",
+        "job": name,
+        "message_id": admitted.job_input.id,
+        "sequence": admitted.job_input.sequence,
+        "status": "queued",
+    }
+    if json_output:
+        typer.echo(json.dumps(receipt, sort_keys=True))
+        return
+    typer.echo(f"Queued message {admitted.job_input.sequence} for Job {name}")
+    typer.echo(
+        "Delivery dispatcher started"
+        if admitted.dispatcher_started
+        else "Delivery pending; the durable queue item was retained"
+    )
+
+
+@job_app.command("end")
+def job_end(
+    name: str = typer.Argument(..., help="Job identity to end."),
+    interrupt: bool = typer.Option(False, "--interrupt", help="Cancel unsettled Job work."),
+) -> None:
+    """Cooperatively end a Job, remove its workspace, and retain its records."""
+    dorf = open_dorf()
+    try:
+        result = dorf.end_job(name, interrupt=interrupt)
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except JobUnsettledError as error:
+        typer.echo(f"Could not end Job {name}: {error}", err=True)
+        unsettled = dorf.observe_unsettled_job_input(name)
+        if unsettled is not None:
+            echo_job_resource_wait_result(
+                name,
+                unsettled,
+                json_output=False,
+            )
+        raise typer.Exit(1) from error
+    except DedicatedWorkerCleanupError as error:
+        typer.echo(
+            f"Job ended, but dedicated Worker cleanup remains retryable: {error}",
+            err=True,
+        )
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"Could not end Job {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    ended = result.binding
+    typer.echo(f"Ended Job: {ended.job.name}")
+    typer.echo(f"Released Worker: {ended.worker.name}")
+    if ended.room.status == "absent" and ended.worker.current_room_id is None:
+        typer.echo("Room already absent; local workspace and processes were already gone")
+    else:
+        typer.echo(f"Removed workspace: {ended.assignment.workspace}")
+    if result.dedicated_worker is not None:
+        typer.echo(f"Ended dedicated Worker: {result.dedicated_worker.name}")
+
+
+@job_app.command("inspect")
+def job_inspect(
+    name: str = typer.Argument(..., help="Job name."),
+    timeline: bool = typer.Option(False, "--timeline", help="Show the chronological Job story."),
+    evidence: bool = typer.Option(
+        False, "--evidence", help="List accepted artifacts with provenance."
+    ),
+) -> None:
+    """Inspect a Job pulse or one read-only document lens."""
+    if timeline and evidence:
+        typer.echo("Choose only one of --timeline or --evidence", err=True)
+        raise typer.Exit(2)
+    dorf = open_dorf()
+    try:
+        events = dorf.job_timeline(name)
+    except InvalidJobNameError as error:
+        typer.echo(f"Invalid Job name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    if timeline:
+        echo_job_timeline(name, events)
+        return
+    if evidence:
+        echo_job_evidence(name, events, dorf.job_documents_path(name))
+        return
+    try:
+        inspection = dorf.inspect_job(name)
+    except RuntimeError as error:
+        typer.echo(f"Could not inspect Job {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    echo_job_inspection(inspection, events)
+
+
+def echo_job_inspection(
+    inspection: JobInspection,
+    events: list[TimelineEvent] | None = None,
+) -> None:
+    typer.echo(f"{inspection.job.name} · {inspection.job.status}")
+    typer.echo(f"goal v{inspection.job.goal_version}: {inspection.job.goal}")
+    typer.echo(
+        f"assigned: {inspection.assignment.worker_name} "
+        f"(generation {inspection.assignment.generation})"
+    )
+    typer.echo(
+        f"room: {inspection.room_observation} (recorded {inspection.room.status})"
+        + (f": {inspection.room_observation_error}" if inspection.room_observation_error else "")
+    )
+    typer.echo(f"assignment status: {inspection.assignment.status}")
+    typer.echo(f"workspace: {inspection.assignment.workspace}")
+    native = inspection.conversation.native_conversation_id or "native thread not started"
+    typer.echo(f"conversation: {inspection.conversation.status} ({native})")
+    if inspection.latest_turn is None:
+        typer.echo("activity: no input delivered")
+    else:
+        typer.echo(
+            f"activity: input {inspection.latest_turn.status} ({inspection.latest_turn.phase})"
+        )
+    typer.echo(f"queued inputs: {inspection.queued_inputs}")
+    recorded = events or []
+    worker_claims = [
+        event for event in recorded if event.source == "worker" and event.provenance == "claim"
+    ]
+    assumptions = [event for event in worker_claims if event.kind == "assumption"]
+    evidence_count = sum(len(event.artifacts) for event in recorded)
+    if worker_claims:
+        typer.echo(f"latest Worker claim: {worker_claims[-1].summary}")
+    else:
+        typer.echo("latest Worker claim: none accepted")
+    typer.echo(f"assumptions: {len(assumptions)} accepted")
+    typer.echo(f"evidence: {evidence_count} accepted")
+    if recorded:
+        typer.echo(f"documents updated: {recorded[-1].recorded_at}")
+    typer.echo(f"facts observed: {inspection.observed_at}")
+
+
+@job_artifact_app.command("list")
+def job_artifact_list(
+    name: str = typer.Argument(..., help="Job name."),
+) -> None:
+    """List the path-free retained-artifact manifest for one Job."""
+    dorf = open_dorf()
+    try:
+        artifacts = dorf.list_job_artifacts(name)
+    except InvalidJobNameError as error:
+        typer.echo(f"Invalid Job name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except (DorfResourceNotFoundError, RuntimeError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Artifacts · {name}")
+    if not artifacts:
+        typer.echo("No artifacts retained.")
+        return
+    for artifact in artifacts:
+        echo_job_artifact(artifact)
+
+
+@job_artifact_app.command("export")
+def job_artifact_export(
+    name: str = typer.Argument(..., help="Job name."),
+    artifact_ref: str = typer.Argument(
+        ...,
+        help="Stable artifact reference from the Job manifest.",
+    ),
+    destination: Path = ARTIFACT_DESTINATION_OPTION,
+    overwrite: bool = ARTIFACT_OVERWRITE_OPTION,
+) -> None:
+    """Export one exact retained artifact without exposing its storage path."""
+    dorf = open_dorf()
+    try:
+        result = dorf.export_job_artifact(
+            name,
+            artifact_ref,
+            destination,
+            overwrite=overwrite,
+        )
+    except InvalidJobNameError as error:
+        typer.echo(f"Invalid Job name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except (DorfResourceNotFoundError, OSError, RuntimeError, ValueError) as error:
+        typer.echo(f"Could not export artifact: {error}", err=True)
+        raise typer.Exit(1) from error
+    if result.status == "missing":
+        typer.echo(f"Artifact not found for Job {name}: {artifact_ref}", err=True)
+        raise typer.Exit(1)
+    if result.status == "cross-job":
+        typer.echo("Artifact reference belongs to another Job.", err=True)
+        raise typer.Exit(1)
+    if result.status == "corrupt":
+        typer.echo("Retained artifact failed custody verification.", err=True)
+        raise typer.Exit(1)
+    if result.status == "destination-exists":
+        typer.echo(
+            f"Destination already exists: {result.destination}. Use --overwrite to replace it.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if result.artifact is None or result.destination is None:
+        raise RuntimeError("Successful artifact export omitted its result")
+    typer.echo(f"Exported {result.artifact.name} to {result.destination}")
+    typer.echo(
+        f"{result.artifact.media_type} · {result.artifact.size} bytes · {result.artifact.digest}"
+    )
+
+
+@job_app.command("wait")
+def job_wait_resource(
+    name: str = typer.Argument(..., help="Job name."),
+    message_id: str | None = typer.Option(
+        None, "--message", help="Wait for this exact admitted input ID."
+    ),
+    timeout: float | None = typer.Option(None, "--timeout", min=0),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Wait read-only for one pinned Job input outcome."""
+    dorf = open_dorf()
+    try:
+        result = dorf.wait_for_job_input(
+            name,
+            input_id=message_id,
+            timeout=timeout,
+        )
+    except InvalidJobNameError as error:
+        typer.echo(f"Invalid Job name: {error}", err=True)
+        raise typer.Exit(1) from error
+    except DorfResourceNotFoundError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"Could not wait for Job {name}: {error}", err=True)
+        raise typer.Exit(1) from error
+    echo_job_resource_wait_result(name, result, json_output=json_output)
+    if result.outcome == "working" and timeout is not None:
+        raise typer.Exit(75)
+
+
+def echo_job_resource_wait_result(
+    name: str,
+    result: AssignedJobWaitResult,
+    *,
+    json_output: bool,
+) -> None:
+    payload = {
+        "detail": result.detail,
+        "input_id": result.input_id,
+        "job": name,
+        "observed_at": result.observed_at,
+        "outcome": result.outcome,
+        "response": result.response,
+        "sequence": result.sequence,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+    typer.echo(f"Job {name}: {result.outcome}")
+    typer.echo(f"Input: {result.sequence} ({result.input_id})")
+    if result.response:
+        typer.echo("Response:")
+        typer.echo(result.response)
+    if result.detail:
+        label = "Need" if result.outcome in {"blocked", "pending-approval"} else "Detail"
+        typer.echo(f"{label}: {result.detail}")
+    typer.echo(f"Observed: {result.observed_at}")
+
+
+@app.command()
+def start(
+    task: str | None = typer.Argument(None, help="Coding task for the new Job."),
+    issue: int | None = typer.Option(None, "--issue", min=1, help="GitHub issue to start."),
+    resume: str | None = typer.Option(
+        None,
+        "--resume",
+        help="Retry setup for this exact setup-failed coding Job.",
+    ),
+    provider_connection: str = typer.Option(
+        ...,
+        "--provider-connection",
+        help="Named Provider Connection for the coding Room.",
+    ),
+) -> None:
+    """Create a dedicated Worker and goal-backed coding Job."""
+    target = detect_git_target(Path.cwd())
+    coding_task = resolve_coding_task_or_exit(target.repo, task=task, issue_number=issue)
+    launch_coding_job_or_exit(
+        target,
+        coding_task,
+        resume_job_name=resume,
+        provider_connection=provider_connection,
+    )
+
+
+@app.command()
+def afk(
+    issue_number: int = typer.Argument(..., min=1, help="GitHub issue to implement."),
+    model: str | None = typer.Option(None, "--model", help="Job conversation model."),
+    reasoning_effort: str | None = typer.Option(
+        None, "--reasoning-effort", help="Job conversation reasoning effort."
+    ),
+    provider_connection: str = typer.Option(
+        ...,
+        "--provider-connection",
+        help="Named Provider Connection for the coding Room.",
+    ),
+) -> None:
+    """Compose unattended coding policy over the same Worker and Job runtime."""
+    target = detect_git_target(Path.cwd())
+    store = CodingStore.open()
+    owner_token = secrets.token_hex(16)
+    target_repo = str(target.repo.resolve())
+    try:
+        afk_start = CodingWorkflow.prepare_afk_start(
+            store,
+            target_repo=target_repo,
+            issue_number=issue_number,
+            owner_token=owner_token,
+        )
+    except WorkflowFailure as error:
+        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
+        store.release_unlinked_afk_coordinator(target_repo, issue_number, owner_token)
+        raise typer.Exit(error.exit_code) from error
+    echo_workflow_outcome(WorkflowOutcome(afk_start.messages))
+    try:
+        if afk_start.action == "launch":
+            coding_task = resolve_coding_task_or_exit(
+                target.repo, task=None, issue_number=issue_number
+            )
+            job_name = launch_coding_job_or_exit(
+                target,
+                coding_task,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                provider_connection=provider_connection,
+                metadata={
+                    "afk_issue_number": str(issue_number),
+                    "afk_stage": "implementation",
+                },
+            )
+            store.link_afk_job(target_repo, issue_number, owner_token, job_name)
+        else:
+            assert afk_start.job_name is not None
+            job_name = afk_start.job_name
+    except BaseException:
+        store.release_unlinked_afk_coordinator(target_repo, issue_number, owner_token)
+        raise
+    run_coding_job_workflow_or_exit(
+        job_name,
+        lambda workflow: workflow.coordinate_afk(
+            issue_number=issue_number,
+            target_repo=target_repo,
+            owner_token=owner_token,
+        ),
+    )
+
+
+@app.command("afk-resume")
+def afk_resume(
+    job_name: str,
+    takeover: bool = typer.Option(
+        False, "--takeover", help="Explicitly replace an interrupted coordinator owner."
+    ),
+) -> None:
+    """Resume an interrupted AFK coordinator for one coding Job."""
+    owner_token = secrets.token_hex(16)
+    store = CodingStore.open()
+    try:
+        resume = CodingWorkflow.prepare_afk_resume(
+            store,
+            job_name=job_name,
+            owner_token=owner_token,
+            takeover=takeover,
+        )
+    except WorkflowFailure as error:
+        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
+        raise typer.Exit(error.exit_code) from error
+    echo_workflow_outcome(WorkflowOutcome(resume.messages))
+    if resume.job.status in {"setting-up", "setup-failed"}:
+        recover_setup_failed_coding_job_or_exit(
+            store,
+            resume.job,
+            resolve_coding_task_or_exit(
+                Path(resume.job.target_repo),
+                task=None,
+                issue_number=resume.issue_number,
+            ),
+        )
+    run_coding_job_workflow_or_exit(
+        job_name,
+        lambda workflow: workflow.coordinate_afk(
+            issue_number=resume.issue_number,
+            target_repo=resume.target_repo,
+            owner_token=owner_token,
+        ),
+    )
+
+
+def launch_coding_job_or_exit(
+    target: GitTarget,
+    coding_task: CodingTask,
+    *,
+    metadata: dict[str, str] | None = None,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    resume_job_name: str | None = None,
+    provider_connection: str,
+) -> str:
+    """Compose a dedicated Worker, Job Assignment, clone, and first delivery."""
+    if is_dirty(target.repo):
+        typer.echo("Target repo has uncommitted changes.", err=True)
+        raise typer.Exit(1)
+    git_author = resolve_git_author_or_exit(target.repo)
+    contract = load_contract_or_exit(target.repo)
+    try:
+        config = resolve_codex_config(
+            contract.primary_codex, model=model, reasoning_effort=reasoning_effort
+        )
+    except AgentConfigValidationError as error:
+        typer.echo(f"Invalid Job Codex configuration: {error}", err=True)
+        raise typer.Exit(1) from error
+    environment = get_environment(
+        contract,
+        provider_connection=provider_connection,
+    )
+    exit_if_environment_prerequisites_missing(environment)
+
+    job_name = resume_job_name or generate_job_name(coding_task.summary)
+    worker_name = f"coder-{job_name}"
+    job_branch = f"dorf/{job_name}"
+    validate_dorf_branch_or_exit(job_branch, target_branch=target.branch)
+    store = CodingStore.open()
+    existing = store.get_coding_job(job_name)
+    if resume_job_name is not None and existing is None:
+        typer.echo(f"Setup-failed coding Job not found: {resume_job_name}", err=True)
+        raise typer.Exit(1)
+    if existing is not None:
+        existing_binding = store.get_job_binding(job_name)
+        if existing.status not in {"setting-up", "setup-failed"}:
+            typer.echo(
+                f"Coding Job already exists: {job_name} ({existing.status})",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if (
+            Path(existing.target_repo).resolve() != target.repo.resolve()
+            or existing.target_branch != target.branch
+            or (existing_binding is not None and existing_binding.worker.name != worker_name)
+        ):
+            typer.echo(
+                f"Setup-failed coding Job does not match this repository: {job_name}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        recover_setup_failed_coding_job_or_exit(store, existing, coding_task)
+        return job_name
+
+    def reserve_coding_job(remote: GitBackedJobBranch) -> None:
+        store.create_coding_job(
+            job_name=job_name,
+            metadata={
+                **remote.metadata,
+                **(metadata or {}),
+                "task": coding_task.summary,
+                "target_repo": str(target.repo),
+                "target_branch": target.branch,
+                "target_start_sha": remote.base_sha,
+                "job_branch": job_branch,
+                "setup_model": config.model,
+                "setup_reasoning_effort": config.reasoning_effort,
+                "setup_task_prompt": coding_task.prompt,
+                "setup_provider_connection": provider_connection,
+            },
+        )
+
+    try:
+        remote_branch = create_git_backed_job_branch_or_exit(
+            target,
+            job_branch,
+            before_create=reserve_coding_job,
+        )
+        store.set_metadata_value(job_name, "github_remote_branch_status", "created")
+    except typer.Exit:
+        if store.get_coding_job(job_name) is not None:
+            store.update_status(job_name, "setup-failed")
+            typer.echo(
+                f"Retry this exact setup with --resume {job_name}",
+                err=True,
+            )
+        raise
+    except Exception as error:
+        typer.echo(f"Could not record coding Job: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    driver = CodexDriver(environment)
+    try:
+        worker = WorkerRuntime(store, environment, driver).spawn(
+            NewWorker(
+                worker_name,
+                provenance="coding-workflow",
+                lifecycle_policy="dedicated",
+            )
+        )
+        goal = coding_job_goal(
+            job_name=job_name,
+            task=coding_task.prompt,
+            job_branch=job_branch,
+            workspace=f"/workspace/jobs/{job_name}",
+        )
+        binding = JobRuntime(store, environment, driver).assign(
+            NewJob(
+                name=job_name,
+                worker_name=worker.worker.name,
+                goal=goal,
+                model=config.model,
+                reasoning_effort=config.reasoning_effort,
+            )
+        )
+    except Exception as error:
+        store.update_status(job_name, "setup-failed")
+        typer.echo(f"Could not create coding Worker and Job {job_name}: {error}", err=True)
+        typer.echo(
+            f"Retry this exact setup with --resume {job_name}",
+            err=True,
+        )
+        raise typer.Exit(1) from error
+    store.remove_metadata_keys(
+        job_name,
+        {
+            "setup_model",
+            "setup_reasoning_effort",
+            "setup_task_prompt",
+            "setup_provider_connection",
+        },
+    )
+
+    try:
+        prepare_git_workspace(
+            environment,
+            binding,
+            repo_full_name=remote_branch.repo_full_name,
+            token=remote_branch.token,
+            branch=job_branch,
+            git_author=git_author,
+        )
+    except Exception as error:
+        if store.get_coding_job(job_name) is not None:
+            store.update_status(job_name, "setup-failed")
+        typer.echo(f"Could not prepare coding Job {job_name}: {error}", err=True)
+        typer.echo(
+            f"Retry this exact Worker, Job, and Assignment with --resume {job_name}",
+            err=True,
+        )
+        raise typer.Exit(1) from error
+
+    store.update_status(job_name, "active")
+    launch_assignment_report_collector(store.database_path, binding.job.name, binding.assignment.id)
+    delivery_started = launch_job_input_dispatcher(store.database_path, job_name)
+    typer.echo(f"Started coding Job {job_name}")
+    typer.echo(f"Worker: {worker_name} (coding-workflow, dedicated)")
+    typer.echo(f"Assignment: {binding.assignment.id}")
+    typer.echo(f"Workspace: {binding.workspace}")
+    typer.echo(f"Branch: {job_branch}")
+    typer.echo(
+        "Initial goal delivery started detached"
+        if delivery_started
+        else "Initial goal delivery pending"
+    )
+    echo_contract_summary(contract)
+    return job_name
+
+
+def recover_setup_failed_coding_job_or_exit(
+    store: CodingStore,
+    job: CodingJob,
+    coding_task: CodingTask,
+) -> None:
+    """Rebuild a failed coding clone without replacing Job or Worker identity."""
+    repo = Path(job.target_repo)
+    if not repo.exists():
+        typer.echo(f"Coding Job host repo not found: {repo}", err=True)
+        raise typer.Exit(1)
+    contract = load_contract_or_exit(repo)
+    worker_name = f"coder-{job.job_name}"
+    binding = store.get_job_binding(job.job_name)
+    worker_binding = store.get_worker_binding(worker_name)
+    setup_provider_connection = job.metadata.get("setup_provider_connection")
+    environment = (
+        get_environment_for_assignment_or_exit(worker_binding, contract)
+        if worker_binding is not None
+        else get_environment(
+            contract,
+            provider_connection=(
+                setup_provider_connection
+                if setup_provider_connection is not None
+                else _missing_setup_provider_connection(job.job_name)
+            ),
+        )
+    )
+    exit_if_environment_prerequisites_missing(environment)
+    workspace = f"/workspace/jobs/{job.job_name}"
+    setup_task_prompt = job.metadata.get("setup_task_prompt")
+    if setup_task_prompt is not None and setup_task_prompt != coding_task.prompt:
+        typer.echo("Recorded coding setup intent no longer matches task context", err=True)
+        raise typer.Exit(1)
+    expected_goal = coding_job_goal(
+        job_name=job.job_name,
+        task=coding_task.prompt,
+        job_branch=job.job_branch,
+        workspace=workspace,
+    )
+    store.update_status(job.job_name, "setting-up")
+    try:
+        config = resolve_codex_config(
+            (
+                CodexConfig(
+                    binding.conversation.model,
+                    binding.conversation.reasoning_effort,
+                )
+                if binding is not None
+                else contract.primary_codex
+            ),
+            model=job.metadata.get("setup_model") if binding is None else None,
+            reasoning_effort=(
+                job.metadata.get("setup_reasoning_effort") if binding is None else None
+            ),
+        )
+        driver = CodexDriver(environment)
+        if worker_binding is None:
+            worker_binding = WorkerRuntime(store, environment, driver).spawn(
+                NewWorker(
+                    worker_name,
+                    provenance="coding-workflow",
+                    lifecycle_policy="dedicated",
+                )
+            )
+        if (
+            worker_binding.worker.provenance != "coding-workflow"
+            or worker_binding.worker.lifecycle_policy != "dedicated"
+        ):
+            raise RuntimeError("recorded Worker does not have dedicated coding provenance")
+        binding = JobRuntime(store, environment, driver).assign(
+            NewJob(
+                name=job.job_name,
+                worker_name=worker_binding.worker.name,
+                goal=expected_goal,
+                model=config.model,
+                reasoning_effort=config.reasoning_effort,
+            )
+        )
+        store.remove_metadata_keys(
+            job.job_name,
+            {"setup_model", "setup_reasoning_effort", "setup_task_prompt"},
+        )
+        remote_branch = recover_git_backed_job_branch_or_exit(job)
+        store.set_metadata_value(job.job_name, "github_remote_branch_status", "created")
+        reset_git_workspace(environment, binding)
+        prepare_git_workspace(
+            environment,
+            binding,
+            repo_full_name=remote_branch.repo_full_name,
+            token=remote_branch.token,
+            branch=job.job_branch,
+            git_author=resolve_git_author_or_exit(repo),
+        )
+    except Exception as error:
+        store.update_status(job.job_name, "setup-failed")
+        typer.echo(f"Could not recover coding Job setup: {error}", err=True)
+        raise typer.Exit(1) from error
+    store.update_status(job.job_name, "active")
+    launch_assignment_report_collector(store.database_path, binding.job.name, binding.assignment.id)
+    launch_job_input_dispatcher(store.database_path, job.job_name)
+    typer.echo(f"Recovered coding Job setup {job.job_name}")
+
+
+def resolve_git_author_or_exit(repo: Path) -> GitAuthorIdentity:
+    values: dict[str, str] = {}
+    for key, label in (("user.name", "name"), ("user.email", "email")):
+        result = run_git_unchecked(repo, "config", "--get", key)
+        value = result.stdout.rstrip("\r\n") if result.returncode == 0 else ""
+        if not value.strip():
+            example = "Your Name" if key == "user.name" else "you@example.com"
+            typer.echo(
+                f"Git author {label} is missing or empty for {repo}. Configure it with: "
+                f"git -C {shlex.quote(str(repo))} config --local {key} "
+                f"{shlex.quote(example)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        values[key] = value
+    return GitAuthorIdentity(name=values["user.name"], email=values["user.email"])
+
+
+def resolve_coding_task_or_exit(
+    repo: Path,
+    *,
+    task: str | None,
+    issue_number: int | None,
+) -> CodingTask:
+    if (task is None) == (issue_number is None):
+        typer.echo("Provide exactly one of TASK or --issue.", err=True)
+        raise typer.Exit(1)
+    if task is not None:
+        return CodingTask(summary=task, prompt=task)
+
+    repo_full_name = github_repo_full_name_or_exit(repo)
+    try:
+        issue = github_repository_client_from_app_token().get_issue(
+            repo_full_name,
+            issue_number,
+        )
+    except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
+        typer.echo(
+            f"Could not retrieve GitHub issue #{issue_number}: {error}. "
+            "Ensure the GitHub App installation has approved Issues: read permission.",
+            err=True,
+        )
+        raise typer.Exit(1) from error
+    return github_issue_task(repo_full_name, issue)
+
+
+def github_issue_task(repo_full_name: str, issue: GitHubIssue) -> CodingTask:
+    summary = f"Issue #{issue.number}: {issue.title}"
+    sections = [
+        summary,
+        f"Repository: {repo_full_name}",
+        "",
+        "Issue body:",
+        issue.body or "(No issue body provided.)",
+    ]
+    if issue.comments:
+        sections.extend(["", "Issue comments:"])
+        sections.extend(f"- {comment}" for comment in issue.comments)
+    sections.extend(
+        [
+            "",
+            "Implementation contract:",
+            "- Use only the Assignment workspace named in the coding Job goal.",
+            "- Keep the change scoped to this issue and follow the repository instructions.",
+            "- Use TDD. Run the repository's configured verification before finalizing.",
+            "- Commit the completed change and push the assigned Job branch to origin.",
+            "- Finish with a PR-ready response containing status, commit, draft PR title "
+            "and body, verification, and notes.",
+        ]
+    )
+    return CodingTask(summary=summary, prompt="\n".join(sections))
+
+
+@app.command()
+def doctor() -> None:
+    """Diagnose the configured core Provider Gateway and Incus Room path."""
+    with ProviderGateway.open() as gateway:
+        gateway_health = gateway.health()
+    typer.echo(f"provider-gateway: {gateway_health.status}")
+    backend_presence = "present" if gateway_health.backend_present else "missing"
+    typer.echo(f"provider-backend: {backend_presence} (pinned {gateway_health.backend_version})")
+    typer.echo(f"provider-bind: {', '.join(gateway_health.bind_addresses)}")
+    connections = "connected" if gateway_health.has_provider_connection else "none"
+    typer.echo(f"provider-connections: {connections}")
+
+    try:
+        profile = load_optional_deployment_profile()
+    except DeploymentProfileError as error:
+        echo_diagnostic_stop(
+            "Doctor",
+            SetupDiagnostic(
+                status="failed",
+                owner="dorf",
+                classification="configuration",
+                summary=f"Global Dorf configuration is invalid: {error}",
+                observed=(str(error),),
+                expected=("The global deployment profile is valid and readable.",),
+                safe_actions=("Repair or remove the reported deployment.json.",),
+                reproducer=("dorf doctor",),
+            ),
+            resume_command="dorf doctor",
+        )
+        raise typer.Exit(1) from error
+    config = profile.incus if profile is not None else IncusConfig()
+    typer.echo(
+        "deployment-profile: "
+        + ("configured" if profile is not None else "not configured; checking defaults")
+    )
+    result = IncusDoctor().core_check(config)
+    if result.ok:
+        typer.echo("incus-vm: ok")
+        return
+    observed = tuple(f"{failure.code}: {failure.message}" for failure in result.failures)
+    echo_diagnostic_stop(
+        "Doctor",
+        SetupDiagnostic(
+            status="failed",
+            owner="incus",
+            classification="configuration",
+            summary="The configured Incus Room path is not ready.",
+            observed=observed,
+            expected=(
+                "Incus can launch the configured VM image on the private network "
+                "with working guest-agent and outbound connectivity.",
+            ),
+            safe_actions=("Run dorf setup to apply reviewed remediation.",),
+            reproducer=("dorf doctor",),
+        ),
+        resume_command="dorf doctor",
+    )
+    raise typer.Exit(1)
+
+
+@app.command()
+def init() -> None:
+    """Create a minimal repo contract."""
+    target = detect_git_target(Path.cwd())
+    contract_path = target.repo / CONTRACT_FILENAME
+    if contract_path.exists():
+        typer.echo(f"{CONTRACT_FILENAME} already exists.", err=True)
+        raise typer.Exit(1)
+
+    contract_path.write_text("[commands]\n")
+    typer.echo(f"Created {CONTRACT_FILENAME}")
+
+
+@github_app.command("setup")
+def github_setup(
+    org: str | None = typer.Option(
+        None,
+        "--org",
+        help="Create the GitHub App under this organization instead of your personal account.",
+    ),
+    host: str = typer.Option("127.0.0.1", "--host", help="Local callback host."),
+    port: int = typer.Option(0, "--port", help="Local callback port. Use 0 for a free port."),
+) -> None:
+    """Create, install, store, and verify the Dorf GitHub App."""
+    try:
+        result = GitHubAppManifestFlow(host=host, port=port, org=org).run(announce=typer.echo)
+    except GitHubAppManifestFlowError as error:
+        typer.echo(f"github: setup failed ({error})", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"github: configured app {result.config.app_id}")
+    typer.echo(f"github: installation {result.config.installation_id}")
+    typer.echo(f"Stored GitHub App metadata: {result.paths.metadata_path}")
+    typer.echo(f"Stored GitHub App private key: {result.paths.private_key_path}")
+    typer.echo("github: verified")
+
+
+@github_app.command("status")
+def github_status(
+    verify: bool = typer.Option(
+        False,
+        "--verify",
+        help="Mint an installation token to verify GitHub App credentials.",
+    ),
+) -> None:
+    """Show GitHub App setup status."""
+    try:
+        config = load_github_app_config()
+    except GitHubAppConfigError as error:
+        typer.echo(f"github: not configured ({error})", err=True)
+        raise typer.Exit(1) from error
+
+    paths = github_app_paths()
+    typer.echo("github: configured")
+    typer.echo(f"App ID: {config.app_id}")
+    typer.echo(f"Installation ID: {config.installation_id}")
+    if config.app_slug:
+        typer.echo(f"App slug: {config.app_slug}")
+    typer.echo(f"Metadata: {paths.metadata_path}")
+    typer.echo(f"Private key: {paths.private_key_path}")
+    if not private_key_permissions_are_locked_down():
+        typer.echo("GitHub App private key permissions are too broad.", err=True)
+        raise typer.Exit(1)
+    if not verify:
+        return
+    try:
+        GitHubAppTokenClient().mint_installation_token(config)
+    except GitHubAppVerificationError as error:
+        typer.echo(f"github: verification failed ({error})", err=True)
+        raise typer.Exit(1) from error
+    typer.echo("github: verified")
+
+
+def echo_job_timeline(name: str, events: list[TimelineEvent]) -> None:
+    typer.echo(f"Timeline · {name}")
+    if not events:
+        typer.echo("No timeline entries recorded.")
+        return
+    for event in events:
+        observed = f"{event.recorded_at[:19].replace('T', ' ')}Z"
+        typer.echo(
+            f"{event.sequence:04d} {observed} [{event.source} {event.provenance}] {event.summary}"
+        )
+        echo_event_related(event)
+        for artifact in event.artifacts:
+            typer.echo(f"     artifact: {artifact.name} · {artifact.path}")
+
+
+def echo_job_evidence(
+    name: str,
+    events: list[TimelineEvent],
+    job_path: Path,
+) -> None:
+    typer.echo(f"Evidence · {name}")
+    entries = [event for event in events if event.artifacts]
+    if not entries:
+        typer.echo("No evidence recorded.")
+        return
+    for event in entries:
+        typer.echo(f"{event.sequence:04d} [{event.source} {event.provenance}] {event.summary}")
+        if event.source == "worker" and event.provenance == "claim":
+            typer.echo("     Worker claim; content has not been independently verified")
+        echo_event_related(event)
+        for artifact in event.artifacts:
+            typer.echo(f"     {artifact.name} · {artifact.media_type} · {artifact.size} bytes")
+            typer.echo(f"     {artifact.digest} · {job_path / artifact.path}")
+
+
+def echo_job_artifact(artifact: JobArtifact) -> None:
+    typer.echo(f"{artifact.name} · {artifact.media_type} · {artifact.size} bytes")
+    typer.echo(f"     ref: {artifact.ref}")
+    typer.echo(f"     digest: {artifact.digest}")
+    typer.echo(f"     event: {artifact.event_id} · {artifact.source} {artifact.provenance}")
+
+
+def echo_event_related(event: TimelineEvent) -> None:
+    if not event.related:
+        return
+    related = " ".join(f"{key}={value}" for key, value in sorted(event.related.items()))
+    typer.echo(f"     related: {related}")
+
+
+@app.command()
+def status(job_name: str) -> None:
+    """Show coding workflow state alongside its current Assignment binding."""
+    store = CodingStore.open()
+    job = store.get_coding_job(job_name)
+    binding = store.get_job_binding(job_name)
+    if job is None or binding is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Job: {job.job_name} ({job.status})")
+    typer.echo(f"Task: {job.task}")
+    typer.echo(f"Worker: {binding.worker.name}")
+    typer.echo(f"Worker provenance: {binding.worker.provenance}")
+    typer.echo(f"Worker lifecycle policy: {binding.worker.lifecycle_policy}")
+    typer.echo(f"Assignment: {binding.assignment.id} ({binding.assignment.status})")
+    typer.echo(f"Room: {binding.room.provider_id} ({binding.room.status})")
+    typer.echo(f"Workspace: {binding.workspace}")
+    typer.echo(f"Target: {job.target_branch} at {job.target_start_sha}")
+    typer.echo(f"Branch: {job.job_branch}")
+    typer.echo(
+        f"Conversation: {binding.conversation.status} "
+        f"({binding.conversation.native_conversation_id or 'not started'})"
+    )
+    if job.github_pr_number is not None and job.github_pr_url:
+        typer.echo(f"GitHub PR: #{job.github_pr_number} {job.github_pr_url}")
+    if stage := job.metadata.get("afk_stage"):
+        typer.echo(f"AFK: {stage} ({job.metadata.get('afk_outcome', 'pending')})")
+
+
+@app.command("implementation-status")
+def implementation_status(
+    job_name: str,
+    wait: bool = typer.Option(False, "--wait", help="Wait for implementation to finish."),
+) -> None:
+    """Show the initial goal turn used for coding implementation."""
+    store = CodingStore.open()
+    while True:
+        job = store.get_coding_job(job_name)
+        inputs = store.list_job_inputs(job_name) if job is not None else []
+        if job is None or not inputs or inputs[0].kind != "goal":
+            typer.echo(f"Coding Job implementation not found: {job_name}", err=True)
+            raise typer.Exit(1)
+        turn = store.get_job_turn_by_input(job_name, inputs[0].id)
+        if turn is not None and (not wait or turn.status != "running"):
+            typer.echo(f"Implementation: {turn.status}")
+            typer.echo(f"Turn ID: {turn.id}")
+            if turn.exit_code is not None:
+                typer.echo(f"Exit code: {turn.exit_code}")
+            typer.echo(f"Output: {turn.output_path}")
+            return
+        if not wait:
+            typer.echo("Implementation: queued")
+            typer.echo(f"Input: {inputs[0].id}")
+            return
+        sleep(0.25)
+
+
+@app.command()
+def ready(job_name: str) -> None:
+    """Mark a coding Job ready after mechanical checks."""
+    run_coding_job_workflow_or_exit(
+        job_name, lambda workflow: workflow.mark_ready(), require_runnable=False
+    )
+
+
+@app.command()
+def bootstrap(job_name: str) -> None:
+    """Run the configured bootstrap command in a coding Job workspace."""
+    run_configured_job_command(job_name, "bootstrap")
+
+
+@app.command()
+def check(job_name: str) -> None:
+    """Run the configured check command in a coding Job workspace."""
+    run_configured_job_command(job_name, "check")
+
+
+@app.command()
+def smoke(job_name: str) -> None:
+    """Run the configured smoke command in a coding Job workspace."""
+    run_configured_job_command(job_name, "smoke")
+
+
+def coding_job_workflow_or_exit(
+    job_name: str,
+    *,
+    require_runnable: bool = True,
+    require_execution: bool = True,
+) -> CodingWorkflow:
+    store = CodingStore.open()
+    job = (
+        get_runnable_coding_job_or_exit(store, job_name)
+        if require_runnable
+        else store.get_coding_job(job_name)
+    )
+    if job is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    binding = store.get_job_binding(job_name)
+    if binding is None:
+        typer.echo(f"Job binding not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    contract = load_contract_or_exit(Path(job.target_repo))
+    environment = None
+    runtime = None
+    if require_execution:
+        environment = get_environment_for_assignment_or_exit(binding, contract)
+        runtime = JobRuntime(store, environment, CodexDriver(environment))
+    return CodingWorkflow(
+        store=store,
+        job=job,
+        contract=contract,
+        environment=environment,
+        runtime=runtime,
+        github_client=github_repository_client_from_app_token,
+        refresh_git_credentials=(
+            (lambda binding: refresh_job_git_credentials(binding, environment=environment))
+            if environment is not None
+            else None
+        ),
+        github_app_slug=github_app_slug,
+    )
+
+
+def github_app_slug() -> str:
+    try:
+        config = load_github_app_config()
+    except GitHubAppConfigError as error:
+        raise RuntimeError(f"GitHub App metadata could not be loaded: {error}") from error
+    if not config.app_slug:
+        raise RuntimeError("GitHub App metadata is missing app_slug; rerun dorf github setup.")
+    return config.app_slug
+
+
+def echo_workflow_outcome(outcome: WorkflowOutcome) -> None:
+    for message in outcome.messages:
+        typer.echo(message.text, err=message.error)
+
+
+def run_coding_job_workflow_or_exit(
+    job_name: str,
+    operation: Callable[[CodingWorkflow], WorkflowOutcome],
+    *,
+    require_runnable: bool = True,
+    require_execution: bool = True,
+) -> None:
+    workflow = coding_job_workflow_or_exit(
+        job_name,
+        require_runnable=require_runnable,
+        require_execution=require_execution,
+    )
+    try:
+        outcome = operation(workflow)
+    except WorkflowFailure as error:
+        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
+        raise typer.Exit(error.exit_code) from error
+    echo_workflow_outcome(outcome)
+
+
+@app.command()
+def review(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> None:
+    """Run configured one-shot review commands for a coding Job."""
+    run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.review(agents))
+
+
+@app.command()
+def verify(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> None:
+    """Run bounded check, review, and Job-message repair rounds."""
+    run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.verify(agents))
+
+
+@app.command()
+def followup(job_name: str) -> None:
+    """Route linked PR feedback through the same Job conversation."""
+    run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.followup())
+
+
+@app.command("exec")
+def exec_job_command(
+    job_name: str,
+    argv: list[str] = COMMAND_ARGV_ARGUMENT,
+) -> None:
+    """Run a non-interactive command in the assigned Job workspace."""
+    if not argv:
+        typer.echo("Missing command argv.", err=True)
+        raise typer.Exit(1)
+    store = CodingStore.open()
+    job = get_runnable_coding_job_or_exit(store, job_name)
+    contract = load_contract_or_exit(Path(job.target_repo))
+    try:
+        run = run_environment_job_command(
+            store=store,
+            job=job,
+            contract=contract,
+            spec=argv_command("exec", argv),
+        )
+    except CommandInterrupted:
+        raise typer.Exit(130) from None
+    exit_for_command_run(job_name, run.kind, run.exit_code)
+
+
+@app.command()
+def publish(job_name: str) -> None:
+    """Create or update the GitHub PR for a verified coding Job."""
+    run_coding_job_workflow_or_exit(
+        job_name,
+        lambda workflow: workflow.publish(),
+        require_runnable=False,
+        require_execution=False,
+    )
+
+
+@app.command()
+def complete(job_name: str) -> None:
+    """Record merged or rejected PR truth and end its runtime resources."""
+    store = CodingStore.open()
+    job = store.get_coding_job(job_name)
+    if job is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    if job.status in {"merged", "rejected"}:
+        typer.echo(f"Coding Job already {job.status}: {job_name}")
+        end_coding_resources_or_exit(job_name, interrupt=True)
+        return
+    if job.status == "abandoned":
+        typer.echo(f"Abandoned coding Job cannot be completed: {job_name}", err=True)
+        raise typer.Exit(1)
+    if job.github_pr_number is None:
+        typer.echo(f"Coding Job has no linked GitHub PR: {job_name}", err=True)
+        raise typer.Exit(1)
+    repo_full_name = job.metadata.get("github_repo")
+    if not repo_full_name:
+        typer.echo("Coding Job metadata is missing github_repo", err=True)
+        raise typer.Exit(1)
+    try:
+        pr = github_repository_client_from_app_token().get_pull_request(
+            repo_full_name, job.github_pr_number
+        )
+    except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
+        typer.echo(f"Could not inspect GitHub PR: {error}", err=True)
+        raise typer.Exit(1) from error
+    if pr.get("state") == "open":
+        typer.echo(f"Linked GitHub PR is still open: #{job.github_pr_number}", err=True)
+        raise typer.Exit(1)
+    terminal = "merged" if pr.get("merged") is True else "rejected"
+    store.update_status(job_name, terminal)
+    typer.echo(f"Recorded coding Job {job_name}: {terminal}")
+    end_coding_resources_or_exit(job_name, interrupt=True)
+
+
+@app.command()
+def runs(job_name: str) -> None:
+    """List workflow-owned command runs for a coding Job."""
+    store = CodingStore.open()
+    if store.get_coding_job(job_name) is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    command_runs = store.list_command_runs(job_name)
+    if not command_runs:
+        typer.echo("No workflow command runs.")
+        return
+    for run in command_runs:
+        typer.echo(
+            "  ".join(
+                [
+                    str(run.id),
+                    run.kind,
+                    run.status,
+                    "" if run.exit_code is None else str(run.exit_code),
+                    run.started_at,
+                    run.finished_at or "",
+                    run.command,
+                ]
+            )
+        )
+
+
+@app.command("show-run")
+def show_run(job_name: str, run_id: int) -> None:
+    """Print one workflow command's stored output."""
+    store = CodingStore.open()
+    run = store.get_command_run(run_id)
+    if store.get_coding_job(job_name) is None or run is None or run.job_name != job_name:
+        typer.echo(f"Run not found: {run_id}", err=True)
+        raise typer.Exit(1)
+    output_path = Path(run.output_path)
+    if not run.output_path or not output_path.is_file():
+        typer.echo(f"Run output not found: {run.output_path or run_id}", err=True)
+        raise typer.Exit(1)
+    typer.echo(output_path.read_text(), nl=False)
+
+
+@app.command()
+def discard(job_name: str) -> None:
+    """Record explicit coding abandonment and end its runtime resources."""
+    store = CodingStore.open()
+    job = store.get_coding_job(job_name)
+    if job is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    if job.status in {"merged", "rejected"}:
+        typer.echo(f"Terminal coding Job cannot be abandoned: {job_name} ({job.status})", err=True)
+        raise typer.Exit(1)
+    if job.status != "abandoned":
+        store.update_status(job_name, "abandoned")
+    typer.echo(f"Recorded coding Job {job_name}: abandoned")
+    end_coding_resources_or_exit(job_name, interrupt=True)
+
+
+def end_coding_resources_or_exit(job_name: str, *, interrupt: bool) -> None:
+    store = CodingStore.open()
+    binding = store.get_job_binding(job_name)
+    if binding is None:
+        raise typer.Exit(1)
+    try:
+        with Dorf(store) as dorf:
+            dorf.end_job(job_name, interrupt=interrupt)
+    except RuntimeError as error:
+        typer.echo(f"Coding resource cleanup remains retryable: {error}", err=True)
+        raise typer.Exit(1) from error
+    typer.echo(f"Ended coding resources: {job_name}")
+
+
+def run_configured_job_command(job_name: str, command_name: str) -> None:
+    store = CodingStore.open()
+    job = get_runnable_coding_job_or_exit(store, job_name)
+    contract = load_contract_or_exit(Path(job.target_repo))
+    command = contract.commands.get(command_name)
+    if command is None:
+        typer.echo(f"No configured {command_name} command for coding Job {job_name}.", err=True)
+        raise typer.Exit(1)
+    try:
+        run = run_environment_job_command(
+            store=store,
+            job=job,
+            contract=contract,
+            spec=shell_command(command_name, command),
+        )
+    except CommandInterrupted:
+        raise typer.Exit(130) from None
+    exit_for_command_run(job_name, command_name, run.exit_code)
+
+
+def validate_dorf_branch_or_exit(branch: str, *, target_branch: str) -> None:
+    reason = unsafe_dorf_branch_reason(branch, target_branch=target_branch)
+    if reason is None:
+        return
+    typer.echo(f"Refusing unsafe Dorf branch name: {branch} ({reason})", err=True)
+    raise typer.Exit(1)
+
+
+def unsafe_dorf_branch_reason(branch: str, *, target_branch: str) -> str | None:
+    if branch in PROTECTED_BRANCHES:
+        return "protected branch"
+    if branch == target_branch:
+        return "target branch"
+    if not branch.startswith(DORF_BRANCH_PREFIX):
+        return f"does not start with {DORF_BRANCH_PREFIX}"
+    suffix = branch.removeprefix(DORF_BRANCH_PREFIX)
+    if not suffix:
+        return "missing Job id"
+    if suffix in {".", ".."} or suffix.startswith("../") or "/../" in suffix:
+        return "contains parent-directory traversal"
+    if suffix.startswith("/") or suffix.endswith("/"):
+        return "contains an empty path segment"
+    if "//" in suffix:
+        return "contains an empty path segment"
+    if suffix.endswith(".lock"):
+        return "ends with .lock"
+    return None
+
+
+def get_runnable_coding_job_or_exit(store: CodingStore, job_name: str) -> CodingJob:
+    job = store.get_coding_job(job_name)
+    if job is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    if job.status in {"setup-failed", "abandoned", "merged", "rejected"}:
+        typer.echo(
+            f"Coding Job does not allow command execution: {job_name} ({job.status})",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if not Path(job.target_repo).exists():
+        typer.echo(f"Coding Job host repo not found: {job.target_repo}", err=True)
+        raise typer.Exit(1)
+    if store.get_job_binding(job_name) is None:
+        typer.echo(f"Job binding not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    return job
+
+
+def exit_for_command_run(job_name: str, kind: str, exit_code: int | None) -> None:
+    if exit_code is None:
+        typer.echo(f"{kind} did not finish for {job_name}.", err=True)
+        raise typer.Exit(1)
+    if exit_code != 0:
+        typer.echo(
+            f"{kind} failed for {job_name} with exit code {exit_code}.",
+            err=True,
+        )
+        raise typer.Exit(exit_code)
+    typer.echo(f"{kind} succeeded for {job_name}")
+
+
+def run_environment_job_command(
+    store: CodingStore,
+    job: CodingJob,
+    contract: RepoContract,
+    spec,
+):
+    binding = store.get_job_binding(job.job_name)
+    if binding is None:
+        typer.echo(f"Job binding not found: {job.job_name}", err=True)
+        raise typer.Exit(1)
+    environment = get_environment_for_assignment_or_exit(binding)
+    return run_coding_job_command(
+        store=store,
+        environment=environment,
+        job=job,
+        binding=binding,
+        contract=contract,
+        spec=spec,
+    )
+
+
+def refresh_job_git_credentials(
+    binding: JobBinding,
+    *,
+    environment: IncusEnvironment | None = None,
+) -> None:
+    job = CodingStore.open().get_coding_job(binding.job.name)
+    if job is None:
+        raise RuntimeError(f"Coding Job not found: {binding.job.name}")
+    repo_full_name = job.metadata.get("github_repo")
+    if not repo_full_name:
+        raise RuntimeError("Coding Job metadata is missing github_repo")
+    try:
+        config = load_github_app_config()
+        minted = GitHubAppTokenClient().mint_installation_token(config)
+    except (GitHubAppConfigError, GitHubAppVerificationError) as error:
+        raise RuntimeError(f"could not refresh GitHub App token: {error}") from error
+    token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+    environment = environment or get_environment_for_assignment_or_exit(binding)
+    install_git_credentials(environment, binding, token=token)
+
+
+def detect_git_target(cwd: Path) -> GitTarget:
+    repo = Path(run_git(cwd, "rev-parse", "--show-toplevel"))
+    branch = run_git(repo, "branch", "--show-current")
+    if not branch:
+        typer.echo("Target repo is in detached HEAD state.", err=True)
+        raise typer.Exit(1)
+    start_sha = run_git(repo, "rev-parse", "HEAD")
+    return GitTarget(repo=repo, branch=branch, start_sha=start_sha)
+
+
+def detect_git_repo_root(cwd: Path) -> Path | None:
+    result = run_git_unchecked(cwd, "rev-parse", "--show-toplevel")
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip())
+
+
+def create_git_backed_job_branch_or_exit(
+    target: GitTarget,
+    job_branch: str,
+    before_create: Callable[[GitBackedJobBranch], None] | None = None,
+) -> GitBackedJobBranch:
+    repo_full_name = github_repo_full_name_or_exit(target.repo)
+    try:
+        config = load_github_app_config()
+        minted = GitHubAppTokenClient().mint_installation_token(config)
+        token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+        expires_at = minted.expires_at if isinstance(minted, GitHubInstallationToken) else None
+        client = GitHubRepositoryClient(token)
+        base_sha = client.get_branch_sha(repo_full_name, target.branch)
+        ensure_base_commit_exists_locally_or_exit(
+            repo=target.repo,
+            repo_full_name=repo_full_name,
+            base_branch=target.branch,
+            base_sha=base_sha,
+            token=token,
+        )
+        branch = GitBackedJobBranch(
+            repo_full_name=repo_full_name,
+            base_sha=base_sha,
+            metadata={
+                "local_target_repo": str(target.repo),
+                "github_repo": repo_full_name,
+                "github_base_branch": target.branch,
+                "github_remote_branch_status": "pending",
+                **({"github_token_expires_at": expires_at} if expires_at else {}),
+            },
+            token=token,
+        )
+        if before_create is not None:
+            before_create(branch)
+        client.create_branch(repo_full_name, job_branch, base_sha)
+    except GitHubAppConfigError as error:
+        typer.echo(f"github: not configured ({error})", err=True)
+        raise typer.Exit(1) from error
+    except (GitHubAppVerificationError, GitHubRepositoryError) as error:
+        typer.echo(f"Could not create remote Job branch: {error}", err=True)
+        raise typer.Exit(1) from error
+
+    return branch
+
+
+def recover_git_backed_job_branch_or_exit(
+    job: CodingJob,
+) -> GitBackedJobBranch:
+    validate_dorf_branch_or_exit(job.job_branch, target_branch=job.target_branch)
+    repo_full_name = job.metadata.get("github_repo")
+    if not repo_full_name:
+        typer.echo(
+            "Could not recover remote Job branch: Job metadata is missing github_repo.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        config = load_github_app_config()
+        minted = GitHubAppTokenClient().mint_installation_token(config)
+        token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+        client = GitHubRepositoryClient(token)
+        try:
+            branch_sha = client.get_branch_sha(repo_full_name, job.job_branch)
+        except GitHubRepositoryError as error:
+            if not github_branch_not_found_error(error):
+                raise
+            client.create_branch(repo_full_name, job.job_branch, job.target_start_sha)
+            branch_sha = job.target_start_sha
+    except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
+        typer.echo(f"Could not recover remote Job branch: {error}", err=True)
+        raise typer.Exit(1) from error
+    if branch_sha != job.target_start_sha:
+        typer.echo(
+            f"Could not recover remote Job branch: {job.job_branch} moved from "
+            f"the recorded target start SHA {job.target_start_sha} to {branch_sha}.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return GitBackedJobBranch(
+        repo_full_name=repo_full_name,
+        base_sha=job.target_start_sha,
+        metadata={},
+        token=token,
+    )
+
+
+def github_branch_not_found_error(error: Exception) -> bool:
+    return "HTTP 404" in str(error)
+
+
+def ensure_base_commit_exists_locally_or_exit(
+    *,
+    repo: Path,
+    repo_full_name: str,
+    base_branch: str,
+    base_sha: str,
+    token: str,
+) -> None:
+    if git_commit_exists(repo, base_sha):
+        return
+    fetch_github_branch_objects_or_exit(
+        repo=repo,
+        repo_full_name=repo_full_name,
+        branch=base_branch,
+        token=token,
+    )
+    if git_commit_exists(repo, base_sha):
+        return
+    typer.echo(
+        f"Remote base SHA is not present locally after fetch: {base_sha}",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def git_commit_exists(repo: Path, sha: str) -> bool:
+    result = run_git_unchecked(repo, "cat-file", "-e", f"{sha}^{{commit}}")
+    return result.returncode == 0
+
+
+def fetch_github_branch_objects_or_exit(
+    *,
+    repo: Path,
+    repo_full_name: str,
+    branch: str,
+    token: str,
+) -> None:
+    clone_url = github_git_authenticated_url(repo_full_name, token)
+    refspec = f"+refs/heads/{branch}:refs/remotes/dorf/{branch}"
+    result = run_git_unchecked(
+        repo,
+        "fetch",
+        "--no-tags",
+        clone_url,
+        refspec,
+    )
+    if result.returncode == 0:
+        return
+    message = result.stderr.strip() or result.stdout.strip() or "git fetch failed"
+    message = redact_token(message, token)
+    typer.echo(f"Could not fetch remote base branch objects: {message}", err=True)
+    raise typer.Exit(result.returncode or 1)
+
+
+def github_git_authenticated_url(repo_full_name: str, token: str) -> str:
+    quoted_token = urllib.parse.quote(token, safe="")
+    return f"https://x-access-token:{quoted_token}@github.com/{repo_full_name}.git"
+
+
+def redact_token(message: str, token: str) -> str:
+    encoded_token = urllib.parse.quote(token, safe="")
+    return message.replace(token, "<redacted>").replace(encoded_token, "<redacted>")
+
+
+def github_repo_full_name_or_exit(repo: Path) -> str:
+    remote_url = run_git_unchecked(repo, "remote", "get-url", "origin")
+    if remote_url.returncode != 0:
+        typer.echo("Git remote not found: origin", err=True)
+        raise typer.Exit(1)
+    origin = remote_url.stdout.strip()
+    parsed = parse_github_repo_full_name(origin)
+    if parsed is None:
+        typer.echo(f"Could not infer GitHub repo from origin: {origin}", err=True)
+        raise typer.Exit(1)
+    return parsed
+
+
+def parse_github_repo_full_name(remote_url: str) -> str | None:
+    https_match = re.match(
+        r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$",
+        remote_url,
+    )
+    if https_match is not None:
+        return f"{https_match.group(1)}/{https_match.group(2)}"
+    ssh_match = re.match(
+        r"^(?:git@github\.com:|ssh://git@github\.com/)([^/]+)/([^/]+?)(?:\.git)?/?$",
+        remote_url,
+    )
+    if ssh_match is not None:
+        return f"{ssh_match.group(1)}/{ssh_match.group(2)}"
+    return None
+
+
+def is_dirty(repo: Path) -> bool:
+    return bool(run_git(repo, "status", "--porcelain"))
+
+
+def generate_job_name(task: str) -> str:
+    return f"{secrets.token_hex(3)}-{slugify(task)}"
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug[:40].strip("-") or "task"
+
+
+def github_repository_client_from_app_token() -> GitHubRepositoryClient:
+    config = load_github_app_config()
+    minted = GitHubAppTokenClient().mint_installation_token(config)
+    token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+    return GitHubRepositoryClient(token)
+
+
+def load_contract_or_exit(repo: Path) -> RepoContract:
+    try:
+        return load_repo_contract(repo)
+    except ContractValidationError as error:
+        typer.echo(f"{CONTRACT_FILENAME}: {error}", err=True)
+        raise typer.Exit(1) from error
+
+
+def get_environment(
+    contract: RepoContract | None = None,
+    *,
+    provider_connection: str,
+) -> CodexRoomEnvironment:
+    config = IncusConfig.from_mapping(contract.incus_config if contract is not None else None)
+    return new_codex_room_environment(config, provider_connection)
+
+
+def open_dorf(
+    contract: RepoContract | None = None,
+    *,
+    deployment_profile: DeploymentProfile | None = None,
+    provider_connection: str | None = None,
+) -> Dorf:
+    """Compose the in-process SDK with the same built-ins selected by the CLI."""
+    return Dorf.open(
+        environment_config=(
+            deployment_profile.incus
+            if deployment_profile is not None
+            else IncusConfig.from_mapping(contract.incus_config if contract is not None else None)
+        ),
+        agent_defaults=contract.primary_codex if contract is not None else None,
+        provider_connection=provider_connection,
+    )
+
+
+def get_environment_for_assignment_or_exit(
+    binding: WorkerBinding | JobBinding,
+    contract: RepoContract | None = None,
+) -> CodexRoomEnvironment:
+    if binding.environment_type != IncusEnvironment.environment_type:
+        typer.echo(
+            f"Unsupported Room type: {binding.environment_type}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    try:
+        return recorded_codex_room_environment(binding)
+    except RuntimeError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+
+
+def _missing_setup_provider_connection(job_name: str) -> str:
+    typer.echo(
+        f"Coding Job {job_name} has no recorded Provider Connection; recreate it",
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def echo_contract_summary(contract: RepoContract) -> None:
+    typer.echo(f"Mode: {contract.mode}")
+    if contract.commands:
+        typer.echo(f"Commands: {', '.join(contract.commands)}")
+
+
+def exit_if_environment_prerequisites_missing(
+    environment: IncusEnvironment | CodexRoomEnvironment,
+) -> None:
+    missing = environment.check_prerequisites()
+    if not missing:
+        return
+    echo_environment_prerequisite_failures(missing)
+    raise typer.Exit(1)
+
+
+def echo_environment_prerequisite_failures(failures: list[str]) -> None:
+    typer.echo("Incus VM fast preflight failed.", err=True)
+    for item in failures:
+        typer.echo(f"- {item}", err=True)
+    typer.echo("Run `dorf doctor` for deep diagnosis.", err=True)
+
+
+def run_git(cwd: Path, *args: str) -> str:
+    result = run_git_unchecked(cwd, *args)
+    if result.returncode != 0:
+        message = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        typer.echo(message, err=True)
+        raise typer.Exit(result.returncode)
+    return result.stdout.strip()
+
+
+def run_git_unchecked(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )

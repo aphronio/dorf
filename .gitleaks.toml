@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deliberately invalid private-key-shaped GitHub client fixture"
+condition = "AND"
+targetRules = ["private-key"]
+regexTarget = "match"
+paths = ['''(?:^|/)tests/test_github_app\.py$''']
+regexes = ['''-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----''']

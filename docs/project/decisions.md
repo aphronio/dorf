@@ -1,0 +1,776 @@
+# Dorf Decision Log
+
+This log records consequential product, architecture, and technology choices whose rationale would
+not be recoverable from the code. It is not a specification or inventory of current behavior.
+
+Add an entry in the same change that makes a new consequential choice. When evidence changes an
+accepted choice, preserve its history, mark it superseded, link the replacement, and remove code and
+tests made obsolete by the new direction. Track open questions and implementation work in GitHub
+issues rather than here.
+
+## D001 — Durable logical agent session
+
+- **Status:** Superseded by D025 — 2026-07-27
+- **Decision:** The durable product identity is a logical agent session bound to an isolated
+  environment and an agent-native conversation identity. OS processes and terminal panes are
+  replaceable operational details.
+- **Why:** Process identity cannot survive crashes, hibernation, or different environment providers,
+  while the user needs stable conversational and workspace continuity.
+- **Reconsider when:** A supported agent cannot resume native context and a resident process must
+  become an explicit part of that driver's behavior.
+
+## D002 — Workflow, runtime, agent driver, and environment seams
+
+- **Status:** Accepted responsibility boundary — 2026-07-22; package-import direction clarified by
+  D019 — 2026-07-23
+- **Decision:** Responsibility flows from the coding workflow through the durable Worker, Room, Job,
+  and Assignment lifecycle to an agent driver operating through an Environment adapter. This is not
+  a package-import graph; D019
+  records that boundary.
+- **Why:** The current runner mixes GitHub, repository, Incus, tmux, and Codex concerns. Separating
+  them lets the coding workflow dogfood reusable primitives without leaking PR policy into agent or
+  environment implementations.
+- **Reconsider when:** A working vertical slice demonstrates a smaller interface with fewer concepts
+  and no workflow leakage.
+
+## D003 — Codex app-server first; ACP later
+
+- **Status:** Accepted — 2026-07-22
+- **Decision:** Codex is the first interactive agent. Use a thin driver over authenticated Codex
+  app-server WebSocket; do not add ACP before a second interactive harness driver is required.
+- **Why:** App-server exposes Codex-native threads, turns, approvals, history, interruption, and live
+  updates directly. A thin driver keeps its experimental protocol replaceable without prematurely
+  creating an agent-plugin framework.
+- **Reconsider when:** App-server cannot satisfy reconnect or security needs, or a concrete second
+  interactive agent such as Claude Code or Kimi CLI enters the supported coding workflow. One-shot
+  reviewer commands do not meet this trigger.
+
+## D004 — Tmux and SSH remain break-glass tools
+
+- **Status:** Accepted — 2026-07-22; built-in tmux runner removed at resource cutover — 2026-07-27
+- **Decision:** Keep SSH/direct Room access and manually started tmux available for operational
+  takeover alongside the semantic harness driver. Do not make a resident tmux process part of
+  durable identity or retain an unused built-in tmux runner.
+- **Why:** Agent-native history does not replace the ability to inspect the VM, recover a stuck
+  process, open a shell, or repair work when Dorf's control path fails.
+- **Reconsider when:** Another proven operational mechanism offers equally simple and reliable local
+  observation and takeover.
+
+## D005 — The agent owns conversation history
+
+- **Status:** Accepted — 2026-07-22; controller-owned input boundary clarified by D022 — 2026-07-26
+- **Decision:** Codex remains authoritative for its transcript, turns, tool items, and context
+  management. Dorf stores native IDs plus the lifecycle, run, workflow, and cleanup facts it
+  owns; it does not duplicate the full transcript in SQLite or documents. Pinned goals and
+  queued human/client messages are Dorf-owned control inputs required for durable delivery, not
+  copies of agent-owned history.
+- **Why:** Duplicating history creates synchronization and compatibility problems without serving the
+  current coding workflow.
+- **Reconsider when:** A real client needs lossless replay that agent-native history cannot supply, or
+  history must remain available after environment destruction.
+
+## D006 — Turns are serialized
+
+- **Status:** Superseded by D022 — 2026-07-26
+- **Decision:** One turn may actively mutate an agent session at a time. Later messages are delivered
+  sequentially. The original decision deferred a durable FIFO until a concrete workflow needed to
+  accept a message during active work; #125 supplied that requirement.
+- **Why:** Concurrent turns against one context have ambiguous ordering and workspace effects.
+- **Reconsider when:** A supported agent has defined concurrent-turn semantics and a real workflow
+  benefits from them.
+
+## D007 — Cleanup has an explicit, retryable outcome
+
+- **Status:** Accepted — 2026-07-22
+- **Decision:** Workflow completion and environment cleanup are separate facts. Cleanup is
+  idempotent, retryable, and visibly failed until resources are released.
+- **Why:** A completed or discarded proposal does not prove that a local VM or future billable
+  environment was deleted.
+- **Reconsider when:** The representation may change, but cleanup failure must remain observable.
+
+## D008 — Local authenticated Incus image for ChatGPT subscription
+
+- **Status:** Superseded for Codex by D035 — 2026-07-29 (implemented and validated under the
+  completed #159 umbrella); the secret-bearing image remains the private default for Droid and any
+  other non-Codex agent state (accepted for the local single-user phase — 2026-07-22; made the
+  private default — 2026-07-26)
+- **Decision:** Use the local secret-bearing `dorf-codex-droid-authenticated-local` Incus image
+  containing `/root/.codex` ChatGPT device-login state for Codex CLI and app-server. While the code,
+  image, and deployment remain private and single-user, this image is the default Room template;
+  configured repositories may override it. Once the D035 umbrella ships, Codex provisioning follows
+  D035 instead: credential-free images plus broker-issued scoped keys.
+- **Why:** This supports the owner's ChatGPT subscription inside the current local trust boundary
+  without requiring usage-based API credentials. A vanilla Ubuntu default cannot satisfy Worker
+  readiness and makes the zero-configuration `spawn` path predictably fail.
+- **Reconsider when:** Dorf becomes remote or multi-user, images must be distributed, Workers
+  need distinct credentials, credentials require scoped injection, or cloned-image token refresh is
+  unreliable.
+
+## D009 — Coding workflow is the only requirements driver
+
+- **Status:** Accepted — 2026-07-22
+- **Decision:** Extract and dogfood the runtime through coding-to-PR before selecting another workflow,
+  environment provider, or interactive agent.
+- **Why:** A dependable building block emerges from real pressure, not speculative generality.
+- **Reconsider when:** The coding workflow is fully routed through the runtime and dogfood evidence
+  justifies one concrete next consumer.
+
+## D010 — Vertical slices, KISS, and deletion are preferred
+
+- **Status:** Accepted — 2026-07-22
+- **Decision:** Migrate through thin end-to-end slices. Current code and tests may be refactored or
+  removed when a simpler implementation replaces them.
+- **Why:** Preserving accidental structure creates adapters around adapters. Tests protect required
+  product behavior, not superseded implementation shape.
+- **Reconsider when:** An explicit compatibility promise covers the affected interface.
+
+## Additional durable choices
+
+These choices predate the 2026-07-22 consolidation. Their original implementation details remain in
+Git history; only the rationale needed to avoid accidental reversal is retained here.
+
+| ID | Decision and why | Reconsider when |
+| --- | --- | --- |
+| D011 | **One coding task slice per Job, Assignment, isolated clone, branch, and PR proposal.** Revision retains those identities; merge, rejection, or abandonment is workflow-terminal. | A concrete workflow needs different cardinality with equally clear acceptance semantics. |
+| D012 | **Incus VM is the only current environment adapter.** It provides local isolation without exposing the host Docker daemon or home directory. | The Incus lifecycle is dogfooded and a meaningfully different environment is deliberately selected. |
+| D013 | **GitHub PR is the acceptance primitive.** Git and GitHub already provide durable diffs, review, merge, and rejection. | A non-GitHub coding workflow becomes a real requirement. |
+| D014 | **SQLite state lives outside managed repos.** Local runtime and coding workflow indexing remains durable without modifying target repositories. | Multi-host coordination requires another store. |
+| D015 | **The Dorf control plane owns coding-branch authentication through the GitHub App.** It delivers short-lived installation tokens through the Environment seam without borrowing ambient controller-machine Git credentials, credential stores, or checkout state. | Another source-control host is supported or a narrower equally usable credential flow is proven. |
+| D016 | **The Room-native `/workspace/jobs/JOB` clone is authoritative for a coding Job.** The host checkout is orchestration context only; each Job is an independent clone, not a worktree or the Worker-general `/workspace` directory. | An environment without a durable native filesystem proves another workspace model necessary. |
+| D017 | **Managed repositories expose explicit development-tooling contracts.** Repo-owned commands and allowlisted environment bindings keep app semantics in the repo without Dorf coupling in product code. | A compatible repo-owned standard or a repeated cross-repo primitive proves a smaller contract. |
+
+## D018 — Stabilize only the dogfooded internal runtime boundary
+
+- **Status:** Superseded by D025 — 2026-07-27
+- **Decision:** The then-supported repository-internal runtime surface was the logical-session lifecycle
+  exercised by the coding workflow: create or retry environment provisioning, start and observe the
+  initial native turn, reconnect and inspect, continue or recover one serialized turn, and end with
+  observable retryable cleanup. Incus and Codex remain direct built-in adapters. Provider selection,
+  generalized runner and agent registries, capability matrices, worker artifact paths, and
+  app-server-specific public errors are outside that surface. GitHub, repository, check, review,
+  repair, publication, and acceptance policy remain in the coding workflow.
+- **Why:** The [#94 ledger](https://github.com/aphronio/dorf/issues/94) directly observed
+  later-client reconnect without new runs, three
+  sequential turns on one Codex thread, and successful retry after partial cleanup. Every slice used
+  Incus and Codex; no second workflow, environment, or interactive agent supplied evidence for a
+  generalized selection layer. The registry had no second implementation, and current setup
+  recovery no longer needed the old run-kind reclassification shim. Process-liveness and
+  app-server error names also leaked replaceable implementation details.
+- **Compatibility:** This surface is internal and experimental. Python types, SQLite representation
+  and migration policy, CLI rendering, and opaque Codex-native inspection payloads may change with
+  further dogfood.
+  Public packaging, licensing, releases, and external compatibility commitments are deferred.
+- **Reconsider when:** A second real workflow needs the same lifecycle with different caller facts;
+  a deliberately selected second environment or interactive agent proves a shared selection seam;
+  agent-native history cannot satisfy a real inspection need; or the owner chooses to prepare a
+  licensed public release with an explicit compatibility policy.
+
+## D019 — Portable runtime core with built-in adapters
+
+- **Status:** Accepted — 2026-07-23
+- **Decision:** Keep the durable lifecycle and generic persistence in the self-contained
+  `dorf.runtime` package. Put concrete implementations in
+  `dorf.adapters.agents` and `dorf.adapters.environments`, in the same distribution for now.
+  Keep coding-to-PR state and behavior in `dorf.workflows`, outside the runtime and adapters.
+  Caller metadata is opaque to the runtime. Do not add registries, plugin loading, provider
+  configuration, networking policy, or a separate distribution yet.
+- **Why:** Durable Worker, Room, Job, Assignment, and conversation bindings are useful beyond
+  the current application and should be inexpensive to extract into another monorepo package or
+  repository. In-package adapters make the implementation seams and future extension points clear
+  without preserving the deleted single-implementation registries or creating a speculative plugin
+  framework. Keeping Git and GitHub behavior in the coding workflow lets a future environment
+  adapter reuse the lifecycle without inheriting coding policy.
+- **Compatibility:** The prior experimental SQLite schema and top-level implementation modules are
+  replaced rather than migrated. No external compatibility promise covered them.
+- **Reconsider when:** The runtime is deliberately published or extracted; a second real adapter
+  proves a common selection/configuration seam; or packaging adapters separately solves a concrete
+  dependency or release problem.
+
+## D020 — Approved Worker, Room, and Job control-plane direction
+
+- **Status:** Superseded by D025 — 2026-07-27; storage authority refined by D023 — 2026-07-26
+- **Decision:** Adopt [north-star.md](north-star.md) as approved product direction for the L1 control
+  plane, including Worker, Room, and Job as product vocabulary and the shared control verbs. `spawn`
+  may provision and bind a Worker to a Room before `assign` pins and delivers the Job goal; the
+  implementation may represent that interval as an unassigned Job rather than introducing an
+  independent worker registry. Aim for a tangible Job document directory alongside transactional
+  operational state as refined by D023. Existing session/environment/turn names, SQLite schemas,
+  and internal APIs are implementation evidence,
+  not compatibility constraints, and may be replaced rather than migrated. Concrete API and schema
+  details remain decisions to make in working vertical slices.
+- **Why:** The finalized north star is the accepted destination, not a speculative alternative to
+  the current implementation. Preserving experimental representations would invert that priority.
+  Keeping concrete details refactorable still allows implementation evidence to expose genuine
+  conflicts without silently weakening the product direction.
+- **Local and remote durability:** A remote or cloud Room should continue when local clients are
+  offline. A local Room requires its host to be powered on, but client/process failure or host
+  restart must not erase the durable Job, Room, Worker binding, or recovery path.
+- **Compatibility:** There is no current external compatibility promise. Rewrite or delete
+  superseded runtime code and tests while retaining coverage for behavior the north star still
+  requires.
+- **Reconsider when:** A working slice exposes a concrete conflict in the accepted vocabulary,
+  object lifecycle, directory representation, or control verbs. Discuss and record the deliberate
+  revision; do not diverge merely to preserve current implementation shape.
+
+## D021 — Situation-first inspection with explicit provenance
+
+- **Status:** Accepted — 2026-07-26
+- **Decision:** `inspect` defaults to a read-only Job pulse built from Dorf-owned lifecycle and
+  run facts plus a fresh Room availability observation. Worker claims are a separate provenance
+  channel and remain explicitly absent until a structured self-report boundary exists; Dorf
+  does not infer them from native conversation history. Opaque native history and adapter
+  diagnostics are available only through the explicit raw lens. An unavailable Room is a pulse
+  fact, not a reason to hide the durable Job; the raw lens may fail when it cannot reconnect.
+- **Why:** A returning manager needs an honest, glanceable situation before protocol history. Keeping
+  claims separate prevents fluent Worker output from becoming control-plane fact, while preserving
+  raw diagnostics supports break-glass investigation without making it the front door. A pulse that
+  survives Room unavailability makes reconnect useful precisely when operational state is degraded.
+- **Current shape:** Assignment-fenced structured Worker claims and evidence now enrich the pulse.
+  Timeline and evidence are explicit read-only lenses; native transcript history remains separate.
+- **Reconsider when:** A reviewed self-report/evidence ingestion boundary lands, a real environment
+  cannot support a cheap side-effect-free availability observation, or a client needs another lens
+  backed by concrete workflow evidence.
+
+## D022 — Controller-owned message FIFO with internal action identity
+
+- **Status:** Accepted — 2026-07-26; storage revised by D023 and conversation scope by D025
+- **Decision:** Preserve one active native turn per conversation and admit subsequent public messages
+  into that conversation's transactional SQLite FIFO. Every admitted user action receives a random
+  internal message ID;
+  internal callers retain that ID across transport retries. Message text is never identity, so two
+  identical messages are two valid queue entries. The internal message ID becomes the existing
+  native turn key. A replaceable
+  local dispatcher drains the FIFO in order and stops at a failed delivery. `wait` only observes
+  durable outcomes and current adapter attention; it does not dispatch, send a status turn, or
+  create polling runs.
+- **Why:** FIFO admission makes ordering durable before transport and lets a dispatcher failure leave
+  recoverable work instead of losing input. Content deduplication would incorrectly collapse valid
+  repeated instructions such as two consecutive “continue” messages. Stable per-action identity is
+  the only honest way to distinguish retries from repeated content without asking humans to manage
+  idempotency keys.
+- **Local durability:** Once the SQLite admission transaction commits, the message is accepted even
+  if detached dispatcher launch fails. A later recovery path may restart delivery. Local host
+  shutdown still pauses local dispatch under D020; it does not erase the Job or queue.
+- **Compatibility:** Message-table schema, receipt JSON, wait outcome shape, polling interval, and
+  dispatcher process are experimental and replaceable. This decision does not select the
+  Worker-to-control-plane context, evidence, timeline, artifact, or ingestion protocol reserved for
+  #126.
+- **Reconsider when:** A remote control plane requires a multi-host queue/lease, a concrete client
+  cannot retain action identity across its own transport retries, or native harness semantics permit
+  useful concurrent turns with defined ordering.
+
+## D023 — Job document plane; SQLite operational authority
+
+- **Status:** Accepted — 2026-07-26
+- **Decision:** Use the external Job directory for durable material that humans or agents should
+  consume through ordinary file tools: the pinned goal and, after reviewed boundaries land,
+  approved context, claims, and evidence. Use SQLite as the authority for transactional operational
+  state including Worker, Room, Job, Assignment, conversation, FIFO admission, and delivery
+  indexing. Do not maintain mutable copies of the same state in both surfaces. Native conversation
+  history remains harness-owned and coding deliverables remain Git/GitHub-owned.
+- **Why:** Documents benefit from `grep`, editors, shell tools, diffs, and bounded read-only exposure
+  to a Room. Concurrent message admission and lifecycle transitions benefit from database
+  transactions and programmatic queries; representing them as JSON merely because SQLite is also a
+  file adds locking, crash-recovery, and synchronization code without helping an agent consume the
+  data.
+- **Room boundary:** The external Job document directory is never writable-mounted into the Room.
+  Approved documents may be projected inward read-only. Worker-authored changes leave the
+  Room only through the reviewed validation and ingestion boundary reserved for #126.
+- **Compatibility:** Existing duplication between `job.json` and SQLite is refactorable evidence,
+  not a schema promise. Remove duplication incrementally when a working slice owns the affected
+  lifecycle behavior; do not expand this message slice into a broad Job-state rewrite.
+- **Reconsider when:** Agents concretely need direct file-tool access to operational state, a
+  multi-host control plane replaces SQLite, or a smaller single authority can preserve both
+  transactional correctness and the document-tool experience.
+
+## D024 — Controller-mediated Job context and validated Worker reports
+
+- **Status:** Accepted after ecosystem research and human design review — 2026-07-26; reporting
+  scope fenced by Assignment under D025 — 2026-07-27
+- **Decision:** Project approved Job context into the Room as a detached copy with no write-back path;
+  never mount the external Job directory writable. Give the Worker a Room-local `dorf-report`
+  command, described through harness-level runtime capability guidance that contains no task or
+  alternate goal. The command publishes milestone, assumption, completion, and artifact claims to a
+  Maildir-style `tmp` then `new` spool. A replaceable controller collector pulls each declared file
+  individually into quarantine, validates it, streams it under fixed quotas, computes its digest,
+  stores immutable per-Job content-addressed bytes, appends one immutable provenance-labelled timeline
+  event as the acceptance commit, and writes an acknowledgement. Reports require the exact current
+  Job, Assignment, and absolute Room outbox scope. `inspect` reads accepted documents only; it never
+  ingests or restarts the collector.
+- **Delivery and recovery:** Report IDs are independent of content. Ingestion is at least once and
+  idempotent by Job plus report ID; a retry with different accepted content is rejected. A collector
+  crash before the timeline event leaves only disposable quarantine or an unreferenced blob. A crash
+  after the event but before acknowledgement reuses that event and completes the acknowledgement.
+  Event files are sequenced under a local Job lock and atomically renamed into the timeline. Automatic
+  process recovery composes with #128; the durable Room spool does not depend on one collector process.
+- **Provenance:** Worker summaries and artifacts remain claims after safe ingestion. Runtime-observed
+  lifecycle/turn outcomes and workflow-observed command exits are facts. Artifact digests bind the
+  exact accepted bytes but do not validate their interpretation. Runtime event kinds and artifact
+  metadata remain generic; coding-specific check, benchmark, diff, branch, and PR meaning stays in the
+  coding workflow.
+- **Security and limits:** Accept only fixed-schema manifests, bounded one-line summaries, safe display
+  names, sequential fixed spool names, and regular files. Reject traversal, links, special files,
+  archives-as-transport, excessive file count, files over 100 MiB, and Jobs over 500 MiB. Transfers do
+  not follow links and stream to controller-owned quarantine rather than buffering artifact contents.
+  The Worker never chooses a controller destination path.
+- **Research basis:** Controller file APIs in [Incus](https://linuxcontainers.org/incus/docs/main/howto/instances_access_files/)
+  and [E2B](https://e2b.dev/docs/quickstart/upload-download-files) support provider-mediated copy
+  rather than shared authority. [Maildir](https://cr.yp.to/proto/maildir.html) demonstrates complete
+  publication through temporary files and atomic rename. The
+  [transactional outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
+  and [Temporal idempotency guidance](https://temporal.io/blog/idempotency-and-durable-execution)
+  support stable identities and idempotent at-least-once consumers. Bazel's
+  [CAS model](https://bazel.build/remote/caching) separates digest-addressed bytes from metadata;
+  [in-toto](https://github.com/in-toto/attestation/blob/main/spec/README.md) supports binding subjects
+  to provenance; and [OpenHands events](https://docs.openhands.dev/sdk/arch/events) reinforce explicit
+  immutable source attribution. OWASP upload guidance motivates strict path, link, type, and quota
+  validation.
+- **Rejected alternatives:** Reject writable authoritative mounts and writable host staging mounts
+  because they weaken the boundary and couple the design to local Incus. Defer Codex dynamic tools or
+  MCP as the primary transport because they add harness-specific protocol work and do not carry large
+  artifacts. Do not adopt Temporal/Postgres, a global object store, full in-toto signing, transcript
+  scraping, or archive extraction for this local-first slice; each adds machinery or false authority
+  without improving the current coding workflow.
+- **Compatibility:** Timeline/report schemas, quotas, collector process shape, Room paths, capability
+  wording, and rendering are internal and replaceable. The enduring boundary is detached approved
+  context inward, validated claims outward, immutable provenance, and no writable authoritative mount.
+- **Reconsider when:** A remote Room needs push delivery instead of polling, a second harness proves a
+  smaller report-tool seam, artifact volume justifies a global store and garbage collector, signed
+  attestations become a real workflow requirement, or fixed quotas block observed coding evidence.
+
+## D025 — Independent Worker identity, replaceable Room, and explicit Assignment
+
+- **Status:** Accepted after stranger-loop dogfooding and human design review — 2026-07-27
+- **Decision:** Worker, Room, Job, and Assignment are separate durable concepts. A Worker is an
+  independently named identity that may be idle, assigned, or offline and survives loss or
+  replacement of its current Room. A Room is a separately recorded isolated execution body operated
+  through the Environment adapter. A Job comes into existence only when complete goal version 1 is
+  atomically pinned. Assignment is the temporal relation connecting an open Job to one Worker; the
+  first implementation permits one open Job per Worker and no cross-Worker reassignment. D020's
+  permitted unassigned placeholder Job is rejected rather than retained as the Worker registry.
+- **Conversation topology:** A Worker owns one lazy harness-native general conversation, while every
+  Job owns a separate harness-native conversation. Inputs are admitted durably and ordered FIFO per
+  conversation, not across the Worker. Independent general and Job turns may overlap when the
+  harness supports independent threads; Dorf adds no Worker-wide scheduler or mutex. Native
+  transcript history remains harness-owned. The Worker-general conversation initially has no
+  timeline/evidence document plane and receives no Job goal or reporting identity.
+- **Configuration:** Harness type belongs to Worker identity. Model and reasoning defaults belong to
+  a conversation and supported turns may override them. `worker spawn` therefore provisions and
+  validates the harness without pinning model/reasoning choices to the Worker.
+- **Lifecycle:** `worker spawn` creates the Worker and its initial ready Room without a Job or Job
+  documents. Open offline Workers admit direct messages for later delivery. `job assign` requires an
+  existing ready Worker with no open Job and never spawns implicitly. Sequential Jobs reuse the
+  Worker's Room but use independent `/workspace/jobs/NAME` workspaces. Explicit ending, same-Worker
+  recovery, and attachment are owned by #129, #128, and #127 respectively.
+- **CLI direction:** L1 uses typed resource groups (`worker ...` and `job ...`); `message` replaces
+  `send`. Worker and Job names occupy separate namespaces. Rooms are initially addressed through
+  Worker identity rather than a public Room command group. The completed cutover removes superseded
+  top-level commands without compatibility aliases.
+- **Why:** #122–#126 proved detached provisioning, messaging, reconnect, and evidence but exposed
+  that an unassigned Job cannot honestly represent a reusable Worker, a replaceable Room, two
+  independent conversations, or sequential Jobs. Making the identities explicit removes ownership
+  ambiguity before attachment, recovery, and cleanup harden it into more state transitions.
+- **Compatibility:** Runtime types, SQLite tables, Job documents, command grammar, and the old
+  one-to-one Session representation were internal and experimental. The development database and
+  generated runtime state are deliberately reset at final cutover rather than automatically
+  migrated; no compatibility adapter or destructive migration ships.
+- **Reconsider when:** A concrete workflow requires multiple simultaneous Jobs per Worker,
+  cross-Worker handoff, public Room management, curated Worker memory, or a harness that cannot keep
+  independent general and Job threads. Each requires a reviewed lifecycle/fencing decision rather
+  than weakening identity boundaries implicitly.
+
+## D026 — Coding workflow composes runtime resources without a replacement aggregate
+
+- **Status:** Accepted at coding cutover — 2026-07-27
+- **Decision:** A coding slice creates deterministic Worker `coder-JOB` with explicit
+  `coding-workflow` provenance and `dedicated` lifecycle policy, then creates one exact-goal Job and
+  Assignment. Workflow-owned SQLite tables are keyed by Job and contain only repository, branch, PR,
+  command, review, AFK, and terminal workflow facts. They do not duplicate current Worker, Room,
+  Assignment, conversation, input, turn, or runtime lifecycle state into a renamed coding Session.
+- **Workspace and turns:** Coding repositories are independent clones at `/workspace/jobs/JOB`, never
+  worktrees or the Worker-general root. Repo setup and checks are workflow-observed commands;
+  implementation, repair, and follow-up are messages on the Job FIFO and native conversation. Review
+  agents remain workflow-owned one-shot commands rather than durable Workers.
+- **Terminal policy:** PR creation, passing checks, successful turns, and Worker completion claims do
+  not close runtime resources. Merge, explicit rejection, and abandonment are terminal coding
+  workflow conditions; resource ending and Room cleanup remain the explicit lifecycle operation
+  owned by #129. Revision preserves the Job, Assignment, Worker, Room, clone, branch, and PR.
+- **Credentials:** Repository clone and Job-workspace fetch/push use short-lived GitHub App
+  installation tokens passed through the current Assignment/Room execution boundary. Before a Job or
+  Room exists, the controller may use a separately minted installation token to read/create the
+  coding branch ref and fetch only the recorded remote base object into the orchestration checkout so
+  it can pin the exact base; recovery uses the same scoped ref API. GitHub PR API calls likewise use
+  controller-side installation tokens for the recorded repository. No path borrows ambient
+  controller Git credentials or credential stores.
+- **Compatibility:** The superseded Session runtime, tables, dispatchers, top-level L1 commands, and
+  coding-session compatibility paths are deleted, not wrapped. Experimental development state is
+  reset once out of band; no destructive migration is shipped.
+- **Why:** Keeping a second aggregate would restore the ownership ambiguity D025 removed and permit
+  runtime and workflow state to disagree. Explicit provenance prevents lifecycle policy from being
+  inferred from the `coder-` name, while Job-keyed workflow facts preserve coding-specific recovery
+  without leaking repository policy into the runtime.
+- **Reconsider when:** A second workflow demonstrates a concrete shared orchestration record that
+  cannot be represented by resource identity plus workflow-owned facts, or coding tasks need a
+  deliberately reviewed Worker-sharing policy.
+
+## D027 — Worker-addressed attachment is synchronous presence with implicit detach
+
+- **Status:** Accepted during stranger-loop attachment implementation — 2026-07-27
+- **Decision:** `worker attach NAME` resolves the Worker's exact current Room at invocation, records
+  one transactional human-presence claim fenced to that Room, and opens a direct interactive shell at
+  `/workspace`. It does not select the assigned Job workspace, pause native turns, or change Worker,
+  Room, Job, Assignment, conversation, workspace, or branch identity. Exiting the shell with
+  `Ctrl-D`, `exit`, or ordinary client interruption clears presence. A process-held advisory lock
+  distinguishes a live owner from a stale row after an ungraceful crash; inspection reports the
+  latter detached and the next attachment reclaims it. A second concurrent attachment fails
+  honestly. Do not add a separate `worker detach` command until a concrete remote
+  forced-detachment need exists; direct provider access remains the break-glass fallback.
+- **Why:** The current local single-user workflow needs a simple door into the Room, not a resident
+  terminal service or remote session-management protocol. Starting consistently at `/workspace`
+  keeps attachment independent of Assignment state, while shell lifetime already supplies an honest
+  presence boundary. A separate detach verb would require durable remote process handles and orphan
+  reconciliation without serving an observed workflow.
+- **Reconsider when:** A remote client must evict an attachment it does not own, multi-human presence
+  becomes real, a non-Incus Environment cannot expose a synchronous terminal, or shell interruption
+  cannot provide reliable presence cleanup.
+
+## D028 — Recovery preserves identity and reconciles native delivery before redispatch
+
+- **Status:** Accepted during stranger-loop recovery implementation — 2026-07-27; absent-Room
+  replacement superseded by D030
+- **Decision:** `worker recover NAME` is the explicit recovery boundary. It restores the exact current
+  Room and provider identity when the Incus VM still exists, including after a host restart. If the
+  provider body is absent, it retains Worker and Job identity, records the old Room as absent, creates
+  one replacement Room, and rolls an open Job to one new same-Worker Assignment generation. Generic
+  Assignment workspace/reporting scope and coding clones are rebuilt in the replacement Room before
+  delivery resumes. Replaceable Worker/Job dispatchers and the exact current Assignment collector
+  are restarted.
+- **Native delivery:** A transport or controller failure after native submission begins records
+  `recovery-required`, not failure. Recovery inspects the bound harness thread and uses the recorded
+  baseline and native turn IDs to distinguish no submission, one submitted turn, completion,
+  interruption, failure, active work, pending approval, and uncertainty. Input is resubmitted only
+  after native history proves no turn was submitted. Worker-general and Job-native reconciliation
+  remain independent. Native transcript bytes stay harness-owned.
+- **Continuity limit:** Room replacement preserves the Dorf conversation binding but cannot
+  promise that Codex can load a thread whose harness state existed only in the lost Room. That case
+  remains visibly blocked with the native error; Dorf does not copy transcripts or silently start
+  a replacement thread and call it continuity.
+- **Why:** Clients, dispatchers, collectors, and app-server control processes are replaceable, while
+  blind resend can duplicate side effects. Provider disk survival is the strongest available source
+  of workspace and native-history continuity. An immutable Assignment generation records a changed
+  Room honestly without reassigning the Job to a different Worker.
+- **Reconsider when:** The harness offers native idempotency keys or cloud-restorable history, a
+  remote control plane needs leases rather than local process locks, or another Environment provides
+  a materially different restore/replacement boundary.
+
+## D029 — Job and Worker ending retain identity and require observable cleanup truth
+
+- **Status:** Accepted during stranger-loop ending implementation — 2026-07-27
+- **Decision:** `job end NAME` closes new admission and requires settled prior input. It admits one
+  stable cleanup input, requires its native turn to succeed, removes the exact Assignment workspace
+  and Room-local reporting scope, ends the current Assignment, returns a caller-managed Worker idle,
+  and retains the Job, goal, timeline, evidence, and native binding. `--interrupt` explicitly marks
+  unsettled work interrupted and bypasses cooperative cleanup. `worker end NAME` requires no open Job,
+  stops and destroys the exact current Room, clears its binding, and retains an ended Worker tombstone.
+- **Retry and policy:** Ending and cleanup are separate durable facts. Workspace or Room cleanup
+  failure remains `ending`/`cleanup-failed`; retry reconciles the same cleanup input and exact Room.
+  Coding merge, explicit rejection, and abandonment force-end their Job. A dedicated coding Worker is
+  then ended; a caller-managed Worker remains ready for another Job. Lifecycle policy is never
+  inferred from its name.
+- **Why:** Conversation success and PR state cannot prove process, workspace, credential, or VM
+  cleanup. Retained identities preserve history and prevent accidental name reuse, while exact
+  provider/workspace fencing prevents a retry from deleting another resource generation.
+- **Reconsider when:** Keep/freeze Room behavior is implemented, permanent deletion/name reuse is
+  required, or a harness exposes a stronger cooperative process-shutdown primitive.
+
+## D030 — Recovery does not replace a lost Room without restorable native history
+
+- **Status:** Accepted after complete stranger-loop dogfooding — 2026-07-27
+- **Decision:** `worker recover NAME` restores and reconciles only the exact recorded Room while its
+  provider body and disk survive. Provider-confirmed absence marks that Room absent, clears the
+  Worker's current Room, and leaves the Worker offline. Dorf retains Worker, Job, Assignment,
+  goal, documents, queued input, and typed native bindings, but does not provision a replacement
+  Room, roll Assignment generation, rebuild a coding clone, or start a fresh native thread and call
+  it continuity. `job end --interrupt` may acknowledge proven Room loss without attempting native or
+  Room-local cleanup; the Roomless Worker can then be ended.
+- **Why:** Authenticated replacement dogfooding preserved control-plane IDs but Codex could not load
+  history stored only in the deleted VM. Continuing would therefore require distributed transcript
+  or harness-state storage, harness-supported history restoration, or an explicit new-conversation
+  handoff protocol. Those mechanisms are disproportionate at the current local coding-to-PR stage,
+  and replacement without them creates misleading continuity plus Assignment, workspace, reporting,
+  credential, and retry complexity.
+- **Compatibility:** This narrows D025's currently implemented replaceable-Room posture and supersedes
+  D028's absent-provider replacement path. Same-Room restoration, process recovery, native-turn
+  reconciliation, durable offline inspection, and queued admission remain supported.
+- **Reconsider when:** Codex or another current harness can restore native history independently of
+  Room disk, Dorf deliberately owns sufficient conversation state, or a concrete workflow needs
+  and validates an explicit handoff into a new native conversation.
+
+## D031 — Buzz relay is the first remote client transport; ACP remains a separate seam
+
+- **Status:** Superseded by D034 after the application-boundary review — 2026-07-28
+- **Decision:** Make Buzz the first phone-facing client through a transport adapter that speaks the
+  Buzz relay's signed Nostr event protocol over its WebSocket and REST surfaces. Do not put Buzz,
+  Nostr, channels, threads, relay identities, or observer events in `dorf.runtime`. Present one
+  stable Dorf coordinator identity in Buzz rather than projecting every Worker as a separate
+  Buzz agent. The coordinator is an ordinary long-lived Dorf Worker using its general
+  conversation. It may employ other Workers through the same typed control verbs available to any
+  agent-first client; it is not a new runtime resource or a privileged replacement authority.
+- **Identity and capability boundary:** The host-side adapter owns the coordinator's Nostr
+  credential, verifies and publishes transport events, and never places that key in the
+  coordinator's Room. The coordinator receives narrowly brokered, typed Dorf operations rather
+  than the host shell, Incus socket, SQLite file, or transport credential. Per-Worker Buzz
+  identities are not the default. They may be reconsidered only for a concrete, deliberately
+  published long-lived Worker whose direct persona is valuable enough to justify separate
+  enrollment.
+- **Conversation and attention:** Natural-language conversation is the first remote interaction.
+  A Buzz conversation addresses the coordinator and may discuss or create zero, one, or many Jobs;
+  it is not exclusively bound to one Job. The adapter supplies exact event, reply, and known
+  resource context. The coordinator interprets intent and selects typed operations, while Dorf
+  validates every Worker, Job, Assignment, admission, and lifecycle transition. Ambiguity around an
+  irreversible or boundary-crossing action requires explicit confirmation. Structured choices may
+  later optimize narrow approvals, but are not a prerequisite for the first phone dogfood loop.
+- **Durability boundary:** A durable adapter-owned mapping from Buzz event ID to the coordinator's
+  internal input ID makes relay replay harmless while distinct events with repeated text remain
+  distinct inputs. Concrete application records associate a Buzz conversation with every Job
+  introduced there and record the exact outcome of coordinator tool actions; they do not create a
+  second runtime aggregate or make thread identity authoritative for Job lifecycle. Deterministic
+  identity, ordering, and typed execution protect the machinery even though semantic interpretation
+  is conversational.
+- **First-party Buzz experience:** Agent identity, membership, profile, presence, mentions, DMs,
+  threads, messages, and audit history come from signed relay events rather than ACP. After the
+  basic loop works, the adapter may emit Buzz's encrypted owner-scoped observer frames to render
+  Dorf turns and activity in Buzz's existing desktop/mobile agent surfaces. Those frames are a
+  transport rendering of Dorf-owned facts and claims, never a second authority.
+- **ACP boundary:** Buzz's current ACP harness is a live, process-owning bridge that spawns an agent,
+  turns relay mentions into ACP prompts, and expects the agent to publish through Buzz separately.
+  Dorf already owns durable Worker, Room, Job, Assignment, and Codex app-server lifecycle, so
+  that harness is not the remote-control foundation. D003 remains unchanged: ACP may be added later
+  for a concrete second harness or ACP-native client such as Zed, independently of the Buzz
+  transport.
+- **Why:** Buzz explicitly supports agents and scripts through its agent-first CLI and relay APIs;
+  ACP is one convenience harness, not the source of first-class agent identity. Direct relay
+  integration preserves both systems' ownership boundaries, provides the native phone/team
+  experience, and reaches a useful conversational demo before building a generalized protocol
+  adapter or structured inbox UI. One coordinator matches how a human lead works in Slack: a single
+  conversation can create and manage several independent pieces of work without requiring every
+  subordinate to join the chat system. It also follows the north star's rule that a lead Worker is
+  just another client speaking the same verbs.
+- **Compatibility:** Buzz event kinds, observer payloads, key storage, profile registration, and
+  adapter persistence are external and replaceable implementation details. The enduring boundary is
+  the same typed Dorf verbs, durable internal admission identity, and no transport concepts in
+  the runtime.
+- **Reconsider when:** Buzz removes or materially restricts direct agent relay participation, its
+  mobile client cannot support the real coding dogfood loop, observer formats cannot be consumed
+  without runtime leakage, or another phone client proves a substantially smaller transport while
+  preserving a first-class coordinator identity. Discuss a new runtime primitive before adding one
+  if dogfood proves that an ordinary Worker general conversation plus typed client tools cannot
+  express durable coordination without distortion.
+
+## D032 — One durable Buzz instance is the main personal deployment
+
+- **Status:** Accepted after provisioning the first owned relay; integration ownership revised by
+  D034 — 2026-07-28
+- **Decision:** Treat the persistent `dorf-buzz` Incus VM as the single developer's main Buzz
+  deployment, not as a disposable fixture or a staging environment. Develop and validate client
+  integrations against this instance, promote changes in place through small runnable demonstrations,
+  and keep its identity, messages, and state across iterations. Do not introduce a staging/production
+  split without an observed need.
+- **Operating posture:** Pin source and container revisions, keep deployment secrets stable, make
+  exposure and lifecycle changes programmatic and reversible, validate health and the real client
+  path after changes, and take coherent backups before upgrades that put durable state at risk.
+  Desktop is the first client for iterative integration work. Trusted WSS, a proper domain or other
+  mobile-compatible exposure is a later deployment slice, after a real channel loop works and is
+  useful.
+- **Why:** There is one developer and operator. A second environment would add resource use,
+  configuration drift, promotion ceremony, and false confidence without protecting other users.
+  Using the actual long-lived instance makes early dogfood honest and follows the
+  small-demonstration, early-adoption execution posture in the project principles.
+- **Compatibility:** The VM remains shared infrastructure outside Dorf Room and Worker
+  lifecycle. This decision does not make Buzz authoritative for Dorf state and does not weaken
+  D034's ownership boundary.
+- **Reconsider when:** Other users depend on the instance, public ingress or uptime expectations
+  appear, an upgrade cannot be rolled back from a coherent backup, destructive migration testing
+  becomes recurrent, or real usage demonstrates that pre-production validation is cheaper than
+  recovery.
+
+## D033 — The human Buzz owner key is client-generated and never server-managed
+
+- **Status:** Accepted after first desktop onboarding — 2026-07-28
+- **Decision:** Generate and retain the main community owner's private identity only in the
+  first-party Buzz client under the human's control. Relay provisioning accepts only that identity's
+  public key as `RELAY_OWNER_PUBKEY`; it must not generate, display, transfer, or retain a human
+  owner private key. The relay's service-signing key remains a distinct deployment secret inside
+  the VM.
+- **Bootstrap posture:** A closed relay may wait for the human's public key before its first usable
+  start. Do not temporarily open membership or create a server-side human identity merely to make
+  provisioning unattended. An explicitly disposable automated fixture may own a fixture key, but
+  that exception does not apply to the durable personal deployment.
+- **Why:** The first desktop onboarding proved that Buzz can generate the human identity before
+  joining a community and expose only its safe `npub` for enrollment. This produces one human, one
+  owner identity, avoids a private-key transfer ceremony, and keeps the server from holding a
+  credential it does not need.
+- **Migration evidence:** The Mac-generated identity is the sole active relay owner. The temporary
+  server-generated bootstrap identity was demoted, removed from membership after the desktop
+  authenticated, and its private/public key files were deleted. It authored no conversation.
+- **Reconsider when:** Buzz introduces a server-mediated owner bootstrap that never exposes or
+  escrows the human private key, or a concrete non-human fixture needs an explicitly scoped
+  operator identity.
+
+## D034 — Human-facing applications remain SDK clients
+
+- **Status:** Accepted; initial Worker and Job client integration validated — 2026-07-29
+- **Decision:** Human-facing applications own their conversation, memory, semantic intent, channel
+  integration, tool selection, and approval UX. They employ Dorf Workers through the same typed
+  Worker and Job verbs available to humans and other clients. Dorf remains authoritative for Worker,
+  Room, Job, Assignment, durable input, native delivery, observed facts, claims, evidence, recovery,
+  and cleanup.
+- **SDK boundary:** Trusted same-host applications call the concrete in-process Python SDK; the CLI
+  is a sibling adapter over the same facade. Clients never implement lifecycle behavior, open Dorf
+  SQLite, or construct Incus and Codex adapters themselves. A network transport may wrap the same
+  SDK if an observed multi-host or untrusted-caller requirement appears, without changing Worker or
+  Job semantics.
+- **Compatibility:** The Python facade, any future request envelope, authentication method, and
+  deployment topology are not yet stable public contracts. The enduring boundary is typed resource
+  verbs, explicit provenance, retry-safe mutations, and separate ownership of application
+  conversation versus runtime lifecycle.
+- **Reconsider when:** A concrete client proves the existing verbs cannot express a required
+  operation without distorting Worker or Job semantics, a second external client proves a shared
+  protocol need, or multi-host operation invalidates the current authority model.
+
+## D035 — Brokered model-plane authentication; credential-free sandbox images
+
+- **Status:** Accepted — 2026-07-29 (supersedes D008 for Codex)
+- **Decision:** A single host-side broker (pinned, vendored CLIProxyAPI) holds the ChatGPT OAuth
+  bundle as the sole refresh writer. Sandboxes run real Codex app-server (D003) pointed at the
+  broker via `model_providers` with a per-sandbox scoped key; sandboxes contain no OpenAI
+  credentials and may be egress-limited to the broker alone. Incus images are credential-free for
+  the Codex leg. Login is a one-time device-code flow; identical sandbox wiring serves
+  ChatGPT-subscription or API-key billing. Chosen/rejected/parked options:
+  `docs/project/model-auth-broker.md`. Validation: `docs/research/codex-auth-multi-sandbox.md`
+  (2026-07-29 experiment).
+- **Why:** Cloned secret-bearing images proved unreliable under concurrent refresh (#117, from
+  #112/#114 Droid evidence). Brokered custody removes refreshable state from sandboxes by
+  construction, preserves D003 session semantics, and matches the shape Amp operates in production
+  for linked ChatGPT subscriptions. The undocumented-upstream risk is accepted and its maintenance
+  delegated to a widely used OSS project.
+- **Reconsider when:** OpenAI publishes a supported individual-account non-interactive path
+  (`chatgptAuthTokens`, `personalAccessToken`); the undocumented upstream breaks or its terms
+  posture changes; Dorf becomes remote or multi-user (add OIDC-style sandbox identity); or the
+  Droid-leg validation produces contradicting evidence.
+
+## D036 — Shared Provider Gateway for trusted clients and Dorf Rooms
+
+- **Status:** Accepted direction — 2026-07-29
+- **Decision:** Add `dorf.provider_gateway` as a sibling application subsystem, outside
+  `dorf.runtime`. Its programmatic `ProviderGateway` facade manages durable upstream Provider
+  Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
+  Dorf composes it for Room routes; trusted host applications may import the same facade for their
+  own model routes. Connecting through either surface reaches one backing authority, so upstream
+  subscription or API credentials are never copied into clients or Rooms. CLIProxyAPI is the first
+  concrete daemon backend; D035 is the first validated ChatGPT-to-Codex route.
+- **Local and remote posture:** The current broker has one concrete bind address. Host-only use may
+  bind loopback; Codex Room composition binds the selected private Incus bridge address so both the
+  host and attached Rooms can reach it, never a wildcard or LAN address. An interface-scoped
+  firewall rule admits the gateway port only from the bridge. Connection and route semantics do not
+  depend on that location. A real remote Room may use the same route shape through a private
+  authenticated transport, but remote exposure, workload identity, and multi-user authority remain
+  unimplemented until a concrete deployment requires them.
+- **Provider posture:** The gateway is intended to admit validated subscription providers such as
+  ChatGPT, Kimi Code, or Grok and API-key providers such as OpenAI or OpenRouter. Names are direction,
+  not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
+  concurrency behavior before advertising it. Do not add automatic pooling, fallback, quota
+  scheduling, or a speculative capability matrix.
+- **Why:** Host applications and Dorf Rooms are distinct consumers of the same model-provider
+  connection. Sharing a typed facade and broker authority gives them login-once behavior without
+  coupling provider state to Worker or Job semantics, duplicating credentials, or forcing model
+  streams through the Python runtime.
+- **Reconsider when:** A second broker backend proves a smaller shared interface; an actual remote
+  deployment requires a network authority; a provider cannot fit connection-plus-route semantics
+  without distortion; or observed multi-account pressure justifies routing policy.
+
+## D037 — New core Rooms use a global deployment profile, never a repository contract
+
+- **Status:** Accepted and implemented for core configuration slice #172 — 2026-07-30
+- **Decision:** New caller-managed Rooms use one host-local deployment profile under the XDG config
+  boundary. The profile selects the built-in Environment configuration and names the default
+  Provider Connection; it contains no provider credential, route key, Room lifecycle, or Job state.
+  A successful `provider connect` selects that connection for new Rooms. `worker spawn NAME` uses
+  the profile with no required option, while an explicit provider override remains available for
+  current dogfood and repair. Generic Worker and Job commands never consult `.dorf.toml`;
+  repository contracts remain workflow-owned inputs for coding setup, checks, review, and
+  publication.
+- **Why:** Room creation needs stable host deployment choices, but the caller's current directory is
+  neither an authority for a Worker nor a safe source of environment/model behavior. Keeping
+  provider credentials in the Provider Gateway, lifecycle in runtime SQLite, and only references in
+  the profile preserves existing authorities while making summon repository-neutral.
+- **Compatibility:** The profile path and JSON shape are internal and replaceable before the public
+  release. Existing recorded Rooms remain self-describing and do not require the profile for
+  inspection, messaging, assignment, recovery, or cleanup.
+- **Reconsider when:** A second Environment proves a concrete selection seam, multiple validated
+  Provider Connections require an interactive default chooser, or a remote/multi-user authority
+  makes a per-host XDG profile the wrong ownership boundary.
+
+## D038 — Official Room images are immutable GitHub Release assets
+
+- **Status:** Accepted and implemented; first public promotion pending repository visibility and
+  immutable-release enablement — 2026-07-31
+- **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
+  exactly one Incus archive and one compatibility manifest for that architecture. A dedicated
+  self-hosted Incus runner builds from an immutable base fingerprint, selects and records the
+  current Codex npm release, proves the credential boundary, completes a real Provider
+  Gateway-backed Worker turn, and exports the candidate before constructing the release. The
+  consumer accepts only a published immutable release and requires agreement among GitHub's asset
+  digests, the manifest, the downloaded archive SHA-256, and the post-import Incus fingerprint.
+- **Promotion boundary:** The repository must be public and GitHub immutable releases must be
+  enabled before the first image is promoted. The workflow records that reviewed repository setting
+  in an explicit variable, creates a complete draft, publishes it once, and verifies its release
+  attestation and both assets. Until those conditions are met, the local candidate terminal is
+  evidence for the pipeline but not a public-image availability claim.
+- **Why:** GitHub Releases reuse the project's source authority, provide static anonymous HTTPS
+  downloads, protected tags and assets, release attestations, and API-visible SHA-256 digests
+  without operating a public Incus daemon or a separate image-index service. Verifying every layer
+  keeps the friendly alias out of the trust boundary and lets setup converge idempotently on one
+  exact local fingerprint.
+- **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
+  installer module are pre-release implementation details. Existing Rooms remain bound to the image
+  they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
+  for another architecture or Environment.
+- **Reconsider when:** Release size or bandwidth makes GitHub unsuitable, a second architecture
+  needs a real distribution index, Incus simplestreams materially reduces setup complexity, GitHub
+  cannot preserve the required immutability/digest guarantees, or a concrete remote Environment
+  requires a different image authority.
+
+## D039 — Initial core setup supports only the official Room image
+
+- **Status:** Accepted for initial open-source setup — 2026-07-31
+- **Decision:** The guided core setup uses only the Dorf-published credential-free Room image.
+  It does not offer a custom-image selector or claim compatibility with arbitrary Incus images.
+  The global profile records the selected official image's immutable fingerprint, and existing
+  Rooms retain their recorded image.
+- **Why:** A custom image creates a second credential boundary, Codex/tool compatibility contract,
+  update policy, validation path, and support surface. None is required to prove the first public
+  one-command setup terminal, and supporting it now would make that terminal harder to maintain.
+- **Reconsider when:** A concrete user need cannot be met by the official image and justifies the
+  additional validation, compatibility, update, and support burden.
+
+## D040 — Rename the product and complete namespace to Dorf
+
+- **Status:** Accepted for initial open-source distribution — 2026-08-03
+- **Decision:** Rename the product to Dorf and use `dorf` consistently for the PyPI distribution,
+  Python import package, CLI command, repository contract, local configuration and state paths,
+  environment-variable prefix, image and release artifacts, and repository identity. Do not retain
+  compatibility aliases or migrate private dogfood state from the former pre-release namespace.
+  The exact `dorf` distribution name was unregistered on PyPI when this decision was made; recheck
+  it immediately before the first upload because only publication reserves it.
+- **Why:** The former distribution name is owned by another PyPI organization, and the selected
+  replacement should be one coherent product identity rather than a permanent split between the
+  install name and every surface a user or integrator encounters. The project has no public release
+  or third-party compatibility commitment, so this is the least costly point for a clean cutover.
+- **Compatibility:** This intentionally breaks private source imports, commands, configuration,
+  state paths, environment variables, image names, and integrations that used the former namespace.
+  Existing dogfood resources must be ended or recreated explicitly; Dorf does not guess ownership
+  of or mutate the old namespace. The `dorf` identity becomes a public compatibility concern only
+  after the first release.
+- **Reconsider when:** PyPI rejects or reserves `dorf` or a credible developer-tool naming conflict
+  is discovered before publication. After publication, require a deliberate migration decision.
