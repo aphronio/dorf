@@ -6,12 +6,6 @@ Dorf gives an AI worker a durable identity, an isolated Room, and an explicit Jo
 leave, reconnect, inspect what changed, steer it, or clean it up without treating one terminal or
 client process as the source of truth.
 
-```text
-Worker ──current Room──> Room
-   ▲
-   └── Assignment ── Job
-```
-
 Workers do Jobs in Rooms. A **Worker** is the durable harness identity, a **Room** is its isolated
 execution boundary, a **Job** is a pinned goal with its own conversation and evidence, and an
 **Assignment** records which Worker and Room own that Job.
