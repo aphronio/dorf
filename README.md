@@ -1,177 +1,137 @@
 # Dorf
 
-**A control plane for durable AI workers on infrastructure you control.**
+**Durable AI workers on infrastructure you control.**
 
-Dorf gives an AI worker a durable identity, an isolated Room, and an explicit Job. Start work,
-leave, reconnect, inspect what changed, steer it, or clean it up without treating one terminal or
-client process as the source of truth.
+Dorf makes your coding agent a durable worker—Codex today, more harnesses over time. Give it a job,
+walk away, and come back to the same work.
 
-Workers do Jobs in Rooms. A **Worker** is the durable harness identity, a **Room** is its isolated
-execution boundary, a **Job** is a pinned goal with its own conversation and evidence, and an
-**Assignment** records which Worker and Room own that Job.
+Each Worker gets a full development environment for its native tools and workflows. The Room keeps
+that work isolated from the rest of your infrastructure.
 
-> [!IMPORTANT]
-> Dorf is alpha software. The current verified path is Codex in local Incus VMs on x86_64 Linux,
-> with automatic host convergence reviewed on Arch Linux and Ubuntu 24.04 LTS. No other harness or
-> Room backend is supported yet.
+## Run a coding Job
 
-## Why Dorf
-
-- **Durable work, replaceable processes.** Worker and Job identity outlive a CLI invocation,
-  controller restart, or disconnected client.
-- **Owned isolation.** Work runs in a private VM Room instead of sharing the host Docker socket or
-  an unbounded host shell.
-- **Detached by default.** Admit a message once, leave, and later inspect the same Worker or Job
-  rather than babysitting a token stream.
-- **Explicit lifecycle.** Recovery and cleanup operate on recorded Worker, Room, Job, and
-  Assignment identity; failures remain visible and retryable.
-- **A composable runtime.** The control plane owns mechanisms. Applications own workflow policy,
-  acceptance, and presentation.
-
-The product direction is broader than the first adapter pair, but the support claim is deliberately
-narrow. Dorf adds another harness or Room backend only after a real implementation validates the
-seam. See the
-[North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) for the
-destination and
-[Runtime Surface](https://github.com/aphronio/dorf/blob/main/docs/project/runtime.md) for what
-exists now.
-
-## Available today
-
-| Layer | Current support |
-| --- | --- |
-| Runtime | Durable Workers, Rooms, Jobs, Assignments, message admission, inspection, recovery, evidence, and cleanup |
-| Agent harness | Codex app-server |
-| Room backend | Local Incus virtual machines |
-| Model access | Named ChatGPT-subscription and OpenAI API-key connections through the local Provider Gateway |
-| Host setup | x86_64 Arch Linux and Ubuntu 24.04 LTS convergence; other x86_64 Linux hosts may work with an already usable Incus installation |
-| Dogfood application | Coding-to-PR, including isolated clones, repo-owned checks, review, follow-up, and PR proposal |
-
-Multiple harnesses, alternative sandbox providers, remote Room backends, Worker pools, scheduling,
-and cross-Worker reassignment are direction—not current capabilities.
-
-## Install the alpha CLI
-
-Install from PyPI with:
+Install Dorf and run the one-time guided setup:
 
 ```bash
 uv tool install dorf
-dorf --version
-dorf --help
 dorf setup
 ```
 
-`dorf setup` inspects the host, guides supported Incus installation, downloads the immutable
-Codex-harness VM image attached to the Dorf release, connects an AI model provider, and proves one
-real disposable Worker turn before reporting ready.
+See [Getting started](https://github.com/aphronio/dorf/blob/main/docs/getting-started.md) for current
+prerequisites and setup details.
 
-To work from source:
-
-```bash
-git clone https://github.com/aphronio/dorf.git
-cd dorf
-uv sync --all-groups
-uv run pytest
-uv run ruff check .
-uv run dorf --help
-```
-
-## Core loop
-
-On a configured host, create a Worker and assign a Job with a complete goal:
+Then create a Worker and give it one complete goal:
 
 ```bash
-dorf worker spawn my-worker
-dorf job assign checkout-perf \
-  --to my-worker \
-  --goal "Make checkout feel instant and leave evidence"
+dorf worker spawn python-developer
+
+dorf job assign build-retry-queue \
+  --to python-developer \
+  --goal "Build a small Python retry queue with tests, run them, and publish the results as evidence."
+
+dorf job wait build-retry-queue
 ```
 
-Message and inspect the Worker or its Job independently:
+Close the terminal while the Job runs, then return from another shell:
 
 ```bash
-dorf worker message my-worker "What can you help with?"
-dorf worker wait my-worker
-dorf worker inspect my-worker
-
-dorf job message checkout-perf "Profile the API first"
-dorf job wait checkout-perf
-dorf job inspect checkout-perf
-dorf job inspect checkout-perf --timeline
-dorf job inspect checkout-perf --evidence
+dorf job inspect build-retry-queue
+dorf job message build-retry-queue "Add a test for exponential backoff and publish the new results."
+dorf job wait build-retry-queue
 ```
 
-Enter the current Room when direct takeover is useful:
+## Workers do Jobs in Rooms
+
+| Resource | Meaning |
+| --- | --- |
+| **Worker** | Durable identity around an agent harness |
+| **Job** | Pinned goal with its own conversation and retained evidence |
+| **Room** | Isolated environment supplied by a Room provider |
+
+An **Assignment** records the exact Worker, Job, and Room binding for lifecycle and recovery. Most
+human-facing commands need only the Worker or Job name.
+
+Workers wrap the harnesses developers already use; they are not a replacement agent framework. The
+control plane is harness- and sandbox-provider agnostic by design. Codex and local Incus VMs are the
+only supported adapters today; other harnesses and local or cloud VM providers can fit the same
+boundaries once validated.
+
+## Why Dorf
+
+- **Leave without losing the thread.** Worker and Job identity survive the client that started them.
+- **Return to the situation, not a transcript.** Inspect state, timeline, and evidence without
+  asking the Worker to recap.
+- **Let the harness do its best work.** Give it a complete development environment and contain that
+  environment with a clear isolation boundary.
+- **Build workflows above the runtime.** Dorf owns durable execution; applications own policy,
+  acceptance, and presentation.
+
+## Alpha status
+
+Dorf is alpha software. See [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md)
+for current adapters, host requirements, and limitations.
+
+## Coding-to-PR showcase
+
+Coding-to-PR is the first application built on Dorf, not the runtime's identity. It takes a coding
+task from an isolated workspace through checks, review, follow-up, and a PR proposal.
 
 ```bash
-dorf worker attach my-worker
+dorf start "Fix the checkout timeout and add a regression test" \
+  --provider-connection personal-chatgpt
+dorf status JOB
+dorf verify JOB
+dorf publish JOB
 ```
 
-End the Job before ending its Worker. Cleanup is bound to the exact recorded resources:
+This showcase requires separate repository, GitHub, and coding-image preparation. See the
+[North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) for how it fits
+the broader runtime.
 
-```bash
-dorf job end checkout-perf
-dorf worker end my-worker
-```
+## Build on Dorf
 
-The same authority is available in process through the typed Python facade:
+Build workflow-specific applications with the experimental Python SDK. It exposes the same Worker,
+Room, Job, and Assignment controls used by the CLI; coding-to-PR is the first example.
 
 ```python
 from dorf import Dorf
 
-with Dorf.open() as dorf:
-    inspection = dorf.inspect_worker("my-worker")
-    receipt = dorf.message_worker(
-        "my-worker",
-        "Profile the API first",
-        action_id="caller-stable-action-id",
-    )
+
+def run_coding_workflow(task: str) -> str | None:
+    with Dorf.open(provider_connection="personal-chatgpt") as dorf:
+        dorf.spawn_worker("developer")
+        dorf.assign_job(
+            "implementation",
+            worker_name="developer",
+            goal=(
+                f"{task}\n\n"
+                "Acceptance:\n"
+                "- Run the repository checks.\n"
+                "- Publish the results as evidence."
+            ),
+        )
+        result = dorf.wait_for_job_input("implementation")
+        if result.outcome != "done":
+            raise RuntimeError(result.detail or result.outcome)
+        return result.response
 ```
 
-Run `dorf worker --help` and `dorf job --help` for the complete current command surface.
+The SDK is experimental and does not yet carry a third-party compatibility promise. See the
+[Runtime Surface](https://github.com/aphronio/dorf/blob/main/docs/project/runtime.md) for the current
+responsibility boundary.
 
-## Coding-to-PR showcase
+## Learn more
 
-Coding-to-PR is Dorf's current dogfood application, not the runtime's identity. One coding task
-composes one goal-backed Job, Assignment, isolated clone, branch, and PR proposal:
-
-```bash
-dorf start "Implement the task" --provider-connection personal-chatgpt
-dorf status JOB
-dorf verify JOB
-dorf publish JOB
-dorf complete JOB
-```
-
-Repositories declare deterministic setup, check, smoke, and review commands in `.dorf.toml`. Git
-and GitHub remain authoritative for branches, commits, and PR state; the harness remains
-authoritative for its native conversation history.
-
-## Architecture boundary
-
-```text
-dorf.runtime     portable Worker, Room, Job, and Assignment mechanisms
-dorf.sdk         in-process facade used by the CLI and host applications
-dorf.adapters    current Codex and Incus integrations
-dorf.workflows   coding-to-PR policy composed over the runtime
-```
-
-Runtime code does not import coding, GitHub, Incus, or Codex policy. Remote Rooms remain an adapter
-concern; Dorf does not need to become a hosted service merely because an adapter controls remote
-infrastructure.
-
-## Documentation
-
-- [North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) — approved product direction
-- [Principles](https://github.com/aphronio/dorf/blob/main/docs/project/principles.md) — product and engineering judgment
-- [Runtime Surface](https://github.com/aphronio/dorf/blob/main/docs/project/runtime.md) — current portable boundary
-- [Decision Log](https://github.com/aphronio/dorf/blob/main/docs/project/decisions.md) — accepted choices and reconsideration triggers
-- [Provider Gateway](https://github.com/aphronio/dorf/blob/main/docs/project/provider-gateway.md) — AI model provider and scoped route boundary
-- [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md) — current host support and diagnostics
-- [Contributing](https://github.com/aphronio/dorf/blob/main/CONTRIBUTING.md) — development workflow and DCO sign-off
+- [Documentation](https://github.com/aphronio/dorf/blob/main/docs/README.md) — choose a path by
+  what you are trying to do
+- [Getting started](https://github.com/aphronio/dorf/blob/main/docs/getting-started.md) — create your
+  first Worker and Job
+- [North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) — approved
+  product direction
+- [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md) — host support,
+  diagnostics, and troubleshooting
+- [Contributing](https://github.com/aphronio/dorf/blob/main/CONTRIBUTING.md) — development workflow
+  and DCO sign-off
 - [Security policy](https://github.com/aphronio/dorf/blob/main/SECURITY.md) — private vulnerability reporting
 
-Dorf is licensed under the
-[Apache License 2.0](https://github.com/aphronio/dorf/blob/main/LICENSE). The runtime and Python SDK
-remain experimental and do not yet carry a third-party compatibility promise. Material under
-`docs/research/` is archival and non-normative.
+Dorf is licensed under the [Apache License 2.0](https://github.com/aphronio/dorf/blob/main/LICENSE).
