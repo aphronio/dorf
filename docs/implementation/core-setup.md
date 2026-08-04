@@ -491,16 +491,17 @@ blockers.
 
 Activation-window preparation:
 
-- [ ] Enable GitHub immutable releases and set `DORF_IMMUTABLE_RELEASES_ENABLED=true`.
-- [ ] Register the dedicated x86_64 Incus image runner with the `dorf-image` label and configure
-  its validated `DORF_IMAGE_PROVIDER_CONNECTION`.
+- [x] Enable GitHub immutable releases.
+- [x] Set `DORF_IMMUTABLE_RELEASES_ENABLED=true` as the publisher's reviewed-setting record.
+- [x] Keep the owner's provider credential local and replace the persistent self-hosted workflow
+  with one repo-owned build, real-Worker validation, and publication command.
 - [ ] Invoke the already verified official-image consumer from guided setup after the first release
   exists.
 
 Public-only acceptance:
 
-- [ ] Promote the first publicly accessible complete `room-image-*` release from the dedicated
-  x86_64 Incus runner.
+- [ ] Promote the first publicly accessible complete `room-image-*` release with the repo-owned
+  local publisher.
 - [ ] From an unauthenticated client, confirm the Releases API reports `immutable: true`, exactly one
   archive and manifest for x86_64, and GitHub SHA-256 digests for both.
 - [ ] Download both assets without GitHub credentials and verify the release attestation, asset
