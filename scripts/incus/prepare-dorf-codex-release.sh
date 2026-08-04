@@ -19,6 +19,12 @@ PROBE_VM="dorf-codex-probe-$BUILD_ID"
 METADATA_PATH="$OUTPUT_DIR/image.json"
 ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-x86_64.tar.gz"
 
+uv run --project "$PROJECT_ROOT" python \
+  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
+  --provider-connection "$PROVIDER_CONNECTION" \
+  --network "$NETWORK" \
+  --preflight-only
+
 cleanup() {
   if incus info "$PROBE_VM" >/dev/null 2>&1; then
     incus delete "$PROBE_VM" --force >/dev/null 2>&1 || true

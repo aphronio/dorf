@@ -170,6 +170,10 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "npm_integrity" in provision_script
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script
+    assert "--preflight-only" in release_script
+    assert release_script.index("--preflight-only") < release_script.index(
+        'IMAGE_ALIAS="$CANDIDATE_ALIAS"'
+    )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
