@@ -41,6 +41,7 @@ class OfficialImageArchive:
 @dataclass(frozen=True)
 class OfficialImageManifest:
     release_tag: str
+    environment: Literal["incus"]
     architecture: str
     image_fingerprint: str
     archive: OfficialImageArchive
@@ -76,10 +77,19 @@ class OfficialImageInstaller:
         self._api_url = api_url
         self._temp_root = temp_root
 
-    def ensure(self, *, alias: str = DEFAULT_INCUS_TEMPLATE) -> OfficialImageInstallResult:
+    def ensure(
+        self,
+        *,
+        alias: str = DEFAULT_INCUS_TEMPLATE,
+        emit: Callable[[str], None] | None = None,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> OfficialImageInstallResult:
+        emit = emit or (lambda message: None)
+        emit("Checking the latest immutable Dorf Room image")
         manifest = self._latest_manifest()
         current_fingerprint = self._local_fingerprint(alias)
         if current_fingerprint == manifest.image_fingerprint:
+            emit(f"Reusing verified image · Codex {manifest.codex_version}")
             return OfficialImageInstallResult(
                 "already-ready",
                 manifest.release_tag,
@@ -90,12 +100,19 @@ class OfficialImageInstaller:
         temporary_directory = Path(tempfile.mkdtemp(prefix="dorf-image.", dir=self._temp_root))
         try:
             archive_path = temporary_directory / manifest.archive.name
+            emit(
+                "Downloading verified Dorf Room image · "
+                f"{max(1, round(manifest.archive.size / (1024 * 1024)))} MiB"
+            )
             self._download_file(
                 manifest.archive.download_url,
                 archive_path,
                 expected_sha256=manifest.archive.sha256,
                 expected_size=manifest.archive.size,
+                progress=progress,
             )
+            emit("Download digest verified")
+            emit("Importing Dorf Room image into Incus")
             imported = self._probe.run(
                 [
                     "incus",
@@ -118,6 +135,7 @@ class OfficialImageInstaller:
                 raise OfficialImageError(
                     "Imported official image fingerprint does not match its manifest"
                 )
+            emit("Imported image fingerprint verified")
         finally:
             shutil.rmtree(temporary_directory)
 
@@ -150,7 +168,7 @@ class OfficialImageInstaller:
         if release.get("immutable") is not True:
             raise OfficialImageError(f"Official image release {tag} is not immutable")
 
-        manifest_name = f"dorf-codex-{self._architecture}.json"
+        manifest_name = f"dorf-codex-incus-vm-{self._architecture}.json"
         manifest_asset = _release_asset(release, manifest_name)
         manifest_bytes = self._download_bytes(
             manifest_asset["browser_download_url"],
@@ -250,11 +268,14 @@ class OfficialImageInstaller:
         *,
         expected_sha256: str,
         expected_size: int,
+        progress: Callable[[int, int], None] | None = None,
     ) -> None:
         _validate_download_url(url)
         request = Request(url, headers={"User-Agent": "dorf-official-image"})
         digest = hashlib.sha256()
         size = 0
+        if progress is not None:
+            progress(0, expected_size)
         try:
             with self._opener(request, timeout=60) as response:
                 _reject_large_content_length(response, MAX_IMAGE_BYTES)
@@ -267,6 +288,8 @@ class OfficialImageInstaller:
                             )
                         digest.update(chunk)
                         output.write(chunk)
+                        if progress is not None:
+                            progress(size, expected_size)
         except OSError as error:
             raise OfficialImageError(f"Could not download official Room image: {error}") from error
         if size != expected_size:
@@ -282,10 +305,12 @@ def _parse_manifest(
     expected_tag: str,
     expected_architecture: str,
 ) -> OfficialImageManifest:
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
-        raise OfficialImageError("Official image manifest schema_version must be 1")
+    if not isinstance(data, dict) or data.get("schema_version") != 2:
+        raise OfficialImageError("Official image manifest schema_version must be 2")
     if data.get("release_tag") != expected_tag:
         raise OfficialImageError("Official image manifest release_tag does not match its release")
+    if data.get("environment") != "incus":
+        raise OfficialImageError("Official image manifest environment must be incus")
     if data.get("architecture") != expected_architecture:
         raise OfficialImageError(
             f"Official image manifest does not support {expected_architecture}"
@@ -296,7 +321,7 @@ def _parse_manifest(
     archive_data = data.get("archive")
     if not isinstance(archive_data, dict):
         raise OfficialImageError("Official image manifest archive must be an object")
-    expected_archive_name = f"dorf-codex-{expected_architecture}.tar.gz"
+    expected_archive_name = f"dorf-codex-incus-vm-{expected_architecture}.tar.gz"
     if archive_data.get("name") != expected_archive_name:
         raise OfficialImageError("Official image manifest archive name is invalid")
     archive_sha256 = _required_sha256(archive_data.get("sha256"), "archive digest")
@@ -336,6 +361,7 @@ def _parse_manifest(
     _validate_release_asset_url(archive_url, expected_tag, expected_archive_name)
     return OfficialImageManifest(
         release_tag=expected_tag,
+        environment="incus",
         architecture=expected_architecture,
         image_fingerprint=fingerprint,
         archive=OfficialImageArchive(

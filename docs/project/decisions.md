@@ -722,6 +722,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exports the untouched candidate, and publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
+- **Artifact identity:** Keep the product-level `room-image-*` release channel, while naming the
+  x86_64 assets `dorf-codex-incus-vm-x86_64.tar.gz` and
+  `dorf-codex-incus-vm-x86_64.json`. Manifest schema 2 requires `environment: incus`. This makes the
+  adapter and VM format explicit without coupling the release channel to one architecture.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
   enabled before the first image is promoted. The publisher records that reviewed repository
   setting in an explicit variable, requires a clean source commit already available from GitHub,

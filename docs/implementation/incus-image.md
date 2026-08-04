@@ -46,6 +46,10 @@ PROVIDER_CONNECTION=personal-chatgpt \
   scripts/incus/publish-dorf-codex-release.sh
 ```
 
+The x86_64 release assets are named `dorf-codex-incus-vm-x86_64.tar.gz` and
+`dorf-codex-incus-vm-x86_64.json`. The explicit `incus-vm` segment prevents the release artifact
+from looking like a generic Linux filesystem or a portable image for another Environment.
+
 A complete draft containing the archive and manifest is published only when:
 
 - the repository is public;
@@ -74,7 +78,8 @@ only the newest non-draft, non-prerelease `room-image-*` GitHub Release when all
 
 - GitHub reports the release as immutable;
 - GitHub's manifest asset digest matches the downloaded manifest;
-- the release tag, architecture, VM type, archive name, size, and digest match the manifest;
+- the manifest schema identifies the `incus` Environment, and its release tag, architecture, VM
+  type, archive name, size, and digest match the release;
 - the archive's GitHub digest, manifest digest, and Incus fingerprint are identical; and
 - Incus reports the expected fingerprint after import.
 

@@ -22,8 +22,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    if args.archive.name != "dorf-codex-x86_64.tar.gz":
-        parser.error("archive must be named dorf-codex-x86_64.tar.gz")
+    if args.archive.name != "dorf-codex-incus-vm-x86_64.tar.gz":
+        parser.error("archive must be named dorf-codex-incus-vm-x86_64.tar.gz")
     if not args.release_tag.startswith("room-image-"):
         parser.error("release tag must start with room-image-")
     if not COMMIT_PATTERN.fullmatch(args.source_commit):
@@ -47,8 +47,9 @@ def main() -> None:
             archive_digest.update(chunk)
     fingerprint = archive_digest.hexdigest()
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "release_tag": args.release_tag,
+        "environment": "incus",
         "architecture": "x86_64",
         "image_type": "virtual-machine",
         "image_fingerprint": fingerprint,

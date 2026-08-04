@@ -175,8 +175,10 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
         'IMAGE_ALIAS="$CANDIDATE_ALIAS"'
     )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
+    assert "dorf-codex-incus-vm-x86_64" in release_script
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
+    assert "dorf-codex-incus-vm-x86_64" in publish_script
     assert 'gh api "repos/$GITHUB_REPOSITORY" --jq .visibility' in publish_script
     assert "DORF_IMMUTABLE_RELEASES_ENABLED" in publish_script
     assert 'gh release create "$RELEASE_TAG"' in publish_script

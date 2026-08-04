@@ -81,18 +81,18 @@ uv run dorf --help
 On a configured host, create a Worker and assign a Job with a complete goal:
 
 ```bash
-dorf worker spawn ada
+dorf worker spawn my-worker
 dorf job assign checkout-perf \
-  --to ada \
+  --to my-worker \
   --goal "Make checkout feel instant and leave evidence"
 ```
 
 Message and inspect the Worker or its Job independently:
 
 ```bash
-dorf worker message ada "What can you help with?"
-dorf worker wait ada
-dorf worker inspect ada
+dorf worker message my-worker "What can you help with?"
+dorf worker wait my-worker
+dorf worker inspect my-worker
 
 dorf job message checkout-perf "Profile the API first"
 dorf job wait checkout-perf

@@ -75,13 +75,14 @@ def release_fixture(
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
     tag = "room-image-20260731-0.150.0"
-    archive_name = f"dorf-codex-{architecture}.tar.gz"
-    manifest_name = f"dorf-codex-{architecture}.json"
+    archive_name = f"dorf-codex-incus-vm-{architecture}.tar.gz"
+    manifest_name = f"dorf-codex-incus-vm-{architecture}.json"
     digest = hashlib.sha256(archive).hexdigest()
     manifest = json.dumps(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "release_tag": tag,
+            "environment": "incus",
             "architecture": architecture,
             "image_type": "virtual-machine",
             "image_fingerprint": image_fingerprint or digest,
@@ -139,12 +140,14 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
     opener = FakeOpener(responses)
     probe = FakeIncusProbe()
 
+    events: list[str] = []
+    progress: list[tuple[int, int]] = []
     result = OfficialImageInstaller(
         probe=probe,
         opener=opener,
         architecture="x86_64",
         temp_root=tmp_path,
-    ).ensure()
+    ).ensure(emit=events.append, progress=lambda current, total: progress.append((current, total)))
 
     assert result.status == "installed"
     assert result.release_tag == "room-image-20260731-0.150.0"
@@ -153,6 +156,15 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
     assert ["incus", "image", "import"] == probe.ran[1][:3]
     assert probe.ran[1][-3:] == ["--alias", "dorf-codex", "--reuse"]
     assert not list(tmp_path.iterdir())
+    archive_size = len(b"incus-vm-image")
+    assert progress == [(0, archive_size), (archive_size, archive_size)]
+    assert events == [
+        "Checking the latest immutable Dorf Room image",
+        "Downloading verified Dorf Room image · 1 MiB",
+        "Download digest verified",
+        "Importing Dorf Room image into Incus",
+        "Imported image fingerprint verified",
+    ]
 
 
 def test_installer_reuses_the_exact_promoted_fingerprint_without_downloading_archive(
@@ -162,16 +174,21 @@ def test_installer_reuses_the_exact_promoted_fingerprint_without_downloading_arc
     opener = FakeOpener(responses)
     probe = FakeIncusProbe(digest)
 
+    events: list[str] = []
     result = OfficialImageInstaller(
         probe=probe,
         opener=opener,
         architecture="x86_64",
         temp_root=tmp_path,
-    ).ensure()
+    ).ensure(emit=events.append)
 
     assert result.status == "already-ready"
     assert not any(command[:3] == ["incus", "image", "import"] for command in probe.ran)
     assert not any(url.endswith(".tar.gz") for url in opener.requested)
+    assert events == [
+        "Checking the latest immutable Dorf Room image",
+        "Reusing verified image · Codex 0.150.0",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -216,7 +233,7 @@ def test_installer_rejects_corrupt_download_before_incus_import(tmp_path) -> Non
 
 
 def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_path) -> None:
-    archive = tmp_path / "dorf-codex-x86_64.tar.gz"
+    archive = tmp_path / "dorf-codex-incus-vm-x86_64.tar.gz"
     archive.write_bytes(b"incus-vm-image")
     metadata = tmp_path / "image.json"
     metadata.write_text(
@@ -228,7 +245,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
             }
         )
     )
-    output = tmp_path / "dorf-codex-x86_64.json"
+    output = tmp_path / "dorf-codex-incus-vm-x86_64.json"
 
     result = subprocess.run(
         [
@@ -255,6 +272,8 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
     assert result.returncode == 0, result.stderr
     manifest = json.loads(output.read_text())
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert manifest["schema_version"] == 2
+    assert manifest["environment"] == "incus"
     assert manifest["image_fingerprint"] == digest
     assert manifest["archive"] == {
         "name": archive.name,
