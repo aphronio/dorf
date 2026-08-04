@@ -27,6 +27,9 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from rich.status import Status
+from rich.text import Text
+from rich.theme import Theme
 
 from dorf import Dorf, __version__
 from dorf.adapters.agents.codex import CodexDriver
@@ -172,6 +175,21 @@ ARTIFACT_OVERWRITE_OPTION = typer.Option(
 )
 DORF_BRANCH_PREFIX = "dorf/"
 PROTECTED_BRANCHES = frozenset({"main", "master", "trunk"})
+DORF_PRIMARY_MOSS = "#5B6B36"
+DORF_BRIGHT_MOSS = "#918A4A"
+DORF_BORDER = "#465B33"
+DORF_MAIN_TEXT = "#CEB87D"
+DORF_MUTED_TEXT = "#B8A369"
+DORF_ACTIVE = "#F6BD4B"
+DORF_ACTIVE_RGB = (246, 189, 75)
+DORF_THEME = Theme(
+    {
+        "progress.download": DORF_MAIN_TEXT,
+        "progress.percentage": DORF_ACTIVE,
+        "progress.data.speed": DORF_MUTED_TEXT,
+        "progress.remaining": DORF_MUTED_TEXT,
+    }
+)
 
 
 class _ImageDownloadProgress:
@@ -183,7 +201,11 @@ class _ImageDownloadProgress:
         tty: bool | None = None,
         console: Console | None = None,
     ) -> None:
-        self._console = console or Console(file=sys.stdout, force_terminal=tty)
+        self._console = console or Console(
+            file=sys.stdout,
+            force_terminal=tty,
+            theme=DORF_THEME,
+        )
         self._tty = self._console.is_terminal if tty is None else tty
         self._progress: Progress | None = None
         self._task_id: int | None = None
@@ -197,12 +219,13 @@ class _ImageDownloadProgress:
         if self._tty:
             if self._progress is None:
                 self._progress = Progress(
-                    SpinnerColumn(style="cyan"),
-                    TextColumn("[bold cyan]{task.description}[/]"),
+                    SpinnerColumn(style=DORF_ACTIVE),
+                    TextColumn(f"[bold {DORF_ACTIVE}]{{task.description}}[/]"),
                     BarColumn(
-                        complete_style="cyan",
-                        finished_style="green",
-                        pulse_style="cyan",
+                        style=DORF_BORDER,
+                        complete_style=DORF_ACTIVE,
+                        finished_style=DORF_PRIMARY_MOSS,
+                        pulse_style=DORF_ACTIVE,
                     ),
                     TaskProgressColumn(),
                     DownloadColumn(),
@@ -241,6 +264,143 @@ class _ImageDownloadProgress:
             self._progress.stop()
             self._progress = None
             self._task_id = None
+
+
+class _SetupDisplay:
+    """Render calm live setup activity while preserving stable redirected output."""
+
+    _HEADINGS = frozenset(
+        {
+            "Checking this machine",
+            "Room image",
+            "AI model provider",
+            "Next:",
+        }
+    )
+    _ACTIVITY_MESSAGES = frozenset(
+        {
+            "Checking the latest immutable Dorf Room image",
+            "Importing Dorf Room image into Incus",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        tty: bool | None = None,
+        console: Console | None = None,
+        plain_emit: Callable[[str], None] = typer.echo,
+    ) -> None:
+        self._console = console or Console(
+            file=sys.stdout,
+            force_terminal=tty,
+            theme=DORF_THEME,
+        )
+        self._tty = self._console.is_terminal if tty is None else tty
+        self._plain_emit = plain_emit
+        self._status: Status | None = None
+        self._image_progress = _ImageDownloadProgress(
+            tty=self._tty,
+            console=self._console,
+        )
+
+    def emit(self, message: str) -> None:
+        if not self._tty:
+            self._plain_emit(message)
+            return
+
+        if message == "":
+            self._stop_activity()
+            self._console.print()
+            return
+        if message == "◆ Dorf":
+            self._console.print(Text(message, style=f"bold {DORF_MAIN_TEXT}"))
+            return
+        if message == "  Durable workers in private local Rooms":
+            self._console.print(Text(message, style=DORF_MUTED_TEXT))
+            return
+        if message == "Dorf is ready.":
+            self._stop_activity()
+            self._console.print(Text(message, style=f"bold {DORF_BRIGHT_MOSS}"))
+            return
+        if message in self._HEADINGS:
+            self._stop_activity()
+            self._console.print(Text(message, style=f"bold {DORF_BRIGHT_MOSS}"))
+            return
+        if message in self._ACTIVITY_MESSAGES:
+            self._start_activity(message)
+            return
+        if message == "Verifying the complete Worker loop":
+            self._stop_activity()
+            self._console.print(Text(message, style=f"bold {DORF_BRIGHT_MOSS}"))
+            self._start_activity("Creating disposable Room")
+            return
+        if message.startswith("Downloading verified image"):
+            self._stop_activity()
+            self._console.print(Text(message, style=DORF_MAIN_TEXT))
+            return
+        if message.startswith("Reusing verified image"):
+            self._stop_activity()
+            self._print_success(message)
+            return
+        if message in {
+            "Download digest verified",
+            "Imported image fingerprint verified",
+        }:
+            self._stop_activity()
+            self._print_success(message)
+            return
+        if message == "✓ Disposable Room created":
+            self._stop_activity()
+            self._print_success(message[2:])
+            self._start_activity("Waiting for Codex to complete a real turn")
+            return
+        if message == "✓ Codex completed a real turn":
+            self._stop_activity()
+            self._print_success(message[2:])
+            self._start_activity("Cleaning up disposable verification")
+            return
+        if message.startswith("✓ "):
+            self._stop_activity()
+            self._print_success(message[2:])
+            return
+        if message.startswith("! "):
+            self._stop_activity()
+            self._console.print(Text(message, style=f"bold {DORF_ACTIVE}"))
+            return
+        if message.startswith("  dorf "):
+            self._console.print(Text(message, style=DORF_MAIN_TEXT))
+            return
+        self._console.print(Text(message))
+
+    def update_image_download(self, downloaded: int, total: int) -> None:
+        self._stop_activity()
+        self._image_progress.update(downloaded, total)
+
+    def finish(self) -> None:
+        self._stop_activity()
+        self._image_progress.finish()
+
+    def _start_activity(self, message: str) -> None:
+        self._stop_activity()
+        self._status = Status(
+            Text(message, style=f"bold {DORF_ACTIVE}"),
+            console=self._console,
+            spinner="dots",
+            spinner_style=DORF_ACTIVE,
+        )
+        self._status.start()
+
+    def _stop_activity(self) -> None:
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
+
+    def _print_success(self, message: str) -> None:
+        line = Text()
+        line.append("✓ ", style=f"bold {DORF_BRIGHT_MOSS}")
+        line.append(message)
+        self._console.print(line)
 
 
 def _format_download_size(size: int) -> str:
@@ -284,35 +444,37 @@ def main(
 @app.command()
 def setup() -> None:
     """Prepare Dorf and prove the complete local Worker path."""
-    typer.echo("◆ Dorf")
-    typer.echo("  Durable workers in private local Rooms")
-    typer.echo()
-    typer.echo("Checking this machine")
-    image_progress = _ImageDownloadProgress()
+    display = _SetupDisplay()
+    display.emit("◆ Dorf")
+    display.emit("  Durable workers in private local Rooms")
+    display.emit("")
+    display.emit("Checking this machine")
     try:
         result = CoreSetup(
             provider_connector=connect_setup_provider,
             incus_installer=install_setup_incus,
             incus_access_repairer=repair_setup_incus_access,
             incus_initializer=initialize_setup_incus,
-            image_progress=image_progress.update,
-        ).run(emit=typer.echo)
+            image_progress=display.update_image_download,
+        ).run(emit=display.emit)
     except CoreSetupPaused as error:
+        display.finish()
         echo_setup_stop(error)
         raise typer.Exit(1) from error
     except CoreSetupFailed as error:
+        display.finish()
         echo_setup_stop(error)
         raise typer.Exit(1) from error
     finally:
-        image_progress.finish()
+        display.finish()
 
-    typer.echo()
-    typer.echo("Dorf is ready.")
-    typer.echo(f"AI provider: {result.provider_connection}")
-    typer.echo(f"Image: {result.image_fingerprint[:12]}")
-    typer.echo()
-    typer.echo("Next:")
-    typer.echo("  dorf worker spawn my-worker")
+    display.emit("")
+    display.emit("Dorf is ready.")
+    display.emit(f"AI provider: {result.provider_connection}")
+    display.emit(f"Image: {result.image_fingerprint[:12]}")
+    display.emit("")
+    display.emit("Next:")
+    display.emit("  dorf worker spawn my-worker")
 
 
 def echo_setup_stop(error: CoreSetupPaused | CoreSetupFailed) -> None:
@@ -499,10 +661,20 @@ def connect_setup_provider(gateway: ProviderGateway) -> str:
     typer.echo("No AI model provider is connected.")
     typer.echo("1. ChatGPT subscription · recommended")
     typer.echo("2. OpenAI API key")
-    choice = typer.prompt("Choose", default="1")
+    choice_prompt = "Choose 1 or 2"
+    if "NO_COLOR" not in os.environ:
+        choice_prompt = typer.style(
+            choice_prompt,
+            fg=DORF_ACTIVE_RGB,
+            bold=True,
+        )
+    choice = typer.prompt(choice_prompt, default="1")
     while choice not in {"1", "2"}:
-        typer.echo("Choose 1 or 2.", err=True)
-        choice = typer.prompt("Choose", default="1")
+        typer.echo(
+            "Enter 1 for ChatGPT subscription or 2 for OpenAI API key.",
+            err=True,
+        )
+        choice = typer.prompt(choice_prompt, default="1")
     if choice == "1":
         connection = gateway.connect_chatgpt_subscription(
             name="personal-chatgpt",
