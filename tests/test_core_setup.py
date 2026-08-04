@@ -9,7 +9,13 @@ import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
-from dorf.cli import _ImageDownloadProgress, app
+from dorf.cli import (
+    DORF_THEME,
+    _ImageDownloadProgress,
+    _SetupDisplay,
+    app,
+    connect_setup_provider,
+)
 from dorf.core_setup import (
     EXPECTED_SETUP_RESPONSE,
     CoreSetup,
@@ -618,7 +624,14 @@ def test_setup_cli_reports_download_milestones_when_output_is_redirected(
 
 def test_setup_download_progress_uses_one_live_terminal_display() -> None:
     stream = io.StringIO()
-    console = Console(file=stream, force_terminal=True, width=120)
+    console = Console(
+        file=stream,
+        force_terminal=True,
+        width=120,
+        color_system="truecolor",
+        no_color=False,
+        theme=DORF_THEME,
+    )
     progress = _ImageDownloadProgress(tty=True, console=console)
 
     progress.update(200 * 1024 * 1024, 800 * 1024 * 1024)
@@ -628,7 +641,107 @@ def test_setup_download_progress_uses_one_live_terminal_display() -> None:
     assert "Downloading Room image" in output
     assert "100%" in output
     assert "Downloading · 25%" not in output
+    assert "38;2;246;189;75" in output
+    assert "38;2;91;107;54" in output
+    assert "38;2;70;91;51" in output
     assert "\r" in output
+
+
+def test_setup_display_preserves_stable_messages_outside_a_terminal() -> None:
+    output: list[str] = []
+    display = _SetupDisplay(
+        tty=False,
+        console=Console(file=io.StringIO(), force_terminal=False),
+        plain_emit=output.append,
+    )
+    messages = [
+        "Room image",
+        "Checking the latest immutable Dorf Room image",
+        "Reusing verified image · Codex 0.150.0",
+        "Verifying the complete Worker loop",
+        "✓ Disposable Room created",
+        "✓ Codex completed a real turn",
+        "✓ Provider route revoked",
+        "✓ Disposable Room destroyed",
+    ]
+
+    for message in messages:
+        display.emit(message)
+    display.finish()
+
+    assert output == messages
+
+
+def test_setup_display_animates_silent_terminal_stages() -> None:
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=True,
+        width=100,
+        color_system="truecolor",
+        no_color=False,
+        theme=DORF_THEME,
+    )
+    display = _SetupDisplay(tty=True, console=console)
+
+    display.emit("Room image")
+    display.emit("Checking the latest immutable Dorf Room image")
+    display.emit("Reusing verified image · Codex 0.150.0")
+    display.emit("Verifying the complete Worker loop")
+    display.emit("✓ Disposable Room created")
+    display.emit("✓ Codex completed a real turn")
+    display.emit("✓ Provider route revoked")
+    display.emit("✓ Disposable Room destroyed")
+    display.finish()
+
+    output = stream.getvalue()
+    assert "Checking the latest immutable Dorf Room image" in output
+    assert "Creating disposable Room" in output
+    assert "Waiting for Codex to complete a real turn" in output
+    assert "Cleaning up disposable verification" in output
+    assert "Reusing verified image · Codex 0.150.0" in output
+    assert "Disposable Room destroyed" in output
+    assert "38;2;246;189;75" in output
+    assert "38;2;145;138;74" in output
+    assert "\r" in output
+
+
+def test_setup_display_honors_no_color(monkeypatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = io.StringIO()
+    console = Console(
+        file=stream,
+        force_terminal=True,
+        color_system="truecolor",
+        theme=DORF_THEME,
+    )
+    display = _SetupDisplay(tty=True, console=console)
+
+    display.emit("Room image")
+    display.emit("✓ Room image ready")
+    display.finish()
+
+    assert "Room image" in stream.getvalue()
+    assert "38;" not in stream.getvalue()
+
+
+def test_setup_provider_prompt_honors_no_color(monkeypatch) -> None:
+    prompts: list[str] = []
+
+    class Gateway:
+        def connect_chatgpt_subscription(self, *, name, on_authorization):
+            return ProviderConnection(name, "chatgpt", "subscription", "connected")
+
+    def prompt(message, *, default):
+        prompts.append(message)
+        return default
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr("dorf.cli.typer.prompt", prompt)
+
+    connect_setup_provider(Gateway())
+
+    assert prompts == ["Choose 1 or 2"]
 
 
 def test_setup_cli_pause_is_bounded_and_explains_how_to_resume(
@@ -734,6 +847,7 @@ def test_setup_cli_guides_the_recommended_chatgpt_device_connection(
 
     assert result.exit_code == 0
     assert "ChatGPT subscription · recommended" in result.output
+    assert "Choose 1 or 2" in result.output
     assert "Open: https://auth.openai.com/codex/device" in result.output
     assert "Code: ABCD-EFGH" in result.output
     assert "✓ Connected · personal-chatgpt" in result.output
