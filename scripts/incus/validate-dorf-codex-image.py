@@ -10,18 +10,33 @@ from pathlib import Path
 
 from dorf import Dorf
 from dorf.adapters.environments import IncusConfig, incus_bridge_ipv4
-from dorf.provider_gateway import ProviderGateway
+from dorf.provider_gateway import ProviderGateway, ProviderGatewayError
 
 EXPECTED_RESPONSE = "dorf image ready"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", required=True)
+    parser.add_argument("--image")
     parser.add_argument("--provider-connection", required=True)
     parser.add_argument("--network", default="incusbr0")
     parser.add_argument("--root-disk-size", default="40GiB")
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
+
+    try:
+        with ProviderGateway.open(bind_address=incus_bridge_ipv4(args.network)) as gateway:
+            gateway.require_connection(args.provider_connection)
+    except (ProviderGatewayError, RuntimeError) as error:
+        raise SystemExit(
+            f"Provider release preflight failed: {error}. "
+            f"Run: dorf provider status {args.provider_connection}"
+        ) from None
+    if args.preflight_only:
+        print(f"Provider release preflight passed: {args.provider_connection}")
+        return
+    if not args.image:
+        parser.error("--image is required unless --preflight-only is used")
 
     suffix = secrets.token_hex(4)
     worker_name = f"image-validation-{suffix}"
