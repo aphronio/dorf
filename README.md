@@ -12,7 +12,7 @@ execution boundary, a **Job** is a pinned goal with its own conversation and evi
 
 > [!IMPORTANT]
 > Dorf is alpha software. The current verified path is Codex in local Incus VMs on x86_64 Linux,
-> with automatic host convergence reviewed on Arch Linux. No other harness or Room backend is
+> with automatic host convergence reviewed on Arch Linux and Ubuntu 24.04 LTS. No other harness or Room backend is
 > supported yet. The official public Room image has not been published, so the fresh-machine
 > `dorf setup` path is not complete in this release.
 
@@ -45,7 +45,7 @@ exists now.
 | Agent harness | Codex app-server |
 | Room backend | Local Incus virtual machines |
 | Model access | Named ChatGPT-subscription and OpenAI API-key connections through the local Provider Gateway |
-| Host setup | x86_64 Arch Linux convergence; other x86_64 Linux hosts may work with an already usable Incus installation |
+| Host setup | x86_64 Arch Linux and Ubuntu 24.04 LTS convergence; other x86_64 Linux hosts may work with an already usable Incus installation |
 | Dogfood application | Coding-to-PR, including isolated clones, repo-owned checks, review, follow-up, and PR proposal |
 
 Multiple harnesses, alternative sandbox providers, remote Room backends, Worker pools, scheduling,

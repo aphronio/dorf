@@ -31,6 +31,7 @@ from dorf.host_setup import (
     MINIMUM_HOST_MEMORY_BYTES,
     HostSetupError,
     inspect_host_capacity,
+    inspect_incus_versions,
 )
 from dorf.provider_gateway import ProviderGateway, ProviderGatewayError
 from dorf.sdk import EnvironmentPrerequisitesError
@@ -311,6 +312,31 @@ class CoreSetup:
                 remediation="Grant this user access to the local Incus service.",
                 owner="host",
                 expected="The current login can operate the local Incus service.",
+            )
+        try:
+            versions = inspect_incus_versions(self._probe)
+            if not versions.aligned and self._incus_access_repairer is not None:
+                self._incus_access_repairer(self._probe)
+                versions = inspect_incus_versions(self._probe)
+        except HostSetupError as error:
+            raise CoreSetupPaused(
+                f"Dorf could not inspect the local Incus version pair: {error}",
+                remediation="Run `incus version` and repair the reported local service failure.",
+                owner="incus",
+                classification="compatibility",
+                expected="The local Incus client and daemon report their versions.",
+            ) from error
+        if not versions.aligned:
+            raise CoreSetupPaused(
+                (
+                    f"The Incus client is {versions.client}, but the local daemon is "
+                    f"{versions.server}."
+                ),
+                remediation="Restart the local Incus service to activate its package update.",
+                owner="incus",
+                classification="compatibility",
+                expected="The local Incus client and daemon use the same installed version.",
+                approval_required_actions=("Restart the local Incus service.",),
             )
         network = self._probe.run(
             ["incus", "network", "show", config.network],

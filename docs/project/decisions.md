@@ -713,25 +713,31 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D038 — Official Room images are immutable GitHub Release assets
 
-- **Status:** Accepted and implemented; first public promotion pending repository visibility and
-  immutable-release enablement — 2026-07-31
+- **Status:** Accepted and implemented — 2026-07-31; local-first publication boundary revised
+  before the first public promotion — 2026-08-04
 - **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
-  exactly one Incus archive and one compatibility manifest for that architecture. A dedicated
-  self-hosted Incus runner builds from an immutable base fingerprint, selects and records the
-  current Codex npm release, proves the credential boundary, completes a real Provider
-  Gateway-backed Worker turn, and exports the candidate before constructing the release. The
-  consumer accepts only a published immutable release and requires agreement among GitHub's asset
-  digests, the manifest, the downloaded archive SHA-256, and the post-import Incus fingerprint.
+  exactly one Incus archive and one compatibility manifest for that architecture. One repo-owned
+  local command builds from an immutable base fingerprint, selects and records the current Codex npm
+  release, proves the credential boundary, completes a real Provider Gateway-backed Worker turn,
+  exports the untouched candidate, and publishes it with GitHub CLI. The consumer accepts only a
+  published immutable release and requires agreement among GitHub's asset digests, the manifest,
+  the downloaded archive SHA-256, and the post-import Incus fingerprint.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
-  enabled before the first image is promoted. The workflow records that reviewed repository setting
-  in an explicit variable, creates a complete draft, publishes it once, and verifies its release
-  attestation and both assets. Until those conditions are met, the local candidate terminal is
-  evidence for the pipeline but not a public-image availability claim.
+  enabled before the first image is promoted. The publisher records that reviewed repository
+  setting in an explicit variable, requires a clean source commit already available from GitHub,
+  creates a complete draft, publishes it once, and verifies its release attestation and both assets.
+  The owner's provider credential remains in the local Provider Gateway; only a scoped route enters
+  a disposable validation Room, and neither enters the image or GitHub.
 - **Why:** GitHub Releases reuse the project's source authority, provide static anonymous HTTPS
   downloads, protected tags and assets, release attestations, and API-visible SHA-256 digests
   without operating a public Incus daemon or a separate image-index service. Verifying every layer
   keeps the friendly alias out of the trust boundary and lets setup converge idempotently on one
   exact local fingerprint.
+- **Why local publication:** A GitHub-hosted runner would require moving or recreating a provider
+  credential to complete the real Worker terminal, while a persistent self-hosted runner adds a
+  needless public-repository execution surface. The current manual release cadence does not justify
+  either cost. The version-controlled command retains deterministic CI-style proof without moving
+  the owner's ChatGPT subscription boundary.
 - **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
   installer module are pre-release implementation details. Existing Rooms remain bound to the image
   they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
@@ -739,7 +745,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Release size or bandwidth makes GitHub unsuitable, a second architecture
   needs a real distribution index, Incus simplestreams materially reduces setup complexity, GitHub
   cannot preserve the required immutability/digest guarantees, or a concrete remote Environment
-  requires a different image authority.
+  requires a different image authority. Reconsider unattended publication when a scoped
+  non-personal provider credential and isolated ephemeral runner make it safer without weakening the
+  real Worker terminal.
 
 ## D039 — Initial core setup supports only the official Room image
 
@@ -774,3 +782,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   after the first release.
 - **Reconsider when:** PyPI rejects or reserves `dorf` or a credible developer-tool naming conflict
   is discovered before publication. After publication, require a deliberate migration decision.
+
+## D041 — Host setup is capability-first with narrow native-package recipes
+
+- **Status:** Accepted for initial open-source setup — 2026-08-04
+- **Decision:** Accept any x86_64 Linux host whose local Incus daemon is already usable, but perform
+  automatic package, service, and root-equivalent group mutations only through exact clean-host
+  validated recipes. The initial recipes are Arch Linux and Ubuntu 24.04 LTS; both use native
+  distribution packages, systemd's `incus.service`, and `incus-admin`, while all pristine daemons
+  delegate storage and private-network creation to `incus admin init --minimal`. Setup reinspects
+  real state on every run, detects a local client/daemon version mismatch left by a package update,
+  and requests approval before restarting the service. Unsupported distributions receive the
+  upstream Incus installation path and may rerun the same command afterward.
+- **Storage default:** Retain Incus's directory-backed minimal default for the first stranger path.
+  In a clean nested Ubuntu 24.04 host, three cached-VM guest-readiness samples had a 15.490-second
+  median on `dir` and a 12.425-second median on a disposable loop-backed Btrfs pool. That gain does
+  not yet justify installing another filesystem tool or choosing storage on the user's behalf.
+- **Why:** Dorf should provide one calm setup experience without becoming a package manager or
+  filesystem provisioner. Capability-first inspection preserves portability for users who already
+  operate Incus; small evidence-backed mutation recipes keep the recommended path resumable and
+  supportable. Delegating initialization to Incus and preferring the least invasive storage choice
+  minimizes maintenance and host risk.
+- **Reconsider when:** Another distribution completes the clean-host terminal; Incus publishes a
+  reviewed universal daemon installer; native package/service semantics diverge enough to require a
+  different recipe; or promoted Dorf-image measurements on non-nested supported hosts repeatedly
+  exceed ten seconds for warm Room readiness and prove storage is the dominant cost.

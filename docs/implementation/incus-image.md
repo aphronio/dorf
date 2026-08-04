@@ -36,24 +36,36 @@ PROVIDER_CONNECTION=personal-chatgpt \
   scripts/incus/prepare-dorf-codex-release.sh
 ```
 
-`.github/workflows/publish-room-image.yml` runs the same proof on the dedicated x86_64 Incus image
-runner. A complete draft containing the archive and manifest is published only when:
+`scripts/incus/publish-dorf-codex-release.sh` runs that proof and publication as one repo-owned
+local release operation. It keeps the selected Provider Gateway credential on the owner's host and
+publishes only the credential-free archive and compatibility manifest. Run it from a clean commit
+that has already reached GitHub:
+
+```bash
+PROVIDER_CONNECTION=personal-chatgpt \
+  scripts/incus/publish-dorf-codex-release.sh
+```
+
+A complete draft containing the archive and manifest is published only when:
 
 - the repository is public;
 - GitHub immutable releases have been enabled;
 - the repository variable `DORF_IMMUTABLE_RELEASES_ENABLED` records that reviewed setting;
-- the runner has a valid `DORF_IMAGE_PROVIDER_CONNECTION`; and
+- the named Provider Connection is valid on the local host; and
 - the complete candidate proof passes.
 
-The workflow then verifies the published release and both assets with GitHub CLI. Release
+The command then verifies the published release and both assets with GitHub CLI. Release
 immutability protects the tag and assets after publication; GitHub records release attestations and
 SHA-256 asset digests. See GitHub's [immutable release
 model](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [release integrity
 verification](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity).
 
-The first public promotion remains blocked while the repository is private and immutable releases
-are not enabled. Do not weaken those gates or advertise the official download before both are true.
+The local publisher is intentionally manual for the first public releases. This avoids placing the
+owner's ChatGPT subscription state in GitHub Actions and avoids a persistent self-hosted runner on a
+public repository. Reconsider unattended publication only with a deliberately scoped non-personal
+CI provider credential and an isolated runner. Do not advertise the official download before its
+anonymous stranger terminal passes.
 
 ## Verified consumption
 

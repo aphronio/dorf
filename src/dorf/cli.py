@@ -68,13 +68,15 @@ from dorf.github_app import (
     private_key_permissions_are_locked_down,
 )
 from dorf.host_setup import (
-    ArchIncusHostState,
     HostSetupError,
-    host_os_id,
+    IncusHostState,
+    host_os_label,
     initialize_pristine_incus,
-    inspect_arch_incus_host,
+    inspect_incus_host,
     install_incus_on_arch,
-    repair_arch_incus_host,
+    install_incus_on_ubuntu_2404,
+    repair_incus_host,
+    supported_incus_host_recipe,
 )
 from dorf.job_input_dispatcher import launch_job_input_dispatcher
 from dorf.provider_gateway import (
@@ -259,9 +261,10 @@ def echo_diagnostic_stop(
 
 
 def install_setup_incus(probe: IncusRunnerProbe) -> None:
-    """Explain and apply the first reviewed host installation recipe."""
+    """Explain and apply one exact reviewed host installation recipe."""
     try:
-        detected_os_id = host_os_id()
+        recipe = supported_incus_host_recipe()
+        host_label = host_os_label()
     except HostSetupError as error:
         raise CoreSetupPaused(
             f"Dorf could not identify this Linux distribution: {error}",
@@ -271,9 +274,9 @@ def install_setup_incus(probe: IncusRunnerProbe) -> None:
             owner="host",
             classification="unsupported",
         ) from error
-    if detected_os_id != "arch":
+    if recipe is None:
         raise CoreSetupPaused(
-            f"Automatic Incus installation is not supported for {detected_os_id or 'this host'}.",
+            f"Automatic Incus installation is not supported for {host_label or 'this host'}.",
             remediation=(
                 "Install Incus using https://linuxcontainers.org/incus/docs/main/installing/."
             ),
@@ -284,8 +287,13 @@ def install_setup_incus(probe: IncusRunnerProbe) -> None:
     typer.echo("Incus is not installed")
     typer.echo("Incus provides the isolated virtual machines Dorf calls Rooms.")
     typer.echo("Installing it will:")
-    typer.echo("• update Arch packages required by the rolling-release package set")
-    typer.echo("• install and start the local Incus service")
+    if recipe == "arch":
+        typer.echo("• update Arch packages required by the rolling-release package set")
+        typer.echo("• install Arch's Incus package")
+    else:
+        typer.echo("• refresh Ubuntu package metadata")
+        typer.echo("• install Ubuntu's native Incus and QEMU VM packages")
+    typer.echo("• enable and start the local Incus service")
     typer.echo("• add your user to incus-admin, which has root-equivalent machine access")
     typer.echo("No remote Incus API will be enabled.")
     if not typer.confirm("Install Incus now?", default=True):
@@ -296,7 +304,10 @@ def install_setup_incus(probe: IncusRunnerProbe) -> None:
             approval_required_actions=("Install and enable Incus on this host.",),
         )
     try:
-        install_incus_on_arch(probe)
+        if recipe == "arch":
+            install_incus_on_arch(probe)
+        else:
+            install_incus_on_ubuntu_2404(probe)
     except HostSetupError as error:
         raise CoreSetupFailed(
             f"Incus installation failed: {error}",
@@ -338,9 +349,9 @@ def initialize_setup_incus(
 
 
 def repair_setup_incus_access(probe: IncusRunnerProbe) -> None:
-    """Resume only reviewed Arch service and administrator-group changes."""
+    """Resume only reviewed service and administrator-group changes."""
     try:
-        state = inspect_arch_incus_host(probe)
+        state = inspect_incus_host(probe)
     except HostSetupError as error:
         raise CoreSetupPaused(
             f"Dorf could not inspect this Incus installation: {error}",
@@ -361,7 +372,7 @@ def repair_setup_incus_access(probe: IncusRunnerProbe) -> None:
                 ),
             )
         try:
-            repair_arch_incus_host(probe, state=state)
+            repair_incus_host(probe, state=state)
         except HostSetupError as error:
             raise CoreSetupFailed(
                 f"Incus access repair failed: {error}",
@@ -377,12 +388,14 @@ def repair_setup_incus_access(probe: IncusRunnerProbe) -> None:
         )
 
 
-def _explain_incus_access_repair(state: ArchIncusHostState) -> None:
+def _explain_incus_access_repair(state: IncusHostState) -> None:
     typer.echo()
     typer.echo("Incus is installed, but its local access setup is incomplete.")
     typer.echo("Dorf needs administrator permission to:")
     if not state.service_enabled or not state.service_active:
         typer.echo("• enable and start the local Incus service")
+    elif state.service_restart_required:
+        typer.echo("• restart the local Incus service to activate its installed package update")
     if not state.admin_membership_configured:
         typer.echo("• add your user to incus-admin, which has root-equivalent access")
     typer.echo("No remote Incus API will be enabled.")

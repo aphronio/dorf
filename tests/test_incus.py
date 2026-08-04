@@ -151,8 +151,11 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     release_script = (
         Path(__file__).parents[1] / "scripts" / "incus" / "prepare-dorf-codex-release.sh"
     ).read_text()
-    workflow = (
-        Path(__file__).parents[1] / ".github" / "workflows" / "publish-room-image.yml"
+    publish_script = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "incus"
+        / "publish-dorf-codex-release.sh"
     ).read_text()
 
     assert "test ! -e /root/.codex/auth.json" in build_script
@@ -169,9 +172,12 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "validate-dorf-codex-image.py" in release_script
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
     assert "create-dorf-codex-manifest.py" in release_script
-    assert 'test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)" = "public"' in workflow
-    assert 'test "$IMMUTABLE_RELEASES_ENABLED" = "true"' in workflow
-    assert "gh release verify-asset" in workflow
+    assert "prepare-dorf-codex-release.sh" in publish_script
+    assert 'gh api "repos/$GITHUB_REPOSITORY" --jq .visibility' in publish_script
+    assert "DORF_IMMUTABLE_RELEASES_ENABLED" in publish_script
+    assert 'gh release create "$RELEASE_TAG"' in publish_script
+    assert 'gh release edit "$RELEASE_TAG"' in publish_script
+    assert "gh release verify-asset" in publish_script
 
 
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:
