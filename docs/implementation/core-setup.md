@@ -23,7 +23,7 @@ The public happy path is:
 ```bash
 uv tool install dorf
 dorf setup
-dorf worker spawn ada
+dorf worker spawn my-worker
 ```
 
 `dorf setup` is one guided, resumable command. It installs and configures the supported local
@@ -35,14 +35,14 @@ alias, adapter choice, or provider flag.
 The default summon should feel like:
 
 ```text
-$ dorf worker spawn ada
+$ dorf worker spawn my-worker
 
-ada · ready
+my-worker · ready
 Room prepared in 7.2s
 Provider: personal-chatgpt
 
 Next:
-  dorf job assign JOB --to ada --goal "..."
+  dorf job assign JOB --to my-worker --goal "..."
 ```
 
 Provider names, Incus instance names, image fingerprints, route IDs, native conversation IDs, and
@@ -126,8 +126,11 @@ Room image
 ● Dorf Codex — recommended
   Latest Codex validated by Dorf
 
-↓ Downloading Dorf Codex
-✓ Image signature verified
+Downloading verified Dorf Room image · 780 MiB
+  [######------------------]  25% · 195 MiB / 780 MiB
+✓ Download digest verified
+Importing Dorf Room image into Incus
+✓ Imported image fingerprint verified
 ✓ Image ready
 
 Model connection
@@ -147,7 +150,7 @@ Verifying the complete Worker loop
 Dorf is ready.
 
 Next:
-  dorf worker spawn ada
+  dorf worker spawn my-worker
 ```
 
 Setup is not a TUI product of its own. It is a calm interactive CLI with good defaults, bounded

@@ -7,6 +7,7 @@ import secrets
 import shlex
 import signal
 import subprocess
+import sys
 import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -162,6 +163,57 @@ DORF_BRANCH_PREFIX = "dorf/"
 PROTECTED_BRANCHES = frozenset({"main", "master", "trunk"})
 
 
+class _ImageDownloadProgress:
+    """Render a compact bar on terminals and stable milestones in logs."""
+
+    def __init__(self, *, tty: bool | None = None) -> None:
+        self._tty = sys.stdout.isatty() if tty is None else tty
+        self._active = False
+        self._last_milestone = 0
+
+    def update(self, downloaded: int, total: int) -> None:
+        if total <= 0:
+            return
+        downloaded = min(max(0, downloaded), total)
+        percent = downloaded * 100 // total
+        if self._tty:
+            width = 24
+            filled = downloaded * width // total
+            typer.echo(
+                "\r  ["
+                + "#" * filled
+                + "-" * (width - filled)
+                + f"] {percent:3d}% · {_format_download_size(downloaded)}"
+                + f" / {_format_download_size(total)}",
+                nl=False,
+            )
+            self._active = downloaded < total
+            if downloaded == total:
+                typer.echo()
+            return
+
+        milestone = min(100, percent // 25 * 25)
+        if milestone >= 25 and milestone > self._last_milestone:
+            typer.echo(
+                f"  Downloading · {milestone}% · {_format_download_size(downloaded)}"
+                f" / {_format_download_size(total)}"
+            )
+            self._last_milestone = milestone
+
+    def finish(self) -> None:
+        if self._active:
+            typer.echo()
+            self._active = False
+
+
+def _format_download_size(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.0f} MiB"
+    if size >= 1024:
+        return f"{size / 1024:.0f} KiB"
+    return f"{size} B"
+
+
 @dataclass(frozen=True)
 class GitTarget:
     repo: Path
@@ -199,12 +251,14 @@ def setup() -> None:
     typer.echo("  Durable workers in private local Rooms")
     typer.echo()
     typer.echo("Checking this machine")
+    image_progress = _ImageDownloadProgress()
     try:
         result = CoreSetup(
             provider_connector=connect_setup_provider,
             incus_installer=install_setup_incus,
             incus_access_repairer=repair_setup_incus_access,
             incus_initializer=initialize_setup_incus,
+            image_progress=image_progress.update,
         ).run(emit=typer.echo)
     except CoreSetupPaused as error:
         echo_setup_stop(error)
@@ -212,6 +266,8 @@ def setup() -> None:
     except CoreSetupFailed as error:
         echo_setup_stop(error)
         raise typer.Exit(1) from error
+    finally:
+        image_progress.finish()
 
     typer.echo()
     typer.echo("Dorf is ready.")
@@ -219,7 +275,7 @@ def setup() -> None:
     typer.echo(f"Image: {result.image_fingerprint[:12]}")
     typer.echo()
     typer.echo("Next:")
-    typer.echo("  dorf worker spawn ada")
+    typer.echo("  dorf worker spawn my-worker")
 
 
 def echo_setup_stop(error: CoreSetupPaused | CoreSetupFailed) -> None:

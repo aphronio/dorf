@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import platform
 import secrets
 import tempfile
@@ -32,6 +31,11 @@ from dorf.host_setup import (
     HostSetupError,
     inspect_host_capacity,
     inspect_incus_versions,
+)
+from dorf.official_image import (
+    OfficialImageError,
+    OfficialImageInstaller,
+    OfficialImageInstallResult,
 )
 from dorf.provider_gateway import ProviderGateway, ProviderGatewayError
 from dorf.sdk import EnvironmentPrerequisitesError
@@ -124,6 +128,8 @@ class CoreSetup:
         incus_installer: Callable[[IncusRunnerProbe], None] | None = None,
         incus_access_repairer: Callable[[IncusRunnerProbe], None] | None = None,
         incus_initializer: Callable[[IncusRunnerProbe, IncusConfig], None] | None = None,
+        official_image_installer: Callable[..., OfficialImageInstallResult] | None = None,
+        image_progress: Callable[[int, int], None] | None = None,
         config_home: Path | None = None,
         temp_root: Path | None = None,
     ) -> None:
@@ -134,6 +140,14 @@ class CoreSetup:
         self._incus_installer = incus_installer
         self._incus_access_repairer = incus_access_repairer
         self._incus_initializer = incus_initializer
+        self._official_image_installer = (
+            official_image_installer
+            or OfficialImageInstaller(
+                probe=self._probe,
+                temp_root=temp_root,
+            ).ensure
+        )
+        self._image_progress = image_progress
         self._config_home = config_home
         self._temp_root = temp_root
 
@@ -150,8 +164,9 @@ class CoreSetup:
 
         emit("")
         emit("Room image")
-        fingerprint = self._local_image_fingerprint(config)
-        emit(f"✓ {config.template} · {fingerprint[:12]}")
+        image = self._ensure_official_image(config, emit=emit)
+        fingerprint = image.fingerprint
+        emit(f"✓ {config.template} · {fingerprint[:12]} · Codex {image.codex_version}")
 
         emit("")
         emit("Model connection")
@@ -358,95 +373,31 @@ class CoreSetup:
                 expected=f"Managed private network {config.network} exists.",
             )
 
-    def _local_image_fingerprint(self, config: IncusConfig) -> str:
-        listed = self._probe.run(
-            ["incus", "image", "list", "--format", "json"],
-            timeout_seconds=30,
-        )
-        if listed.returncode != 0:
-            raise CoreSetupPaused(
-                "Dorf could not inspect local Incus images.",
-                remediation="Run `incus image list` and repair the reported Incus failure.",
-                owner="incus",
-                expected="Incus returns bounded local image metadata.",
-            )
+    def _ensure_official_image(
+        self,
+        config: IncusConfig,
+        *,
+        emit: Callable[[str], None],
+    ) -> OfficialImageInstallResult:
         try:
-            images = json.loads(listed.stdout)
-        except json.JSONDecodeError as error:
-            raise CoreSetupPaused(
-                "Incus returned invalid image metadata.",
-                remediation="Run `incus image list` and repair the reported Incus failure.",
-                owner="incus",
-                classification="compatibility",
-                expected="Incus returns image metadata as a JSON list.",
-            ) from error
-        if not isinstance(images, list):
-            raise CoreSetupPaused(
-                "Incus returned invalid image metadata.",
-                remediation="Run `incus image list` and repair the reported Incus failure.",
-                owner="incus",
-                classification="compatibility",
-                expected="Incus returns image metadata as a JSON list.",
+            return self._official_image_installer(
+                alias=config.template,
+                emit=emit,
+                progress=self._image_progress,
             )
-        matches = [
-            image
-            for image in images
-            if isinstance(image, dict)
-            and any(
-                isinstance(alias, dict) and alias.get("name") == config.template
-                for alias in image.get("aliases", [])
-            )
-        ]
-        if not matches:
+        except OfficialImageError as error:
             raise CoreSetupPaused(
-                (
-                    f"Dorf Codex image {config.template} is not installed. "
-                    "Public image download is not active in this pre-release build."
-                ),
+                f"The official Dorf Room image is not ready: {error}",
                 remediation=(
-                    "Use an existing validated local image, or rerun after public "
-                    "image distribution is activated."
+                    "Restore access to GitHub Releases or wait for an official image promotion, "
+                    "then rerun dorf setup."
                 ),
                 owner="dorf",
-                expected=(f"One validated x86_64 VM image is available as {config.template}."),
-            )
-        if len(matches) != 1:
-            raise CoreSetupFailed(
-                f"Incus returned multiple images for alias {config.template}",
-                owner="incus",
-                classification="compatibility",
-                expected=f"Alias {config.template} resolves to exactly one image.",
-            )
-        image = matches[0]
-        if image.get("architecture") not in {"x86_64", "amd64"}:
-            raise CoreSetupPaused(
-                f"Incus image {config.template} is not an x86_64 image.",
-                remediation="Install a supported Dorf Codex VM image.",
-                owner="dorf",
-                classification="compatibility",
-                expected="The selected Room image uses the x86_64 architecture.",
-            )
-        if image.get("type") != "virtual-machine":
-            raise CoreSetupPaused(
-                f"Incus image {config.template} is not a VM image.",
-                remediation="Install a supported Dorf Codex VM image.",
-                owner="dorf",
-                classification="compatibility",
-                expected="The selected Room image has type virtual-machine.",
-            )
-        fingerprint = image.get("fingerprint")
-        if (
-            not isinstance(fingerprint, str)
-            or len(fingerprint) != 64
-            or any(character not in "0123456789abcdef" for character in fingerprint)
-        ):
-            raise CoreSetupFailed(
-                f"Incus image {config.template} has an invalid fingerprint",
-                owner="incus",
-                classification="compatibility",
-                expected="Incus returns a lowercase 64-character image fingerprint.",
-            )
-        return fingerprint
+                classification="possible-upstream-regression",
+                expected=(
+                    "The latest immutable, digest-verified x86_64 Dorf Room image is installed."
+                ),
+            ) from error
 
     def _select_provider_connection(
         self,

@@ -17,7 +17,8 @@ CANDIDATE_ALIAS="dorf-codex-candidate-$BUILD_ID"
 BUILD_VM="dorf-codex-build-$BUILD_ID"
 PROBE_VM="dorf-codex-probe-$BUILD_ID"
 METADATA_PATH="$OUTPUT_DIR/image.json"
-ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-x86_64.tar.gz"
+ARCHIVE_BASENAME="dorf-codex-incus-vm-x86_64"
+ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
 
 uv run --project "$PROJECT_ROOT" python \
   "$SCRIPT_DIR/validate-dorf-codex-image.py" \
@@ -37,7 +38,7 @@ trap cleanup EXIT
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$METADATA_PATH" "$ARCHIVE_PATH" \
-  "$OUTPUT_DIR/dorf-codex-x86_64.json"
+  "$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
 
 IMAGE_ALIAS="$CANDIDATE_ALIAS" \
 BUILD_VM="$BUILD_VM" \
@@ -72,7 +73,7 @@ uv run --project "$PROJECT_ROOT" python \
   --root-disk-size "$ROOT_DISK_SIZE"
 
 incus image export "$CANDIDATE_ALIAS" \
-  "$OUTPUT_DIR/dorf-codex-x86_64" --vm
+  "$OUTPUT_DIR/$ARCHIVE_BASENAME" --vm
 
 CODEX_VERSION="$(
   sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$METADATA_PATH"
@@ -91,9 +92,9 @@ uv run --project "$PROJECT_ROOT" python \
   --release-tag "$RELEASE_TAG" \
   --source-commit "$SOURCE_COMMIT" \
   --validated-at "$VALIDATED_AT" \
-  --output "$OUTPUT_DIR/dorf-codex-x86_64.json"
+  --output "$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
 
 printf '%s\n' \
   "Candidate ready: $RELEASE_TAG" \
   "Archive: $ARCHIVE_PATH" \
-  "Manifest: $OUTPUT_DIR/dorf-codex-x86_64.json"
+  "Manifest: $OUTPUT_DIR/$ARCHIVE_BASENAME.json"

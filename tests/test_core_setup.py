@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from typer.testing import CliRunner
 
-from dorf.cli import app
+from dorf.cli import _ImageDownloadProgress, app
 from dorf.core_setup import (
     EXPECTED_SETUP_RESPONSE,
     CoreSetup,
@@ -17,9 +17,14 @@ from dorf.core_setup import (
 )
 from dorf.deployment_profile import load_deployment_profile
 from dorf.host_setup import GIB, HostCapacity
+from dorf.official_image import (
+    OfficialImageError,
+    OfficialImageInstallResult,
+)
 from dorf.provider_gateway import DeviceAuthorization, ProviderConnection
 
 FINGERPRINT = "a" * 64
+USE_READY_IMAGE = object()
 
 
 class FakeProbe:
@@ -156,6 +161,8 @@ def setup_runner(
     incus_installer=None,
     incus_access_repairer=None,
     incus_initializer=None,
+    official_image_installer=USE_READY_IMAGE,
+    image_progress=None,
 ):
     monkeypatch.setattr("dorf.core_setup.platform.system", lambda: "Linux")
     monkeypatch.setattr("dorf.core_setup.platform.machine", lambda: "x86_64")
@@ -176,6 +183,18 @@ def setup_runner(
         opened.append((args, kwargs))
         return nullcontext(fake_dorf)
 
+    if official_image_installer is USE_READY_IMAGE:
+
+        def reuse_image(*, alias, emit, progress):
+            return OfficialImageInstallResult(
+                "already-ready",
+                "room-image-20260731-0.150.0",
+                FINGERPRINT,
+                "0.150.0",
+            )
+
+        official_image_installer = reuse_image
+
     setup = CoreSetup(
         probe=probe or FakeProbe(),
         gateway_opener=lambda **kwargs: nullcontext(fake_gateway),
@@ -184,6 +203,8 @@ def setup_runner(
         incus_installer=incus_installer,
         incus_access_repairer=incus_access_repairer,
         incus_initializer=incus_initializer,
+        official_image_installer=official_image_installer,
+        image_progress=image_progress,
         config_home=tmp_path / "config",
         temp_root=tmp_path,
     )
@@ -216,7 +237,7 @@ def test_setup_converges_existing_authorities_and_proves_real_worker_shape(
         "✓ Private VM network ready · incusbr0",
         "",
         "Room image",
-        f"✓ dorf-codex · {FINGERPRINT[:12]}",
+        f"✓ dorf-codex · {FINGERPRINT[:12]} · Codex 0.150.0",
         "",
         "Model connection",
         "✓ Model connection ready · personal-chatgpt",
@@ -458,24 +479,72 @@ def test_setup_repairs_a_stale_local_daemon_before_room_work(
     assert opened
 
 
-def test_setup_pauses_honestly_when_the_pre_public_local_image_is_absent(
+def test_setup_installs_the_promoted_image_before_the_real_worker_smoke(
     tmp_path,
     monkeypatch,
 ) -> None:
+    installed: list[str] = []
+
+    class Installer:
+        def __init__(self, *, probe, temp_root):
+            assert probe.image_present is False
+            assert temp_root == tmp_path
+
+        def ensure(self, *, alias, emit, progress):
+            assert not installed
+            assert progress is image_progress
+            installed.append(alias)
+            emit("Downloading verified Dorf Room image · 780 MiB")
+            return OfficialImageInstallResult(
+                "installed",
+                "room-image-20260804-0.146.0",
+                "b" * 64,
+                "0.146.0",
+            )
+
+    monkeypatch.setattr("dorf.core_setup.OfficialImageInstaller", Installer)
+
+    def image_progress(current, total):
+        pass
+
     setup, _, _, opened = setup_runner(
         tmp_path,
         monkeypatch,
         probe=FakeProbe(image_present=False),
+        official_image_installer=None,
+        image_progress=image_progress,
+    )
+    output: list[str] = []
+
+    result = setup.run(emit=output.append)
+
+    assert installed == ["dorf-codex"]
+    assert result.image_fingerprint == "b" * 64
+    assert "Downloading verified Dorf Room image · 780 MiB" in output
+    assert opened
+    assert load_deployment_profile(config_home=tmp_path / "config").image_fingerprint == "b" * 64
+
+
+def test_setup_pauses_before_worker_smoke_when_official_image_is_unavailable(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def install(*, alias, emit, progress):
+        raise OfficialImageError("No promoted official Dorf Room image was found")
+
+    setup, _, _, opened = setup_runner(
+        tmp_path,
+        monkeypatch,
+        official_image_installer=install,
     )
 
-    with pytest.raises(
-        CoreSetupPaused,
-        match="Public image download is not active",
-    ) as raised:
+    with pytest.raises(CoreSetupPaused, match="No promoted official") as raised:
         setup.run(emit=lambda message: None)
 
     assert raised.value.owner == "dorf"
+    assert raised.value.classification == "possible-upstream-regression"
     assert not opened
+    assert not (tmp_path / "config" / "dorf" / "deployment.json").exists()
 
 
 def test_setup_failure_interrupts_the_disposable_worker_and_saves_no_profile(
@@ -514,8 +583,52 @@ def test_setup_cli_has_no_required_options_and_ends_with_the_next_command(
     assert result.exit_code == 0
     assert "◆ Dorf" in result.output
     assert "Dorf is ready." in result.output
-    assert "dorf worker spawn ada" in result.output
+    assert "dorf worker spawn my-worker" in result.output
     assert "--" not in result.output
+
+
+def test_setup_cli_reports_download_milestones_when_output_is_redirected(
+    monkeypatch,
+) -> None:
+    class PassingSetup:
+        def __init__(self, *, image_progress, **kwargs):
+            self.image_progress = image_progress
+
+        def run(self, *, emit):
+            self.image_progress(0, 800 * 1024 * 1024)
+            self.image_progress(200 * 1024 * 1024, 800 * 1024 * 1024)
+            self.image_progress(800 * 1024 * 1024, 800 * 1024 * 1024)
+            return CoreSetupResult(
+                "personal-chatgpt",
+                FINGERPRINT,
+                Path("/tmp/deployment.json"),
+            )
+
+    monkeypatch.setattr("dorf.cli.CoreSetup", PassingSetup)
+
+    result = CliRunner().invoke(app, ["setup"])
+
+    assert result.exit_code == 0
+    assert "Downloading · 25% · 200 MiB / 800 MiB" in result.output
+    assert "Downloading · 100% · 800 MiB / 800 MiB" in result.output
+    assert "\r" not in result.output
+
+
+def test_setup_download_progress_uses_one_terminal_bar(monkeypatch) -> None:
+    output: list[tuple[str, bool]] = []
+
+    def echo(message="", *, nl=True, **kwargs):
+        output.append((message, nl))
+
+    monkeypatch.setattr("dorf.cli.typer.echo", echo)
+    progress = _ImageDownloadProgress(tty=True)
+
+    progress.update(200 * 1024 * 1024, 800 * 1024 * 1024)
+    progress.update(800 * 1024 * 1024, 800 * 1024 * 1024)
+
+    assert output[0] == ("\r  [######------------------]  25% · 200 MiB / 800 MiB", False)
+    assert output[1] == ("\r  [########################] 100% · 800 MiB / 800 MiB", False)
+    assert output[2] == ("", True)
 
 
 def test_setup_cli_pause_is_bounded_and_explains_how_to_resume(
