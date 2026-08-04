@@ -12,7 +12,8 @@ application facade over that building block. Portability means that the core doe
 coding-to-PR, GitHub, Incus, or Codex policy; neither package is yet a public compatibility promise.
 
 Python types, Job-directory schemas, transaction indexes, adapter protocols, and rendered output may
-change with dogfood evidence. Dorf is not yet presented as a public open-source release.
+change with dogfood evidence. The public alpha does not yet make these surfaces a third-party
+compatibility promise.
 
 ## Responsibility boundary
 
@@ -114,7 +115,7 @@ triggers behind these invariants.
 ## Composition and non-goals
 
 The in-process `Dorf` facade selects the application store plus the concrete Incus Environment
-and Codex Agent adapters. The Room integration slice will compose the sibling Provider Gateway to
+and Codex Agent adapters. The Room integration composes the sibling Provider Gateway to
 obtain and revoke Room-scoped inference routes without teaching `dorf.runtime` about provider
 connections or broker implementations. The CLI's resource commands and embedded SDK clients use
 the Dorf facade; trusted host clients may import the Provider Gateway facade directly for their own
