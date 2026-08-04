@@ -1731,7 +1731,7 @@ def test_version() -> None:
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "0.1.1" in result.output
 
 
 def test_resolve_git_author_rejects_empty_value(tmp_path, monkeypatch) -> None:

@@ -167,6 +167,9 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert r"""sed -n 's/.*"version": "\([^"]*\)".*/\1/p'""" in build_script
     assert "npm view @openai/codex@latest version" in provision_script
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
+    assert "apt-get purge -y npm" in provision_script
+    assert "git" not in provision_script
+    assert "astral.sh/uv" not in provision_script
     assert "npm_integrity" in provision_script
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script
@@ -176,6 +179,9 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
     assert "dorf-codex-incus-vm-x86_64" in release_script
+    assert "! command -v git" in release_script
+    assert "! command -v npm" in release_script
+    assert "! command -v uv" in release_script
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
     assert "dorf-codex-incus-vm-x86_64" in publish_script

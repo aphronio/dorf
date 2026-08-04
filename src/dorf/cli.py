@@ -16,6 +16,17 @@ from pathlib import Path
 from time import sleep
 
 import typer
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
 from dorf import Dorf, __version__
 from dorf.adapters.agents.codex import CodexDriver
@@ -164,11 +175,18 @@ PROTECTED_BRANCHES = frozenset({"main", "master", "trunk"})
 
 
 class _ImageDownloadProgress:
-    """Render a compact bar on terminals and stable milestones in logs."""
+    """Render a live terminal download and stable milestones in logs."""
 
-    def __init__(self, *, tty: bool | None = None) -> None:
-        self._tty = sys.stdout.isatty() if tty is None else tty
-        self._active = False
+    def __init__(
+        self,
+        *,
+        tty: bool | None = None,
+        console: Console | None = None,
+    ) -> None:
+        self._console = console or Console(file=sys.stdout, force_terminal=tty)
+        self._tty = self._console.is_terminal if tty is None else tty
+        self._progress: Progress | None = None
+        self._task_id: int | None = None
         self._last_milestone = 0
 
     def update(self, downloaded: int, total: int) -> None:
@@ -177,19 +195,37 @@ class _ImageDownloadProgress:
         downloaded = min(max(0, downloaded), total)
         percent = downloaded * 100 // total
         if self._tty:
-            width = 24
-            filled = downloaded * width // total
-            typer.echo(
-                "\r  ["
-                + "#" * filled
-                + "-" * (width - filled)
-                + f"] {percent:3d}% · {_format_download_size(downloaded)}"
-                + f" / {_format_download_size(total)}",
-                nl=False,
+            if self._progress is None:
+                self._progress = Progress(
+                    SpinnerColumn(style="cyan"),
+                    TextColumn("[bold cyan]{task.description}[/]"),
+                    BarColumn(
+                        complete_style="cyan",
+                        finished_style="green",
+                        pulse_style="cyan",
+                    ),
+                    TaskProgressColumn(),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                    console=self._console,
+                    expand=True,
+                    refresh_per_second=12,
+                )
+                self._progress.start()
+                self._task_id = self._progress.add_task(
+                    "Downloading Room image",
+                    total=total,
+                )
+            assert self._task_id is not None
+            self._progress.update(
+                self._task_id,
+                completed=downloaded,
+                total=total,
+                refresh=True,
             )
-            self._active = downloaded < total
             if downloaded == total:
-                typer.echo()
+                self.finish()
             return
 
         milestone = min(100, percent // 25 * 25)
@@ -201,9 +237,10 @@ class _ImageDownloadProgress:
             self._last_milestone = milestone
 
     def finish(self) -> None:
-        if self._active:
-            typer.echo()
-            self._active = False
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._task_id = None
 
 
 def _format_download_size(size: int) -> str:
@@ -271,7 +308,7 @@ def setup() -> None:
 
     typer.echo()
     typer.echo("Dorf is ready.")
-    typer.echo(f"Provider: {result.provider_connection}")
+    typer.echo(f"AI provider: {result.provider_connection}")
     typer.echo(f"Image: {result.image_fingerprint[:12]}")
     typer.echo()
     typer.echo("Next:")
@@ -459,7 +496,7 @@ def _explain_incus_access_repair(state: IncusHostState) -> None:
 
 def connect_setup_provider(gateway: ProviderGateway) -> str:
     """Guide one first-run provider choice without exposing connection plumbing."""
-    typer.echo("No model connection is configured.")
+    typer.echo("No AI model provider is connected.")
     typer.echo("1. ChatGPT subscription · recommended")
     typer.echo("2. OpenAI API key")
     choice = typer.prompt("Choose", default="1")

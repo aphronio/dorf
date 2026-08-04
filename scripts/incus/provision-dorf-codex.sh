@@ -6,8 +6,6 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates \
-  curl \
-  git \
   nodejs \
   npm
 
@@ -16,10 +14,11 @@ CODEX_VERSION="$(npm view @openai/codex@latest version)"
 CODEX_NPM_INTEGRITY="$(npm view "@openai/codex@$CODEX_VERSION" dist.integrity)"
 npm install -g "@openai/codex@$CODEX_VERSION"
 
-curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh
+apt-get purge -y npm
+apt-get autoremove -y --purge
 
 codex --version
-uv --version
+node --version
 
 install -d -m 0755 /usr/local/share/dorf
 printf '%s\n' \

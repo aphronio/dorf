@@ -60,7 +60,10 @@ incus exec "$PROBE_VM" -- bash -lc '
   test ! -e /root/.config/dorf/provider-route.key
   test -z "${OPENAI_API_KEY:-}"
   test -x "$(command -v codex)"
-  test -x "$(command -v uv)"
+  test -x "$(command -v node)"
+  ! command -v git >/dev/null
+  ! command -v npm >/dev/null
+  ! command -v uv >/dev/null
   test -r /usr/local/share/dorf/image.json
 '
 incus delete "$PROBE_VM" --force
@@ -82,7 +85,11 @@ if [[ -z "$CODEX_VERSION" ]]; then
   echo "Candidate metadata did not contain a Codex version." >&2
   exit 1
 fi
-RELEASE_TAG="${RELEASE_TAG:-room-image-$(date -u +%Y%m%dT%H%M%SZ)-$CODEX_VERSION}"
+PACKAGE_VERSION="$(
+  uv run --project "$PROJECT_ROOT" python -c \
+    'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])'
+)"
+RELEASE_TAG="${RELEASE_TAG:-v$PACKAGE_VERSION}"
 VALIDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 uv run --project "$PROJECT_ROOT" python \

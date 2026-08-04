@@ -40,8 +40,16 @@ class FakeOpener:
 
 
 class FakeIncusProbe:
-    def __init__(self, fingerprint: str | None = None) -> None:
+    def __init__(
+        self,
+        fingerprint: str | None = None,
+        *,
+        fail_alias_create: bool = False,
+    ) -> None:
         self.fingerprint = fingerprint
+        self.imported_fingerprint: str | None = None
+        self.fail_alias_create = fail_alias_create
+        self.alias_create_attempts = 0
         self.ran: list[list[str]] = []
 
     def run(self, argv, *, input=None, timeout_seconds=None):
@@ -61,7 +69,16 @@ class FakeIncusProbe:
             )
             return subprocess.CompletedProcess(argv, 0, json.dumps(images), "")
         if argv[:3] == ["incus", "image", "import"]:
-            self.fingerprint = hashlib.sha256(Path(argv[3]).read_bytes()).hexdigest()
+            self.imported_fingerprint = hashlib.sha256(Path(argv[3]).read_bytes()).hexdigest()
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:4] == ["incus", "image", "alias", "delete"]:
+            self.fingerprint = None
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:4] == ["incus", "image", "alias", "create"]:
+            self.alias_create_attempts += 1
+            if self.fail_alias_create and self.alias_create_attempts == 1:
+                return subprocess.CompletedProcess(argv, 1, "", "alias create failed")
+            self.fingerprint = argv[5]
             return subprocess.CompletedProcess(argv, 0, "", "")
         raise AssertionError(argv)
 
@@ -74,7 +91,7 @@ def release_fixture(
     image_fingerprint: str | None = None,
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
-    tag = "room-image-20260731-0.150.0"
+    tag = "v0.1.1"
     archive_name = f"dorf-codex-incus-vm-{architecture}.tar.gz"
     manifest_name = f"dorf-codex-incus-vm-{architecture}.json"
     digest = hashlib.sha256(archive).hexdigest()
@@ -106,6 +123,13 @@ def release_fixture(
     api_url = "https://api.github.com/repos/aphronio/dorf/releases?per_page=30"
     releases = json.dumps(
         [
+            {
+                "tag_name": "v0.2.0",
+                "draft": False,
+                "prerelease": False,
+                "immutable": True,
+                "assets": [],
+            },
             {
                 "tag_name": tag,
                 "draft": False,
@@ -150,11 +174,11 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
     ).ensure(emit=events.append, progress=lambda current, total: progress.append((current, total)))
 
     assert result.status == "installed"
-    assert result.release_tag == "room-image-20260731-0.150.0"
+    assert result.release_tag == "v0.1.1"
     assert result.fingerprint == digest
     assert result.codex_version == "0.150.0"
     assert ["incus", "image", "import"] == probe.ran[1][:3]
-    assert probe.ran[1][-3:] == ["--alias", "dorf-codex", "--reuse"]
+    assert probe.ran[2] == ["incus", "image", "alias", "create", "dorf-codex", digest]
     assert not list(tmp_path.iterdir())
     archive_size = len(b"incus-vm-image")
     assert progress == [(0, archive_size), (archive_size, archive_size)]
@@ -165,6 +189,41 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
         "Importing Dorf Room image into Incus",
         "Imported image fingerprint verified",
     ]
+
+
+def test_installer_replaces_an_older_alias_using_incus_6_commands(tmp_path) -> None:
+    responses, digest = release_fixture(b"incus-vm-image")
+    previous = "0" * 64
+    probe = FakeIncusProbe(previous)
+
+    result = OfficialImageInstaller(
+        probe=probe,
+        opener=FakeOpener(responses),
+        architecture="x86_64",
+        temp_root=tmp_path,
+    ).ensure()
+
+    assert result.status == "installed"
+    assert probe.fingerprint == digest
+    assert ["incus", "image", "alias", "delete", "dorf-codex"] in probe.ran
+    assert ["incus", "image", "alias", "create", "dorf-codex", digest] in probe.ran
+    assert not any("--reuse" in command for command in probe.ran)
+
+
+def test_installer_restores_the_previous_alias_when_alias_update_fails(tmp_path) -> None:
+    responses, _ = release_fixture(b"incus-vm-image")
+    previous = "0" * 64
+    probe = FakeIncusProbe(previous, fail_alias_create=True)
+
+    with pytest.raises(OfficialImageError, match="previous alias was restored"):
+        OfficialImageInstaller(
+            probe=probe,
+            opener=FakeOpener(responses),
+            architecture="x86_64",
+            temp_root=tmp_path,
+        ).ensure()
+
+    assert probe.fingerprint == previous
 
 
 def test_installer_reuses_the_exact_promoted_fingerprint_without_downloading_archive(
@@ -256,7 +315,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
             "--image-metadata",
             str(metadata),
             "--release-tag",
-            "room-image-20260731-0.150.0",
+            "v0.1.1",
             "--source-commit",
             "a" * 40,
             "--validated-at",
