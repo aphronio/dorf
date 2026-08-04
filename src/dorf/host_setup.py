@@ -9,6 +9,7 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from dorf.adapters.environments import IncusConfig, IncusRunnerProbe
 
@@ -32,12 +33,16 @@ class HostCapacity:
     disk_free_bytes: int
 
 
+IncusHostRecipe = Literal["arch", "ubuntu-24.04"]
+
+
 @dataclass(frozen=True)
-class ArchIncusHostState:
-    """Observed Arch service and user-access facts used for safe convergence."""
+class IncusHostState:
+    """Observed systemd service and user-access facts used for safe convergence."""
 
     service_enabled: bool
     service_active: bool
+    service_restart_required: bool
     admin_membership_configured: bool
     admin_membership_effective: bool
 
@@ -46,13 +51,43 @@ class ArchIncusHostState:
         return (
             not self.service_enabled
             or not self.service_active
+            or self.service_restart_required
             or not self.admin_membership_configured
         )
 
 
-def host_os_id(*, os_release_path: Path = Path("/etc/os-release")) -> str:
-    """Return the stable distribution identifier used to select a reviewed recipe."""
-    return _read_os_release(os_release_path).get("ID", "")
+@dataclass(frozen=True)
+class IncusVersions:
+    """Local Incus client and daemon versions reported by the supported CLI."""
+
+    client: str
+    server: str
+
+    @property
+    def aligned(self) -> bool:
+        return self.client == self.server
+
+
+def supported_incus_host_recipe(
+    *,
+    os_release_path: Path = Path("/etc/os-release"),
+) -> IncusHostRecipe | None:
+    """Select only an exact host recipe with a real clean-host validation terminal."""
+    release = _read_os_release(os_release_path)
+    os_id = release.get("ID", "")
+    if os_id == "arch":
+        return "arch"
+    if os_id == "ubuntu" and release.get("VERSION_ID") == "24.04":
+        return "ubuntu-24.04"
+    return None
+
+
+def host_os_label(*, os_release_path: Path = Path("/etc/os-release")) -> str:
+    """Return one bounded distribution label for setup diagnostics and presentation."""
+    release = _read_os_release(os_release_path)
+    return release.get("PRETTY_NAME") or " ".join(
+        value for value in (release.get("ID", ""), release.get("VERSION_ID", "")) if value
+    )
 
 
 def inspect_host_capacity(
@@ -103,17 +138,13 @@ def install_incus_on_arch(
     username: str | None = None,
 ) -> None:
     """Install and enable Incus through Arch's official package."""
-    detected_os_id = host_os_id(os_release_path=os_release_path)
-    if detected_os_id != "arch":
+    if supported_incus_host_recipe(os_release_path=os_release_path) != "arch":
         raise HostSetupError(
-            f"Incus installation is not supported for {detected_os_id or 'this host'}"
+            "The Arch Incus recipe does not support "
+            f"{host_os_label(os_release_path=os_release_path) or 'this host'}"
         )
     username = username or pwd.getpwuid(os.getuid()).pw_name
-    privilege_prefix = [] if os.geteuid() == 0 else ["sudo"]
-    if privilege_prefix:
-        approval = probe.attach(["sudo", "-v"])
-        if approval.returncode != 0:
-            raise HostSetupError("Administrator authentication was not granted")
+    privilege_prefix = _authenticate_administrator(probe)
     _require_command(
         probe,
         [
@@ -127,6 +158,60 @@ def install_incus_on_arch(
         timeout_seconds=900,
         label="install the Arch Incus package",
     )
+    _enable_incus_service_and_access(
+        probe,
+        privilege_prefix=privilege_prefix,
+        username=username,
+    )
+
+
+def install_incus_on_ubuntu_2404(
+    probe: IncusRunnerProbe,
+    *,
+    os_release_path: Path = Path("/etc/os-release"),
+    username: str | None = None,
+) -> None:
+    """Install Ubuntu 24.04's native Incus and QEMU packages."""
+    if supported_incus_host_recipe(os_release_path=os_release_path) != "ubuntu-24.04":
+        raise HostSetupError(
+            "The Ubuntu 24.04 Incus recipe does not support "
+            f"{host_os_label(os_release_path=os_release_path) or 'this host'}"
+        )
+    username = username or pwd.getpwuid(os.getuid()).pw_name
+    privilege_prefix = _authenticate_administrator(probe)
+    _require_command(
+        probe,
+        [*privilege_prefix, "apt-get", "update"],
+        timeout_seconds=300,
+        label="refresh Ubuntu package metadata",
+    )
+    _require_command(
+        probe,
+        [
+            *privilege_prefix,
+            "apt-get",
+            "install",
+            "--yes",
+            "incus",
+            "qemu-system",
+        ],
+        timeout_seconds=900,
+        label="install Ubuntu's Incus and QEMU packages",
+    )
+    _enable_incus_service_and_access(
+        probe,
+        privilege_prefix=privilege_prefix,
+        username=username,
+    )
+
+
+def _enable_incus_service_and_access(
+    probe: IncusRunnerProbe,
+    *,
+    privilege_prefix: list[str],
+    username: str,
+) -> None:
+    """Apply the service and root-equivalent access steps shared by tested systemd hosts."""
     _require_command(
         probe,
         [
@@ -153,42 +238,49 @@ def install_incus_on_arch(
     )
 
 
-def inspect_arch_incus_host(
+def inspect_incus_host(
     probe: IncusRunnerProbe,
     *,
     os_release_path: Path = Path("/etc/os-release"),
     username: str | None = None,
-) -> ArchIncusHostState:
-    """Inspect the exact Arch service and group checkpoints setup owns."""
-    detected_os_id = host_os_id(os_release_path=os_release_path)
-    if detected_os_id != "arch":
+) -> IncusHostState:
+    """Inspect the shared checkpoints on one host with a reviewed Incus recipe."""
+    if supported_incus_host_recipe(os_release_path=os_release_path) is None:
         raise HostSetupError(
-            f"Incus host recovery is not supported for {detected_os_id or 'this host'}"
+            "Incus host recovery is not supported for "
+            f"{host_os_label(os_release_path=os_release_path) or 'this host'}"
         )
     username = username or pwd.getpwuid(os.getuid()).pw_name
     configured_groups = _read_groups(probe, ["id", "-nG", username])
     effective_groups = _read_groups(probe, ["id", "-nG"])
-    return ArchIncusHostState(
-        service_enabled=_command_succeeds(
-            probe,
-            ["systemctl", "is-enabled", "--quiet", "incus.service"],
-        ),
-        service_active=_command_succeeds(
-            probe,
-            ["systemctl", "is-active", "--quiet", "incus.service"],
-        ),
+    service_enabled = _command_succeeds(
+        probe,
+        ["systemctl", "is-enabled", "--quiet", "incus.service"],
+    )
+    service_active = _command_succeeds(
+        probe,
+        ["systemctl", "is-active", "--quiet", "incus.service"],
+    )
+    try:
+        versions = inspect_incus_versions(probe) if service_active else None
+    except HostSetupError:
+        versions = None
+    return IncusHostState(
+        service_enabled=service_enabled,
+        service_active=service_active,
+        service_restart_required=versions is not None and not versions.aligned,
         admin_membership_configured="incus-admin" in configured_groups,
         admin_membership_effective="incus-admin" in effective_groups,
     )
 
 
-def repair_arch_incus_host(
+def repair_incus_host(
     probe: IncusRunnerProbe,
     *,
-    state: ArchIncusHostState,
+    state: IncusHostState,
     username: str | None = None,
 ) -> None:
-    """Resume only the reviewed Arch service and group changes still missing."""
+    """Resume only the reviewed systemd service and group changes still missing."""
     username = username or pwd.getpwuid(os.getuid()).pw_name
     commands: list[tuple[list[str], float, str]] = []
     privilege_prefix = [] if os.geteuid() == 0 else ["sudo"]
@@ -204,6 +296,14 @@ def repair_arch_incus_host(
                 ],
                 120,
                 "enable the local Incus service",
+            )
+        )
+    elif state.service_restart_required:
+        commands.append(
+            (
+                [*privilege_prefix, "systemctl", "restart", "incus.service"],
+                120,
+                "restart the local Incus service after its package update",
             )
         )
     if not state.admin_membership_configured:
@@ -222,10 +322,7 @@ def repair_arch_incus_host(
         )
     if not commands:
         return
-    if privilege_prefix:
-        approval = probe.attach(["sudo", "-v"])
-        if approval.returncode != 0:
-            raise HostSetupError("Administrator authentication was not granted")
+    _authenticate_administrator(probe)
     for argv, timeout_seconds, label in commands:
         _require_command(
             probe,
@@ -233,6 +330,33 @@ def repair_arch_incus_host(
             timeout_seconds=timeout_seconds,
             label=label,
         )
+
+
+def _authenticate_administrator(probe: IncusRunnerProbe) -> list[str]:
+    if os.geteuid() == 0:
+        return []
+    approval = probe.attach(["sudo", "-v"])
+    if approval.returncode != 0:
+        raise HostSetupError("Administrator authentication was not granted")
+    return ["sudo"]
+
+
+def inspect_incus_versions(probe: IncusRunnerProbe) -> IncusVersions:
+    """Read the local client/daemon pair without depending on package-manager state."""
+    result = probe.run(["incus", "version"], timeout_seconds=30)
+    if result.returncode != 0:
+        raise HostSetupError(f"Could not inspect Incus versions: {_command_detail(result)}")
+    values = {
+        key.strip().lower(): value.strip()
+        for line in result.stdout.splitlines()
+        if ":" in line
+        for key, value in [line.split(":", 1)]
+    }
+    client = values.get("client version")
+    server = values.get("server version")
+    if not client or not server:
+        raise HostSetupError("Incus did not report both client and server versions")
+    return IncusVersions(client=client, server=server)
 
 
 def initialize_pristine_incus(

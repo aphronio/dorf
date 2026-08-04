@@ -17,12 +17,12 @@ them because host facts can still be identifying.
 
 ## Supported host boundary
 
-The first reviewed host-convergence recipe is x86_64 Arch Linux with hardware virtualization and
-`/dev/kvm`. It installs the distribution's Incus package, starts the local service, and initializes
-local storage plus a private NAT network.
+The reviewed host-convergence recipes are x86_64 Arch Linux and Ubuntu 24.04 LTS with hardware
+virtualization and `/dev/kvm`. They install the distributions' native Incus packages and required
+VM support, start the local service, and initialize local storage plus a private NAT network.
 
 Other x86_64 Linux hosts may work when Incus is already installed and usable, but Dorf does not
-yet change their packages, services, or groups. macOS, Windows, other architectures, and remote
+change their packages, services, or groups. macOS, Windows, other architectures, and remote
 Incus daemons are not supported local-Room hosts in the initial release.
 
 Membership in `incus-admin` grants root-equivalent control of the machine through Incus. Setup

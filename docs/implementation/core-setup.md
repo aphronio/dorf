@@ -1,7 +1,7 @@
 # Core Setup and Summon DX
 
-- **Status:** Accepted product direction; configured-host terminal and first Arch host-convergence
-  recipe complete, public image acquisition pending
+- **Status:** Accepted product direction; configured-host terminal plus Arch and Ubuntu 24.04
+  host-convergence recipes complete, public image acquisition pending
 - **Scope:** Dorf core only—Worker, Room, Job, Assignment, the built-in Incus and Codex
   adapters, and the model connection required to run a real Worker
 - **Terminal:** A stranger on one supported Linux host can install Dorf, run one guided setup,
@@ -538,6 +538,8 @@ private.
   explicit alternative; setup supplies the stable connection name.
 - [x] Implement the first concrete Incus installation recipe for Arch Linux using the distribution
   package, local service, and `incus-admin` group.
+- [x] Implement Ubuntu 24.04 LTS convergence using its native `incus` and `qemu-system` packages,
+  the same reviewed systemd service and `incus-admin` boundary, and no third-party install script.
 - [x] Explain the full Arch package update, local service, and root-equivalent group boundary, then
   request approval before administrator authentication.
 - [x] Initialize a pristine daemon with Incus's minimal local storage and private `incusbr0`
@@ -546,6 +548,8 @@ private.
 - [x] Reconcile interruption across the reviewed Arch package, service, and `incus-admin` changes
   by inspecting each real checkpoint, requesting approval only for missing privileged changes, and
   refusing to guess ownership of ambiguous Incus resources.
+- [x] Detect a stale local Incus daemon left running after a package update, explain the mismatch,
+  and request approval to restart only the local service before attempting Room work.
 
 Terminal: a clean supported Linux host reaches the same disposable Worker terminal through
 `dorf setup`.
@@ -582,6 +586,23 @@ not-yet-effective membership produces the unavoidable sign-out/sign-in pause wit
 administrator operation. Partially initialized Incus storage or networking remains an explicit
 stop: setup cannot establish that those generic resources belong to Dorf and will not
 commandeer them.
+
+The Ubuntu 24.04 recipe was exercised on 2026-08-04 in a clean nested-KVM VM. Ubuntu's native
+Incus 6.0 and QEMU packages installed, `incus admin init --minimal` created the directory-backed
+pool and private `incusbr0`, and the remote API remained disabled. The pristine root-authority run
+reached the intentionally inactive public-image boundary in 44.213 seconds. A fresh ordinary user
+with the expected `incus-admin` membership then reached the same bounded boundary in 0.235 seconds.
+The non-root approval, declined mutation, new-login pause, and observed-state resume transitions
+remain protected by behavior tests; the complete clean-host Worker terminal still awaits the first
+public image.
+
+The same nested host compared cached Ubuntu VM guest readiness on Incus's default `dir` pool
+(15.888, 15.488, and 15.490 seconds; 15.490-second median) with a disposable loop-backed Btrfs pool
+(12.425, 12.429, and 11.434 seconds; 12.425-second median). The roughly three-second improvement
+does not justify another package, loop-backed filesystem, or automatic storage decision on a
+stranger's machine. Initial setup therefore retains Incus's robust minimal `dir` default. Repeat
+the measurement with the promoted Dorf image on non-nested supported hosts; reconsider if warm Room
+readiness repeatedly exceeds ten seconds and storage is shown to dominate the delay.
 
 ### 4. Agent diagnostic contract
 

@@ -30,11 +30,15 @@ class FakeProbe:
         incus_access: bool = True,
         image_present: bool = True,
         network_ready: bool = True,
+        client_version: str = "7.2",
+        server_version: str = "7.2",
     ) -> None:
         self.installed = installed
         self.incus_access = incus_access
         self.image_present = image_present
         self.network_ready = network_ready
+        self.client_version = client_version
+        self.server_version = server_version
         self.ran: list[list[str]] = []
 
     def which(self, command: str) -> str | None:
@@ -45,6 +49,16 @@ class FakeProbe:
         self.ran.append(argv)
         if argv == ["incus", "info"] and not self.incus_access:
             return subprocess.CompletedProcess(argv, 1, "", "permission denied")
+        if argv == ["incus", "version"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                (
+                    f"Client version: {self.client_version}\n"
+                    f"Server version: {self.server_version}\n"
+                ),
+                "",
+            )
         if argv == ["incus", "network", "get", "incusbr0", "ipv4.address"]:
             return subprocess.CompletedProcess(argv, 0, "10.42.0.1/24\n", "")
         if argv == ["incus", "network", "show", "incusbr0"] and not self.network_ready:
@@ -405,6 +419,31 @@ def test_setup_repairs_inaccessible_incus_then_continues(
         assert selected_probe is probe
         repaired.append(True)
         probe.incus_access = True
+
+    setup, _, _, opened = setup_runner(
+        tmp_path,
+        monkeypatch,
+        probe=probe,
+        incus_access_repairer=repair,
+    )
+
+    setup.run(emit=lambda message: None)
+
+    assert repaired == [True]
+    assert opened
+
+
+def test_setup_repairs_a_stale_local_daemon_before_room_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    probe = FakeProbe(client_version="7.2", server_version="7.0")
+    repaired: list[bool] = []
+
+    def repair(selected_probe):
+        assert selected_probe is probe
+        repaired.append(True)
+        probe.server_version = probe.client_version
 
     setup, _, _, opened = setup_runner(
         tmp_path,

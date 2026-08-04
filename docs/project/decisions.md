@@ -774,3 +774,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   after the first release.
 - **Reconsider when:** PyPI rejects or reserves `dorf` or a credible developer-tool naming conflict
   is discovered before publication. After publication, require a deliberate migration decision.
+
+## D041 — Host setup is capability-first with narrow native-package recipes
+
+- **Status:** Accepted for initial open-source setup — 2026-08-04
+- **Decision:** Accept any x86_64 Linux host whose local Incus daemon is already usable, but perform
+  automatic package, service, and root-equivalent group mutations only through exact clean-host
+  validated recipes. The initial recipes are Arch Linux and Ubuntu 24.04 LTS; both use native
+  distribution packages, systemd's `incus.service`, and `incus-admin`, while all pristine daemons
+  delegate storage and private-network creation to `incus admin init --minimal`. Setup reinspects
+  real state on every run, detects a local client/daemon version mismatch left by a package update,
+  and requests approval before restarting the service. Unsupported distributions receive the
+  upstream Incus installation path and may rerun the same command afterward.
+- **Storage default:** Retain Incus's directory-backed minimal default for the first stranger path.
+  In a clean nested Ubuntu 24.04 host, three cached-VM guest-readiness samples had a 15.490-second
+  median on `dir` and a 12.425-second median on a disposable loop-backed Btrfs pool. That gain does
+  not yet justify installing another filesystem tool or choosing storage on the user's behalf.
+- **Why:** Dorf should provide one calm setup experience without becoming a package manager or
+  filesystem provisioner. Capability-first inspection preserves portability for users who already
+  operate Incus; small evidence-backed mutation recipes keep the recommended path resumable and
+  supportable. Delegating initialization to Incus and preferring the least invasive storage choice
+  minimizes maintenance and host risk.
+- **Reconsider when:** Another distribution completes the clean-host terminal; Incus publishes a
+  reviewed universal daemon installer; native package/service semantics diverge enough to require a
+  different recipe; or promoted Dorf-image measurements on non-nested supported hosts repeatedly
+  exceed ten seconds for warm Room readiness and prove storage is the dominant cost.
