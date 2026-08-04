@@ -12,7 +12,9 @@ scripts/incus/build-dorf-codex-image.sh
 ```
 
 The build and provisioning scripts are the source of truth for the base fingerprint, installed
-tools, selected Codex release, and credential checks. `IMAGE_ALIAS` changes the local published
+harness, selected Codex release, and credential checks. The public core image retains the Ubuntu
+base, CA certificates, the Node runtime, and Codex app-server harness; build-only npm plus
+coding-workflow tools such as Git and uv are absent. `IMAGE_ALIAS` changes the local published
 alias. The builder resolves the configured Ubuntu VM alias to an immutable fingerprint before
 launching it and records the exact Codex version, npm package integrity, and base fingerprint.
 
@@ -38,8 +40,9 @@ PROVIDER_CONNECTION=personal-chatgpt \
 
 `scripts/incus/publish-dorf-codex-release.sh` runs that proof and publication as one repo-owned
 local release operation. It keeps the selected Provider Gateway credential on the owner's host and
-publishes only the credential-free archive and compatibility manifest. Run it from a clean commit
-that has already reached GitHub:
+attaches only the credential-free archive and compatibility manifest to the same immutable `vX.Y.Z`
+release that triggers the Python package publication. Run it from a clean versioned commit that has
+already reached GitHub and passed the TestPyPI rehearsal:
 
 ```bash
 PROVIDER_CONNECTION=personal-chatgpt \
@@ -58,6 +61,11 @@ A complete draft containing the archive and manifest is published only when:
 - the named Provider Connection is valid on the local host; and
 - the complete candidate proof passes.
 
+The lean `v0.1.1` candidate passed this proof on 2026-08-04 with Codex 0.146.0. Its fresh probe
+contained Node and Codex but no Git, npm, uv, provider credential, or generated Room route. A real
+Worker returned the expected response, after which its scoped route and Room were removed. The
+export was 767,224,375 bytes, about 53 MiB smaller than the previous workflow-tooling image.
+
 The command then verifies the published release and both assets with GitHub CLI. Release
 immutability protects the tag and assets after publication; GitHub records release attestations and
 SHA-256 asset digests. See GitHub's [immutable release
@@ -74,7 +82,8 @@ anonymous stranger terminal passes.
 ## Verified consumption
 
 `dorf.official_image.OfficialImageInstaller` is the setup-side convergence boundary. It accepts
-only the newest non-draft, non-prerelease `room-image-*` GitHub Release when all of these agree:
+only the newest non-draft, non-prerelease `vX.Y.Z` GitHub Release carrying a compatible manifest
+when all of these agree:
 
 - GitHub reports the release as immutable;
 - GitHub's manifest asset digest matches the downloaded manifest;
@@ -85,9 +94,9 @@ only the newest non-draft, non-prerelease `room-image-*` GitHub Release when all
 
 An already-installed exact fingerprint is reused without downloading the archive. An old or custom
 alias is never treated as current merely because its name matches. This consumer is intentionally
-not yet exposed as a standalone public command: guided setup owns that call after the first public
-image exists, so users do not encounter a command whose only possible result is a private-repository
-failure.
+not exposed as a standalone public command: guided setup owns that call. Import and alias updates
+use the commands available in Ubuntu 24.04's Incus 6.0; replacing an older alias does not delete its
+underlying image because existing Rooms may still reference that fingerprint.
 
 The current implementation is x86_64-only. Add another architecture only with its own built,
 published, and real-Worker validation terminal.

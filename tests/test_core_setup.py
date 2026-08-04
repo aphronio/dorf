@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 from contextlib import nullcontext
@@ -5,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from dorf.cli import _ImageDownloadProgress, app
@@ -188,7 +190,7 @@ def setup_runner(
         def reuse_image(*, alias, emit, progress):
             return OfficialImageInstallResult(
                 "already-ready",
-                "room-image-20260731-0.150.0",
+                "v0.1.1",
                 FINGERPRINT,
                 "0.150.0",
             )
@@ -239,8 +241,8 @@ def test_setup_converges_existing_authorities_and_proves_real_worker_shape(
         "Room image",
         f"✓ dorf-codex · {FINGERPRINT[:12]} · Codex 0.150.0",
         "",
-        "Model connection",
-        "✓ Model connection ready · personal-chatgpt",
+        "AI model provider",
+        "✓ AI model provider ready · personal-chatgpt",
         "",
         "Verifying the complete Worker loop",
         "✓ Disposable Room created",
@@ -497,7 +499,7 @@ def test_setup_installs_the_promoted_image_before_the_real_worker_smoke(
             emit("Downloading verified Dorf Room image · 780 MiB")
             return OfficialImageInstallResult(
                 "installed",
-                "room-image-20260804-0.146.0",
+                "v0.1.1",
                 "b" * 64,
                 "0.146.0",
             )
@@ -530,7 +532,7 @@ def test_setup_pauses_before_worker_smoke_when_official_image_is_unavailable(
     monkeypatch,
 ) -> None:
     def install(*, alias, emit, progress):
-        raise OfficialImageError("No promoted official Dorf Room image was found")
+        raise OfficialImageError("No compatible official Dorf release image was found")
 
     setup, _, _, opened = setup_runner(
         tmp_path,
@@ -538,7 +540,7 @@ def test_setup_pauses_before_worker_smoke_when_official_image_is_unavailable(
         official_image_installer=install,
     )
 
-    with pytest.raises(CoreSetupPaused, match="No promoted official") as raised:
+    with pytest.raises(CoreSetupPaused, match="No compatible official") as raised:
         setup.run(emit=lambda message: None)
 
     assert raised.value.owner == "dorf"
@@ -614,21 +616,19 @@ def test_setup_cli_reports_download_milestones_when_output_is_redirected(
     assert "\r" not in result.output
 
 
-def test_setup_download_progress_uses_one_terminal_bar(monkeypatch) -> None:
-    output: list[tuple[str, bool]] = []
-
-    def echo(message="", *, nl=True, **kwargs):
-        output.append((message, nl))
-
-    monkeypatch.setattr("dorf.cli.typer.echo", echo)
-    progress = _ImageDownloadProgress(tty=True)
+def test_setup_download_progress_uses_one_live_terminal_display() -> None:
+    stream = io.StringIO()
+    console = Console(file=stream, force_terminal=True, width=120)
+    progress = _ImageDownloadProgress(tty=True, console=console)
 
     progress.update(200 * 1024 * 1024, 800 * 1024 * 1024)
     progress.update(800 * 1024 * 1024, 800 * 1024 * 1024)
 
-    assert output[0] == ("\r  [######------------------]  25% · 200 MiB / 800 MiB", False)
-    assert output[1] == ("\r  [########################] 100% · 800 MiB / 800 MiB", False)
-    assert output[2] == ("", True)
+    output = stream.getvalue()
+    assert "Downloading Room image" in output
+    assert "100%" in output
+    assert "Downloading · 25%" not in output
+    assert "\r" in output
 
 
 def test_setup_cli_pause_is_bounded_and_explains_how_to_resume(
@@ -737,4 +737,4 @@ def test_setup_cli_guides_the_recommended_chatgpt_device_connection(
     assert "Open: https://auth.openai.com/codex/device" in result.output
     assert "Code: ABCD-EFGH" in result.output
     assert "✓ Connected · personal-chatgpt" in result.output
-    assert "Provider: personal-chatgpt" in result.output
+    assert "AI provider: personal-chatgpt" in result.output

@@ -12,9 +12,8 @@ execution boundary, a **Job** is a pinned goal with its own conversation and evi
 
 > [!IMPORTANT]
 > Dorf is alpha software. The current verified path is Codex in local Incus VMs on x86_64 Linux,
-> with automatic host convergence reviewed on Arch Linux and Ubuntu 24.04 LTS. No other harness or Room backend is
-> supported yet. The official public Room image has not been published, so the fresh-machine
-> `dorf setup` path is not complete in this release.
+> with automatic host convergence reviewed on Arch Linux and Ubuntu 24.04 LTS. No other harness or
+> Room backend is supported yet.
 
 ## Why Dorf
 
@@ -59,11 +58,12 @@ Install from PyPI with:
 uv tool install dorf
 dorf --version
 dorf --help
+dorf setup
 ```
 
-Installing the CLI does not yet provide the complete fresh-machine Worker path described in the
-North Star. Until the official Room image is published, use Dorf on a configured development host
-or explore the runtime and CLI surfaces without provisioning a Worker.
+`dorf setup` inspects the host, guides supported Incus installation, downloads the immutable
+Codex-harness VM image attached to the Dorf release, connects an AI model provider, and proves one
+real disposable Worker turn before reporting ready.
 
 To work from source:
 
@@ -104,14 +104,14 @@ dorf job inspect checkout-perf --evidence
 Enter the current Room when direct takeover is useful:
 
 ```bash
-dorf worker attach ada
+dorf worker attach my-worker
 ```
 
 End the Job before ending its Worker. Cleanup is bound to the exact recorded resources:
 
 ```bash
 dorf job end checkout-perf
-dorf worker end ada
+dorf worker end my-worker
 ```
 
 The same authority is available in process through the typed Python facade:
@@ -120,9 +120,9 @@ The same authority is available in process through the typed Python facade:
 from dorf import Dorf
 
 with Dorf.open() as dorf:
-    inspection = dorf.inspect_worker("ada")
+    inspection = dorf.inspect_worker("my-worker")
     receipt = dorf.message_worker(
-        "ada",
+        "my-worker",
         "Profile the API first",
         action_id="caller-stable-action-id",
     )
@@ -166,7 +166,7 @@ infrastructure.
 - [Principles](https://github.com/aphronio/dorf/blob/main/docs/project/principles.md) — product and engineering judgment
 - [Runtime Surface](https://github.com/aphronio/dorf/blob/main/docs/project/runtime.md) — current portable boundary
 - [Decision Log](https://github.com/aphronio/dorf/blob/main/docs/project/decisions.md) — accepted choices and reconsideration triggers
-- [Provider Gateway](https://github.com/aphronio/dorf/blob/main/docs/project/provider-gateway.md) — model connection and scoped route boundary
+- [Provider Gateway](https://github.com/aphronio/dorf/blob/main/docs/project/provider-gateway.md) — AI model provider and scoped route boundary
 - [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md) — current host support and diagnostics
 - [Contributing](https://github.com/aphronio/dorf/blob/main/CONTRIBUTING.md) — development workflow and DCO sign-off
 - [Security policy](https://github.com/aphronio/dorf/blob/main/SECURITY.md) — private vulnerability reporting

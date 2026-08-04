@@ -18,12 +18,13 @@ from dorf.adapters.environments import IncusRunnerProbe
 from dorf.adapters.environments.incus import DEFAULT_INCUS_TEMPLATE
 
 OFFICIAL_IMAGE_RELEASES_API = "https://api.github.com/repos/aphronio/dorf/releases?per_page=30"
-OFFICIAL_IMAGE_RELEASE_PREFIX = "room-image-"
+OFFICIAL_RELEASE_PREFIX = "v"
 MAX_RELEASE_RESPONSE_BYTES = 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_IMAGE_BYTES = 2_000_000_000
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_RELEASE_TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+$")
 
 
 class OfficialImageError(RuntimeError):
@@ -119,9 +120,6 @@ class OfficialImageInstaller:
                     "image",
                     "import",
                     str(archive_path),
-                    "--alias",
-                    alias,
-                    "--reuse",
                 ],
                 timeout_seconds=600,
             )
@@ -130,6 +128,11 @@ class OfficialImageInstaller:
                 raise OfficialImageError(
                     f"Incus could not import the official Room image: {detail or 'unknown error'}"
                 )
+            self._replace_alias(
+                alias,
+                fingerprint=manifest.image_fingerprint,
+                previous_fingerprint=current_fingerprint,
+            )
             observed = self._local_fingerprint(alias)
             if observed != manifest.image_fingerprint:
                 raise OfficialImageError(
@@ -146,29 +149,72 @@ class OfficialImageInstaller:
             manifest.codex_version,
         )
 
+    def _replace_alias(
+        self,
+        alias: str,
+        *,
+        fingerprint: str,
+        previous_fingerprint: str | None,
+    ) -> None:
+        if previous_fingerprint is not None:
+            deleted = self._probe.run(
+                ["incus", "image", "alias", "delete", alias],
+                timeout_seconds=30,
+            )
+            if deleted.returncode != 0:
+                detail = (deleted.stderr or deleted.stdout).strip()
+                raise OfficialImageError(
+                    f"Incus could not update image alias {alias}: {detail or 'unknown error'}"
+                )
+
+        created = self._probe.run(
+            ["incus", "image", "alias", "create", alias, fingerprint],
+            timeout_seconds=30,
+        )
+        if created.returncode == 0:
+            return
+
+        detail = (created.stderr or created.stdout).strip()
+        rollback = None
+        if previous_fingerprint is not None:
+            rollback = self._probe.run(
+                ["incus", "image", "alias", "create", alias, previous_fingerprint],
+                timeout_seconds=30,
+            )
+        recovery = (
+            " The previous alias was restored."
+            if rollback is not None and rollback.returncode == 0
+            else ""
+        )
+        raise OfficialImageError(
+            f"Incus could not set image alias {alias}: {detail or 'unknown error'}.{recovery}"
+        )
+
     def _latest_manifest(self) -> OfficialImageManifest:
         releases = self._read_json(self._api_url, max_bytes=MAX_RELEASE_RESPONSE_BYTES)
         if not isinstance(releases, list):
             raise OfficialImageError("Official image release response must be a list")
+        manifest_name = f"dorf-codex-incus-vm-{self._architecture}.json"
         release = next(
             (
                 item
                 for item in releases
                 if isinstance(item, dict)
                 and isinstance(item.get("tag_name"), str)
-                and item["tag_name"].startswith(OFFICIAL_IMAGE_RELEASE_PREFIX)
+                and item["tag_name"].startswith(OFFICIAL_RELEASE_PREFIX)
+                and _RELEASE_TAG_PATTERN.fullmatch(item["tag_name"])
                 and item.get("draft") is False
                 and item.get("prerelease") is False
+                and _has_release_asset(item, manifest_name)
             ),
             None,
         )
         if release is None:
-            raise OfficialImageError("No promoted official Dorf Room image was found")
+            raise OfficialImageError("No compatible official Dorf release image was found")
         tag = release["tag_name"]
         if release.get("immutable") is not True:
             raise OfficialImageError(f"Official image release {tag} is not immutable")
 
-        manifest_name = f"dorf-codex-incus-vm-{self._architecture}.json"
         manifest_asset = _release_asset(release, manifest_name)
         manifest_bytes = self._download_bytes(
             manifest_asset["browser_download_url"],
@@ -385,6 +431,13 @@ def _release_asset(release: dict[str, object], name: str) -> dict[str, object]:
     if len(matches) != 1:
         raise OfficialImageError(f"Official image release must contain exactly one {name}")
     return matches[0]
+
+
+def _has_release_asset(release: dict[str, object], name: str) -> bool:
+    assets = release.get("assets")
+    return isinstance(assets, list) and any(
+        isinstance(asset, dict) and asset.get("name") == name for asset in assets
+    )
 
 
 def _asset_sha256(asset: dict[str, object], *, label: str) -> str:

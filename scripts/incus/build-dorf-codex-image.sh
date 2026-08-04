@@ -76,7 +76,7 @@ fi
 incus exec "$BUILD_VM" -- sync
 incus stop "$BUILD_VM" --timeout 60
 incus publish "$BUILD_VM" --alias "$IMAGE_ALIAS" --reuse \
-  description="Dorf Ubuntu 24.04 VM with Codex $CODEX_VERSION and uv" \
+  description="Dorf Ubuntu 24.04 VM with the Codex $CODEX_VERSION harness" \
   dorf.codex.version="$CODEX_VERSION" \
   dorf.source.base_fingerprint="$BASE_FINGERPRINT"
 

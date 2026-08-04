@@ -1,9 +1,9 @@
 # Core Setup and Summon DX
 
-- **Status:** Accepted product direction; configured-host terminal plus Arch and Ubuntu 24.04
-  host-convergence recipes complete, public image acquisition pending
+- **Status:** Release-candidate fresh-host terminal complete on Ubuntu 24.04; public Python package
+  publication of the merged candidate remains
 - **Scope:** Dorf core only—Worker, Room, Job, Assignment, the built-in Incus and Codex
-  adapters, and the model connection required to run a real Worker
+  adapters, and the AI model provider required to run a real Worker
 - **Terminal:** A stranger on one supported Linux host can install Dorf, run one guided setup,
   summon a real Worker with no flags, complete a real turn, and destroy every disposable resource
 
@@ -28,7 +28,7 @@ dorf worker spawn my-worker
 
 `dorf setup` is one guided, resumable command. It installs and configures the supported local
 dependencies after explaining consequential machine changes, installs the official Dorf Room
-image, connects a model provider, and proves the complete path through a disposable real Worker
+image, connects an AI model provider, and proves the complete path through a disposable real Worker
 turn. After setup, ordinary Worker commands do not require a repository, `.dorf.toml`, image
 alias, adapter choice, or provider flag.
 
@@ -39,7 +39,7 @@ $ dorf worker spawn my-worker
 
 my-worker · ready
 Room prepared in 7.2s
-Provider: personal-chatgpt
+AI provider: personal-chatgpt
 
 Next:
   dorf job assign JOB --to my-worker --goal "..."
@@ -74,7 +74,7 @@ It must not require or configure:
 
 Generic Worker and Job operations use the global Dorf deployment profile. Only coding-workflow
 commands may consult a repository contract. Running `worker spawn` from inside an arbitrary Git
-repository must not change which image, environment, model connection, or runtime defaults it uses.
+repository must not change which image, environment, AI model provider, or runtime defaults it uses.
 
 ## One setup command
 
@@ -127,13 +127,13 @@ Room image
   Latest Codex validated by Dorf
 
 Downloading verified Dorf Room image · 780 MiB
-  [######------------------]  25% · 195 MiB / 780 MiB
+⠹ Downloading Room image ━━━━━━━━━━━━━╺━━━━━━━━━━━━ 49% 382/780 MiB 24 MiB/s 0:17
 ✓ Download digest verified
 Importing Dorf Room image into Incus
 ✓ Imported image fingerprint verified
 ✓ Image ready
 
-Model connection
+AI model provider
 ● ChatGPT subscription
 ○ OpenAI API key
 
@@ -482,15 +482,14 @@ disposable Worker turn without building the image locally.
 The implementation-side candidate terminal passed on 2026-07-31 with Codex 0.146.0: a fresh
 credential-free VM completed the expected real Worker response through the Provider Gateway, the
 route and Room were removed, and the exported archive digest matched its generated Incus fingerprint
-and manifest. This is not the slice terminal: anonymous consumption cannot be demonstrated while
-the repository is private, and setup does not call the consumer yet.
+and manifest. The later anonymous setup and stranger terminals below completed the distribution
+side of this slice after public activation.
 
 #### Public activation checklist
 
-The anonymous distribution terminals genuinely require a public repository. GitHub allows release
-immutability and runner registration while a repository is private, but those operational changes
-are deliberately postponed and batched with the visibility change rather than treated as technical
-blockers.
+The anonymous distribution terminals require a public repository. The repository is now public,
+release immutability is enabled, and publication remains a local maintainer operation so the
+provider credential never moves into GitHub Actions.
 
 Activation-window preparation:
 
@@ -498,32 +497,32 @@ Activation-window preparation:
 - [x] Set `DORF_IMMUTABLE_RELEASES_ENABLED=true` as the publisher's reviewed-setting record.
 - [x] Keep the owner's provider credential local and replace the persistent self-hosted workflow
   with one repo-owned build, real-Worker validation, and publication command.
-- [ ] Invoke the already verified official-image consumer from guided setup after the first release
-  exists.
+- [x] Invoke the verified official-image consumer from guided setup.
 
 Public-only acceptance:
 
-- [ ] Promote the first publicly accessible complete `room-image-*` release with the repo-owned
+- [x] Rehearse a publicly accessible complete image release with the repo-owned
   local publisher.
-- [ ] From an unauthenticated client, confirm the Releases API reports `immutable: true`, exactly one
+- [ ] Attach the validated image to the immutable `v0.1.1` product release and remove the two
+  superseded machine-only releases after anonymous setup passes.
+- [x] From an unauthenticated client, confirm the Releases API reports `immutable: true`, exactly one
   archive and manifest for x86_64, and GitHub SHA-256 digests for both.
-- [ ] Download both assets without GitHub credentials and verify the release attestation, asset
+- [x] Download both assets without GitHub credentials and verify the release attestation, asset
   digests, manifest, archive digest, and Incus fingerprint.
-- [ ] Activate the official-image consumer in guided setup and run it on a clean supported host with
+- [x] Activate the official-image consumer in guided setup and run it on a clean supported host with
   no local Dorf image and no GitHub authentication.
-- [ ] Complete a real disposable Worker turn on that anonymously obtained image and verify exact
+- [x] Complete a real disposable Worker turn on that anonymously obtained image and verify exact
   Room and Provider Gateway route cleanup.
-- [ ] Rerun setup against the same promoted fingerprint and prove it performs no image download or
+- [x] Rerun setup against the same promoted fingerprint and prove it performs no image download or
   mutation.
 - [ ] Promote a later validated Codex image and prove new Rooms select it while an existing Room
   retains its original image and native conversation.
-- [ ] Only after those terminals pass, advertise the official image and no-local-build setup path in
+- [x] Only after those terminals pass, advertise the official image and no-local-build setup path in
   public installation documentation.
 
-Repository visibility is a consequential owner action and is not performed by the implementation
-workflow. The activation-window preparation is not visibility-blocked, but is postponed by product
-sequencing. The anonymous distribution and stranger terminals cannot run while the repository is
-private.
+Repository visibility was a consequential owner action outside the implementation workflow. It is
+now complete; the remaining activation work is the combined `v0.1.1` release, one final anonymous
+consumer pass against it, and removal of the two superseded machine-only releases.
 
 ### 3. Guided host setup
 
@@ -578,8 +577,8 @@ default storage pool, managed private `incusbr0` bridge, default profile wiring,
 `core.https_address`. The disposable validation VM was removed. On a fresh non-root login, setup
 pauses after installation only when `incus info` proves that the new `incus-admin` membership is
 not effective yet; signing out and back in, then rerunning the same command resumes from observed
-state. The clean-host terminal remains intentionally incomplete until setup can anonymously obtain
-the official image after the repository is public.
+state. The complete stranger terminal was subsequently exercised on Ubuntu 24.04; Arch remains a
+reviewed host-convergence recipe rather than a duplicate release gate.
 
 Interrupted Arch host setup now resumes from observed state rather than from a completion marker.
 If the package exists but `incus info` fails, setup separately inspects whether `incus.service` is
@@ -594,11 +593,23 @@ commandeer them.
 The Ubuntu 24.04 recipe was exercised on 2026-08-04 in a clean nested-KVM VM. Ubuntu's native
 Incus 6.0 and QEMU packages installed, `incus admin init --minimal` created the directory-backed
 pool and private `incusbr0`, and the remote API remained disabled. The pristine root-authority run
-reached the intentionally inactive public-image boundary in 44.213 seconds. A fresh ordinary user
-with the expected `incus-admin` membership then reached the same bounded boundary in 0.235 seconds.
+first reached the intentionally inactive pre-public image boundary in 44.213 seconds. A fresh
+ordinary user with the expected `incus-admin` membership then reached the same bounded boundary in
+0.235 seconds.
 The non-root approval, declined mutation, new-login pause, and observed-state resume transitions
-remain protected by behavior tests; the complete clean-host Worker terminal still awaits the first
-public image.
+remain protected by behavior tests.
+
+After public activation, a second pristine Ubuntu 24.04 nested-KVM host installed the wheel built
+from verified main, showed the exact Incus/QEMU and root-equivalent group effects before approval,
+and resumed correctly after interruption between package installation and `incus admin init
+--minimal`. With GitHub credentials absent, it downloaded the immutable
+`dorf-codex-incus-vm-x86_64` release, verified every digest, imported fingerprint `32a6ef8861e1...`,
+completed ChatGPT device onboarding and a real Codex turn, revoked the scoped route, and destroyed
+the Room. That pass exposed that Ubuntu's Incus 6.0 lacks `image import --reuse`; the consumer now
+uses import plus the 6.0-compatible alias commands and preserves an older underlying image. The
+corrected run passed, and an immediate rerun reused the exact fingerprint without downloading or
+importing while repeating the Worker and cleanup proof. The remaining installation distinction is
+publication of this merged candidate to PyPI rather than installing its locally built wheel.
 
 The same nested host compared cached Ubuntu VM guest readiness on Incus's default `dir` pool
 (15.888, 15.488, and 15.490 seconds; 15.490-second median) with a disposable loop-backed Btrfs pool

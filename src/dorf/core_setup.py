@@ -169,7 +169,7 @@ class CoreSetup:
         emit(f"✓ {config.template} · {fingerprint[:12]} · Codex {image.codex_version}")
 
         emit("")
-        emit("Model connection")
+        emit("AI model provider")
         try:
             bridge_address = incus_bridge_ipv4(config.network, probe=self._probe)
         except RuntimeError as error:
@@ -185,7 +185,7 @@ class CoreSetup:
                     gateway,
                     profile=profile,
                 )
-                emit(f"✓ Model connection ready · {provider_connection}")
+                emit(f"✓ AI model provider ready · {provider_connection}")
                 emit("")
                 emit("Verifying the complete Worker loop")
                 self._verify_worker(
@@ -199,7 +199,7 @@ class CoreSetup:
         except ProviderGatewayError as error:
             remediation = getattr(error, "remediation", None)
             raise CoreSetupPaused(
-                f"Model connection is not ready: {error}",
+                f"AI model provider is not ready: {error}",
                 remediation=(
                     remediation
                     if isinstance(remediation, str) and remediation

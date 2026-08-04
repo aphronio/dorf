@@ -48,6 +48,14 @@ SOURCE_COMMIT="$SOURCE_COMMIT" \
 
 RELEASE_TAG="$(jq -r .release_tag "$MANIFEST_PATH")"
 CODEX_VERSION="$(jq -r .codex.version "$MANIFEST_PATH")"
+PACKAGE_VERSION="$(
+  uv run --project "$PROJECT_ROOT" python -c \
+    'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])'
+)"
+if [[ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]]; then
+  echo "Image release tag must match package version v$PACKAGE_VERSION: $RELEASE_TAG" >&2
+  exit 1
+fi
 if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
   echo "Release already exists: $RELEASE_TAG" >&2
   exit 1
@@ -59,7 +67,10 @@ cleanup_notes() {
 }
 trap cleanup_notes EXIT
 printf '%s\n' \
-  "Credential-free Incus VM image promoted after a real Dorf Codex turn." \
+  "Dorf $PACKAGE_VERSION" \
+  "" \
+  "Python package and credential-free Incus VM image." \
+  "The image was promoted after a real Dorf Codex turn." \
   "" \
   "Codex: $CODEX_VERSION" \
   "Environment: Incus VM" \
@@ -70,9 +81,9 @@ echo "Creating complete draft release: $RELEASE_TAG"
 gh release create "$RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --draft \
-  --latest=false \
+  --generate-notes \
   --target "$SOURCE_COMMIT" \
-  --title "Dorf Room image · $RELEASE_TAG" \
+  --title "Dorf $RELEASE_TAG" \
   --notes-file "$NOTES_PATH" \
   "$ARCHIVE_PATH" \
   "$MANIFEST_PATH"
@@ -81,7 +92,7 @@ echo "Publishing and verifying immutable release: $RELEASE_TAG"
 gh release edit "$RELEASE_TAG" \
   --repo "$GITHUB_REPOSITORY" \
   --draft=false \
-  --latest=false
+  --latest
 gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
 gh release verify-asset "$RELEASE_TAG" "$ARCHIVE_PATH" \
   --repo "$GITHUB_REPOSITORY"

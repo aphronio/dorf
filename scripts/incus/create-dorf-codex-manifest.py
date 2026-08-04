@@ -24,8 +24,8 @@ def main() -> None:
 
     if args.archive.name != "dorf-codex-incus-vm-x86_64.tar.gz":
         parser.error("archive must be named dorf-codex-incus-vm-x86_64.tar.gz")
-    if not args.release_tag.startswith("room-image-"):
-        parser.error("release tag must start with room-image-")
+    if not args.release_tag.startswith("v"):
+        parser.error("release tag must start with v")
     if not COMMIT_PATTERN.fullmatch(args.source_commit):
         parser.error("source commit must be a full lowercase Git SHA")
     if not args.validated_at.endswith("Z"):
