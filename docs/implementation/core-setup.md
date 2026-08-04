@@ -1,7 +1,7 @@
 # Core Setup and Summon DX
 
-- **Status:** Release-candidate fresh-host terminal complete on Ubuntu 24.04; public Python package
-  publication of the merged candidate remains
+- **Status:** Public fresh-host terminal complete on Ubuntu 24.04 through PyPI `0.1.1` and the
+  immutable combined `v0.1.1` product release
 - **Scope:** Dorf core only—Worker, Room, Job, Assignment, the built-in Incus and Codex
   adapters, and the AI model provider required to run a real Worker
 - **Terminal:** A stranger on one supported Linux host can install Dorf, run one guided setup,
@@ -503,7 +503,7 @@ Public-only acceptance:
 
 - [x] Rehearse a publicly accessible complete image release with the repo-owned
   local publisher.
-- [ ] Attach the validated image to the immutable `v0.1.1` product release and remove the two
+- [x] Attach the validated image to the immutable `v0.1.1` product release and remove the two
   superseded machine-only releases after anonymous setup passes.
 - [x] From an unauthenticated client, confirm the Releases API reports `immutable: true`, exactly one
   archive and manifest for x86_64, and GitHub SHA-256 digests for both.
@@ -520,9 +520,9 @@ Public-only acceptance:
 - [x] Only after those terminals pass, advertise the official image and no-local-build setup path in
   public installation documentation.
 
-Repository visibility was a consequential owner action outside the implementation workflow. It is
-now complete; the remaining activation work is the combined `v0.1.1` release, one final anonymous
-consumer pass against it, and removal of the two superseded machine-only releases.
+Repository visibility was a consequential owner action outside the implementation workflow. The
+public-activation terminal is now complete: the combined `v0.1.1` release passed anonymous
+consumption and the two superseded machine-only releases were removed.
 
 ### 3. Guided host setup
 
@@ -608,8 +608,20 @@ completed ChatGPT device onboarding and a real Codex turn, revoked the scoped ro
 the Room. That pass exposed that Ubuntu's Incus 6.0 lacks `image import --reuse`; the consumer now
 uses import plus the 6.0-compatible alias commands and preserves an older underlying image. The
 corrected run passed, and an immediate rerun reused the exact fingerprint without downloading or
-importing while repeating the Worker and cleanup proof. The remaining installation distinction is
-publication of this merged candidate to PyPI rather than installing its locally built wheel.
+importing while repeating the Worker and cleanup proof.
+
+The final public terminal passed on 2026-08-04 from the same disposable Ubuntu 24.04 stranger host
+after installing Dorf 0.1.1 from public PyPI. With GitHub credentials absent, setup selected the
+immutable combined `v0.1.1` release, downloaded its 765,823,845-byte Incus VM archive, verified the
+GitHub and manifest digests, and imported fingerprint
+`0c269e0aa0c5a765e45bb50542b64d06e6c55930b920754459643991c7349775` through Incus 6.0. The
+interactive download rendered one in-place spinner and progress bar with percentage, bytes, speed,
+and ETA, including during real network stalls; redirected output remains bounded to milestone
+lines. Setup then completed a real Codex turn, revoked the scoped route, destroyed the Room, and
+left no nested instance. An immediate public-package rerun printed `Reusing verified image`,
+performed no download or import, and repeated the full Worker proof and cleanup in approximately 38
+seconds. The two activation-only `room-image-*` releases and tags were then removed; the release feed
+now contains only `v0.1.0` and combined `v0.1.1`.
 
 The same nested host compared cached Ubuntu VM guest readiness on Incus's default `dir` pool
 (15.888, 15.488, and 15.490 seconds; 15.490-second median) with a disposable loop-backed Btrfs pool
@@ -618,6 +630,13 @@ does not justify another package, loop-backed filesystem, or automatic storage d
 stranger's machine. Initial setup therefore retains Incus's robust minimal `dir` default. Repeat
 the measurement with the promoted Dorf image on non-nested supported hosts; reconsider if warm Room
 readiness repeatedly exceeds ten seconds and storage is shown to dominate the delay.
+
+One precisely timed warm Room launch from the promoted image took 34.999 seconds in the deliberately
+nested Incus-inside-Incus stranger host; three preceding launches were in the same roughly
+30-to-33-second band and each exact Room cleanup took about 0.7 seconds. These are stress-environment
+observations, not normal-laptop targets. The direct nested-host storage comparison above remains the
+decision-quality evidence for the default: Btrfs saved only about three seconds, so setup continues
+to prefer Incus's low-maintenance `dir` pool.
 
 ### 4. Agent diagnostic contract
 

@@ -61,10 +61,14 @@ A complete draft containing the archive and manifest is published only when:
 - the named Provider Connection is valid on the local host; and
 - the complete candidate proof passes.
 
-The lean `v0.1.1` candidate passed this proof on 2026-08-04 with Codex 0.146.0. Its fresh probe
+The lean `v0.1.1` release passed this proof on 2026-08-04 with Codex 0.146.0. Its fresh probe
 contained Node and Codex but no Git, npm, uv, provider credential, or generated Room route. A real
 Worker returned the expected response, after which its scoped route and Room were removed. The
-export was 767,224,375 bytes, about 53 MiB smaller than the previous workflow-tooling image.
+published archive is 765,823,845 bytes, about 52 MiB smaller than the previous workflow-tooling
+image. Its archive and Incus fingerprint is
+`0c269e0aa0c5a765e45bb50542b64d06e6c55930b920754459643991c7349775`; the manifest digest is
+`93cbcd60b6af32b9cd1240c0813d4f43903cf22f36a93d661e6e0ea6c3d30ea3`, and both assets identify
+release `v0.1.1` from source commit `0069db51d7e8b030501197b8ab89665575c15d84`.
 
 The command then verifies the published release and both assets with GitHub CLI. Release
 immutability protects the tag and assets after publication; GitHub records release attestations and

@@ -726,7 +726,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   instead of creating machine-only releases in the human-facing release feed. Name the x86_64
   assets `dorf-codex-incus-vm-x86_64.tar.gz` and `dorf-codex-incus-vm-x86_64.json`. Manifest schema
   2 requires `environment: incus`. The two activation-time `room-image-*` bootstrap releases are
-  removable only after the combined release passes anonymous consumption.
+  removable only after the combined release passes anonymous consumption; they were removed after
+  that `v0.1.1` terminal passed on 2026-08-04.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
   enabled before the first image is promoted. The publisher records that reviewed repository
   setting in an explicit variable, requires a clean source commit already available from GitHub,
