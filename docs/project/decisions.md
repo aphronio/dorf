@@ -226,7 +226,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   raw diagnostics supports break-glass investigation without making it the front door. A pulse that
   survives Room unavailability makes reconnect useful precisely when operational state is degraded.
 - **Current shape:** Assignment-fenced structured Worker claims and evidence now enrich the pulse.
-  Timeline and evidence are explicit read-only lenses; native transcript history remains separate.
+  Coding Jobs compose workflow-owned outcome and attention facts into the same default pulse, with
+  terminal workflow outcome or runtime lifecycle taking precedence over stale AFK progress while
+  retaining its own source and provenance. Timeline and evidence are explicit read-only lenses;
+  native transcript history remains separate.
 - **Reconsider when:** A reviewed self-report/evidence ingestion boundary lands, a real environment
   cannot support a cheap side-effect-free availability observation, or a client needs another lens
   backed by concrete workflow evidence.

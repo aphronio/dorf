@@ -7,6 +7,16 @@ from .coding import (
     WorkflowOutcome,
 )
 from .coding_commands import prepare_coding_repository, run_coding_job_command
+from .coding_pulse import (
+    CodingJobPulse,
+    PulseActivity,
+    PulseAttention,
+    PulseDelta,
+    PulseLifecycle,
+    PulseRoomAvailability,
+    PulseWorkerClaim,
+    build_coding_job_pulse,
+)
 from .coding_store import (
     AfkCoordinator,
     CodingCommandRun,
@@ -19,12 +29,20 @@ __all__ = [
     "AfkCoordinator",
     "CodingCommandRun",
     "CodingJob",
+    "CodingJobPulse",
     "CodingStore",
     "CodingWorkflow",
     "FollowupFeedback",
+    "PulseActivity",
+    "PulseAttention",
+    "PulseDelta",
+    "PulseLifecycle",
+    "PulseRoomAvailability",
+    "PulseWorkerClaim",
     "WorkflowFailure",
     "WorkflowMessage",
     "WorkflowOutcome",
+    "build_coding_job_pulse",
     "prepare_coding_repository",
     "run_coding_job_command",
 ]

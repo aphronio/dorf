@@ -11,7 +11,7 @@ import sys
 import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -139,10 +139,12 @@ from dorf.setup_diagnostics import (
 )
 from dorf.workflows import (
     CodingJob,
+    CodingJobPulse,
     CodingStore,
     CodingWorkflow,
     WorkflowFailure,
     WorkflowOutcome,
+    build_coding_job_pulse,
     prepare_coding_repository,
     run_coding_job_command,
 )
@@ -1351,10 +1353,11 @@ def job_inspect(
     evidence: bool = typer.Option(
         False, "--evidence", help="List accepted artifacts with provenance."
     ),
+    json_output: bool = typer.Option(False, "--json", help="Emit the structured Job pulse."),
 ) -> None:
     """Inspect a Job pulse or one read-only document lens."""
-    if timeline and evidence:
-        typer.echo("Choose only one of --timeline or --evidence", err=True)
+    if sum((timeline, evidence, json_output)) > 1:
+        typer.echo("Choose only one of --timeline, --evidence, or --json", err=True)
         raise typer.Exit(2)
     dorf = open_dorf()
     try:
@@ -1376,7 +1379,44 @@ def job_inspect(
     except RuntimeError as error:
         typer.echo(f"Could not inspect Job {name}: {error}", err=True)
         raise typer.Exit(1) from error
+    coding_store = CodingStore.open()
+    if coding_store.get_coding_job(name) is not None:
+        pulse = build_coding_job_pulse(coding_store, inspection)
+        echo_coding_job_pulse(pulse, json_output=json_output)
+        return
+    if json_output:
+        typer.echo("Structured outcome pulses are currently available for coding Jobs.", err=True)
+        raise typer.Exit(1)
     echo_job_inspection(inspection, events)
+
+
+def echo_coding_job_pulse(pulse: CodingJobPulse, *, json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(asdict(pulse), sort_keys=True))
+        return
+    typer.echo(f"{pulse.job} · {pulse.outcome_stage}")
+    typer.echo(f"goal v{pulse.goal_version}: {pulse.goal_summary}")
+    lifecycle = pulse.lifecycle
+    typer.echo(
+        f"lifecycle [{lifecycle.source} {lifecycle.provenance}]: {lifecycle.state}"
+    )
+    room = pulse.room_availability
+    room_detail = f" ({room.detail})" if room.detail else ""
+    typer.echo(
+        f"Room availability [{room.source} {room.provenance}]: {room.status}{room_detail}"
+    )
+    delta = pulse.latest_delta
+    typer.echo(f"delta [{delta.source} {delta.provenance}]: {delta.summary}")
+    activity = pulse.observed_activity
+    typer.echo(f"activity [{activity.status}]: {activity.detail}")
+    typer.echo(f"claim support: {activity.claim_support}")
+    if pulse.worker_claim is None:
+        typer.echo("latest Worker claim: none accepted")
+    else:
+        typer.echo(f"latest Worker claim [claim]: {pulse.worker_claim.summary}")
+    typer.echo(f"evidence: {pulse.evidence_count} accepted")
+    typer.echo(f"attention: {pulse.attention.state} ({pulse.attention.reason})")
+    typer.echo(f"updated: {pulse.updated_at}")
 
 
 def echo_job_inspection(

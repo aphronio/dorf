@@ -1295,14 +1295,33 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     )
     worker = CliRunner().invoke(app, ["worker", "inspect", "coder-abc123-demo-task"], env=env)
     job = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task"], env=env)
+    job_json = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task", "--json"], env=env)
     coding = CliRunner().invoke(app, ["status", "abc123-demo-task"], env=env)
 
-    assert result.exit_code == worker.exit_code == job.exit_code == coding.exit_code == 0
+    assert result.exit_code == worker.exit_code == job.exit_code == job_json.exit_code == 0
+    assert coding.exit_code == 0
     assert "Worker: coder-abc123-demo-task (coding-workflow, dedicated)" in result.output
     assert "Workspace: /workspace/jobs/abc123-demo-task" in result.output
     assert "provenance: coding-workflow" in worker.output
     assert "lifecycle policy: dedicated" in worker.output
-    assert "goal v1: Implement this coding task as Dorf Job abc123-demo-task." in job.output
+    assert "goal v1: Demo task" in job.output
+    assert "Working rules:" not in job.output
+    pulse = json.loads(job_json.output)
+    assert pulse["job"] == "abc123-demo-task"
+    assert pulse["goal_summary"] == "Demo task"
+    assert "Working rules:" in pulse["goal"]
+    assert pulse["outcome_stage"] == "active"
+    assert pulse["lifecycle"]["state"] == "open"
+    assert pulse["lifecycle"]["source"] == "runtime"
+    assert pulse["lifecycle"]["provenance"] == "fact"
+    assert pulse["attention"]["state"] == "quiet"
+    assert pulse["evidence_count"] == 0
+    assert pulse["room_availability"]["status"] == "available"
+    assert pulse["room_availability"]["source"] == "runtime"
+    assert pulse["room_availability"]["provenance"] == "fact"
+    assert "lifecycle [runtime fact]: open" in job.output
+    assert "Room availability [runtime fact]: available" in job.output
+    assert {"room", "workspace", "conversation"}.isdisjoint(pulse)
     assert "Worker provenance: coding-workflow" in coding.output
     clone_commands = [command for command in commands if "git clone" in " ".join(command)]
     assert len(clone_commands) == 1
@@ -1320,6 +1339,27 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     assert store.get_job_binding("abc123-demo-task").room.metadata["provider_connection"] == (
         "personal-chatgpt"
     )
+    binding = store.get_job_binding("abc123-demo-task")
+    store.update_room_status(
+        binding.room.id,
+        "failed",
+        f"Incus VM {binding.room.provider_id} stopped",
+    )
+    unavailable_text = CliRunner().invoke(
+        app, ["job", "inspect", "abc123-demo-task"], env=env
+    )
+    unavailable_json = CliRunner().invoke(
+        app, ["job", "inspect", "abc123-demo-task", "--json"], env=env
+    )
+    unavailable = json.loads(unavailable_json.output)
+    assert unavailable_text.exit_code == unavailable_json.exit_code == 0
+    assert "Room availability [runtime fact]: unavailable (Incus VM Room stopped)" in (
+        unavailable_text.output
+    )
+    assert unavailable["room_availability"]["status"] == "unavailable"
+    assert unavailable["room_availability"]["detail"] == "Incus VM Room stopped"
+    assert binding.room.id not in unavailable_json.output
+    assert binding.room.provider_id not in unavailable_json.output
     assert len(dispatched) == 1
     assert setup_order == [("prepare", "preparing"), ("dispatch", "open")]
     assert dispatched[0][1] == "abc123-demo-task"
