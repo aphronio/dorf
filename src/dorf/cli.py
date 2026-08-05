@@ -2248,6 +2248,16 @@ def prove_coding_admission_or_exit(
                     err=True,
                 )
                 raise typer.Exit(1)
+            retained_installation = retained.request.get("installation_id")
+            if retained_installation != proof.installation_id:
+                typer.echo(
+                    "Retained GitHub authority is pinned to installation "
+                    f"{retained_installation or 'unknown'}, but readiness used installation "
+                    f"{proof.installation_id}. Restore the original installation or make a new "
+                    "delegation.",
+                    err=True,
+                )
+                raise typer.Exit(1)
             if retained.status == "admitted":
                 typer.echo(
                     "This delegation was already admitted as coding Job "
@@ -2266,18 +2276,27 @@ def prove_coding_admission_or_exit(
     if len(result.failures) == 1 and len(resumable) == 1:
         failure = resumable[0]
         assert failure.approval is not None
-        pinned_request = replace(request, repository=failure.approval.repository)
+        pinned_request = replace(
+            request,
+            repository=failure.approval.repository,
+            installation_id=failure.approval.installation_id,
+        )
         store = CodingStore.open()
         retained = store.get_coding_admission_for_request(request.record())
         if (
             retained is not None
             and retained.status in {"pending", "approved", "admitted"}
-            and retained.request.get("repository") != failure.approval.repository
+            and (
+                retained.request.get("repository") != failure.approval.repository
+                or retained.request.get("installation_id")
+                != failure.approval.installation_id
+            )
         ):
             typer.echo(
                 "This delegation already has retained GitHub authority for "
                 f"{retained.request.get('repository') or 'an unknown repository'}; refusing "
-                f"to retarget it to {failure.approval.repository}.",
+                f"to retarget it to {failure.approval.repository} through installation "
+                f"{failure.approval.installation_id}.",
                 err=True,
             )
             raise typer.Exit(1)
@@ -2300,6 +2319,13 @@ def prove_coding_admission_or_exit(
         if attempt.status == "pending":
             echo_github_authority_attention(attempt, retried=not created)
             outcome = await_github_authority_approval(attempt)
+            if outcome == "installation-changed":
+                typer.echo(
+                    "Configured GitHub App installation changed while approval was pending. "
+                    f"Restore installation {attempt.request['installation_id']} and retry.",
+                    err=True,
+                )
+                raise typer.Exit(1)
             if outcome in {"declined", "expired"}:
                 store.end_pending_coding_admission(attempt.id, outcome)
                 typer.echo(f"GitHub authority approval {outcome}.", err=True)
@@ -2313,6 +2339,13 @@ def prove_coding_admission_or_exit(
         typer.echo("GitHub authority approved; rerunning exact coding readiness.")
         resumed = CodingAdmissionPreflight().prove(pinned_request)
         if resumed.proof is not None:
+            if resumed.proof.installation_id != attempt.request.get("installation_id"):
+                typer.echo(
+                    "Coding readiness used a different GitHub App installation than the "
+                    "retained approval.",
+                    err=True,
+                )
+                raise typer.Exit(1)
             if not store.approve_coding_admission(attempt.id):
                 typer.echo("GitHub authority approval expired during readiness.", err=True)
                 raise typer.Exit(1)
@@ -2347,11 +2380,14 @@ def await_github_authority_approval(attempt: PendingCodingAdmission) -> str:
     webbrowser.open(attempt.attention["url"])
     repo = str(attempt.request["repository"])
     branch = str(attempt.request["target_branch"])
+    installation_id = str(attempt.request["installation_id"])
     expires_at = datetime.fromisoformat(attempt.expires_at)
     try:
         while datetime.now(UTC) < expires_at:
             try:
                 config = load_github_app_config()
+                if config.installation_id != installation_id:
+                    return "installation-changed"
                 minted = GitHubAppTokenClient().mint_installation_token(config)
                 token = (
                     minted.token

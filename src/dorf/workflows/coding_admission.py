@@ -90,6 +90,7 @@ ADMISSION_CHECKS = (
 @dataclass(frozen=True)
 class GitHubAuthorityApproval:
     repository: str
+    installation_id: str
     missing_authority: str
     why_needed: str
     action: str
@@ -105,6 +106,7 @@ class GitHubAuthorityApproval:
             "approve_consequence": self.approve_consequence,
             "automatic_resume": self.automatic_resume,
             "decline_consequence": self.decline_consequence,
+            "installation_id": self.installation_id,
             "missing_authority": self.missing_authority,
             "repository": self.repository,
             "scope": self.scope,
@@ -145,6 +147,7 @@ class CodingAdmissionRequest:
     command: str = "issue"
     target_start_sha: str | None = None
     repository: str | None = None
+    installation_id: str | None = None
     provider_connection: str | None = None
     model: str | None = None
     reasoning_effort: str | None = None
@@ -153,6 +156,7 @@ class CodingAdmissionRequest:
         return {
             "command": self.command,
             "issue_number": self.issue_number,
+            "installation_id": self.installation_id,
             "model": self.model,
             "provider_connection": self.provider_connection,
             "reasoning_effort": self.reasoning_effort,
@@ -167,6 +171,7 @@ class CodingAdmissionRequest:
 class CodingAdmissionProof:
     proof_id: str
     repository: str
+    installation_id: str
     issue: GitHubIssue | None
     target_branch: str
     target_start_sha: str
@@ -185,6 +190,7 @@ class CodingAdmissionProof:
         cls,
         *,
         repository: str,
+        installation_id: str,
         issue: GitHubIssue | None,
         target_branch: str,
         target_start_sha: str,
@@ -200,6 +206,7 @@ class CodingAdmissionProof:
         facts = {
             "checks": ADMISSION_CHECKS,
             "image_fingerprint": image_fingerprint,
+            "installation_id": installation_id,
             "issue_number": issue.number if issue is not None else None,
             "provider_connection": provider_connection,
             "repository": repository,
@@ -213,6 +220,7 @@ class CodingAdmissionProof:
         return cls(
             proof_id=proof_id,
             repository=repository,
+            installation_id=installation_id,
             issue=issue,
             target_branch=target_branch,
             target_start_sha=target_start_sha,
@@ -230,6 +238,7 @@ class CodingAdmissionProof:
         record: dict[str, object] = {
             "checks": list(ADMISSION_CHECKS),
             "image_fingerprint": self.image_fingerprint,
+            "installation_id": self.installation_id,
             "issue_number": self.issue.number if self.issue is not None else None,
             "proof_id": self.proof_id,
             "provider_connection": self.provider_connection,
@@ -312,6 +321,7 @@ class LocalCodingAdmissionBackend:
         self.provider_connection: str | None = None
         self.image_fingerprint: str | None = None
         self.installation_token: str | None = None
+        self.installation_id: str | None = None
         self.issue: GitHubIssue | None = None
         self.target_start_sha: str | None = None
         self.reviewer = "codex"
@@ -475,6 +485,23 @@ class LocalCodingAdmissionBackend:
         config = None
         try:
             config = load_github_app_config()
+            if (
+                request.installation_id is not None
+                and config.installation_id != request.installation_id
+            ):
+                return (
+                    _failure(
+                        "delegation-installation-changed",
+                        "GitHub App installation owner",
+                        "Configured GitHub App installation changed after this delegation "
+                        "was pinned.",
+                        f"Restore GitHub App installation {request.installation_id} or make a "
+                        "new delegation.",
+                        "A different installation cannot approve or consume this retained "
+                        "delegation.",
+                    ),
+                )
+            self.installation_id = config.installation_id
             minted = GitHubAppTokenClient().mint_installation_token(config)
             if not isinstance(minted, GitHubInstallationToken):
                 minted = GitHubInstallationToken(str(minted))
@@ -524,6 +551,7 @@ class LocalCodingAdmissionBackend:
                     target_branch=request.target_branch,
                     issue_number=request.issue_number,
                     installation_id=config.installation_id,
+                    app_slug=getattr(config, "app_slug", None),
                 )
                 failures.append(
                     AdmissionFailure(
@@ -770,12 +798,14 @@ class LocalCodingAdmissionBackend:
                 self.provider_connection,
                 self.image_fingerprint,
                 self.installation_token,
+                self.installation_id,
                 self.target_start_sha,
             )
         ):
             raise RuntimeError("coding admission proof is incomplete")
         return CodingAdmissionProof.create(
             repository=self.repository,
+            installation_id=self.installation_id,
             issue=self.issue,
             target_branch=request.target_branch,
             target_start_sha=self.target_start_sha,
@@ -1049,28 +1079,44 @@ def _github_repository_approval(
     target_branch: str,
     issue_number: int | None,
     installation_id: str,
+    app_slug: str | None,
 ) -> GitHubAuthorityApproval:
     issue = f"issue #{issue_number} and " if issue_number is not None else ""
+    installation = (
+        f"GitHub App `{app_slug}` installation {installation_id}"
+        if app_slug
+        else f"Dorf GitHub App installation {installation_id}"
+    )
     return GitHubAuthorityApproval(
         repository=repository,
-        missing_authority=f"Dorf GitHub App access to {repository}",
+        installation_id=installation_id,
+        missing_authority=f"Persistent repository access for {installation} to {repository}",
         why_needed=(
-            f"Coding admission must read {issue}{target_branch} and create the Job branch and PR."
+            f"Coding admission must read {issue}{target_branch}, write the Job branch, and manage "
+            "its pull request."
         ),
         action=(
-            f"Open GitHub, configure installation {installation_id}, select {repository}, "
-            "and save access."
+            f"In GitHub settings, select {repository} for {installation} and save. This grants "
+            "that installation persistent repository-wide access with its configured permissions "
+            "until an owner changes or removes the access."
         ),
-        scope=f"Only {repository} for this delegation.",
+        scope=(
+            f"Persistent repository-wide authority on {repository} for installation "
+            f"{installation_id}: metadata read, issues read, contents write, and pull requests "
+            "write. It is not limited to this issue, branch, or delegation."
+        ),
         approve_consequence=(
-            f"Dorf may read {issue}{target_branch} and write the Job branch and pull request."
+            f"{installation} gains those configured permissions across {repository}; Dorf can "
+            "use them while that repository access remains installed."
         ),
         decline_consequence=(
-            "This pending delegation ends without creating a Job or GitHub resources."
+            f"{installation} does not gain access to {repository}; this pending delegation ends "
+            "without creating a Job, branch, Room, or pull request."
         ),
         automatic_resume=(
-            "Dorf will detect the granted access, rerun exact readiness, and continue this "
-            "delegation automatically."
+            f"Dorf polls only installation {installation_id}. When that installation can read "
+            f"{repository}:{target_branch}, Dorf reruns exact readiness and continues this "
+            "delegation automatically; a different configured installation cannot approve it."
         ),
         url=f"https://github.com/settings/installations/{installation_id}",
     )

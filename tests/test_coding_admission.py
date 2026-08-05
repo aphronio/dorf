@@ -34,6 +34,7 @@ from dorf.workflows.coding_admission import (
 def proof() -> CodingAdmissionProof:
     return CodingAdmissionProof.create(
         repository="example/repo",
+        installation_id="123",
         issue=GitHubIssue(18, "One admission proof", "Body", ()),
         target_branch="main",
         target_start_sha="a" * 40,
@@ -253,27 +254,86 @@ def test_github_missing_exact_repository_authority_is_one_resumable_approval(
     assert failure.code == "github-repository-authority"
     assert failure.automatic_continuation is True
     assert failure.approval == GitHubAuthorityApproval(
-        missing_authority="Dorf GitHub App access to example/repo",
+        installation_id="123",
+        missing_authority=(
+            "Persistent repository access for Dorf GitHub App installation 123 to example/repo"
+        ),
         why_needed=(
-            "Coding admission must read issue #20 and main and create the Job branch and PR."
+            "Coding admission must read issue #20 and main, write the Job branch, and manage its "
+            "pull request."
         ),
         action=(
-            "Open GitHub, configure installation 123, select example/repo, and save access."
+            "In GitHub settings, select example/repo for Dorf GitHub App installation 123 and "
+            "save. This grants that installation persistent repository-wide access with its "
+            "configured permissions until an owner changes or removes the access."
         ),
-        scope="Only example/repo for this delegation.",
+        scope=(
+            "Persistent repository-wide authority on example/repo for installation 123: metadata "
+            "read, issues read, contents write, and pull requests write. It is not limited to this "
+            "issue, branch, or delegation."
+        ),
         approve_consequence=(
-            "Dorf may read issue #20 and main and write the Job branch and pull request."
+            "Dorf GitHub App installation 123 gains those configured permissions across "
+            "example/repo; Dorf can use them while that repository access remains installed."
         ),
         decline_consequence=(
-            "This pending delegation ends without creating a Job or GitHub resources."
+            "Dorf GitHub App installation 123 does not gain access to example/repo; this pending "
+            "delegation ends without creating a Job, branch, Room, or pull request."
         ),
         automatic_resume=(
-            "Dorf will detect the granted access, rerun exact readiness, and continue this "
-            "delegation automatically."
+            "Dorf polls only installation 123. When that installation can read example/repo:main, "
+            "Dorf reruns exact readiness and continues this delegation automatically; a different "
+            "configured installation cannot approve it."
         ),
         url="https://github.com/settings/installations/123",
         repository="example/repo",
     )
+    authority_text = " ".join(
+        (
+            failure.approval.action,
+            failure.approval.scope,
+            failure.approval.approve_consequence,
+        )
+    )
+    assert "persistent repository-wide" in authority_text
+    assert all(
+        permission in authority_text
+        for permission in ("issues read", "contents write", "pull requests write")
+    )
+    assert "not limited to this issue, branch, or delegation" in authority_text
+
+
+def test_github_readiness_rejects_a_pinned_installation_configuration_swap(
+    monkeypatch, tmp_path
+) -> None:
+    backend = LocalCodingAdmissionBackend()
+    backend.repo = tmp_path
+    backend.repository = "example/repo"
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_github_app_config",
+        lambda: SimpleNamespace(installation_id="456", app_slug="dorf-local"),
+    )
+    minted = []
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.GitHubAppTokenClient.mint_installation_token",
+        lambda self, config: minted.append(config),
+    )
+
+    failures = backend.check_github(
+        CodingAdmissionRequest(
+            repo_path=str(tmp_path),
+            target_branch="main",
+            issue_number=20,
+            repository="example/repo",
+            installation_id="123",
+        )
+    )
+
+    assert [failure.code for failure in failures] == [
+        "delegation-installation-changed"
+    ]
+    assert minted == []
+    assert backend.installation_token is None
 
 
 def test_github_check_accepts_installation_authority_when_repository_user_push_is_false(
@@ -324,7 +384,7 @@ def test_github_check_accepts_installation_authority_when_repository_user_push_i
     monkeypatch.setattr(client, "_request_json", request_json)
     monkeypatch.setattr(
         "dorf.workflows.coding_admission.load_github_app_config",
-        lambda: object(),
+        lambda: SimpleNamespace(installation_id="123", app_slug="dorf-local"),
     )
     monkeypatch.setattr(
         "dorf.workflows.coding_admission.GitHubAppTokenClient.mint_installation_token",
@@ -510,6 +570,7 @@ class ReadyLocalBackend(LocalCodingAdmissionBackend):
 
     def check_github(self, request):
         reusable = proof()
+        self.installation_id = reusable.installation_id
         self.installation_token = reusable.installation_token
         self.issue = reusable.issue
         self.target_start_sha = reusable.target_start_sha

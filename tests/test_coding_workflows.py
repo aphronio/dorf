@@ -269,9 +269,11 @@ def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotentl
         target_branch="main",
         issue_number=20,
         repository="example/repo",
+        installation_id="123",
         provider_connection="personal-chatgpt",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read the issue and publish the coding proposal.",
         action="Add example/repo to installation 123.",
@@ -301,15 +303,31 @@ def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotentl
     assert attempts[0].request == request.record()
     assert "token" not in str(attempts[0].request).lower()
 
+    with pytest.raises(RuntimeError, match="installation identity does not match"):
+        store.create_coding_job(
+            job_name="wrong-installation",
+            metadata={
+                "admission_proof": (
+                    '{"proof_id":"proof-1","installation_id":"456"}'
+                )
+            },
+            admission_attempt_id=first.id,
+        )
+    assert store.get_coding_admission(first.id).status == "approved"
+
     store.create_coding_job(
         job_name="approved-job",
-        metadata={"admission_proof": '{"proof_id":"proof-1"}'},
+        metadata={
+            "admission_proof": '{"proof_id":"proof-1","installation_id":"123"}'
+        },
         admission_attempt_id=first.id,
     )
     with pytest.raises(RuntimeError, match="already been consumed"):
         store.create_coding_job(
             job_name="duplicate-job",
-            metadata={"admission_proof": '{"proof_id":"proof-1"}'},
+            metadata={
+                "admission_proof": '{"proof_id":"proof-1","installation_id":"123"}'
+            },
             admission_attempt_id=first.id,
         )
 
@@ -329,8 +347,10 @@ def test_retain_pending_github_authority_expires_stale_attempt_before_reuse(
         target_branch="main",
         issue_number=20,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read the issue and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -362,8 +382,10 @@ def test_expired_approved_github_authority_cannot_be_consumed(tmp_path) -> None:
         target_branch="main",
         issue_number=20,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read the issue and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -387,7 +409,11 @@ def test_expired_approved_github_authority_cannot_be_consumed(tmp_path) -> None:
     with pytest.raises(RuntimeError, match="already been consumed"):
         store.create_coding_job(
             job_name="stale-approval",
-            metadata={"admission_proof": '{"proof_id":"proof-stale"}'},
+            metadata={
+                "admission_proof": (
+                    '{"proof_id":"proof-stale","installation_id":"123"}'
+                )
+            },
             admission_attempt_id=attempt.id,
         )
 
@@ -405,8 +431,10 @@ def test_decline_or_expiry_ends_pending_authority_without_active_state(
         target_branch="main",
         issue_number=20,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read the issue and publish the proposal.",
         action="Add example/repo to installation 123.",

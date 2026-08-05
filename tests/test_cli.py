@@ -20,6 +20,7 @@ from dorf.cli import (
     GitBackedJobBranch,
     GitTarget,
     app,
+    await_github_authority_approval,
     create_admitted_git_backed_job_branch_or_exit,
     create_git_backed_job_branch_or_exit,
     fetch_github_branch_objects_or_exit,
@@ -1494,6 +1495,7 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
     contract = RepoContract(mode="configured", commands={}, env={})
     admission = CodingAdmissionProof.create(
         repository="example/repo",
+        installation_id="123",
         issue=GitHubIssue(18, "One admission proof", "Issue body", ()),
         target_branch="main",
         target_start_sha=git(repo, "rev-parse", "HEAD"),
@@ -1588,6 +1590,7 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
     monkeypatch.chdir(repo)
     configure_passing_incus(monkeypatch)
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read issue #20 and publish its branch and PR.",
         action="Add example/repo to installation 123 and save access.",
@@ -1609,6 +1612,7 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
     )
     admission = CodingAdmissionProof.create(
         repository="example/repo",
+        installation_id="123",
         issue=GitHubIssue(20, "Resume one authority approval", "Issue body", ()),
         target_branch="main",
         target_start_sha=git(repo, "rev-parse", "HEAD"),
@@ -1671,7 +1675,7 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
     assert len(preflight_requests) == 2
     assert preflight_requests[0].repository is None
     assert preflight_requests[1] == replace(
-        preflight_requests[0], repository="example/repo"
+        preflight_requests[0], repository="example/repo", installation_id="123"
     )
     store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
     attempts = store.list_coding_admissions()
@@ -1700,8 +1704,10 @@ def test_successful_preflight_reuses_active_attempt_after_controller_restart(
         command="afk",
         target_start_sha=start_sha,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read issue #20 and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -1722,6 +1728,7 @@ def test_successful_preflight_reuses_active_attempt_after_controller_restart(
         store.approve_coding_admission(attempt.id)
     admission = CodingAdmissionProof.create(
         repository="example/repo",
+        installation_id="123",
         issue=GitHubIssue(20, "Resume one authority approval", "Issue body", ()),
         target_branch="main",
         target_start_sha=start_sha,
@@ -1754,6 +1761,50 @@ def test_successful_preflight_reuses_active_attempt_after_controller_restart(
     )
 
 
+def test_authority_polling_rejects_a_configured_installation_swap(
+    tmp_path, monkeypatch
+) -> None:
+    request = CodingAdmissionRequest(
+        repo_path=str(tmp_path / "repo"),
+        target_branch="main",
+        issue_number=20,
+        repository="example/repo",
+        installation_id="123",
+    )
+    approval = GitHubAuthorityApproval(
+        installation_id="123",
+        missing_authority="Persistent access for installation 123",
+        why_needed="Read the issue and publish the proposal.",
+        action="Select example/repo for installation 123.",
+        scope="Persistent repository-wide authority.",
+        approve_consequence="Installation 123 gains repository access.",
+        decline_consequence="No repository access is added.",
+        automatic_resume="Only installation 123 is polled.",
+        url="https://github.com/settings/installations/123",
+        repository="example/repo",
+    )
+    store = CodingStore.open(tmp_path / "state.sqlite3")
+    attempt, _ = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+    monkeypatch.setattr("dorf.cli.webbrowser.open", lambda url: True)
+    monkeypatch.setattr(
+        "dorf.cli.load_github_app_config",
+        lambda: GitHubAppConfig(app_id="app", installation_id="456"),
+    )
+    minted = []
+    monkeypatch.setattr(
+        "dorf.cli.GitHubAppTokenClient.mint_installation_token",
+        lambda self, config: minted.append(config),
+    )
+
+    outcome = await_github_authority_approval(attempt)
+
+    assert outcome == "installation-changed"
+    assert minted == []
+    assert store.get_coding_admission(attempt.id).status == "pending"
+
+
 def test_post_reservation_failure_distinguishes_owner_from_concurrent_loser(
     tmp_path, monkeypatch
 ) -> None:
@@ -1770,8 +1821,10 @@ def test_post_reservation_failure_distinguishes_owner_from_concurrent_loser(
         command="afk",
         target_start_sha=start_sha,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read issue #20 and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -1790,6 +1843,7 @@ def test_post_reservation_failure_distinguishes_owner_from_concurrent_loser(
     admission = replace(
         CodingAdmissionProof.create(
             repository="example/repo",
+            installation_id="123",
             issue=GitHubIssue(20, "Branch failure", "Issue body", ()),
             target_branch="main",
             target_start_sha=start_sha,
@@ -1850,8 +1904,12 @@ def test_post_reservation_failure_distinguishes_owner_from_concurrent_loser(
     assert store.get_coding_job("concurrent-loser") is None
 
 
-def test_successful_preflight_rejects_origin_changed_during_pending_approval(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("ready_repository", "ready_installation_id"),
+    [("other/repo", "123"), ("example/repo", "456")],
+)
+def test_successful_preflight_rejects_retained_authority_identity_change(
+    tmp_path, monkeypatch, ready_repository, ready_installation_id
 ) -> None:
     repo = create_git_repo(tmp_path / "repo")
     start_sha = git(repo, "rev-parse", "HEAD")
@@ -1863,8 +1921,10 @@ def test_successful_preflight_rejects_origin_changed_during_pending_approval(
         command="afk",
         target_start_sha=start_sha,
         repository="example/repo",
+        installation_id="123",
     )
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read issue #20 and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -1882,7 +1942,8 @@ def test_successful_preflight_rejects_origin_changed_during_pending_approval(
         original.record(), approval.record(), ttl_seconds=3600
     )
     changed = CodingAdmissionProof.create(
-        repository="other/repo",
+        repository=ready_repository,
+        installation_id=ready_installation_id,
         issue=GitHubIssue(20, "Changed origin", "Issue body", ()),
         target_branch="main",
         target_start_sha=start_sha,
@@ -1921,6 +1982,7 @@ def test_afk_github_authority_decline_or_expiry_creates_no_active_state(
     repo = create_git_repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     approval = GitHubAuthorityApproval(
+        installation_id="123",
         missing_authority="Dorf GitHub App access to example/repo",
         why_needed="Read issue #20 and publish the proposal.",
         action="Add example/repo to installation 123.",
@@ -2183,6 +2245,7 @@ def test_admitted_branch_creation_rejects_target_advance_before_reservation(
     )()
     admission = CodingAdmissionProof.create(
         repository="example/repo",
+        installation_id="123",
         issue=GitHubIssue(18, "One admission proof", "Issue body", ()),
         target_branch="main",
         target_start_sha=base_sha,

@@ -112,13 +112,30 @@ class CodingStore(RuntimeStore):
             self._expire_coding_admissions(now)
             if admission_attempt_id is not None:
                 attempt = self._connection.execute(
-                    "SELECT status FROM coding_admissions WHERE id = ?",
+                    "SELECT status, request FROM coding_admissions WHERE id = ?",
                     (admission_attempt_id,),
                 ).fetchone()
                 if attempt is None or attempt["status"] != "approved":
                     self._connection.commit()
                     raise RuntimeError(
                         "coding admission has already been consumed"
+                    )
+                try:
+                    retained_installation_id = json.loads(attempt["request"])[
+                        "installation_id"
+                    ]
+                    proof_installation_id = json.loads(
+                        metadata["admission_proof"]
+                    )["installation_id"]
+                except (KeyError, TypeError, json.JSONDecodeError) as error:
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission installation identity is missing"
+                    ) from error
+                if proof_installation_id != retained_installation_id:
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission installation identity does not match"
                     )
             self._connection.execute(
                 """
@@ -252,7 +269,7 @@ class CodingStore(RuntimeStore):
         for row in rows:
             retained = _pending_coding_admission(row)
             if all(
-                key == "repository" and value is None
+                key in {"repository", "installation_id"} and value is None
                 or retained.request.get(key) == value
                 for key, value in request.items()
             ):
