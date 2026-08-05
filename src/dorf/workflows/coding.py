@@ -19,7 +19,7 @@ from dorf.github_app import (
     GitHubRepositoryClient,
     GitHubRepositoryError,
 )
-from dorf.repo_contract import RepoContract
+from dorf.repo_contract import REVIEW_PROMPT_PLACEHOLDER, RepoContract
 from dorf.runtime import JobBinding, JobRuntime
 
 from .coding_commands import CodingEnvironment, run_coding_job_command
@@ -27,7 +27,6 @@ from .coding_store import CodingJob, CodingStore
 
 VERIFY_GATE_FAILURE_LIMIT = 3
 REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
-REVIEW_PROMPT_PLACEHOLDER = "{dorf_review_prompt}"
 AFK_TERMINAL_JOB_STATUSES = frozenset({"abandoned", "merged", "rejected"})
 REVIEW_RESULT_INSTRUCTIONS = f"""\
 If there are no actionable findings, print exactly:
@@ -177,27 +176,13 @@ class CodingWorkflow:
         raise failure_type(exit_code, tuple(self._messages), kind=kind)
 
     @staticmethod
-    def prepare_afk_start(
+    def existing_afk_job(
         store: CodingStore,
         *,
         target_repo: str,
         issue_number: int,
-        owner_token: str,
-    ) -> AfkStart:
-        """Reserve an issue and decide whether AFK should launch or resume."""
-        try:
-            reservation = store.claim_afk_coordinator(
-                target_repo,
-                issue_number,
-                owner_token,
-            )
-        except RuntimeError as error:
-            message = WorkflowMessage(
-                f"Could not start AFK: {error}. Use afk-resume --takeover to recover.",
-                error=True,
-            )
-            raise WorkflowFailure(1, (message,), kind="ownership") from error
-
+    ) -> CodingJob | None:
+        """Inspect the one convergent nonterminal identity without claiming it."""
         matches = [
             job
             for job in store.list_coding_jobs()
@@ -212,6 +197,36 @@ class CodingWorkflow:
                 error=True,
             )
             raise WorkflowFailure(1, (message,), kind="state")
+        return matches[0] if matches else None
+
+    @staticmethod
+    def prepare_afk_start(
+        store: CodingStore,
+        *,
+        target_repo: str,
+        issue_number: int,
+        owner_token: str,
+    ) -> AfkStart:
+        """Reserve an issue and decide whether AFK should launch or resume."""
+        existing = CodingWorkflow.existing_afk_job(
+            store,
+            target_repo=target_repo,
+            issue_number=issue_number,
+        )
+        try:
+            reservation = store.claim_afk_coordinator(
+                target_repo,
+                issue_number,
+                owner_token,
+            )
+        except RuntimeError as error:
+            message = WorkflowMessage(
+                f"Could not start AFK: {error}. Use afk-resume --takeover to recover.",
+                error=True,
+            )
+            raise WorkflowFailure(1, (message,), kind="ownership") from error
+
+        matches = [existing] if existing is not None else []
         if reservation.job_name is not None:
             job_name = reservation.job_name
             reserved_job = next((item for item in matches if item.job_name == job_name), None)

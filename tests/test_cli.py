@@ -8,6 +8,7 @@ from click.exceptions import Exit
 from typer.testing import CliRunner
 
 from dorf import Dorf
+from dorf.adapters.agents.codex_config import CodexConfig
 from dorf.adapters.environments import (
     IncusCheckResult,
     IncusConfig,
@@ -23,6 +24,7 @@ from dorf.cli import (
     resolve_git_author_or_exit,
     unsafe_dorf_branch_reason,
 )
+from dorf.coding_workspace import GitAuthorIdentity
 from dorf.deployment_profile import (
     DeploymentProfile,
     load_deployment_profile,
@@ -39,8 +41,14 @@ from dorf.provider_gateway import (
     ProviderConnection,
     ProviderGateway,
 )
+from dorf.repo_contract import RepoContract
 from dorf.runtime import ArtifactInput, RuntimeStore, WorkerWaitResult
-from dorf.workflows import CodingStore
+from dorf.workflows import (
+    AdmissionFailure,
+    CodingAdmissionProof,
+    CodingAdmissionResult,
+    CodingStore,
+)
 
 
 def configure_passing_incus(monkeypatch) -> list[list[str]]:
@@ -1395,6 +1403,158 @@ def test_new_coding_job_without_provider_default_fails_before_branch_or_job_muta
     assert CodingStore.open(data_home / "dorf" / "state.sqlite3").get_coding_job(
         "no-provider"
     ) is None
+
+
+def test_afk_aggregated_admission_failure_precedes_coordinator_and_job_mutation(
+    tmp_path, monkeypatch
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    coordinator_attempts = []
+    branch_attempts = []
+    monkeypatch.setattr(
+        "dorf.cli.CodingWorkflow.prepare_afk_start",
+        lambda *args, **kwargs: coordinator_attempts.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "dorf.cli.create_admitted_git_backed_job_branch_or_exit",
+        lambda *args, **kwargs: branch_attempts.append((args, kwargs)),
+    )
+    failures = (
+        AdmissionFailure(
+            "github-authority",
+            "GitHub App owner",
+            "Issue access failed.",
+            "Run `dorf github setup`.",
+            "The exact issue is unproved.",
+            False,
+        ),
+        AdmissionFailure(
+            "provider-route",
+            "provider connection owner",
+            "Provider route failed.",
+            "Reconnect the provider.",
+            "Implementation cannot execute.",
+            False,
+        ),
+    )
+    monkeypatch.setattr(
+        "dorf.cli.CodingAdmissionPreflight.prove",
+        lambda self, request: CodingAdmissionResult(failures=failures),
+    )
+    data_home = tmp_path / "data"
+
+    result = CliRunner().invoke(
+        app,
+        ["afk", "18"],
+        env={"XDG_DATA_HOME": str(data_home)},
+    )
+
+    assert result.exit_code == 1
+    assert "Coding admission failed with 2 independently discovered failure(s)" in result.output
+    assert "owner: GitHub App owner" in result.output
+    assert "repair: Run `dorf github setup`." in result.output
+    assert "automatic continuation: no" in result.output
+    assert coordinator_attempts == branch_attempts == []
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    assert store.list_coding_jobs() == []
+    assert store.get_afk_coordinator(str(repo.resolve()), 18) is None
+
+
+def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
+    tmp_path, monkeypatch
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    configure_passing_incus(monkeypatch)
+    contract = RepoContract(mode="configured", commands={}, env={})
+    admission = CodingAdmissionProof.create(
+        repository="example/repo",
+        issue=GitHubIssue(18, "One admission proof", "Issue body", ()),
+        target_branch="main",
+        target_start_sha=git(repo, "rev-parse", "HEAD"),
+        image_fingerprint="b" * 64,
+        provider_connection="personal-chatgpt",
+        reviewer="codex",
+        contract=contract,
+        codex_config=CodexConfig("gpt-5.6-sol", "low"),
+        git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
+        environment_config=IncusConfig(template="b" * 64),
+        installation_token="installation-token",
+    )
+    preflight_requests = []
+
+    def prove(self, request):
+        preflight_requests.append(request)
+        return CodingAdmissionResult(proof=admission)
+
+    monkeypatch.setattr("dorf.cli.CodingAdmissionPreflight.prove", prove)
+    monkeypatch.setattr("dorf.cli.generate_job_name", lambda task: "admitted-issue")
+
+    def create_branch(target, branch_name, proof, before_create=None):
+        remote = GitBackedJobBranch(
+            proof.repository,
+            proof.target_start_sha,
+            {"github_repo": proof.repository, "github_remote_branch_status": "pending"},
+            proof.installation_token,
+        )
+        if before_create is not None:
+            before_create(remote)
+        return remote
+
+    monkeypatch.setattr(
+        "dorf.cli.create_admitted_git_backed_job_branch_or_exit",
+        create_branch,
+    )
+    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    coordinated = []
+    monkeypatch.setattr(
+        "dorf.cli.run_coding_job_workflow_or_exit",
+        lambda job_name, action: coordinated.append(job_name),
+    )
+    data_home = tmp_path / "data"
+
+    result = CliRunner().invoke(
+        app,
+        ["afk", "18"],
+        env={"XDG_DATA_HOME": str(data_home)},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert f"Coding admission ready: {admission.proof_id}" in result.output
+    assert "Started coding Job admitted-issue" in result.output
+    assert coordinated == ["admitted-issue"]
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    job = store.get_coding_job("admitted-issue")
+    assert json.loads(job.metadata["admission_proof"]) == admission.record()
+    goal = store.get_job("admitted-issue").goal
+    assert goal.startswith("Implement this coding task as Dorf Job admitted-issue.")
+    assert "Task:\n        Issue #18: One admission proof" in goal
+    timeline = store.documents.list_events("admitted-issue")
+    assert any(
+        event.summary == f"Coding admission proved by {admission.proof_id}"
+        for event in timeline
+    )
+    coordinator = store.get_afk_coordinator(str(repo.resolve()), 18)
+    store.finish_afk_coordinator(
+        str(repo.resolve()),
+        18,
+        coordinator.owner_token,
+        "ready",
+    )
+
+    repeated = CliRunner().invoke(
+        app,
+        ["afk", "18"],
+        env={"XDG_DATA_HOME": str(data_home)},
+    )
+
+    assert repeated.exit_code == 0, repeated.output
+    assert f"Reusing coding admission proof: {admission.proof_id}" in repeated.output
+    assert len(preflight_requests) == 1
+    assert len(store.list_coding_jobs()) == 1
+    assert coordinated == ["admitted-issue", "admitted-issue"]
 
 
 def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(

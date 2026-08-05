@@ -38,6 +38,7 @@ class GitHubAppConfig:
 class GitHubInstallationToken:
     token: str
     expires_at: str | None = None
+    permissions: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -205,7 +206,17 @@ class GitHubAppTokenClient:
         expires_at = payload.get("expires_at")
         if expires_at is not None and not isinstance(expires_at, str):
             expires_at = None
-        return GitHubInstallationToken(token=token, expires_at=expires_at)
+        permissions = payload.get("permissions")
+        if not isinstance(permissions, dict) or not all(
+            isinstance(name, str) and isinstance(level, str)
+            for name, level in permissions.items()
+        ):
+            permissions = None
+        return GitHubInstallationToken(
+            token=token,
+            expires_at=expires_at,
+            permissions=permissions,
+        )
 
 
 class GitHubRepositoryClient:
@@ -225,6 +236,20 @@ class GitHubRepositoryClient:
         if not isinstance(sha, str) or not sha:
             raise GitHubRepositoryError("GitHub branch response did not include a SHA")
         return sha
+
+    def get_repository_permissions(self, repo_full_name: str) -> dict[str, bool]:
+        """Return the token's exact repository-level authority flags."""
+        payload = self._request_json("GET", f"/repos/{repo_full_name}")
+        permissions = payload.get("permissions") if isinstance(payload, dict) else None
+        if not isinstance(permissions, dict):
+            raise GitHubRepositoryError(
+                "GitHub repository response did not include token permissions"
+            )
+        return {
+            name: value
+            for name, value in permissions.items()
+            if isinstance(name, str) and isinstance(value, bool)
+        }
 
     def get_issue(self, repo_full_name: str, issue_number: int) -> GitHubIssue:
         payload = self._request_json("GET", f"/repos/{repo_full_name}/issues/{issue_number}")

@@ -125,6 +125,12 @@ must order repository setup around Worker and Job admission. Coding admission cr
 provenance-labelled dedicated Worker, a goal-backed Job and Assignment, and an independent clone at
 `/workspace/jobs/JOB`. The Assignment remains non-admitting and non-deliverable while the workflow
 clones and runs repository preparation, then opens immediately before initial goal dispatch.
+Issue-backed coding delegation first completes one workflow-owned admission proof in an unrecorded
+disposable VM. The proof pins the exact issue, repository head, GitHub App authority, official image,
+provider route, repository preparation/smoke path, dry-run Git write, and real implementation and
+reviewer turns; it revokes the route and destroys the VM before any AFK coordinator, coding Job,
+branch, Worker, or durable Room is admitted. A successful proof is consumed by that same invocation
+and recorded as a workflow fact; repeated delegation reuses the admitted identity and proof.
 Repository commands are workflow facts; model implementation, repair, and follow-up instructions
 are Job FIFO inputs.
 Worker-addressed attachment is an Environment operation; the Incus adapter opens a direct
