@@ -12,6 +12,7 @@ from .coding_admission import (
     CodingAdmissionProof,
     CodingAdmissionRequest,
     CodingAdmissionResult,
+    GitHubAuthorityApproval,
 )
 from .coding_commands import prepare_coding_repository, run_coding_job_command
 from .coding_pulse import (
@@ -30,6 +31,7 @@ from .coding_store import (
     CodingJob,
     CodingStore,
     FollowupFeedback,
+    PendingCodingAdmission,
 )
 
 __all__ = [
@@ -39,12 +41,14 @@ __all__ = [
     "CodingAdmissionProof",
     "CodingAdmissionRequest",
     "CodingAdmissionResult",
+    "GitHubAuthorityApproval",
     "CodingCommandRun",
     "CodingJob",
     "CodingJobPulse",
     "CodingStore",
     "CodingWorkflow",
     "FollowupFeedback",
+    "PendingCodingAdmission",
     "PulseActivity",
     "PulseAttention",
     "PulseDelta",

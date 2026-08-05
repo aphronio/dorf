@@ -10,7 +10,12 @@ from dorf.adapters.agents.codex_config import CodexConfig
 from dorf.adapters.environments import IncusCheckResult, IncusConfig, IncusFailure
 from dorf.coding_workspace import GitAuthorIdentity
 from dorf.deployment_profile import DeploymentProfile
-from dorf.github_app import GitHubInstallationToken, GitHubIssue, GitHubRepositoryClient
+from dorf.github_app import (
+    GitHubInstallationToken,
+    GitHubIssue,
+    GitHubRepositoryClient,
+    GitHubRepositoryError,
+)
 from dorf.provider_gateway import InferenceRoute
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.workflows import (
@@ -18,6 +23,7 @@ from dorf.workflows import (
     CodingAdmissionPreflight,
     CodingAdmissionProof,
     CodingAdmissionRequest,
+    GitHubAuthorityApproval,
 )
 from dorf.workflows.coding_admission import (
     LocalCodingAdmissionBackend,
@@ -137,6 +143,35 @@ def test_preflight_exercises_real_consumer_path_and_returns_one_reusable_proof()
     assert replace(result.proof, installation_token="rotated").proof_id == result.proof.proof_id
 
 
+def test_repository_check_rejects_a_changed_pinned_delegation_start(monkeypatch) -> None:
+    def git(repo, *args):
+        values = {
+            ("status", "--porcelain"): "",
+            ("rev-parse", "HEAD"): "b" * 40 + "\n",
+            ("remote", "get-url", "origin"): "https://github.com/example/repo.git\n",
+            ("config", "user.name"): "Dorf\n",
+            ("config", "user.email"): "dorf@example.com\n",
+        }
+        return subprocess.CompletedProcess(args, 0, values[args], "")
+
+    monkeypatch.setattr("dorf.workflows.coding_admission._git", git)
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_repo_contract", lambda repo: proof().contract
+    )
+
+    failures = LocalCodingAdmissionBackend().check_repository(
+        CodingAdmissionRequest(
+            repo_path="/repo",
+            target_branch="main",
+            issue_number=20,
+            command="afk",
+            target_start_sha="a" * 40,
+        )
+    )
+
+    assert [failure.code for failure in failures] == ["delegation-start-changed"]
+
+
 def test_github_permission_write_satisfies_required_read_authority() -> None:
     assert _missing_app_permissions(
         {
@@ -146,6 +181,71 @@ def test_github_permission_write_satisfies_required_read_authority() -> None:
             "pull_requests": "admin",
         }
     ) == []
+
+
+def test_github_missing_exact_repository_authority_is_one_resumable_approval(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    backend = LocalCodingAdmissionBackend()
+    backend.repo = tmp_path
+    backend.repository = "example/repo"
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_github_app_config",
+        lambda: SimpleNamespace(installation_id="123"),
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.GitHubAppTokenClient.mint_installation_token",
+        lambda self, config: GitHubInstallationToken(
+            token="installation-token",
+            permissions={
+                "contents": "write",
+                "issues": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.GitHubRepositoryClient.get_branch_sha",
+        lambda self, repository, branch: (_ for _ in ()).throw(
+            GitHubRepositoryError("HTTP 404: Not Found", status_code=404)
+        ),
+    )
+
+    failures = backend.check_github(
+        CodingAdmissionRequest(
+            repo_path=str(tmp_path),
+            target_branch="main",
+            issue_number=20,
+        )
+    )
+
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure.code == "github-repository-authority"
+    assert failure.automatic_continuation is True
+    assert failure.approval == GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed=(
+            "Coding admission must read issue #20 and main and create the Job branch and PR."
+        ),
+        action=(
+            "Open GitHub, configure installation 123, select example/repo, and save access."
+        ),
+        scope="Only example/repo for this delegation.",
+        approve_consequence=(
+            "Dorf may read issue #20 and main and write the Job branch and pull request."
+        ),
+        decline_consequence=(
+            "This pending delegation ends without creating a Job or GitHub resources."
+        ),
+        automatic_resume=(
+            "Dorf will detect the granted access, rerun exact readiness, and continue this "
+            "delegation automatically."
+        ),
+        url="https://github.com/settings/installations/123",
+    )
 
 
 def test_github_check_accepts_installation_authority_when_repository_user_push_is_false(

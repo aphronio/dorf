@@ -49,6 +49,7 @@ from dorf.workflows import (
     CodingAdmissionProof,
     CodingAdmissionResult,
     CodingStore,
+    GitHubAuthorityApproval,
 )
 
 
@@ -1572,6 +1573,150 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
     assert len(preflight_requests) == 1
     assert len(store.list_coding_jobs()) == 1
     assert coordinated == ["admitted-issue", "admitted-issue"]
+
+
+def test_afk_missing_github_authority_resumes_original_delegation_after_approval(
+    tmp_path, monkeypatch
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    configure_passing_incus(monkeypatch)
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read issue #20 and publish its branch and PR.",
+        action="Add example/repo to installation 123 and save access.",
+        scope="Only example/repo for this delegation.",
+        approve_consequence="Dorf may read the issue and publish the coding proposal.",
+        decline_consequence="The delegation ends without resources.",
+        automatic_resume="Exact readiness reruns and this delegation continues.",
+        url="https://github.com/settings/installations/123",
+    )
+    missing = AdmissionFailure(
+        "github-repository-authority",
+        "GitHub App installation owner",
+        "The installation cannot access example/repo.",
+        approval.action,
+        approval.approve_consequence,
+        True,
+        approval,
+    )
+    admission = CodingAdmissionProof.create(
+        repository="example/repo",
+        issue=GitHubIssue(20, "Resume one authority approval", "Issue body", ()),
+        target_branch="main",
+        target_start_sha=git(repo, "rev-parse", "HEAD"),
+        image_fingerprint="b" * 64,
+        provider_connection="personal-chatgpt",
+        reviewer="codex",
+        contract=RepoContract(mode="configured", commands={}, env={}),
+        codex_config=CodexConfig("gpt-5.6-sol", "low"),
+        git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
+        environment_config=IncusConfig(template="b" * 64),
+        installation_token="installation-token",
+    )
+    proofs = iter(
+        [CodingAdmissionResult(failures=(missing,)), CodingAdmissionResult(proof=admission)]
+    )
+    preflight_requests = []
+
+    def prove(self, request):
+        preflight_requests.append(request)
+        return next(proofs)
+
+    monkeypatch.setattr("dorf.cli.CodingAdmissionPreflight.prove", prove)
+    monkeypatch.setattr(
+        "dorf.cli.await_github_authority_approval", lambda attempt: "approved"
+    )
+    monkeypatch.setattr("dorf.cli.generate_job_name", lambda task: "approved-issue")
+    monkeypatch.setattr(
+        "dorf.cli.create_admitted_git_backed_job_branch_or_exit",
+        lambda target, branch_name, proof, before_create=None: (
+            before_create(
+                GitBackedJobBranch(
+                    proof.repository,
+                    proof.target_start_sha,
+                    {"github_repo": proof.repository},
+                    proof.installation_token,
+                )
+            )
+            or GitBackedJobBranch(
+                proof.repository,
+                proof.target_start_sha,
+                {"github_repo": proof.repository},
+                proof.installation_token,
+            )
+        ),
+    )
+    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.cli.run_coding_job_workflow_or_exit", lambda *args: None)
+    data_home = tmp_path / "data"
+
+    result = CliRunner().invoke(
+        app, ["afk", "20"], env={"XDG_DATA_HOME": str(data_home)}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Attention: GitHub authority approval required" in result.output
+    assert "Missing authority: Dorf GitHub App access to example/repo" in result.output
+    assert "Automatic resume: Exact readiness reruns" in result.output
+    assert "GitHub authority approved; rerunning exact coding readiness." in result.output
+    assert len(preflight_requests) == 2
+    assert preflight_requests[0] == preflight_requests[1]
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    attempts = store.list_coding_admissions()
+    assert len(attempts) == 1
+    assert attempts[0].status == "admitted"
+    assert attempts[0].job_name == "approved-issue"
+    assert attempts[0].request["command"] == "afk"
+    assert attempts[0].request["target_start_sha"] == git(repo, "rev-parse", "HEAD")
+    assert len(store.list_coding_jobs()) == 1
+
+
+@pytest.mark.parametrize("outcome", ["declined", "expired"])
+def test_afk_github_authority_decline_or_expiry_creates_no_active_state(
+    tmp_path, monkeypatch, outcome
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read issue #20 and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The delegation can continue.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+    )
+    failure = AdmissionFailure(
+        "github-repository-authority",
+        "GitHub App installation owner",
+        "The installation cannot access example/repo.",
+        approval.action,
+        approval.approve_consequence,
+        True,
+        approval,
+    )
+    monkeypatch.setattr(
+        "dorf.cli.CodingAdmissionPreflight.prove",
+        lambda self, request: CodingAdmissionResult(failures=(failure,)),
+    )
+    monkeypatch.setattr(
+        "dorf.cli.await_github_authority_approval", lambda attempt: outcome
+    )
+    data_home = tmp_path / "data"
+
+    result = CliRunner().invoke(
+        app, ["afk", "20"], env={"XDG_DATA_HOME": str(data_home)}
+    )
+
+    assert result.exit_code == 1
+    assert f"GitHub authority approval {outcome}" in result.output
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    assert store.list_coding_admissions()[0].status == outcome
+    assert store.list_coding_jobs() == []
+    assert store.get_afk_coordinator(str(repo.resolve()), 20) is None
 
 
 def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(

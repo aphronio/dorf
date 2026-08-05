@@ -9,9 +9,11 @@ import signal
 import subprocess
 import sys
 import urllib.parse
+import webbrowser
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -145,6 +147,7 @@ from dorf.workflows import (
     CodingJobPulse,
     CodingStore,
     CodingWorkflow,
+    PendingCodingAdmission,
     WorkflowFailure,
     WorkflowOutcome,
     build_coding_job_pulse,
@@ -188,6 +191,8 @@ DORF_MAIN_TEXT = "#CEB87D"
 DORF_MUTED_TEXT = "#B8A369"
 DORF_ACTIVE = "#F6BD4B"
 DORF_ACTIVE_RGB = (246, 189, 75)
+GITHUB_AUTHORITY_APPROVAL_TTL_SECONDS = 3600
+GITHUB_AUTHORITY_POLL_SECONDS = 10
 DORF_THEME = Theme(
     {
         "progress.download": DORF_MAIN_TEXT,
@@ -1618,6 +1623,7 @@ def start(
     if issue is not None and resume is None:
         admission = prove_coding_admission_or_exit(
             target,
+            command="start",
             issue_number=issue,
             model=None,
             reasoning_effort=None,
@@ -1671,6 +1677,7 @@ def afk(
     if existing is None:
         admission = prove_coding_admission_or_exit(
             target,
+            command="afk",
             issue_number=issue_number,
             model=model,
             reasoning_effort=reasoning_effort,
@@ -1855,6 +1862,11 @@ def launch_coding_job_or_exit(
     def reserve_coding_job(remote: GitBackedJobBranch) -> None:
         store.create_coding_job(
             job_name=job_name,
+            admission_attempt_id=(
+                admission_proof.approval_attempt_id
+                if admission_proof is not None
+                else None
+            ),
             metadata={
                 **remote.metadata,
                 **(metadata or {}),
@@ -1904,6 +1916,13 @@ def launch_coding_job_or_exit(
             )
         raise
     except Exception as error:
+        if admission_proof is not None and admission_proof.approval_attempt_id:
+            attempt = store.get_coding_admission(admission_proof.approval_attempt_id)
+            if attempt is not None and attempt.status == "admitted":
+                typer.echo(
+                    f"This delegation was already admitted as coding Job {attempt.job_name}."
+                )
+                raise typer.Exit(0) from error
         typer.echo(f"Could not record coding Job: {error}", err=True)
         raise typer.Exit(1) from error
 
@@ -2178,31 +2197,128 @@ def resolve_coding_task_or_exit(
 def prove_coding_admission_or_exit(
     target: GitTarget,
     *,
+    command: str,
     issue_number: int,
     model: str | None,
     reasoning_effort: str | None,
     provider_connection: str | None,
 ) -> CodingAdmissionProof:
     """Run the AFK delegation's single proof before any workflow mutation."""
-    result = CodingAdmissionPreflight().prove(
-        CodingAdmissionRequest(
-            repo_path=str(target.repo),
-            target_branch=target.branch,
-            issue_number=issue_number,
-            provider_connection=provider_connection,
-            model=model,
-            reasoning_effort=reasoning_effort,
-        )
+    request = CodingAdmissionRequest(
+        repo_path=str(target.repo),
+        target_branch=target.branch,
+        issue_number=issue_number,
+        command=command,
+        target_start_sha=target.start_sha,
+        provider_connection=provider_connection,
+        model=model,
+        reasoning_effort=reasoning_effort,
     )
+    result = CodingAdmissionPreflight().prove(request)
     if result.proof is not None:
         typer.echo(f"Coding admission ready: {result.proof.proof_id}")
         return result.proof
+    resumable = [
+        failure
+        for failure in result.failures
+        if failure.automatic_continuation and failure.approval is not None
+    ]
+    if len(result.failures) == 1 and len(resumable) == 1:
+        failure = resumable[0]
+        assert failure.approval is not None
+        store = CodingStore.open()
+        attempt, created = store.retain_pending_coding_admission(
+            request.record(),
+            failure.approval.record(),
+            ttl_seconds=GITHUB_AUTHORITY_APPROVAL_TTL_SECONDS,
+        )
+        if attempt.status == "admitted":
+            typer.echo(
+                f"This delegation was already admitted as coding Job {attempt.job_name}."
+            )
+            raise typer.Exit(0)
+        if attempt.status in {"declined", "expired"}:
+            typer.echo(
+                f"This GitHub authority approval attempt already ended: {attempt.status}.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if attempt.status == "pending":
+            echo_github_authority_attention(attempt, retried=not created)
+            outcome = await_github_authority_approval(attempt)
+            if outcome in {"declined", "expired"}:
+                store.end_pending_coding_admission(attempt.id, outcome)
+                typer.echo(f"GitHub authority approval {outcome}.", err=True)
+                typer.echo(failure.approval.decline_consequence, err=True)
+                raise typer.Exit(1)
+            store.approve_coding_admission(attempt.id)
+        else:
+            typer.echo("Reusing approved GitHub authority for this delegation.")
+        typer.echo("GitHub authority approved; rerunning exact coding readiness.")
+        resumed = CodingAdmissionPreflight().prove(request)
+        if resumed.proof is not None:
+            proof = replace(resumed.proof, approval_attempt_id=attempt.id)
+            typer.echo(f"Coding admission ready: {proof.proof_id}")
+            return proof
+        _echo_coding_admission_failures(resumed.failures)
+        raise typer.Exit(1)
+    _echo_coding_admission_failures(result.failures)
+    raise typer.Exit(1)
+
+
+def echo_github_authority_attention(
+    attempt: PendingCodingAdmission, *, retried: bool
+) -> None:
+    attention = attempt.attention
+    typer.echo("Attention: GitHub authority approval required")
+    typer.echo(f"Attempt: {attempt.id}" + (" (retained)" if retried else ""))
+    typer.echo(f"Missing authority: {attention['missing_authority']}")
+    typer.echo(f"Why needed: {attention['why_needed']}")
+    typer.echo(f"Approval action: {attention['action']}")
+    typer.echo(f"Approval URL: {attention['url']}")
+    typer.echo(f"Scope: {attention['scope']}")
+    typer.echo(f"If approved: {attention['approve_consequence']}")
+    typer.echo(f"If declined or expired: {attention['decline_consequence']}")
+    typer.echo(f"Automatic resume: {attention['automatic_resume']}")
+    typer.echo(f"Expires: {attempt.expires_at}")
+
+
+def await_github_authority_approval(attempt: PendingCodingAdmission) -> str:
+    """Open the one scoped GitHub action and observe authority without storing credentials."""
+    webbrowser.open(attempt.attention["url"])
+    repo = github_repo_full_name_or_exit(Path(str(attempt.request["repo_path"])))
+    branch = str(attempt.request["target_branch"])
+    expires_at = datetime.fromisoformat(attempt.expires_at)
+    try:
+        while datetime.now(UTC) < expires_at:
+            try:
+                config = load_github_app_config()
+                minted = GitHubAppTokenClient().mint_installation_token(config)
+                token = (
+                    minted.token
+                    if isinstance(minted, GitHubInstallationToken)
+                    else str(minted)
+                )
+                GitHubRepositoryClient(token).get_branch_sha(repo, branch)
+                return "approved"
+            except (
+                GitHubAppConfigError,
+                GitHubAppVerificationError,
+                GitHubRepositoryError,
+            ):
+                sleep(GITHUB_AUTHORITY_POLL_SECONDS)
+    except KeyboardInterrupt:
+        return "declined"
+    return "expired"
+
+
+def _echo_coding_admission_failures(failures) -> None:
     typer.echo(
         "Coding admission failed with "
-        f"{len(result.failures)} independently discovered failure(s):",
+        f"{len(failures)} independently discovered failure(s):",
         err=True,
     )
-    for failure in result.failures:
+    for failure in failures:
         typer.echo(f"- [{failure.code}] {failure.summary}", err=True)
         typer.echo(f"  owner: {failure.owner}", err=True)
         typer.echo(f"  repair: {failure.repair}", err=True)
@@ -2212,7 +2328,6 @@ def prove_coding_admission_or_exit(
             + ("yes" if failure.automatic_continuation else "no"),
             err=True,
         )
-    raise typer.Exit(1)
 
 
 def github_issue_task(repo_full_name: str, issue: GitHubIssue) -> CodingTask:

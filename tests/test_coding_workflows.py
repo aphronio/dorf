@@ -24,6 +24,7 @@ from dorf.workflows import (
     run_coding_job_command,
 )
 from dorf.workflows.coding import verify_job_readiness
+from dorf.workflows.coding_admission import CodingAdmissionRequest, GitHubAuthorityApproval
 from dorf.workflows.coding_commands import prepare_coding_repository
 
 
@@ -257,6 +258,97 @@ def test_coding_store_has_no_superseded_session_or_duplicate_turn_tables(tmp_pat
         for row in sqlite3.connect(store.database_path).execute("PRAGMA table_info(coding_jobs)")
     }
     assert not {"worker_name", "room_id", "assignment_id", "conversation_id"} & coding_columns
+
+
+def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotently(
+    tmp_path,
+) -> None:
+    store = CodingStore.open(tmp_path / "state.sqlite3")
+    request = CodingAdmissionRequest(
+        repo_path=str(tmp_path / "repo"),
+        target_branch="main",
+        issue_number=20,
+        provider_connection="personal-chatgpt",
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read the issue and publish the coding proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The coding Job can be admitted.",
+        decline_consequence="No Job or GitHub resource is created.",
+        automatic_resume="Exact readiness reruns and the delegation continues.",
+        url="https://github.com/settings/installations/123",
+    )
+
+    first, created = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+    retried, retry_created = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+
+    assert created is True
+    assert retry_created is False
+    assert retried == first
+    assert store.approve_coding_admission(first.id) is True
+    assert store.approve_coding_admission(first.id) is True
+    attempts = store.list_coding_admissions()
+    assert len(attempts) == 1
+    assert attempts[0].status == "approved"
+    assert attempts[0].request == request.record()
+    assert "token" not in str(attempts[0].request).lower()
+
+    store.create_coding_job(
+        job_name="approved-job",
+        metadata={"admission_proof": '{"proof_id":"proof-1"}'},
+        admission_attempt_id=first.id,
+    )
+    with pytest.raises(RuntimeError, match="already been consumed"):
+        store.create_coding_job(
+            job_name="duplicate-job",
+            metadata={"admission_proof": '{"proof_id":"proof-1"}'},
+            admission_attempt_id=first.id,
+        )
+
+    admitted = store.get_coding_admission(first.id)
+    assert admitted.status == "admitted"
+    assert admitted.job_name == "approved-job"
+    assert admitted.proof_id == "proof-1"
+    assert [job.job_name for job in store.list_coding_jobs()] == ["approved-job"]
+
+
+@pytest.mark.parametrize("outcome", ["declined", "expired"])
+def test_decline_or_expiry_ends_pending_authority_without_active_state(
+    tmp_path, outcome
+) -> None:
+    store = CodingStore.open(tmp_path / f"{outcome}.sqlite3")
+    request = CodingAdmissionRequest(
+        repo_path=str(tmp_path / "repo"),
+        target_branch="main",
+        issue_number=20,
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read the issue and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The coding Job can be admitted.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+    )
+    attempt, _ = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+
+    assert store.end_pending_coding_admission(attempt.id, outcome) is True
+    assert store.end_pending_coding_admission(attempt.id, outcome) is False
+    assert store.get_coding_admission(attempt.id).status == outcome
+    assert store.list_coding_jobs() == []
+    assert sqlite3.connect(store.database_path).execute(
+        "SELECT COUNT(*) FROM workers"
+    ).fetchone()[0] == 0
 
 
 def test_coding_command_runs_in_assignment_workspace_and_records_fact_evidence(

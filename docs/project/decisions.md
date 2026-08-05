@@ -847,3 +847,29 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A non-GitHub coding authority becomes real, repository smoke proves too broad
   for admission and a narrower repo-owned readiness contract is observed, or a future Environment
   can provide the same exact disposable consumer proof without a local Incus VM.
+
+## D043 — Missing repository authority pauses inside the original delegation
+
+- **Status:** Accepted for the GitHub App HITL slice — 2026-08-05
+- **Decision:** When the exact issue-backed admission proof receives GitHub's not-found response
+  before it can resolve the target branch, treat that one result as absent repository selection on
+  the already configured Dorf GitHub App installation. Retain one deterministic, non-secret
+  admission attempt keyed by the original command, repository, starting commit, branch, issue,
+  provider, and model inputs;
+  create no Job, branch, Room, route, or AFK reservation. Open the installation's GitHub settings
+  page with an attention item scoped to that repository, observe only when branch authority appears,
+  then record idempotent approval and rerun the complete exact admission proof. The attempt expires
+  after one hour, and decline or expiry is terminal for that attempt. The first coding Job
+  reservation consumes approval and records admission in the same transaction so retries or a
+  replaced controller process cannot create another Job.
+- **Why:** Repository selection is one important, actionable authority decision that cannot safely
+  be automated or replaced by a generic setup error. Keeping it inside the pinned delegation lets
+  the owner approve once in GitHub while Dorf remains responsible for context retention, readiness,
+  and continuation. Persisting no installation token or private key and changing no general setup
+  command keeps the grant least-privilege and confined to coding admission.
+- **Compatibility:** Pending-attempt schema, expiry, failure code, installation URL, polling cadence,
+  and CLI rendering are internal alpha surfaces. Other admission failures remain ordinary repair
+  results; this does not introduce a general approval or workflow engine.
+- **Reconsider when:** GitHub exposes a narrower repository-access callback than authority polling,
+  an organization-request flow needs a distinct approval state, or a second concrete authority
+  interruption proves a smaller shared primitive without leaking workflow policy into the runtime.
