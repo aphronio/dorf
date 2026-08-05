@@ -926,6 +926,7 @@ class LocalCodingAdmissionBackend:
                     "-lc",
                     command,
                 ],
+                input="",
                 timeout_seconds=600,
             )
             if result.returncode:
@@ -949,6 +950,7 @@ class LocalCodingAdmissionBackend:
                 "origin",
                 f"HEAD:{branch}",
             ],
+            input="",
             timeout_seconds=60,
         )
         if result.returncode:
@@ -979,6 +981,7 @@ class LocalCodingAdmissionBackend:
                 "-lc",
                 script,
             ],
+            input="",
             timeout_seconds=min(
                 self.contract.review.timeout_seconds,
                 ADMISSION_REVIEW_TIMEOUT_SECONDS,

@@ -151,9 +151,13 @@ from dorf.workflows import (
     WorkflowFailure,
     WorkflowOutcome,
     build_coding_job_pulse,
+    build_proof_dossier,
+    compile_acceptance_checklist,
     prepare_coding_repository,
+    render_proof_dossier,
     run_coding_job_command,
 )
+from dorf.workflows.coding import proof_dossier_commit, review_command_with_dorf_protocol
 
 app = typer.Typer(help="Manage durable Workers and Jobs in isolated Rooms.")
 worker_app = typer.Typer(help="Manage durable Workers and their current Rooms.")
@@ -181,6 +185,11 @@ ARTIFACT_OVERWRITE_OPTION = typer.Option(
     False,
     "--overwrite",
     help="Explicitly replace an existing destination file.",
+)
+ACCEPTANCE_FILE_OPTION = typer.Option(
+    None,
+    "--from-file",
+    help="Replace the draft goal criteria from a reviewed Markdown checklist.",
 )
 DORF_BRANCH_PREFIX = "dorf/"
 PROTECTED_BRANCHES = frozenset({"main", "master", "trunk"})
@@ -1846,52 +1855,82 @@ def launch_coding_job_or_exit(
         return job_name
 
     if admission_proof is None:
-        selected_provider = select_coding_provider_connection_or_exit(provider_connection)
+        selected_provider, deployment_profile = select_coding_deployment_or_exit(
+            provider_connection
+        )
+        image_fingerprint = deployment_image_fingerprint(deployment_profile, contract)
         environment = get_environment(
             contract,
             provider_connection=selected_provider,
+            image_fingerprint=image_fingerprint,
         )
         exit_if_environment_prerequisites_missing(environment)
     else:
         selected_provider = admission_proof.provider_connection
+        image_fingerprint = admission_proof.image_fingerprint
         environment = new_codex_room_environment(
             admission_proof.environment_config,
             selected_provider,
         )
+    room_image_metadata = (
+        {"image_fingerprint": image_fingerprint}
+        if image_fingerprint is not None
+        else {}
+    )
+    goal = coding_job_goal(
+        job_name=job_name,
+        task=coding_task.prompt,
+        job_branch=job_branch,
+        workspace=f"/workspace/jobs/{job_name}",
+    )
 
     reservation_committed = False
 
     def reserve_coding_job(remote: GitBackedJobBranch) -> None:
         nonlocal reservation_committed
-        store.create_coding_job(
+        coding_metadata = {
+            **remote.metadata,
+            **(metadata or {}),
+            "task": coding_task.summary,
+            "target_repo": str(target.repo),
+            "target_branch": target.branch,
+            "target_start_sha": remote.base_sha,
+            "job_branch": job_branch,
+            "setup_model": config.model,
+            "setup_reasoning_effort": config.reasoning_effort,
+            "setup_task_prompt": coding_task.prompt,
+            "setup_provider_connection": selected_provider,
+            **(
+                {"setup_image_fingerprint": image_fingerprint}
+                if image_fingerprint is not None
+                else {}
+            ),
+            **(
+                {
+                    "admission_proof": json.dumps(
+                        admission_proof.record(), sort_keys=True
+                    )
+                }
+                if admission_proof is not None
+                else {}
+            ),
+        }
+        admitted_job = CodingJob(job_name, "setting-up", coding_metadata, None, None, "", "")
+        acceptance_items = compile_acceptance_checklist(
+            coding_task.prompt,
+            contract,
+            review_commands=rendered_review_commands(contract, admitted_job),
+        )
+        store.create_coding_job_with_acceptance(
             job_name=job_name,
+            metadata=coding_metadata,
+            goal=goal,
+            items=acceptance_items,
             admission_attempt_id=(
                 admission_proof.approval_attempt_id
                 if admission_proof is not None
                 else None
             ),
-            metadata={
-                **remote.metadata,
-                **(metadata or {}),
-                "task": coding_task.summary,
-                "target_repo": str(target.repo),
-                "target_branch": target.branch,
-                "target_start_sha": remote.base_sha,
-                "job_branch": job_branch,
-                "setup_model": config.model,
-                "setup_reasoning_effort": config.reasoning_effort,
-                "setup_task_prompt": coding_task.prompt,
-                "setup_provider_connection": selected_provider,
-                **(
-                    {
-                        "admission_proof": json.dumps(
-                            admission_proof.record(), sort_keys=True
-                        )
-                    }
-                    if admission_proof is not None
-                    else {}
-                ),
-            },
         )
         reservation_committed = True
 
@@ -1947,13 +1986,8 @@ def launch_coding_job_or_exit(
                 worker_name,
                 provenance="coding-workflow",
                 lifecycle_policy="dedicated",
+                room_metadata=room_image_metadata,
             )
-        )
-        goal = coding_job_goal(
-            job_name=job_name,
-            task=coding_task.prompt,
-            job_branch=job_branch,
-            workspace=f"/workspace/jobs/{job_name}",
         )
         job_runtime = JobRuntime(store, environment, driver)
         binding = job_runtime.assign(
@@ -1995,6 +2029,7 @@ def launch_coding_job_or_exit(
             "setup_reasoning_effort",
             "setup_task_prompt",
             "setup_provider_connection",
+            "setup_image_fingerprint",
         },
     )
 
@@ -2027,6 +2062,12 @@ def launch_coding_job_or_exit(
     typer.echo(f"Assignment: {binding.assignment.id}")
     typer.echo(f"Workspace: {binding.workspace}")
     typer.echo(f"Branch: {job_branch}")
+    checklist = store.get_acceptance_checklist(job_name)
+    if checklist is not None:
+        typer.echo(
+            f"Acceptance: {checklist.state} ({len(checklist.items)} items; "
+            f"correct with dorf acceptance {job_name} --from-file FILE before verify)"
+        )
     typer.echo(
         "Initial goal delivery started detached"
         if delivery_started
@@ -2080,6 +2121,7 @@ def recover_setup_failed_coding_job_or_exit(
                 if setup_provider_connection is not None
                 else _missing_setup_provider_connection(job.job_name)
             ),
+            image_fingerprint=job.metadata.get("setup_image_fingerprint"),
         )
     )
     exit_if_environment_prerequisites_missing(environment)
@@ -2117,6 +2159,11 @@ def recover_setup_failed_coding_job_or_exit(
                     worker_name,
                     provenance="coding-workflow",
                     lifecycle_policy="dedicated",
+                    room_metadata=(
+                        {"image_fingerprint": job.metadata["setup_image_fingerprint"]}
+                        if "setup_image_fingerprint" in job.metadata
+                        else None
+                    ),
                 )
             )
         if (
@@ -2137,7 +2184,12 @@ def recover_setup_failed_coding_job_or_exit(
         )
         store.remove_metadata_keys(
             job.job_name,
-            {"setup_model", "setup_reasoning_effort", "setup_task_prompt"},
+            {
+                "setup_model",
+                "setup_reasoning_effort",
+                "setup_task_prompt",
+                "setup_image_fingerprint",
+            },
         )
         remote_branch = recover_git_backed_job_branch_or_exit(job)
         store.set_metadata_value(job.job_name, "github_remote_branch_status", "created")
@@ -2662,6 +2714,82 @@ def status(job_name: str) -> None:
         typer.echo(f"AFK: {stage} ({job.metadata.get('afk_outcome', 'pending')})")
 
 
+@app.command()
+def acceptance(
+    job_name: str,
+    from_file: Path | None = ACCEPTANCE_FILE_OPTION,
+    json_output: bool = typer.Option(False, "--json", help="Emit agent-readable JSON."),
+) -> None:
+    """Inspect or correct the admission checklist before verification governs completion."""
+    store = CodingStore.open()
+    job = store.get_coding_job(job_name)
+    checklist = store.get_acceptance_checklist(job_name)
+    if job is None or checklist is None:
+        typer.echo(f"Acceptance checklist not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    if from_file is not None:
+        if not from_file.is_file():
+            typer.echo(f"Acceptance checklist file not found: {from_file}", err=True)
+            raise typer.Exit(1)
+        contract = load_contract_or_exit(Path(job.target_repo))
+        compiled = compile_acceptance_checklist(
+            from_file.read_text(),
+            contract,
+            review_commands=rendered_review_commands(contract, job),
+        )
+        corrected = tuple(
+            replace(item, source="human")
+            if item.source in {"goal", "issue"}
+            else item
+            for item in compiled
+        )
+        try:
+            checklist = store.replace_acceptance_checklist(job_name, corrected)
+        except (RuntimeError, ValueError) as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(1) from error
+    if json_output:
+        typer.echo(json.dumps(asdict(checklist), sort_keys=True))
+        return
+    typer.echo(
+        f"Acceptance · {job_name} · {checklist.state} revision {checklist.revision} · "
+        f"goal {checklist.goal_digest}"
+    )
+    for item in checklist.items:
+        verifier_ref = f"={item.verifier_ref}" if item.verifier_ref else ""
+        typer.echo(
+            f"- [ ] {item.text} [{item.source}; {item.verifier}{verifier_ref}]"
+        )
+
+
+@app.command()
+def dossier(
+    job_name: str,
+    commit: str | None = typer.Option(
+        None,
+        "--commit",
+        help="Assess this exact commit instead of the latest retained proof commit.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit agent-readable JSON."),
+) -> None:
+    """Show the compact, commit-pinned coding proof dossier."""
+    store = CodingStore.open()
+    job = store.get_coding_job(job_name)
+    binding = store.get_job_binding(job_name)
+    if job is None or binding is None:
+        typer.echo(f"Coding Job not found: {job_name}", err=True)
+        raise typer.Exit(1)
+    commit_sha = commit or proof_dossier_commit(store, job)
+    if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+        typer.echo(f"Invalid dossier commit: {commit_sha}", err=True)
+        raise typer.Exit(1)
+    proof = build_proof_dossier(store, job, binding, commit_sha=commit_sha)
+    if json_output:
+        typer.echo(json.dumps(asdict(proof), sort_keys=True))
+        return
+    typer.echo(render_proof_dossier(proof))
+
+
 @app.command("implementation-status")
 def implementation_status(
     job_name: str,
@@ -2964,6 +3092,10 @@ def run_configured_job_command(job_name: str, command_name: str) -> None:
     if command is None:
         typer.echo(f"No configured {command_name} command for coding Job {job_name}.", err=True)
         raise typer.Exit(1)
+    if command_name in {"check", "smoke"}:
+        checklist = store.get_acceptance_checklist(job_name)
+        if checklist is not None:
+            store.freeze_acceptance_checklist(job_name)
     try:
         run = run_environment_job_command(
             store=store,
@@ -2974,6 +3106,17 @@ def run_configured_job_command(job_name: str, command_name: str) -> None:
     except CommandInterrupted:
         raise typer.Exit(130) from None
     exit_for_command_run(job_name, command_name, run.exit_code)
+
+
+def rendered_review_commands(contract: RepoContract, job: CodingJob) -> dict[str, str]:
+    review = contract.review
+    if review is None:
+        return {}
+    return {
+        name: review_command_with_dorf_protocol(agent.command, review.prompt, job=job)
+        for name, agent in review.agents.items()
+        if agent.enabled
+    }
 
 
 def validate_dorf_branch_or_exit(branch: str, *, target_branch: str) -> None:
@@ -3359,21 +3502,42 @@ def get_environment(
     contract: RepoContract | None = None,
     *,
     provider_connection: str,
+    image_fingerprint: str | None = None,
 ) -> CodexRoomEnvironment:
     config = IncusConfig.from_mapping(contract.incus_config if contract is not None else None)
+    if image_fingerprint is not None:
+        config = replace(config, template=image_fingerprint)
     return new_codex_room_environment(config, provider_connection)
 
 
-def select_coding_provider_connection_or_exit(override: str | None) -> str:
-    """Select host deployment policy only when creating a new coding Room."""
-    if override is not None:
-        return override
+def deployment_image_fingerprint(
+    profile: DeploymentProfile | None,
+    contract: RepoContract,
+) -> str | None:
+    """Use a setup fingerprint only when it describes the requested Room configuration."""
+    explicit_template = contract.incus_config.get("template")
+    if explicit_template is not None:
+        if re.fullmatch(r"[0-9a-f]{64}", explicit_template):
+            return explicit_template
+        if profile is None or explicit_template != profile.incus.template:
+            return None
+    return profile.image_fingerprint if profile is not None else None
+
+
+def select_coding_deployment_or_exit(
+    override: str | None,
+) -> tuple[str, DeploymentProfile | None]:
+    """Select provider policy and immutable image identity for a new coding Room."""
     try:
         profile = load_optional_deployment_profile()
     except DeploymentProfileError as error:
+        if override is not None:
+            return override, None
         typer.echo(f"Could not load the global deployment profile: {error}", err=True)
         typer.echo("remediation: Run `dorf setup`.", err=True)
         raise typer.Exit(1) from error
+    if override is not None:
+        return override, profile
     if profile is None:
         typer.echo(
             "Dorf setup is incomplete: no default Provider Connection is configured.",
@@ -3381,7 +3545,7 @@ def select_coding_provider_connection_or_exit(override: str | None) -> str:
         )
         typer.echo("remediation: Run `dorf setup`.", err=True)
         raise typer.Exit(1)
-    return profile.provider_connection
+    return profile.provider_connection, profile
 
 
 def open_dorf(

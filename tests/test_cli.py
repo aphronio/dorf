@@ -23,6 +23,7 @@ from dorf.cli import (
     await_github_authority_approval,
     create_admitted_git_backed_job_branch_or_exit,
     create_git_backed_job_branch_or_exit,
+    deployment_image_fingerprint,
     fetch_github_branch_objects_or_exit,
     github_issue_task,
     launch_coding_job_or_exit,
@@ -1294,9 +1295,11 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
     data_home = tmp_path / "data"
     config_home = tmp_path / "config"
-    DeploymentProfile(provider_connection="personal-chatgpt").save(
-        config_home=config_home
-    )
+    image_fingerprint = "f" * 64
+    DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint=image_fingerprint,
+    ).save(config_home=config_home)
     env = {
         "XDG_CONFIG_HOME": str(config_home),
         "XDG_DATA_HOME": str(data_home),
@@ -1314,16 +1317,39 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     job = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task"], env=env)
     job_json = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task", "--json"], env=env)
     coding = CliRunner().invoke(app, ["status", "abc123-demo-task"], env=env)
+    admitted = CliRunner().invoke(app, ["acceptance", "abc123-demo-task", "--json"], env=env)
+    dossier = CliRunner().invoke(app, ["dossier", "abc123-demo-task", "--json"], env=env)
 
-    assert result.exit_code == worker.exit_code == job.exit_code == job_json.exit_code == 0
+    assert (
+        result.exit_code
+        == worker.exit_code
+        == job.exit_code
+        == job_json.exit_code
+        == admitted.exit_code
+        == dossier.exit_code
+        == 0
+    )
     assert coding.exit_code == 0
     assert "Worker: coder-abc123-demo-task (coding-workflow, dedicated)" in result.output
     assert "Workspace: /workspace/jobs/abc123-demo-task" in result.output
+    assert "Acceptance: draft (2 items" in result.output
     assert "provenance: coding-workflow" in worker.output
     assert "lifecycle policy: dedicated" in worker.output
     assert "goal v1: Demo task" in job.output
     assert "Working rules:" not in job.output
     pulse = json.loads(job_json.output)
+    checklist = json.loads(admitted.output)
+    proof = json.loads(dossier.output)
+    assert checklist["state"] == "draft"
+    assert [item["key"] for item in checklist["items"]] == ["goal-1", "repo-check"]
+    assert checklist["items"][0]["verifier"] == "command"
+    assert proof["commit_sha"] == git(repo, "rev-parse", "HEAD")
+    assert proof["acceptance"][0]["status"] == "unproven"
+    assert proof["environment"]["environment_type"] == "incus-vm"
+    assert ["image_fingerprint", image_fingerprint] in proof["environment"]["metadata"]
+    assert not any(
+        "immutable image fingerprint" in risk for risk in proof["unresolved_risks"]
+    )
     assert pulse["job"] == "abc123-demo-task"
     assert pulse["goal_summary"] == "Demo task"
     assert "Working rules:" in pulse["goal"]
@@ -1356,6 +1382,13 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     assert store.get_job_binding("abc123-demo-task").room.metadata["provider_connection"] == (
         "personal-chatgpt"
     )
+    assert (
+        store.get_job_binding("abc123-demo-task").room.metadata["image_fingerprint"]
+        == image_fingerprint
+    )
+    assert any(
+        command[:3] == ["incus", "init", image_fingerprint] for command in commands
+    )
     binding = store.get_job_binding("abc123-demo-task")
     store.update_room_status(
         binding.room.id,
@@ -1381,6 +1414,65 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     assert setup_order == [("prepare", "preparing"), ("dispatch", "open")]
     assert dispatched[0][1] == "abc123-demo-task"
     assert store.list_job_inputs("abc123-demo-task")[0].kind == "goal"
+
+
+def test_repository_incus_override_does_not_claim_global_image_fingerprint() -> None:
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint="f" * 64,
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        incus_config={"template": "repo-specific-image"},
+    )
+
+    assert deployment_image_fingerprint(profile, contract) is None
+
+
+@pytest.mark.parametrize(
+    "incus_override",
+    [
+        {"network": "repo-network"},
+        {"root_disk_size": "64GiB"},
+        {"network": "repo-network", "root_disk_size": "64GiB"},
+    ],
+)
+def test_repository_non_image_incus_overrides_preserve_global_image_fingerprint(
+    incus_override,
+) -> None:
+    fingerprint = "f" * 64
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint=fingerprint,
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        incus_config=incus_override,
+    )
+
+    assert deployment_image_fingerprint(profile, contract) == fingerprint
+
+
+def test_explicit_fingerprint_template_becomes_the_immutable_image_pin() -> None:
+    profile_fingerprint = "f" * 64
+    explicit_fingerprint = "e" * 64
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint=profile_fingerprint,
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        incus_config={"template": explicit_fingerprint},
+    )
+
+    assert deployment_image_fingerprint(profile, contract) == explicit_fingerprint
+    assert deployment_image_fingerprint(None, contract) == explicit_fingerprint
 
 
 def test_new_coding_job_without_provider_default_fails_before_branch_or_job_mutation(
@@ -1491,8 +1583,10 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
 ) -> None:
     repo = create_git_repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
-    configure_passing_incus(monkeypatch)
-    contract = RepoContract(mode="configured", commands={}, env={})
+    incus_commands = configure_passing_incus(monkeypatch)
+    contract = RepoContract(
+        mode="configured", commands={"check": "uv run pytest"}, env={}
+    )
     admission = CodingAdmissionProof.create(
         repository="example/repo",
         installation_id="123",
@@ -1505,10 +1599,15 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
         contract=contract,
         codex_config=CodexConfig("gpt-5.6-sol", "low"),
         git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
-        environment_config=IncusConfig(template="b" * 64),
+        environment_config=IncusConfig(
+            template="b" * 64,
+            network="admission-net",
+            root_disk_size="73GiB",
+        ),
         installation_token="installation-token",
     )
     preflight_requests = []
+    reservation_snapshots = []
 
     def prove(self, request):
         preflight_requests.append(request)
@@ -1526,6 +1625,18 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
         )
         if before_create is not None:
             before_create(remote)
+            reserved_store = CodingStore.open()
+            reserved_job = reserved_store.get_coding_job("admitted-issue")
+            reserved_checklist = reserved_store.get_acceptance_checklist(
+                "admitted-issue"
+            )
+            reservation_snapshots.append(
+                (
+                    reserved_job.status,
+                    reserved_checklist.state,
+                    tuple(item.key for item in reserved_checklist.items),
+                )
+            )
         return remote
 
     monkeypatch.setattr(
@@ -1551,9 +1662,18 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
     assert f"Coding admission ready: {admission.proof_id}" in result.output
     assert "Started coding Job admitted-issue" in result.output
     assert coordinated == ["admitted-issue"]
+    assert reservation_snapshots == [
+        ("setting-up", "draft", ("goal-1", "repo-check"))
+    ]
     store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
     job = store.get_coding_job("admitted-issue")
     assert json.loads(job.metadata["admission_proof"]) == admission.record()
+    checklist = store.get_acceptance_checklist("admitted-issue")
+    assert checklist.state == "draft"
+    assert [item.verifier_command for item in checklist.items] == [
+        "uv run pytest",
+        "uv run pytest",
+    ]
     goal = store.get_job("admitted-issue").goal
     assert goal.startswith("Implement this coding task as Dorf Job admitted-issue.")
     assert "Task:\n        Issue #18: One admission proof" in goal
@@ -1561,6 +1681,21 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
     assert any(
         event.summary == f"Coding admission proved by {admission.proof_id}"
         for event in timeline
+    )
+    binding = store.get_job_binding("admitted-issue")
+    assert binding.metadata["provider_connection"] == admission.provider_connection
+    assert binding.metadata["template"] == admission.environment_config.template
+    assert binding.metadata["network"] == admission.environment_config.network
+    assert (
+        binding.metadata["root_disk_size"]
+        == admission.environment_config.root_disk_size
+    )
+    assert binding.metadata["image_fingerprint"] == admission.image_fingerprint
+    assert any(
+        command[:3] == ["incus", "init", admission.image_fingerprint]
+        and "admission-net" in command
+        and "root,size=73GiB" in command
+        for command in incus_commands
     )
     coordinator = store.get_afk_coordinator(str(repo.resolve()), 18)
     store.finish_afk_coordinator(
@@ -2097,12 +2232,18 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
     failed_job = store.get_coding_job("retry-task")
     assert failed_job is not None, first.output
     assert failed_job.status == "setup-failed"
+    admitted = store.get_acceptance_checklist("retry-task")
+    assert admitted is not None
+    assert admitted.items == ()
     assert "--resume retry-task" in first.output
     assert initial is not None
     assert initial.room.metadata["provider_connection"] == "personal-chatgpt"
     store.update_assignment_status("retry-task", "workspace-failed")
 
     DeploymentProfile(provider_connection="changed-default").save(config_home=config_home)
+    (repo / ".dorf.toml").write_text('[commands]\ncheck = "new-command"\n')
+    git(repo, "add", ".dorf.toml")
+    git(repo, "commit", "-m", "change contract after admission")
 
     second = runner.invoke(
         app,
@@ -2126,6 +2267,7 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
     assert store.get_job("retry-task").id == initial.job.id
     assert final.assignment.id == initial.assignment.id
     assert final.room.metadata["provider_connection"] == "personal-chatgpt"
+    assert store.get_acceptance_checklist("retry-task") == admitted
     assert created and recovered == ["retry-task"]
     assert clone_attempts == 2
 
@@ -2231,6 +2373,47 @@ def test_coding_reservation_is_durable_before_remote_branch_creation(tmp_path, m
         ("reservation", base_sha, "pending"),
         ("branch", "dorf/demo-task", base_sha),
     ]
+
+
+@pytest.mark.parametrize("command_name", ["check", "smoke"])
+def test_standalone_verification_command_freezes_acceptance_before_running(
+    tmp_path, monkeypatch, command_name
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".dorf.toml").write_text(
+        '[commands]\ncheck = "pytest"\nsmoke = "./smoke.sh"\n'
+    )
+    store = CodingStore.open()
+    store.create_coding_job(
+        job_name="proof",
+        status="active",
+        metadata={"target_repo": str(repo)},
+    )
+    store.record_acceptance_checklist(
+        "proof",
+        goal="Pinned goal",
+        items=(),
+    )
+    observed_states = []
+
+    def run_command(**kwargs):
+        observed_states.append(store.get_acceptance_checklist("proof").state)
+        return type("Run", (), {"exit_code": 0})()
+
+    monkeypatch.setattr(
+        "dorf.cli.get_runnable_coding_job_or_exit",
+        lambda actual_store, job_name: actual_store.get_coding_job(job_name),
+    )
+    monkeypatch.setattr("dorf.cli.run_environment_job_command", run_command)
+
+    result = CliRunner().invoke(app, [command_name, "proof"])
+
+    assert result.exit_code == 0, result.output
+    assert observed_states == ["governing"]
+    assert store.get_acceptance_checklist("proof").state == "governing"
 
 
 def test_admitted_branch_creation_rejects_target_advance_before_reservation(

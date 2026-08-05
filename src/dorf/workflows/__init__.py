@@ -15,6 +15,17 @@ from .coding_admission import (
     GitHubAuthorityApproval,
 )
 from .coding_commands import prepare_coding_repository, run_coding_job_command
+from .coding_dossier import (
+    AcceptanceResult,
+    DossierArtifact,
+    EnvironmentProvenance,
+    ProofDossier,
+    ProofEvidence,
+    acceptance_is_proven,
+    build_proof_dossier,
+    compile_acceptance_checklist,
+    render_proof_dossier,
+)
 from .coding_pulse import (
     CodingJobPulse,
     PulseActivity,
@@ -26,6 +37,8 @@ from .coding_pulse import (
     build_coding_job_pulse,
 )
 from .coding_store import (
+    AcceptanceChecklist,
+    AcceptanceItem,
     AfkCoordinator,
     CodingCommandRun,
     CodingJob,
@@ -35,6 +48,9 @@ from .coding_store import (
 )
 
 __all__ = [
+    "AcceptanceChecklist",
+    "AcceptanceItem",
+    "AcceptanceResult",
     "AfkCoordinator",
     "AdmissionFailure",
     "CodingAdmissionPreflight",
@@ -47,6 +63,8 @@ __all__ = [
     "CodingJobPulse",
     "CodingStore",
     "CodingWorkflow",
+    "DossierArtifact",
+    "EnvironmentProvenance",
     "FollowupFeedback",
     "PendingCodingAdmission",
     "PulseActivity",
@@ -55,10 +73,16 @@ __all__ = [
     "PulseLifecycle",
     "PulseRoomAvailability",
     "PulseWorkerClaim",
+    "ProofDossier",
+    "ProofEvidence",
     "WorkflowFailure",
     "WorkflowMessage",
     "WorkflowOutcome",
+    "acceptance_is_proven",
     "build_coding_job_pulse",
+    "build_proof_dossier",
+    "compile_acceptance_checklist",
     "prepare_coding_repository",
     "run_coding_job_command",
+    "render_proof_dossier",
 ]
