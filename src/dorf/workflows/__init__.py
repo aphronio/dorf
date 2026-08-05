@@ -12,6 +12,8 @@ from .coding_pulse import (
     PulseActivity,
     PulseAttention,
     PulseDelta,
+    PulseLifecycle,
+    PulseRoomAvailability,
     PulseWorkerClaim,
     build_coding_job_pulse,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "PulseActivity",
     "PulseAttention",
     "PulseDelta",
+    "PulseLifecycle",
+    "PulseRoomAvailability",
     "PulseWorkerClaim",
     "WorkflowFailure",
     "WorkflowMessage",

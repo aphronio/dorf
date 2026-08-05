@@ -702,6 +702,45 @@ def test_afk_pulse_keeps_silence_quiet_instead_of_treating_coordinator_as_progre
     assert "recorded running" in recorded_only.observed_activity.detail
 
 
+def test_afk_pulse_preserves_room_unavailability_without_infrastructure_identity(
+    tmp_path,
+) -> None:
+    store, _environment, _agent, runtime, job, binding = make_coding_job(tmp_path)
+    store.update_room_status(
+        binding.room.id,
+        "failed",
+        f"Incus VM {binding.room.provider_id} stopped",
+    )
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.room_availability.status == "unavailable"
+    assert pulse.room_availability.detail == "Incus VM Room stopped"
+    assert pulse.room_availability.source == "runtime"
+    assert pulse.room_availability.provenance == "fact"
+    assert binding.room.id not in repr(pulse)
+    assert binding.room.provider_id not in repr(pulse)
+
+
+def test_afk_pulse_interrupted_turn_requires_attention_like_runtime_wait(tmp_path) -> None:
+    store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    goal = store.list_job_inputs(job.job_name)[0]
+    turn, _created = store.admit_job_turn(goal, output_path="/tmp/interrupted.log")
+    store.prepare_job_turn(turn.id, baseline_native_turn_id=None)
+    store.start_job_turn(turn.id, "turn-interrupted")
+    store.finish_job_turn(
+        turn.id,
+        status="interrupted",
+        exit_code=130,
+        error="Detached turn was interrupted",
+    )
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.attention.state == "needs-human"
+    assert pulse.attention.reason == "Latest Job input is interrupted"
+
+
 @pytest.mark.parametrize("terminal_status", ["merged", "rejected", "abandoned"])
 def test_afk_pulse_terminal_state_overrides_stale_attention(tmp_path, terminal_status) -> None:
     store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
@@ -715,6 +754,9 @@ def test_afk_pulse_terminal_state_overrides_stale_attention(tmp_path, terminal_s
 
     assert pulse.outcome_stage == terminal_status
     assert pulse.latest_delta.summary == f"Coding outcome is {terminal_status}"
+    assert pulse.latest_delta.source == "workflow"
+    assert pulse.lifecycle.state == "open"
+    assert pulse.lifecycle.source == "runtime"
     assert pulse.attention.state == "none"
     assert pulse.attention.reason == f"Job is terminal: {terminal_status}"
 
@@ -731,6 +773,12 @@ def test_afk_pulse_ended_runtime_job_overrides_stale_active_workflow_state(tmp_p
     pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
 
     assert pulse.outcome_stage == "ended"
+    assert pulse.lifecycle.state == "ended"
+    assert pulse.lifecycle.source == "runtime"
+    assert pulse.lifecycle.provenance == "fact"
+    assert pulse.latest_delta.summary == "Job lifecycle is ended"
+    assert pulse.latest_delta.source == "runtime"
+    assert pulse.latest_delta.updated_at == pulse.lifecycle.updated_at
     assert pulse.observed_activity.status == "settled"
     assert pulse.attention.state == "none"
 

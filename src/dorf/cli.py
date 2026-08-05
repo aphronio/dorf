@@ -1396,6 +1396,15 @@ def echo_coding_job_pulse(pulse: CodingJobPulse, *, json_output: bool) -> None:
         return
     typer.echo(f"{pulse.job} · {pulse.outcome_stage}")
     typer.echo(f"goal v{pulse.goal_version}: {pulse.goal}")
+    lifecycle = pulse.lifecycle
+    typer.echo(
+        f"lifecycle [{lifecycle.source} {lifecycle.provenance}]: {lifecycle.state}"
+    )
+    room = pulse.room_availability
+    room_detail = f" ({room.detail})" if room.detail else ""
+    typer.echo(
+        f"Room availability [{room.source} {room.provenance}]: {room.status}{room_detail}"
+    )
     delta = pulse.latest_delta
     typer.echo(f"delta [{delta.source} {delta.provenance}]: {delta.summary}")
     activity = pulse.observed_activity
