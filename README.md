@@ -85,7 +85,8 @@ task from an isolated workspace through checks, review, follow-up, and a PR prop
 dorf start "Fix the checkout timeout and add a regression test"
 # Or leave an issue running unattended:
 dorf afk 42
-dorf status JOB
+dorf job inspect JOB
+dorf job inspect JOB --json  # structured outcome pulse for agents
 dorf verify JOB
 dorf publish JOB
 ```

@@ -9,6 +9,7 @@ from dorf.command_runner import shell_command
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.runtime import (
     AgentConversationInspection,
+    ArtifactInput,
     JobRuntime,
     NewJob,
     NewWorker,
@@ -19,6 +20,7 @@ from dorf.workflows import (
     CodingStore,
     CodingWorkflow,
     WorkflowFailure,
+    build_coding_job_pulse,
     run_coding_job_command,
 )
 from dorf.workflows.coding import verify_job_readiness
@@ -625,6 +627,112 @@ def test_afk_composes_the_same_job_assignment_through_ready_pr(tmp_path) -> None
     assert current.worker.name == binding.worker.name
     assert current.room.id == binding.room.id
     assert store.get_job(job.job_name).status == "open"
+
+
+def test_afk_pulse_keeps_detached_activity_when_coordinator_disappears(tmp_path) -> None:
+    store, _environment, _agent, runtime, job, binding = make_coding_job(tmp_path)
+    goal = store.list_job_inputs(job.job_name)[0]
+    turn, _created = store.admit_job_turn(goal, output_path="/tmp/implementation.log")
+    store.prepare_job_turn(turn.id, baseline_native_turn_id=None)
+    store.start_job_turn(turn.id, "turn-detached")
+    store.set_metadata_values(
+        job.job_name,
+        {"afk_stage": "implementation", "afk_outcome": "waiting for primary agent"},
+    )
+    (tmp_path / "implementation.txt").write_text("work in progress\n")
+    store.documents.append_event(
+        job.job_name,
+        event_id="report-progress",
+        source="worker",
+        provenance="claim",
+        kind="progress",
+        summary="Implementing the requested change",
+        related={"assignment": binding.assignment.id},
+        artifacts=[
+            ArtifactInput(
+                "implementation.txt",
+                tmp_path / "implementation.txt",
+                "text/plain",
+            )
+        ],
+    )
+    store.claim_afk_coordinator("example/repo", 19, "coordinator")
+    store.link_afk_job("example/repo", 19, "coordinator", job.job_name)
+    inspection = runtime.inspect(job.job_name)
+
+    before = build_coding_job_pulse(store, inspection)
+    store.finish_afk_coordinator("example/repo", 19, "coordinator", "lost")
+    after = build_coding_job_pulse(store, inspection)
+
+    assert after == before
+    assert after.job == "checkout-perf"
+    assert after.goal == "Implement checkout performance"
+    assert after.outcome_stage == "implementation"
+    assert after.observed_activity.status == "active"
+    assert after.observed_activity.claim_support == "consistent"
+    assert after.worker_claim is not None
+    assert after.worker_claim.provenance == "claim"
+    assert after.worker_claim.assignment_id == binding.assignment.id
+    assert after.evidence_count == 1
+    assert "coordinator" not in repr(after)
+
+
+def test_afk_pulse_keeps_silence_quiet_instead_of_treating_coordinator_as_progress(
+    tmp_path,
+) -> None:
+    store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    store.set_metadata_values(
+        job.job_name,
+        {"afk_stage": "implementation", "afk_outcome": "waiting for primary agent"},
+    )
+    store.claim_afk_coordinator("example/repo", 19, "coordinator")
+    store.link_afk_job("example/repo", 19, "coordinator", job.job_name)
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.observed_activity.status == "quiet"
+    assert pulse.observed_activity.detail == "No Job turn or workflow command is active"
+    assert pulse.attention.state == "quiet"
+
+    store.create_command_run(job.job_name, "check", "pytest", "/tmp/check.log")
+    recorded_only = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert recorded_only.observed_activity.status == "unconfirmed"
+    assert recorded_only.observed_activity.provenance == "fact"
+    assert "recorded running" in recorded_only.observed_activity.detail
+
+
+@pytest.mark.parametrize("terminal_status", ["merged", "rejected", "abandoned"])
+def test_afk_pulse_terminal_state_overrides_stale_attention(tmp_path, terminal_status) -> None:
+    store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    store.set_metadata_values(
+        job.job_name,
+        {"afk_stage": "needs-human", "afk_outcome": "verification needs a decision"},
+    )
+    store.update_status(job.job_name, terminal_status)
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.outcome_stage == terminal_status
+    assert pulse.latest_delta.summary == f"Coding outcome is {terminal_status}"
+    assert pulse.attention.state == "none"
+    assert pulse.attention.reason == f"Job is terminal: {terminal_status}"
+
+
+def test_afk_pulse_ended_runtime_job_overrides_stale_active_workflow_state(tmp_path) -> None:
+    store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    store.set_metadata_values(
+        job.job_name,
+        {"afk_stage": "implementation", "afk_outcome": "waiting for primary agent"},
+    )
+    cleanup = store.begin_job_end(job.job_name, interrupt=True)
+    store.finish_job_end(job.job_name, cleanup.id, interrupted=True)
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.outcome_stage == "ended"
+    assert pulse.observed_activity.status == "settled"
+    assert pulse.attention.state == "none"
 
 
 def test_verify_bounds_repeated_gate_failures_as_needs_human(tmp_path) -> None:

@@ -1295,14 +1295,22 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     )
     worker = CliRunner().invoke(app, ["worker", "inspect", "coder-abc123-demo-task"], env=env)
     job = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task"], env=env)
+    job_json = CliRunner().invoke(app, ["job", "inspect", "abc123-demo-task", "--json"], env=env)
     coding = CliRunner().invoke(app, ["status", "abc123-demo-task"], env=env)
 
-    assert result.exit_code == worker.exit_code == job.exit_code == coding.exit_code == 0
+    assert result.exit_code == worker.exit_code == job.exit_code == job_json.exit_code == 0
+    assert coding.exit_code == 0
     assert "Worker: coder-abc123-demo-task (coding-workflow, dedicated)" in result.output
     assert "Workspace: /workspace/jobs/abc123-demo-task" in result.output
     assert "provenance: coding-workflow" in worker.output
     assert "lifecycle policy: dedicated" in worker.output
     assert "goal v1: Implement this coding task as Dorf Job abc123-demo-task." in job.output
+    pulse = json.loads(job_json.output)
+    assert pulse["job"] == "abc123-demo-task"
+    assert pulse["outcome_stage"] == "active"
+    assert pulse["attention"]["state"] == "quiet"
+    assert pulse["evidence_count"] == 0
+    assert {"room", "workspace", "conversation"}.isdisjoint(pulse)
     assert "Worker provenance: coding-workflow" in coding.output
     clone_commands = [command for command in commands if "git clone" in " ".join(command)]
     assert len(clone_commands) == 1
