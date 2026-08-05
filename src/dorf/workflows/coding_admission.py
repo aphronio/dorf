@@ -88,6 +88,34 @@ ADMISSION_CHECKS = (
 
 
 @dataclass(frozen=True)
+class GitHubAuthorityApproval:
+    repository: str
+    installation_id: str
+    missing_authority: str
+    why_needed: str
+    action: str
+    scope: str
+    approve_consequence: str
+    decline_consequence: str
+    automatic_resume: str
+    url: str
+
+    def record(self) -> dict[str, str]:
+        return {
+            "action": self.action,
+            "approve_consequence": self.approve_consequence,
+            "automatic_resume": self.automatic_resume,
+            "decline_consequence": self.decline_consequence,
+            "installation_id": self.installation_id,
+            "missing_authority": self.missing_authority,
+            "repository": self.repository,
+            "scope": self.scope,
+            "url": self.url,
+            "why_needed": self.why_needed,
+        }
+
+
+@dataclass(frozen=True)
 class AdmissionFailure:
     code: str
     owner: str
@@ -95,9 +123,10 @@ class AdmissionFailure:
     repair: str
     consequence: str
     automatic_continuation: bool
+    approval: GitHubAuthorityApproval | None = None
 
     def record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "automatic_continuation": self.automatic_continuation,
             "code": self.code,
             "consequence": self.consequence,
@@ -105,6 +134,9 @@ class AdmissionFailure:
             "repair": self.repair,
             "summary": self.summary,
         }
+        if self.approval is not None:
+            record["approval"] = self.approval.record()
+        return record
 
 
 @dataclass(frozen=True)
@@ -112,15 +144,34 @@ class CodingAdmissionRequest:
     repo_path: str
     target_branch: str
     issue_number: int | None
+    command: str = "issue"
+    target_start_sha: str | None = None
+    repository: str | None = None
+    installation_id: str | None = None
     provider_connection: str | None = None
     model: str | None = None
     reasoning_effort: str | None = None
+
+    def record(self) -> dict[str, object]:
+        return {
+            "command": self.command,
+            "issue_number": self.issue_number,
+            "installation_id": self.installation_id,
+            "model": self.model,
+            "provider_connection": self.provider_connection,
+            "reasoning_effort": self.reasoning_effort,
+            "repo_path": str(Path(self.repo_path).resolve()),
+            "repository": self.repository,
+            "target_branch": self.target_branch,
+            "target_start_sha": self.target_start_sha,
+        }
 
 
 @dataclass(frozen=True)
 class CodingAdmissionProof:
     proof_id: str
     repository: str
+    installation_id: str
     issue: GitHubIssue | None
     target_branch: str
     target_start_sha: str
@@ -132,12 +183,14 @@ class CodingAdmissionProof:
     git_author: GitAuthorIdentity = field(repr=False, compare=False)
     environment_config: IncusConfig = field(repr=False, compare=False)
     installation_token: str = field(repr=False, compare=False)
+    approval_attempt_id: str | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def create(
         cls,
         *,
         repository: str,
+        installation_id: str,
         issue: GitHubIssue | None,
         target_branch: str,
         target_start_sha: str,
@@ -153,6 +206,7 @@ class CodingAdmissionProof:
         facts = {
             "checks": ADMISSION_CHECKS,
             "image_fingerprint": image_fingerprint,
+            "installation_id": installation_id,
             "issue_number": issue.number if issue is not None else None,
             "provider_connection": provider_connection,
             "repository": repository,
@@ -166,6 +220,7 @@ class CodingAdmissionProof:
         return cls(
             proof_id=proof_id,
             repository=repository,
+            installation_id=installation_id,
             issue=issue,
             target_branch=target_branch,
             target_start_sha=target_start_sha,
@@ -180,9 +235,10 @@ class CodingAdmissionProof:
         )
 
     def record(self) -> dict[str, object]:
-        return {
+        record: dict[str, object] = {
             "checks": list(ADMISSION_CHECKS),
             "image_fingerprint": self.image_fingerprint,
+            "installation_id": self.installation_id,
             "issue_number": self.issue.number if self.issue is not None else None,
             "proof_id": self.proof_id,
             "provider_connection": self.provider_connection,
@@ -191,6 +247,9 @@ class CodingAdmissionProof:
             "target_branch": self.target_branch,
             "target_start_sha": self.target_start_sha,
         }
+        if self.approval_attempt_id is not None:
+            record["approval_attempt_id"] = self.approval_attempt_id
+        return record
 
 
 @dataclass(frozen=True)
@@ -262,6 +321,7 @@ class LocalCodingAdmissionBackend:
         self.provider_connection: str | None = None
         self.image_fingerprint: str | None = None
         self.installation_token: str | None = None
+        self.installation_id: str | None = None
         self.issue: GitHubIssue | None = None
         self.target_start_sha: str | None = None
         self.reviewer = "codex"
@@ -292,6 +352,21 @@ class LocalCodingAdmissionBackend:
                     "Dorf cannot pin an unambiguous target start state.",
                 )
             )
+        if request.target_start_sha is not None:
+            current_head = _git(self.repo, "rev-parse", "HEAD")
+            if (
+                current_head.returncode != 0
+                or current_head.stdout.strip() != request.target_start_sha
+            ):
+                failures.append(
+                    _failure(
+                        "delegation-start-changed",
+                        "repository owner",
+                        "Repository HEAD changed after this delegation was pinned.",
+                        "Restore the delegated starting commit or make a new delegation.",
+                        "Automatic continuation cannot silently change the source baseline.",
+                    )
+                )
         remote = _git(self.repo, "remote", "get-url", "origin")
         repository = _parse_github_repository(remote.stdout.strip())
         if remote.returncode != 0 or not repository:
@@ -305,7 +380,19 @@ class LocalCodingAdmissionBackend:
                 )
             )
         else:
-            self.repository = repository
+            if request.repository is not None and repository != request.repository:
+                failures.append(
+                    _failure(
+                        "delegation-repository-changed",
+                        "repository owner",
+                        "Repository origin changed after this delegation was pinned.",
+                        f"Restore origin to {request.repository} or make a new delegation.",
+                        "Automatic continuation cannot retarget GitHub authority to another "
+                        "repository.",
+                    )
+                )
+            else:
+                self.repository = repository
         try:
             self.contract = load_repo_contract(self.repo)
         except (ContractValidationError, OSError) as error:
@@ -395,8 +482,26 @@ class LocalCodingAdmissionBackend:
         if self.repository is None:
             return ()
         failures: list[AdmissionFailure] = []
+        config = None
         try:
             config = load_github_app_config()
+            if (
+                request.installation_id is not None
+                and config.installation_id != request.installation_id
+            ):
+                return (
+                    _failure(
+                        "delegation-installation-changed",
+                        "GitHub App installation owner",
+                        "Configured GitHub App installation changed after this delegation "
+                        "was pinned.",
+                        f"Restore GitHub App installation {request.installation_id} or make a "
+                        "new delegation.",
+                        "A different installation cannot approve or consume this retained "
+                        "delegation.",
+                    ),
+                )
+            self.installation_id = config.installation_id
             minted = GitHubAppTokenClient().mint_installation_token(config)
             if not isinstance(minted, GitHubInstallationToken):
                 minted = GitHubInstallationToken(str(minted))
@@ -435,7 +540,43 @@ class LocalCodingAdmissionBackend:
                 )
             if request.issue_number is not None:
                 self.issue = client.get_issue(self.repository, request.issue_number)
-        except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
+        except GitHubRepositoryError as error:
+            if (
+                error.status_code == 404
+                and self.target_start_sha is None
+                and config is not None
+            ):
+                approval = _github_repository_approval(
+                    repository=self.repository,
+                    target_branch=request.target_branch,
+                    issue_number=request.issue_number,
+                    installation_id=config.installation_id,
+                    app_slug=getattr(config, "app_slug", None),
+                )
+                failures.append(
+                    AdmissionFailure(
+                        "github-repository-authority",
+                        "GitHub App installation owner",
+                        f"The Dorf GitHub App installation cannot access {self.repository}.",
+                        approval.action,
+                        approval.approve_consequence,
+                        True,
+                        approval,
+                    )
+                )
+            else:
+                failures.append(
+                    _failure(
+                        "github-authority",
+                        "GitHub App owner",
+                        str(error),
+                        "Run `dorf github setup` and grant the App this repository's required "
+                        "access.",
+                        "The exact repository, issue, branch, and publication authority are "
+                        "unproved.",
+                    )
+                )
+        except (GitHubAppConfigError, GitHubAppVerificationError) as error:
             failures.append(
                 _failure(
                     "github-authority",
@@ -657,12 +798,14 @@ class LocalCodingAdmissionBackend:
                 self.provider_connection,
                 self.image_fingerprint,
                 self.installation_token,
+                self.installation_id,
                 self.target_start_sha,
             )
         ):
             raise RuntimeError("coding admission proof is incomplete")
         return CodingAdmissionProof.create(
             repository=self.repository,
+            installation_id=self.installation_id,
             issue=self.issue,
             target_branch=request.target_branch,
             target_start_sha=self.target_start_sha,
@@ -931,6 +1074,55 @@ def _failure(
     consequence: str,
 ) -> AdmissionFailure:
     return AdmissionFailure(code, owner, summary, repair, consequence, False)
+
+
+def _github_repository_approval(
+    *,
+    repository: str,
+    target_branch: str,
+    issue_number: int | None,
+    installation_id: str,
+    app_slug: str | None,
+) -> GitHubAuthorityApproval:
+    issue = f"issue #{issue_number} and " if issue_number is not None else ""
+    installation = (
+        f"GitHub App `{app_slug}` installation {installation_id}"
+        if app_slug
+        else f"Dorf GitHub App installation {installation_id}"
+    )
+    return GitHubAuthorityApproval(
+        repository=repository,
+        installation_id=installation_id,
+        missing_authority=f"Persistent repository access for {installation} to {repository}",
+        why_needed=(
+            f"Coding admission must read {issue}{target_branch}, write the Job branch, and manage "
+            "its pull request."
+        ),
+        action=(
+            f"In GitHub settings, select {repository} for {installation} and save. This grants "
+            "that installation persistent repository-wide access with its configured permissions "
+            "until an owner changes or removes the access."
+        ),
+        scope=(
+            f"Persistent repository-wide authority on {repository} for installation "
+            f"{installation_id}: metadata read, issues read, contents write, and pull requests "
+            "write. It is not limited to this issue, branch, or delegation."
+        ),
+        approve_consequence=(
+            f"{installation} gains those configured permissions across {repository}; Dorf can "
+            "use them while that repository access remains installed."
+        ),
+        decline_consequence=(
+            f"{installation} does not gain access to {repository}; this pending delegation ends "
+            "without creating a Job, branch, Room, or pull request."
+        ),
+        automatic_resume=(
+            f"Dorf polls only installation {installation_id}. When that installation can read "
+            f"{repository}:{target_branch}, Dorf reruns exact readiness and continues this "
+            "delegation automatically; a different configured installation cannot approve it."
+        ),
+        url=f"https://github.com/settings/installations/{installation_id}",
+    )
 
 
 def _disposable_job_binding(vm: str, codex_config: CodexConfig) -> JobBinding:

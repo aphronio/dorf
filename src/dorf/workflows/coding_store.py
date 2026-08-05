@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from dorf.runtime import RuntimeStore
 
@@ -84,6 +84,19 @@ class AfkCoordinator:
 
 
 @dataclass(frozen=True)
+class PendingCodingAdmission:
+    id: str
+    status: str
+    request: dict[str, object]
+    attention: dict[str, str]
+    proof_id: str | None
+    job_name: str | None
+    expires_at: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class AcceptanceItem:
     key: str
     text: str
@@ -113,18 +126,74 @@ class CodingStore(RuntimeStore):
         job_name: str,
         metadata: dict[str, str],
         status: str = "setting-up",
+        admission_attempt_id: str | None = None,
     ) -> CodingJob:
         now = _now()
-        self._connection.execute(
-            """
-            INSERT INTO coding_jobs (
-                job_name, status, metadata,
-                github_pr_number, github_pr_url, created_at, updated_at
-            ) VALUES (?, ?, ?, NULL, NULL, ?, ?)
-            """,
-            (job_name, status, json.dumps(metadata, sort_keys=True), now, now),
-        )
-        self._connection.commit()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(now)
+            if admission_attempt_id is not None:
+                attempt = self._connection.execute(
+                    "SELECT status, request FROM coding_admissions WHERE id = ?",
+                    (admission_attempt_id,),
+                ).fetchone()
+                if attempt is None or attempt["status"] != "approved":
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission has already been consumed"
+                    )
+                try:
+                    retained_installation_id = json.loads(attempt["request"])[
+                        "installation_id"
+                    ]
+                    proof_installation_id = json.loads(
+                        metadata["admission_proof"]
+                    )["installation_id"]
+                except (KeyError, TypeError, json.JSONDecodeError) as error:
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission installation identity is missing"
+                    ) from error
+                if proof_installation_id != retained_installation_id:
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission installation identity does not match"
+                    )
+            self._connection.execute(
+                """
+                INSERT INTO coding_jobs (
+                    job_name, status, metadata,
+                    github_pr_number, github_pr_url, created_at, updated_at
+                ) VALUES (?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                (job_name, status, json.dumps(metadata, sort_keys=True), now, now),
+            )
+            if admission_attempt_id is not None:
+                proof_id = None
+                raw_proof = metadata.get("admission_proof")
+                if raw_proof is not None:
+                    try:
+                        candidate = json.loads(raw_proof).get("proof_id")
+                    except (AttributeError, json.JSONDecodeError):
+                        candidate = None
+                    if isinstance(candidate, str):
+                        proof_id = candidate
+                cursor = self._connection.execute(
+                    """
+                    UPDATE coding_admissions
+                    SET status = 'admitted', job_name = ?, proof_id = ?, updated_at = ?
+                    WHERE id = ? AND status = 'approved' AND expires_at > ?
+                    """,
+                    (job_name, proof_id, now, admission_attempt_id, now),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        "coding admission has already been consumed"
+                    )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
         created = self.get_coding_job(job_name)
         if created is None:
             raise RuntimeError("created coding Job could not be loaded")
@@ -138,14 +207,38 @@ class CodingStore(RuntimeStore):
         goal: str,
         items: tuple[AcceptanceItem, ...],
         status: str = "setting-up",
+        admission_attempt_id: str | None = None,
     ) -> CodingJob:
-        """Atomically reserve a coding Job and its explicit admission result."""
+        """Atomically reserve a coding Job, acceptance, and retained approval."""
         _validate_acceptance_items(items)
         now = _now()
         goal_digest = f"sha256:{hashlib.sha256(goal.encode()).hexdigest()}"
         encoded = json.dumps([asdict(item) for item in items], sort_keys=True)
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(now)
+            if admission_attempt_id is not None:
+                attempt = self._connection.execute(
+                    "SELECT status, request FROM coding_admissions WHERE id = ?",
+                    (admission_attempt_id,),
+                ).fetchone()
+                if attempt is None or attempt["status"] != "approved":
+                    raise RuntimeError("coding admission has already been consumed")
+                try:
+                    retained_installation_id = json.loads(attempt["request"])[
+                        "installation_id"
+                    ]
+                    proof_installation_id = json.loads(
+                        metadata["admission_proof"]
+                    )["installation_id"]
+                except (KeyError, TypeError, json.JSONDecodeError) as error:
+                    raise RuntimeError(
+                        "coding admission installation identity is missing"
+                    ) from error
+                if proof_installation_id != retained_installation_id:
+                    raise RuntimeError(
+                        "coding admission installation identity does not match"
+                    )
             self._connection.execute(
                 """
                 INSERT INTO coding_jobs (
@@ -163,6 +256,26 @@ class CodingStore(RuntimeStore):
                 """,
                 (job_name, goal_digest, encoded, now, now),
             )
+            if admission_attempt_id is not None:
+                proof_id = None
+                raw_proof = metadata.get("admission_proof")
+                if raw_proof is not None:
+                    try:
+                        candidate = json.loads(raw_proof).get("proof_id")
+                    except (AttributeError, json.JSONDecodeError):
+                        candidate = None
+                    if isinstance(candidate, str):
+                        proof_id = candidate
+                cursor = self._connection.execute(
+                    """
+                    UPDATE coding_admissions
+                    SET status = 'admitted', job_name = ?, proof_id = ?, updated_at = ?
+                    WHERE id = ? AND status = 'approved' AND expires_at > ?
+                    """,
+                    (job_name, proof_id, now, admission_attempt_id, now),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("coding admission has already been consumed")
             self._connection.commit()
         except BaseException:
             self._connection.rollback()
@@ -171,6 +284,164 @@ class CodingStore(RuntimeStore):
         if created is None:
             raise RuntimeError("created coding Job could not be loaded")
         return created
+
+    def retain_pending_coding_admission(
+        self,
+        request: dict[str, object],
+        attention: dict[str, str],
+        *,
+        ttl_seconds: int,
+    ) -> tuple[PendingCodingAdmission, bool]:
+        canonical_request = json.dumps(request, sort_keys=True, separators=(",", ":"))
+        base_attempt_id = "admission-intent-" + hashlib.sha256(
+            canonical_request.encode()
+        ).hexdigest()[:24]
+        now = datetime.now(UTC)
+        timestamp = now.isoformat(timespec="microseconds")
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat(
+            timespec="microseconds"
+        )
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            latest = self._connection.execute(
+                """
+                SELECT * FROM coding_admissions
+                WHERE request = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (canonical_request,),
+            ).fetchone()
+            if latest is not None and latest["status"] in {
+                "pending",
+                "approved",
+                "admitted",
+            }:
+                self._connection.commit()
+                return _pending_coding_admission(latest), False
+
+            generation = 1
+            attempt_id = base_attempt_id
+            while self._connection.execute(
+                "SELECT 1 FROM coding_admissions WHERE id = ?", (attempt_id,)
+            ).fetchone() is not None:
+                generation += 1
+                attempt_id = f"{base_attempt_id}-{generation}"
+            self._connection.execute(
+                """
+                INSERT INTO coding_admissions (
+                    id, status, request, attention, proof_id, job_name,
+                    expires_at, created_at, updated_at
+                ) VALUES (?, 'pending', ?, ?, NULL, NULL, ?, ?, ?)
+                """,
+                (
+                    attempt_id,
+                    canonical_request,
+                    json.dumps(attention, sort_keys=True),
+                    expires_at,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        attempt = self.get_coding_admission(attempt_id)
+        if attempt is None:
+            raise RuntimeError("retained coding admission could not be loaded")
+        return attempt, True
+
+    def get_coding_admission(self, attempt_id: str) -> PendingCodingAdmission | None:
+        row = self._connection.execute(
+            "SELECT * FROM coding_admissions WHERE id = ?", (attempt_id,)
+        ).fetchone()
+        return _pending_coding_admission(row) if row is not None else None
+
+    def get_coding_admission_for_request(
+        self, request: dict[str, object]
+    ) -> PendingCodingAdmission | None:
+        """Expire stale intents, then match the latest with a discovery-time wildcard."""
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            rows = self._connection.execute(
+                "SELECT * FROM coding_admissions ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        for row in rows:
+            retained = _pending_coding_admission(row)
+            if all(
+                key in {"repository", "installation_id"} and value is None
+                or retained.request.get(key) == value
+                for key, value in request.items()
+            ):
+                return retained
+        return None
+
+    def list_coding_admissions(self) -> list[PendingCodingAdmission]:
+        rows = self._connection.execute(
+            "SELECT * FROM coding_admissions ORDER BY created_at, id"
+        ).fetchall()
+        return [_pending_coding_admission(row) for row in rows]
+
+    def approve_coding_admission(self, attempt_id: str) -> bool:
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            cursor = self._connection.execute(
+                """
+                UPDATE coding_admissions
+                SET status = 'approved', updated_at = ?
+                WHERE id = ? AND status = 'pending' AND expires_at > ?
+                """,
+                (timestamp, attempt_id, timestamp),
+            )
+            current = self._connection.execute(
+                "SELECT status FROM coding_admissions WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        return cursor.rowcount == 1 or (
+            current is not None and current["status"] in {"approved", "admitted"}
+        )
+
+    def end_pending_coding_admission(self, attempt_id: str, outcome: str) -> bool:
+        if outcome not in {"declined", "expired"}:
+            raise ValueError(f"Unsupported coding admission outcome: {outcome}")
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            cursor = self._connection.execute(
+                """
+                UPDATE coding_admissions SET status = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (outcome, timestamp, attempt_id),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        return cursor.rowcount == 1
+
+    def _expire_coding_admissions(self, timestamp: str) -> None:
+        self._connection.execute(
+            """
+            UPDATE coding_admissions SET status = 'expired', updated_at = ?
+            WHERE status IN ('pending', 'approved') AND expires_at <= ?
+            """,
+            (timestamp, timestamp),
+        )
 
     def get_coding_job(self, job_name: str) -> CodingJob | None:
         row = self._connection.execute(
@@ -685,6 +956,21 @@ class CodingStore(RuntimeStore):
         )
         self._connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS coding_admissions (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                request TEXT NOT NULL,
+                attention TEXT NOT NULL,
+                proof_id TEXT,
+                job_name TEXT,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        self._connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS coding_acceptance_checklists (
                 job_name TEXT PRIMARY KEY,
                 goal_digest TEXT NOT NULL,
@@ -736,6 +1022,20 @@ def _followup_feedback(row) -> FollowupFeedback:
         comment_id=row["comment_id"],
         status=row["status"],
         commit_sha=row["commit_sha"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _pending_coding_admission(row) -> PendingCodingAdmission:
+    return PendingCodingAdmission(
+        id=row["id"],
+        status=row["status"],
+        request=json.loads(row["request"]),
+        attention=json.loads(row["attention"]),
+        proof_id=row["proof_id"],
+        job_name=row["job_name"],
+        expires_at=row["expires_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

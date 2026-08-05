@@ -69,7 +69,9 @@ class GitHubAppManifestFlowError(RuntimeError):
 
 
 class GitHubRepositoryError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @contextmanager
@@ -444,7 +446,8 @@ class GitHubRepositoryClient:
         except urllib.error.HTTPError as error:
             body_text = error.read().decode("utf-8", errors="replace")
             raise GitHubRepositoryError(
-                f"GitHub repository request failed: HTTP {error.code}: {body_text}"
+                f"GitHub repository request failed: HTTP {error.code}: {body_text}",
+                status_code=error.code,
             ) from error
         except OSError as error:
             raise GitHubRepositoryError(f"GitHub repository request failed: {error}") from error

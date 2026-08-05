@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import urllib.error
+
 import pytest
 
 from dorf.github_app import (
@@ -85,6 +88,29 @@ def test_repository_client_get_issue_rejects_pull_request_payload(monkeypatch) -
 
     with pytest.raises(GitHubRepositoryError, match="#62 is a pull request, not an issue"):
         client.get_issue("example/repo", 62)
+
+
+def test_repository_client_retains_http_status_for_authority_classification(
+    monkeypatch,
+) -> None:
+    error = urllib.error.HTTPError(
+        "https://api.github.com/repos/example/repo/git/ref/heads/main",
+        404,
+        "Not Found",
+        {},
+        io.BytesIO(b'{"message":"Not Found"}'),
+    )
+    monkeypatch.setattr(
+        "dorf.github_app.urllib.request.urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(GitHubRepositoryError) as raised:
+        GitHubRepositoryClient("installation-token").get_branch_sha(
+            "example/repo", "main"
+        )
+
+    assert raised.value.status_code == 404
 
 
 def test_manifest_requests_read_access_to_issues() -> None:
