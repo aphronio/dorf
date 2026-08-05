@@ -16,15 +16,15 @@ Return actionable findings if any.
 """
 
 [review.agents.codex]
-enabled = false
-command = "codex exec -s read-only -c model='\"gpt-5.6-sol\"' -c model_reasoning_effort='\"high\"' {dorf_review_prompt} 2>/dev/null"
+enabled = true
+command = "codex exec -s read-only -c model='\"gpt-5.6-sol\"' -c model_reasoning_effort='\"high\"' {dorf_review_prompt}"
 
 [review.agents.droid]
-enabled = true
+enabled = false
 command = "droid exec --auto high --model kimi-k2.7-code --reasoning-effort high {dorf_review_prompt}"
 
 [incus]
-template = "dorf-codex-droid-authenticated-local"
+template = "dorf-codex"
 
 [env]
 PATH = { source = "host.PATH" }

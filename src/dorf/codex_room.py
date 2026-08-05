@@ -123,10 +123,11 @@ class CodexRoomEnvironment:
         *,
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
+        provider_route: bool = False,
     ) -> list[str]:
         return self._environment.process_command(
             binding,
-            self._room_argv(argv),
+            self._provider_route_argv(argv) if provider_route else self._room_argv(argv),
             cwd=cwd,
             env=env,
         )
@@ -217,6 +218,14 @@ class CodexRoomEnvironment:
             f'export {CODEX_ROUTE_ENV_KEY}; exec codex "$@"'
         )
         return ["bash", "-lc", script, "dorf-codex", *argv[1:]]
+
+    @staticmethod
+    def _provider_route_argv(argv: list[str]) -> list[str]:
+        script = (
+            f"IFS= read -r {CODEX_ROUTE_ENV_KEY} < {CODEX_ROUTE_CREDENTIAL_PATH}; "
+            f"export {CODEX_ROUTE_ENV_KEY}; exec \"$@\""
+        )
+        return ["bash", "-lc", script, "dorf-provider-route", *argv]
 
 
 def new_codex_room_environment(

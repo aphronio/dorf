@@ -369,6 +369,23 @@ def test_review_commands_all_use_current_assignment_workspace(tmp_path) -> None:
     assert len(environment.processes) == 2
     assert all(item[0] == binding for item in environment.processes)
     assert all(item[2]["cwd"] == binding.workspace for item in environment.processes)
+    assert environment.processes[0][2]["provider_route"] is False
+    assert environment.processes[1][2]["provider_route"] is True
+
+
+def test_check_command_does_not_receive_provider_route_credential(tmp_path) -> None:
+    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
+
+    run_coding_job_command(
+        store,
+        environment,
+        job,
+        binding,
+        RepoContract(mode="configured", commands={"check": "env"}, env={}),
+        shell_command("check", "env"),
+    )
+
+    assert environment.processes[-1][2]["provider_route"] is False
 
 
 def test_followup_without_new_feedback_reads_current_assignment_and_keeps_job_open(
