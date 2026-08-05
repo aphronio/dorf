@@ -20,6 +20,7 @@ from dorf.workflows import (
     CodingAdmissionRequest,
 )
 from dorf.workflows.coding_admission import (
+    ADMISSION_WORKSPACE,
     LocalCodingAdmissionBackend,
     _missing_app_permissions,
 )
@@ -312,6 +313,7 @@ def test_platform_check_reports_invalid_incus_bridge_as_provider_route_failure(
 class DisposableProbe:
     def __init__(self, *, instance_exists: bool = False) -> None:
         self.commands: list[list[str]] = []
+        self.invocations: list[tuple[list[str], str | None, float | None]] = []
         self.instance_exists = instance_exists
 
     def which(self, command: str) -> str | None:
@@ -319,6 +321,7 @@ class DisposableProbe:
 
     def run(self, argv, *, input=None, timeout_seconds=None):
         self.commands.append(argv)
+        self.invocations.append((argv, input, timeout_seconds))
         if argv[:2] == ["incus", "info"]:
             return subprocess.CompletedProcess(
                 argv,
@@ -446,6 +449,24 @@ def test_local_consumer_proof_uses_app_server_and_one_disposable_vm(
     assert any("git push --dry-run" in command for command in joined)
     assert sum("codex exec" in command for command in joined) == 1
     assert any("DORF_ADMISSION_READY_" in command for command in joined)
+    reviewer_invocation = next(
+        invocation
+        for invocation in probe.invocations
+        if "codex exec" in " ".join(invocation[0])
+    )
+    assert reviewer_invocation[1:] == ("", 180)
+    repository_commands = [
+        invocation
+        for invocation in probe.invocations
+        if "--cwd" in invocation[0]
+        and ADMISSION_WORKSPACE in invocation[0]
+        and (
+            invocation[0][-2:] == ["-lc", "true"]
+            or "git push --dry-run" in " ".join(invocation[0])
+        )
+    ]
+    assert len(repository_commands) == 3
+    assert all(input == "" for _, input, _ in repository_commands)
     assert [call[0] for call in driver_calls] == ["driver", "prepare", "turn"]
     _, binding, turn, timeout_seconds = driver_calls[-1]
     assert binding.environment_id.startswith("dorf-coding-admission-")

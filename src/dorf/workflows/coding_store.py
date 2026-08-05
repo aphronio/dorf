@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 from dorf.runtime import RuntimeStore
@@ -81,6 +83,27 @@ class AfkCoordinator:
     status: str
 
 
+@dataclass(frozen=True)
+class AcceptanceItem:
+    key: str
+    text: str
+    source: str
+    verifier: str
+    verifier_ref: str
+    verifier_command: str = ""
+
+
+@dataclass(frozen=True)
+class AcceptanceChecklist:
+    job_name: str
+    goal_digest: str
+    items: tuple[AcceptanceItem, ...]
+    state: str
+    revision: int
+    created_at: str
+    updated_at: str
+
+
 class CodingStore(RuntimeStore):
     """Keep workflow policy separate from runtime resource authority."""
 
@@ -102,6 +125,48 @@ class CodingStore(RuntimeStore):
             (job_name, status, json.dumps(metadata, sort_keys=True), now, now),
         )
         self._connection.commit()
+        created = self.get_coding_job(job_name)
+        if created is None:
+            raise RuntimeError("created coding Job could not be loaded")
+        return created
+
+    def create_coding_job_with_acceptance(
+        self,
+        *,
+        job_name: str,
+        metadata: dict[str, str],
+        goal: str,
+        items: tuple[AcceptanceItem, ...],
+        status: str = "setting-up",
+    ) -> CodingJob:
+        """Atomically reserve a coding Job and its explicit admission result."""
+        _validate_acceptance_items(items)
+        now = _now()
+        goal_digest = f"sha256:{hashlib.sha256(goal.encode()).hexdigest()}"
+        encoded = json.dumps([asdict(item) for item in items], sort_keys=True)
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(
+                """
+                INSERT INTO coding_jobs (
+                    job_name, status, metadata,
+                    github_pr_number, github_pr_url, created_at, updated_at
+                ) VALUES (?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                (job_name, status, json.dumps(metadata, sort_keys=True), now, now),
+            )
+            self._connection.execute(
+                """
+                INSERT INTO coding_acceptance_checklists (
+                    job_name, goal_digest, items, state, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, 'draft', 1, ?, ?)
+                """,
+                (job_name, goal_digest, encoded, now, now),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
         created = self.get_coding_job(job_name)
         if created is None:
             raise RuntimeError("created coding Job could not be loaded")
@@ -181,6 +246,93 @@ class CodingStore(RuntimeStore):
         self._connection.commit()
         if cursor.rowcount != 1:
             raise RuntimeError(f"Coding Job not found: {job_name}")
+
+    def record_acceptance_checklist(
+        self,
+        job_name: str,
+        *,
+        goal: str,
+        items: tuple[AcceptanceItem, ...],
+    ) -> AcceptanceChecklist:
+        """Pin one admission checklist idempotently before implementation starts."""
+        _validate_acceptance_items(items)
+        now = _now()
+        goal_digest = f"sha256:{hashlib.sha256(goal.encode()).hexdigest()}"
+        encoded = json.dumps([asdict(item) for item in items], sort_keys=True)
+        try:
+            self._connection.execute(
+                """
+                INSERT INTO coding_acceptance_checklists (
+                    job_name, goal_digest, items, state, revision, created_at, updated_at
+                ) VALUES (?, ?, ?, 'draft', 1, ?, ?)
+                """,
+                (job_name, goal_digest, encoded, now, now),
+            )
+            self._connection.commit()
+        except sqlite3.IntegrityError:
+            self._connection.rollback()
+            existing = self.get_acceptance_checklist(job_name)
+            if (
+                existing is None
+                or existing.goal_digest != goal_digest
+                or existing.items != items
+            ):
+                raise
+            return existing
+        recorded = self.get_acceptance_checklist(job_name)
+        if recorded is None:
+            raise RuntimeError("recorded acceptance checklist could not be loaded")
+        return recorded
+
+    def get_acceptance_checklist(self, job_name: str) -> AcceptanceChecklist | None:
+        row = self._connection.execute(
+            "SELECT * FROM coding_acceptance_checklists WHERE job_name = ?", (job_name,)
+        ).fetchone()
+        return _acceptance_checklist(row) if row is not None else None
+
+    def replace_acceptance_checklist(
+        self,
+        job_name: str,
+        items: tuple[AcceptanceItem, ...],
+    ) -> AcceptanceChecklist:
+        """Apply a human correction while the admitted checklist is still a draft."""
+        _validate_acceptance_items(items)
+        encoded = json.dumps([asdict(item) for item in items], sort_keys=True)
+        cursor = self._connection.execute(
+            """
+            UPDATE coding_acceptance_checklists
+            SET items = ?, revision = revision + 1, updated_at = ?
+            WHERE job_name = ? AND state = 'draft'
+            """,
+            (encoded, _now(), job_name),
+        )
+        self._connection.commit()
+        if cursor.rowcount != 1:
+            existing = self.get_acceptance_checklist(job_name)
+            if existing is None:
+                raise RuntimeError(f"Acceptance checklist not found: {job_name}")
+            raise RuntimeError(f"Acceptance checklist already governs completion: {job_name}")
+        updated = self.get_acceptance_checklist(job_name)
+        if updated is None:
+            raise RuntimeError("updated acceptance checklist could not be loaded")
+        return updated
+
+    def freeze_acceptance_checklist(self, job_name: str) -> AcceptanceChecklist:
+        """Make the corrected admission checklist govern verification completion."""
+        cursor = self._connection.execute(
+            """
+            UPDATE coding_acceptance_checklists SET state = 'governing', updated_at = ?
+            WHERE job_name = ? AND state = 'draft'
+            """,
+            (_now(), job_name),
+        )
+        self._connection.commit()
+        checklist = self.get_acceptance_checklist(job_name)
+        if checklist is None:
+            raise RuntimeError(f"Acceptance checklist not found: {job_name}")
+        if cursor.rowcount not in {0, 1} or checklist.state != "governing":
+            raise RuntimeError(f"Could not freeze acceptance checklist: {job_name}")
+        return checklist
 
     def create_command_run(
         self,
@@ -291,7 +443,8 @@ class CodingStore(RuntimeStore):
             UPDATE coding_command_runs
             SET status = 'interrupted', exit_code = 130, finished_at = ?
             WHERE job_name = ? AND status = 'running'
-              AND (kind = 'afk' OR kind = 'check' OR kind LIKE 'review:%')
+              AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke'
+                   OR kind LIKE 'review:%')
             RETURNING id
             """,
             (_now(), job_name),
@@ -530,6 +683,19 @@ class CodingStore(RuntimeStore):
             )
             """
         )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS coding_acceptance_checklists (
+                job_name TEXT PRIMARY KEY,
+                goal_digest TEXT NOT NULL,
+                items TEXT NOT NULL,
+                state TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         self._connection.commit()
 
 
@@ -573,6 +739,35 @@ def _followup_feedback(row) -> FollowupFeedback:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _acceptance_checklist(row) -> AcceptanceChecklist:
+    return AcceptanceChecklist(
+        job_name=row["job_name"],
+        goal_digest=row["goal_digest"],
+        items=tuple(AcceptanceItem(**item) for item in json.loads(row["items"])),
+        state=row["state"],
+        revision=row["revision"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _validate_acceptance_items(items: tuple[AcceptanceItem, ...]) -> None:
+    keys = [item.key for item in items]
+    if len(keys) != len(set(keys)):
+        raise ValueError("Acceptance item keys must be unique")
+    for item in items:
+        if not item.key or not item.text.strip():
+            raise ValueError("Acceptance items require a key and text")
+        if item.source not in {"goal", "issue", "contract", "human"}:
+            raise ValueError(f"Unsupported acceptance source: {item.source}")
+        if item.verifier not in {"command", "review", "manual"}:
+            raise ValueError(f"Unsupported acceptance verifier: {item.verifier}")
+        if item.verifier in {"command", "review"} and not item.verifier_command:
+            raise ValueError(
+                f"{item.verifier.title()} acceptance items require an exact pinned command"
+            )
 
 
 def _now() -> str:

@@ -17,13 +17,14 @@ from dorf.runtime import (
     WorkerTurnOutcome,
 )
 from dorf.workflows import (
+    AcceptanceItem,
     CodingStore,
     CodingWorkflow,
     WorkflowFailure,
     build_coding_job_pulse,
     run_coding_job_command,
 )
-from dorf.workflows.coding import verify_job_readiness
+from dorf.workflows.coding import review_command_with_dorf_protocol, verify_job_readiness
 from dorf.workflows.coding_commands import prepare_coding_repository
 
 
@@ -415,6 +416,11 @@ def test_review_harness_controls_provider_route_capability_not_agent_name(tmp_pa
             }
         ),
     )
+    store.record_acceptance_checklist(
+        job.job_name,
+        goal=binding.job.goal,
+        items=(AcceptanceItem("manual", "Human check", "human", "manual", ""),),
+    )
 
     workflow(store, environment, runtime, job, GitHubClient(), contract=contract).review()
 
@@ -423,6 +429,7 @@ def test_review_harness_controls_provider_route_capability_not_agent_name(tmp_pa
     assert all(item[2]["cwd"] == binding.workspace for item in environment.processes)
     assert environment.processes[0][2]["provider_route"] is True
     assert environment.processes[1][2]["provider_route"] is False
+    assert store.get_acceptance_checklist(job.job_name).state == "governing"
 
 
 def test_check_command_does_not_receive_provider_route_credential(tmp_path) -> None:
@@ -498,6 +505,101 @@ def test_verify_publishes_ready_pr_without_ending_job_or_worker(tmp_path) -> Non
     assert store.get_coding_job("checkout-perf").github_pr_number == 42
     assert store.get_job("checkout-perf").status == "open"
     assert store.get_worker("coder-checkout-perf").status == "assigned"
+
+
+def test_verify_freezes_and_requires_commit_pinned_acceptance_before_ready(tmp_path) -> None:
+    clean = "DORF_REVIEW_NO_FINDINGS"
+    store, environment, _agent, runtime, job, binding = make_coding_job(
+        tmp_path, review_outputs=[clean]
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={"check": "true", "smoke": "true"},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"droid": ReviewAgent("droid", "reviewer {dorf_review_prompt}")},
+        ),
+    )
+    review_command = review_command_with_dorf_protocol(
+        contract.review.agents["droid"].command,
+        contract.review.prompt,
+        job=job,
+    )
+    store.record_acceptance_checklist(
+        job.job_name,
+        goal=binding.job.goal,
+        items=(
+            AcceptanceItem(
+                "issue-1",
+                "Behavior is correct",
+                "issue",
+                "review",
+                "droid",
+                review_command,
+            ),
+            AcceptanceItem(
+                "repo-check", "Checks pass", "contract", "command", "check", "true"
+            ),
+            AcceptanceItem(
+                "repo-smoke", "Smoke passes", "contract", "command", "smoke", "true"
+            ),
+        ),
+    )
+    github = GitHubClient()
+
+    workflow(store, environment, runtime, job, github, contract=contract).verify()
+
+    accepted = store.get_acceptance_checklist(job.job_name)
+    ready = store.get_coding_job(job.job_name)
+    assert accepted.state == "governing"
+    assert ready.status == "ready"
+    assert ready.metadata["proof_commit"] == "b" * 40
+    assert {run.kind for run in store.list_command_runs(job.job_name)} >= {
+        "check",
+        "smoke",
+        "review:droid",
+    }
+    assert "# Dorf proof dossier · checkout-perf" in github.comments[0]
+    assert "## Acceptance status" in github.comments[0]
+    assert "`bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`" in github.comments[0]
+    assert any(
+        event.kind == "review-verdict"
+        and event.related.get("verdict") == "no-findings"
+        for event in store.documents.list_events(job.job_name)
+    )
+
+
+def test_mark_ready_freezes_acceptance_before_a_failed_readiness_attempt(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    store.record_acceptance_checklist(
+        job.job_name,
+        goal="Pinned goal",
+        items=(AcceptanceItem("manual", "Human check", "human", "manual", ""),),
+    )
+    original_execute = environment.execute
+
+    def execute(binding, argv, **kwargs):
+        if argv == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(argv, 0, "dirty.txt\n", "")
+        return original_execute(binding, argv, **kwargs)
+
+    environment.execute = execute
+
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, GitHubClient()).mark_ready()
+
+    assert store.get_acceptance_checklist(job.job_name).state == "governing"
+
+
+def test_afk_takeover_interrupts_an_abandoned_smoke_run(tmp_path) -> None:
+    store, _environment, _agent, _runtime, job, _binding = make_coding_job(tmp_path)
+    run = store.create_command_run(job.job_name, "smoke", "smoke-command", "")
+
+    interrupted = store.interrupt_abandoned_afk_runs(job.job_name)
+
+    assert [item.id for item in interrupted] == [run.id]
+    assert store.get_command_run(run.id).status == "interrupted"
 
 
 def test_verify_reports_unrecovered_job_turn_without_accessing_session_fields(tmp_path) -> None:
