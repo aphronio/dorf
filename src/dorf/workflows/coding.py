@@ -534,7 +534,7 @@ class CodingWorkflow:
                             job=self.job,
                         ),
                         timeout_seconds=self.contract.review.timeout_seconds,
-                        requires_provider_route=name == "codex",
+                        requires_provider_route=reviewer_uses_codex_harness(agent.command),
                     )
                 )
             except CommandInterrupted:
@@ -621,7 +621,7 @@ class CodingWorkflow:
                         job=self.job,
                     ),
                     timeout_seconds=self.contract.review.timeout_seconds,
-                    requires_provider_route=name == "codex",
+                    requires_provider_route=reviewer_uses_codex_harness(agent.command),
                 )
             )
             payload["review_runs"].append(
@@ -1390,6 +1390,15 @@ def review_command_with_dorf_protocol(
     ]
     rendered_prompt = shlex.quote(chr(10).join(prompt_parts))
     return command.replace(REVIEW_PROMPT_PLACEHOLDER, rendered_prompt)
+
+
+def reviewer_uses_codex_harness(command: str) -> bool:
+    """Recognize the one supported shell-launched reviewer that needs the Room route."""
+    try:
+        argv = shlex.split(command)
+    except ValueError:
+        return False
+    return argv[:2] == ["codex", "exec"]
 
 
 def render_review_prompt(prompt: str, job: CodingJob) -> str:

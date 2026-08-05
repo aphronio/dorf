@@ -113,7 +113,7 @@ class Environment:
 
     def process_command(self, binding, argv, **kwargs):
         self.processes.append((binding, argv, kwargs))
-        if argv[-1].startswith("reviewer "):
+        if argv[-1].startswith(("reviewer ", "codex exec ")):
             output = next(self.review_outputs)
             return ["bash", "-lc", f"printf '%s' {output!r}"]
         if argv[-1] == "false":
@@ -347,7 +347,7 @@ def test_readiness_refreshes_credentials_on_current_assignment_and_retries_push(
     assert pushes == 2
 
 
-def test_review_commands_all_use_current_assignment_workspace(tmp_path) -> None:
+def test_review_harness_controls_provider_route_capability_not_agent_name(tmp_path) -> None:
     store, environment, _agent, runtime, job, binding = make_coding_job(
         tmp_path,
         review_outputs=["first", "second"],
@@ -358,7 +358,7 @@ def test_review_commands_all_use_current_assignment_workspace(tmp_path) -> None:
         env={},
         review=ReviewConfig(
             agents={
-                "droid": ReviewAgent("droid", "reviewer {dorf_review_prompt}"),
+                "secondary": ReviewAgent("secondary", "codex exec {dorf_review_prompt}"),
                 "codex": ReviewAgent("codex", "reviewer {dorf_review_prompt}"),
             }
         ),
@@ -369,8 +369,8 @@ def test_review_commands_all_use_current_assignment_workspace(tmp_path) -> None:
     assert len(environment.processes) == 2
     assert all(item[0] == binding for item in environment.processes)
     assert all(item[2]["cwd"] == binding.workspace for item in environment.processes)
-    assert environment.processes[0][2]["provider_route"] is False
-    assert environment.processes[1][2]["provider_route"] is True
+    assert environment.processes[0][2]["provider_route"] is True
+    assert environment.processes[1][2]["provider_route"] is False
 
 
 def test_check_command_does_not_receive_provider_route_credential(tmp_path) -> None:
