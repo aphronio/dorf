@@ -182,7 +182,12 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
     assert "apt-get purge -y npm" in provision_script
     assert "git" in provision_script
-    assert "astral.sh/uv" in provision_script
+    assert "astral.sh/uv/install.sh" not in provision_script
+    assert "uv-x86_64-unknown-linux-gnu.tar.gz" in provision_script
+    assert "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb" in (
+        provision_script
+    )
+    assert "sha256sum --check --strict" in provision_script
     assert "npm_integrity" in provision_script
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script

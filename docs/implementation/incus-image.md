@@ -17,7 +17,9 @@ The build and provisioning scripts are the source of truth for the base fingerpr
 harness and tools, selected Codex release, and credential checks. `IMAGE_ALIAS` changes the local
 published alias. The builder resolves the configured Ubuntu VM alias to an immutable fingerprint
 before launching it and records the exact Codex version, npm package integrity, Git, Node, and uv
-versions, and base fingerprint.
+versions, the verified uv release-archive digest, and base fingerprint. Tool installation uses a
+pinned x86_64 uv release archive whose published SHA-256 is verified before installation; it does
+not execute a mutable network installer.
 
 ## Candidate and release pipeline
 

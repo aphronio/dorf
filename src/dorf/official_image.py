@@ -403,6 +403,16 @@ def _parse_manifest(
         raise OfficialImageError(
             "Official image manifest must identify the complete coding workstation tools"
         )
+    tool_integrity = data.get("tool_integrity")
+    uv_integrity = tool_integrity.get("uv") if isinstance(tool_integrity, dict) else None
+    if (
+        not isinstance(uv_integrity, str)
+        or not uv_integrity.startswith("sha256:")
+        or not _SHA256_PATTERN.fullmatch(uv_integrity.removeprefix("sha256:"))
+    ):
+        raise OfficialImageError(
+            "Official image manifest must identify verified uv archive integrity"
+        )
     source_commit = data.get("source_commit")
     if not isinstance(source_commit, str) or not _COMMIT_PATTERN.fullmatch(source_commit):
         raise OfficialImageError("Official image manifest source commit is invalid")

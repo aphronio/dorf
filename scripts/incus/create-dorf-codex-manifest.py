@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHA256_INTEGRITY_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def main() -> None:
@@ -37,6 +38,7 @@ def main() -> None:
     codex_version = metadata.get("version")
     npm_integrity = metadata.get("npm_integrity")
     tools = metadata.get("tools")
+    tool_integrity = metadata.get("tool_integrity")
     if not isinstance(codex_version, str) or not codex_version:
         parser.error("image metadata has no Codex version")
     if not isinstance(npm_integrity, str) or not npm_integrity.startswith("sha512-"):
@@ -46,6 +48,12 @@ def main() -> None:
         for name in ("git", "node", "uv")
     ):
         parser.error("image metadata has no complete coding tool inventory")
+    if (
+        not isinstance(tool_integrity, dict)
+        or not isinstance(tool_integrity.get("uv"), str)
+        or not SHA256_INTEGRITY_PATTERN.fullmatch(tool_integrity["uv"])
+    ):
+        parser.error("image metadata has no verified uv archive integrity")
 
     archive_digest = hashlib.sha256()
     with args.archive.open("rb") as archive_file:
@@ -69,6 +77,7 @@ def main() -> None:
             "npm_integrity": npm_integrity,
         },
         "tools": {name: tools[name] for name in ("git", "node", "uv")},
+        "tool_integrity": {"uv": tool_integrity["uv"]},
         "source_commit": args.source_commit,
         "validated_at": args.validated_at,
     }

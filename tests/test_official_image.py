@@ -91,6 +91,7 @@ def release_fixture(
     image_fingerprint: str | None = None,
     schema_version: int = 3,
     tools: dict[str, str] | None = None,
+    uv_integrity: str = "sha256:" + "b" * 64,
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
     tag = "v0.1.1"
@@ -117,6 +118,7 @@ def release_fixture(
             "tools": tools
             if tools is not None
             else {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
+            "tool_integrity": {"uv": uv_integrity},
             "source_commit": "a" * 40,
             "validated_at": "2026-07-31T08:30:00Z",
         },
@@ -285,6 +287,7 @@ def test_installer_rejects_untrusted_release_metadata(
         ({"schema_version": 2}, "schema_version must be 3"),
         ({"tools": {"git": "2.43.0", "node": "v18.19.1"}}, "workstation tools"),
         ({"tools": {"git": "", "node": "v18.19.1", "uv": "0.8.3"}}, "workstation tools"),
+        ({"uv_integrity": "sha256:unverified"}, "uv archive integrity"),
     ],
 )
 def test_installer_rejects_images_without_the_coding_workstation_capability(
@@ -331,6 +334,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
                 "version": "0.150.0",
                 "npm_integrity": "sha512-published-package",
                 "tools": {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
+                "tool_integrity": {"uv": "sha256:" + "b" * 64},
             }
         )
     )
@@ -378,3 +382,4 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
         "node": "v18.19.1",
         "uv": "0.8.3",
     }
+    assert manifest["tool_integrity"] == {"uv": "sha256:" + "b" * 64}
