@@ -144,8 +144,8 @@ from dorf.workflows import (
     CodingWorkflow,
     WorkflowFailure,
     WorkflowOutcome,
-    prepare_coding_repository,
     build_coding_job_pulse,
+    prepare_coding_repository,
     run_coding_job_command,
 )
 
@@ -1395,7 +1395,7 @@ def echo_coding_job_pulse(pulse: CodingJobPulse, *, json_output: bool) -> None:
         typer.echo(json.dumps(asdict(pulse), sort_keys=True))
         return
     typer.echo(f"{pulse.job} · {pulse.outcome_stage}")
-    typer.echo(f"goal v{pulse.goal_version}: {pulse.goal}")
+    typer.echo(f"goal v{pulse.goal_version}: {pulse.goal_summary}")
     lifecycle = pulse.lifecycle
     typer.echo(
         f"lifecycle [{lifecycle.source} {lifecycle.provenance}]: {lifecycle.state}"

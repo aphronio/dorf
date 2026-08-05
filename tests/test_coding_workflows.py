@@ -741,6 +741,23 @@ def test_afk_pulse_interrupted_turn_requires_attention_like_runtime_wait(tmp_pat
     assert pulse.attention.reason == "Latest Job input is interrupted"
 
 
+def test_afk_pulse_ready_outcome_supersedes_later_stale_needs_human_marker(tmp_path) -> None:
+    store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    store.update_status(job.job_name, "ready")
+    store.set_metadata_values(
+        job.job_name,
+        {"afk_stage": "needs-human", "afk_outcome": "verify requires human"},
+    )
+
+    pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
+
+    assert pulse.outcome_stage == "ready"
+    assert pulse.attention.state == "quiet"
+    assert pulse.latest_delta.summary == "Coding outcome is ready"
+    assert pulse.latest_delta.source == "workflow"
+    assert pulse.latest_delta.provenance == "fact"
+
+
 @pytest.mark.parametrize("terminal_status", ["merged", "rejected", "abandoned"])
 def test_afk_pulse_terminal_state_overrides_stale_attention(tmp_path, terminal_status) -> None:
     store, _environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)

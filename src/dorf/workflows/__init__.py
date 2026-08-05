@@ -42,7 +42,7 @@ __all__ = [
     "WorkflowFailure",
     "WorkflowMessage",
     "WorkflowOutcome",
-    "prepare_coding_repository",
     "build_coding_job_pulse",
+    "prepare_coding_repository",
     "run_coding_job_command",
 ]

@@ -1304,9 +1304,12 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     assert "Workspace: /workspace/jobs/abc123-demo-task" in result.output
     assert "provenance: coding-workflow" in worker.output
     assert "lifecycle policy: dedicated" in worker.output
-    assert "goal v1: Implement this coding task as Dorf Job abc123-demo-task." in job.output
+    assert "goal v1: Demo task" in job.output
+    assert "Working rules:" not in job.output
     pulse = json.loads(job_json.output)
     assert pulse["job"] == "abc123-demo-task"
+    assert pulse["goal_summary"] == "Demo task"
+    assert "Working rules:" in pulse["goal"]
     assert pulse["outcome_stage"] == "active"
     assert pulse["lifecycle"]["state"] == "open"
     assert pulse["lifecycle"]["source"] == "runtime"

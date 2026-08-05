@@ -9,6 +9,8 @@ from dorf.runtime import JobInspection, TimelineEvent
 from .coding import AFK_TERMINAL_JOB_STATUSES
 from .coding_store import CodingCommandRun, CodingJob, CodingStore
 
+_GOAL_SUMMARY_LIMIT = 160
+
 
 @dataclass(frozen=True)
 class PulseDelta:
@@ -64,6 +66,7 @@ class PulseRoomAvailability:
 class CodingJobPulse:
     job: str
     goal: str
+    goal_summary: str
     goal_version: int
     outcome_stage: str
     lifecycle: PulseLifecycle
@@ -147,6 +150,7 @@ def build_coding_job_pulse(
     return CodingJobPulse(
         job=inspection.job.name,
         goal=inspection.job.goal,
+        goal_summary=_goal_summary(coding_job, inspection.job.goal),
         goal_version=inspection.job.goal_version,
         outcome_stage=outcome_stage,
         lifecycle=PulseLifecycle(
@@ -195,6 +199,18 @@ def _latest_delta(
             "workflow",
             "fact",
         )
+    if coding_job.status in {"ready", "needs-human"}:
+        matching_outcome = (
+            coding_job.metadata.get("afk_outcome")
+            if coding_job.metadata.get("afk_stage") == coding_job.status
+            else None
+        )
+        return PulseDelta(
+            matching_outcome or f"Coding outcome is {coding_job.status}",
+            coding_job.updated_at,
+            "workflow",
+            "fact",
+        )
     outcome = coding_job.metadata.get("afk_outcome")
     candidates = [
         PulseDelta(
@@ -210,6 +226,17 @@ def _latest_delta(
         if event.kind != "input-admitted"
     )
     return max(candidates, key=lambda delta: delta.updated_at)
+
+
+def _goal_summary(coding_job: CodingJob, pinned_goal: str) -> str:
+    candidate = coding_job.task.strip() or next(
+        (line.strip() for line in pinned_goal.splitlines() if line.strip()),
+        "Goal not recorded",
+    )
+    compact = " ".join(candidate.split())
+    if len(compact) <= _GOAL_SUMMARY_LIMIT:
+        return compact
+    return f"{compact[: _GOAL_SUMMARY_LIMIT - 1].rstrip()}…"
 
 
 def _room_availability(inspection: JobInspection) -> PulseRoomAvailability:
