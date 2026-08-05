@@ -1859,7 +1859,10 @@ def launch_coding_job_or_exit(
             selected_provider,
         )
 
+    reservation_committed = False
+
     def reserve_coding_job(remote: GitBackedJobBranch) -> None:
+        nonlocal reservation_committed
         store.create_coding_job(
             job_name=job_name,
             admission_attempt_id=(
@@ -1890,6 +1893,7 @@ def launch_coding_job_or_exit(
                 ),
             },
         )
+        reservation_committed = True
 
     try:
         remote_branch = (
@@ -1916,6 +1920,16 @@ def launch_coding_job_or_exit(
             )
         raise
     except Exception as error:
+        if reservation_committed:
+            store.update_status(job_name, "setup-failed")
+            typer.echo(
+                f"Could not complete coding Job branch setup: {error}", err=True
+            )
+            typer.echo(
+                f"Retry this exact setup with --resume {job_name}",
+                err=True,
+            )
+            raise typer.Exit(1) from error
         if admission_proof is not None and admission_proof.approval_attempt_id:
             attempt = store.get_coding_admission(admission_proof.approval_attempt_id)
             if attempt is not None and attempt.status == "admitted":
@@ -2240,9 +2254,8 @@ def prove_coding_admission_or_exit(
                     f"{retained.job_name}."
                 )
                 raise typer.Exit(0)
-            if retained.status == "pending":
-                store.approve_coding_admission(retained.id)
-            proof = replace(proof, approval_attempt_id=retained.id)
+            if store.approve_coding_admission(retained.id):
+                proof = replace(proof, approval_attempt_id=retained.id)
         typer.echo(f"Coding admission ready: {proof.proof_id}")
         return proof
     resumable = [
@@ -2292,12 +2305,17 @@ def prove_coding_admission_or_exit(
                 typer.echo(f"GitHub authority approval {outcome}.", err=True)
                 typer.echo(failure.approval.decline_consequence, err=True)
                 raise typer.Exit(1)
-            store.approve_coding_admission(attempt.id)
+            if not store.approve_coding_admission(attempt.id):
+                typer.echo("GitHub authority approval expired.", err=True)
+                raise typer.Exit(1)
         else:
             typer.echo("Reusing approved GitHub authority for this delegation.")
         typer.echo("GitHub authority approved; rerunning exact coding readiness.")
         resumed = CodingAdmissionPreflight().prove(pinned_request)
         if resumed.proof is not None:
+            if not store.approve_coding_admission(attempt.id):
+                typer.echo("GitHub authority approval expired during readiness.", err=True)
+                raise typer.Exit(1)
             proof = replace(resumed.proof, approval_attempt_id=attempt.id)
             typer.echo(f"Coding admission ready: {proof.proof_id}")
             return proof

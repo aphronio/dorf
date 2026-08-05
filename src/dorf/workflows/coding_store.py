@@ -109,6 +109,17 @@ class CodingStore(RuntimeStore):
         now = _now()
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(now)
+            if admission_attempt_id is not None:
+                attempt = self._connection.execute(
+                    "SELECT status FROM coding_admissions WHERE id = ?",
+                    (admission_attempt_id,),
+                ).fetchone()
+                if attempt is None or attempt["status"] != "approved":
+                    self._connection.commit()
+                    raise RuntimeError(
+                        "coding admission has already been consumed"
+                    )
             self._connection.execute(
                 """
                 INSERT INTO coding_jobs (
@@ -132,9 +143,9 @@ class CodingStore(RuntimeStore):
                     """
                     UPDATE coding_admissions
                     SET status = 'admitted', job_name = ?, proof_id = ?, updated_at = ?
-                    WHERE id = ? AND status = 'approved'
+                    WHERE id = ? AND status = 'approved' AND expires_at > ?
                     """,
-                    (job_name, proof_id, now, admission_attempt_id),
+                    (job_name, proof_id, now, admission_attempt_id, now),
                 )
                 if cursor.rowcount != 1:
                     raise RuntimeError(
@@ -167,6 +178,7 @@ class CodingStore(RuntimeStore):
         )
         try:
             self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
             latest = self._connection.execute(
                 """
                 SELECT * FROM coding_admissions
@@ -225,10 +237,18 @@ class CodingStore(RuntimeStore):
     def get_coding_admission_for_request(
         self, request: dict[str, object]
     ) -> PendingCodingAdmission | None:
-        """Find the latest intent, allowing an unpinned repository during discovery."""
-        rows = self._connection.execute(
-            "SELECT * FROM coding_admissions ORDER BY created_at DESC, id DESC"
-        ).fetchall()
+        """Expire stale intents, then match the latest with a discovery-time wildcard."""
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            rows = self._connection.execute(
+                "SELECT * FROM coding_admissions ORDER BY created_at DESC, id DESC"
+            ).fetchall()
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
         for row in rows:
             retained = _pending_coding_admission(row)
             if all(
@@ -246,32 +266,57 @@ class CodingStore(RuntimeStore):
         return [_pending_coding_admission(row) for row in rows]
 
     def approve_coding_admission(self, attempt_id: str) -> bool:
-        cursor = self._connection.execute(
-            """
-            UPDATE coding_admissions
-            SET status = 'approved', updated_at = ?
-            WHERE id = ? AND status = 'pending'
-            """,
-            (_now(), attempt_id),
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            cursor = self._connection.execute(
+                """
+                UPDATE coding_admissions
+                SET status = 'approved', updated_at = ?
+                WHERE id = ? AND status = 'pending' AND expires_at > ?
+                """,
+                (timestamp, attempt_id, timestamp),
+            )
+            current = self._connection.execute(
+                "SELECT status FROM coding_admissions WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        return cursor.rowcount == 1 or (
+            current is not None and current["status"] in {"approved", "admitted"}
         )
-        self._connection.commit()
-        if cursor.rowcount == 1:
-            return True
-        current = self.get_coding_admission(attempt_id)
-        return current is not None and current.status in {"approved", "admitted"}
 
     def end_pending_coding_admission(self, attempt_id: str, outcome: str) -> bool:
         if outcome not in {"declined", "expired"}:
             raise ValueError(f"Unsupported coding admission outcome: {outcome}")
-        cursor = self._connection.execute(
-            """
-            UPDATE coding_admissions SET status = ?, updated_at = ?
-            WHERE id = ? AND status = 'pending'
-            """,
-            (outcome, _now(), attempt_id),
-        )
-        self._connection.commit()
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._expire_coding_admissions(timestamp)
+            cursor = self._connection.execute(
+                """
+                UPDATE coding_admissions SET status = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (outcome, timestamp, attempt_id),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
         return cursor.rowcount == 1
+
+    def _expire_coding_admissions(self, timestamp: str) -> None:
+        self._connection.execute(
+            """
+            UPDATE coding_admissions SET status = 'expired', updated_at = ?
+            WHERE status IN ('pending', 'approved') AND expires_at <= ?
+            """,
+            (timestamp, timestamp),
+        )
 
     def get_coding_job(self, job_name: str) -> CodingJob | None:
         row = self._connection.execute(

@@ -320,6 +320,81 @@ def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotentl
     assert [job.job_name for job in store.list_coding_jobs()] == ["approved-job"]
 
 
+def test_retain_pending_github_authority_expires_stale_attempt_before_reuse(
+    tmp_path,
+) -> None:
+    store = CodingStore.open(tmp_path / "state.sqlite3")
+    request = CodingAdmissionRequest(
+        repo_path=str(tmp_path / "repo"),
+        target_branch="main",
+        issue_number=20,
+        repository="example/repo",
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read the issue and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The coding Job can be admitted.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+        repository="example/repo",
+    )
+    stale, _ = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=-1
+    )
+
+    renewed, created = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+
+    assert created is True
+    assert renewed.id != stale.id
+    assert store.get_coding_admission(stale.id).status == "expired"
+    assert renewed.status == "pending"
+
+
+def test_expired_approved_github_authority_cannot_be_consumed(tmp_path) -> None:
+    store = CodingStore.open(tmp_path / "state.sqlite3")
+    request = CodingAdmissionRequest(
+        repo_path=str(tmp_path / "repo"),
+        target_branch="main",
+        issue_number=20,
+        repository="example/repo",
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read the issue and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The coding Job can be admitted.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+        repository="example/repo",
+    )
+    attempt, _ = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+    assert store.approve_coding_admission(attempt.id) is True
+    with sqlite3.connect(store.database_path) as connection:
+        connection.execute(
+            "UPDATE coding_admissions SET expires_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00.000000+00:00", attempt.id),
+        )
+
+    with pytest.raises(RuntimeError, match="already been consumed"):
+        store.create_coding_job(
+            job_name="stale-approval",
+            metadata={"admission_proof": '{"proof_id":"proof-stale"}'},
+            admission_attempt_id=attempt.id,
+        )
+
+    assert store.get_coding_admission(attempt.id).status == "expired"
+    assert store.get_coding_job("stale-approval") is None
+
+
 @pytest.mark.parametrize("outcome", ["declined", "expired"])
 def test_decline_or_expiry_ends_pending_authority_without_active_state(
     tmp_path, outcome
