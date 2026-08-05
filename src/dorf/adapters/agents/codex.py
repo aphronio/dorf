@@ -67,7 +67,7 @@ class AgentProcessEnvironment(Protocol):
 class AppServerConnection(Protocol):
     def send(self, message: str) -> None: ...
 
-    def recv(self) -> str | bytes: ...
+    def recv(self, timeout: float | None = None) -> str | bytes: ...
 
     def close(self) -> None: ...
 
@@ -152,9 +152,19 @@ class CodexTurnOutcome:
 class CodexAppServerProtocol:
     """The version-sensitive subset of Codex app-server used by the first turn."""
 
-    def __init__(self, connection: AppServerConnection) -> None:
+    def __init__(
+        self,
+        connection: AppServerConnection,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("app-server protocol timeout must be positive")
         self._connection = connection
         self._pending_notifications: deque[dict[str, Any]] = deque()
+        self._deadline = (
+            time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+        )
 
     def run_initial_turn(
         self,
@@ -458,7 +468,12 @@ class CodexAppServerProtocol:
         return self._receive()
 
     def _receive(self) -> dict[str, Any]:
-        raw = self._connection.recv()
+        timeout = None
+        if self._deadline is not None:
+            timeout = self._deadline - time.monotonic()
+            if timeout <= 0:
+                raise CodexTransportError("timed out waiting for app-server turn completion")
+        raw = self._connection.recv() if timeout is None else self._connection.recv(timeout=timeout)
         if isinstance(raw, bytes):
             try:
                 raw = raw.decode()
@@ -517,9 +532,17 @@ class _CodexTransportConnection:
             detail = f" {method}" if isinstance(method, str) else ""
             raise CodexTransportError(f"could not send{detail}: {error}") from error
 
-    def recv(self) -> str | bytes:
+    def recv(self, timeout: float | None = None) -> str | bytes:
         try:
-            return self._connection.recv()
+            return (
+                self._connection.recv()
+                if timeout is None
+                else self._connection.recv(timeout=timeout)
+            )
+        except TimeoutError as error:
+            raise CodexTransportError(
+                "timed out waiting for app-server turn completion"
+            ) from error
         except Exception as error:
             raise CodexTransportError(f"disconnected before turn completion: {error}") from error
 
@@ -547,7 +570,11 @@ class _CodexAppServerClient:
 
     @contextmanager
     def launch_and_connect(
-        self, command: list[str], *, diagnostic_output=None
+        self,
+        command: list[str],
+        *,
+        diagnostic_output=None,
+        timeout_seconds: float | None = None,
     ) -> Iterator[CodexAppServerProtocol]:
         try:
             process = subprocess.Popen(
@@ -574,7 +601,7 @@ class _CodexAppServerClient:
         connection = None
         try:
             connection = self._await_connection(process)
-            yield CodexAppServerProtocol(connection)
+            yield CodexAppServerProtocol(connection, timeout_seconds=timeout_seconds)
         finally:
             if connection is not None:
                 self._close(connection)
@@ -700,6 +727,7 @@ class _CodexAppServerSupervisor:
         turn_started: Callable[[str], None],
         developer_instructions: str | None,
         process_env: dict[str, str],
+        timeout_seconds: float | None = None,
     ) -> CodexTurnOutcome:
         launch = self.prepare_launch(
             binding,
@@ -718,7 +746,13 @@ class _CodexAppServerSupervisor:
                     f"Starting Codex Worker conversation at {launch.client.endpoint}",
                 )
                 with launch.client.launch_and_connect(
-                    launch.command, diagnostic_output=output
+                    launch.command,
+                    diagnostic_output=output,
+                    **(
+                        {"timeout_seconds": timeout_seconds}
+                        if timeout_seconds is not None
+                        else {}
+                    ),
                 ) as protocol:
                     outcome = protocol.run_initial_turn(
                         prompt=turn.prompt,
@@ -1051,6 +1085,7 @@ class CodexDriver:
         conversation_started: Callable[[str], None],
         turn_prepared: Callable[[str | None], None],
         turn_started: Callable[[str], None],
+        timeout_seconds: float | None = None,
     ) -> WorkerTurnOutcome:
         outcome = self._app_server.run_initial_turn(
             binding,
@@ -1063,6 +1098,7 @@ class CodexDriver:
                 "DORF_WORKER_NAME": binding.worker.name,
                 "DORF_WORKSPACE": binding.room.workspace,
             },
+            timeout_seconds=timeout_seconds,
         )
         return WorkerTurnOutcome(outcome.turn_id, outcome.status)
 
@@ -1132,6 +1168,7 @@ class CodexDriver:
         conversation_started: Callable[[str], None],
         turn_prepared: Callable[[str | None], None],
         turn_started: Callable[[str], None],
+        timeout_seconds: float | None = None,
     ) -> WorkerTurnOutcome:
         process_env = self._job_process_env(binding)
         outcome = self._app_server.run_initial_turn(
@@ -1146,6 +1183,7 @@ class CodexDriver:
                 binding.job.goal_version,
             ),
             process_env=process_env,
+            timeout_seconds=timeout_seconds,
         )
         return WorkerTurnOutcome(outcome.turn_id, outcome.status)
 

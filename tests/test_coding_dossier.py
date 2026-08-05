@@ -1,5 +1,6 @@
+import json
 import subprocess
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -446,6 +447,30 @@ def test_review_acceptance_uses_the_newest_verdict_at_the_commit(
     dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
 
     assert dossier.acceptance[0].status == "unproven"
+
+
+def test_default_dossier_omits_multiline_commands_but_json_keeps_them(
+    tmp_path: Path,
+) -> None:
+    store, job, binding = assigned_coding_job(tmp_path)
+    commit = "b" * 40
+    command = "codex exec --readonly <<'REVIEW'\nreview the exact diff\nREVIEW"
+    store.record_acceptance_checklist("proof", goal="Pinned goal", items=())
+    run = store.create_command_run(
+        "proof", "review:codex", command, str(tmp_path / "review.log")
+    )
+    store.finish_command_run(run.id, "succeeded", 0)
+    store.set_command_run_git_commits(run.id, before=commit, after=commit)
+
+    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
+    markdown = render_proof_dossier(dossier)
+    structured = json.dumps(asdict(dossier), sort_keys=True)
+
+    assert dossier.independent_review[0].command == command
+    assert json.loads(structured)["independent_review"][0]["command"] == command
+    assert command not in markdown
+    assert f"run:{run.id}" in markdown
+    assert len(markdown.splitlines()) <= 50
 
 
 def test_review_acceptance_rejects_a_changed_command_under_the_same_reviewer(

@@ -6,6 +6,13 @@ from .coding import (
     WorkflowMessage,
     WorkflowOutcome,
 )
+from .coding_admission import (
+    AdmissionFailure,
+    CodingAdmissionPreflight,
+    CodingAdmissionProof,
+    CodingAdmissionRequest,
+    CodingAdmissionResult,
+)
 from .coding_commands import prepare_coding_repository, run_coding_job_command
 from .coding_dossier import (
     AcceptanceResult,
@@ -43,6 +50,11 @@ __all__ = [
     "AcceptanceItem",
     "AcceptanceResult",
     "AfkCoordinator",
+    "AdmissionFailure",
+    "CodingAdmissionPreflight",
+    "CodingAdmissionProof",
+    "CodingAdmissionRequest",
+    "CodingAdmissionResult",
     "CodingCommandRun",
     "CodingJob",
     "CodingJobPulse",

@@ -694,12 +694,11 @@ def _render_evidence_section(
         if item.source == "worker":
             label = "worker claim"
         commit = item.commit_sha or "unbound"
-        command = f" · `{item.command}`" if item.command else ""
         turn = f" · turn {item.turn_id}" if item.turn_id is not None else ""
         artifacts = ", ".join(artifact.ref for artifact in item.artifacts) or "no artifact"
         lines.append(
             f"- [{label}] {item.evidence_id} · {item.summary} · commit `{commit}`"
-            f"{command}{turn} · {artifacts}"
+            f"{turn} · {artifacts}"
         )
 
 

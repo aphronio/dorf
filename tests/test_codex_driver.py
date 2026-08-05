@@ -325,6 +325,31 @@ def test_protocol_starts_worker_general_thread_without_job_guidance() -> None:
     assert all("DORF_JOB_NAME" not in json.dumps(message) for message in connection.sent)
 
 
+def test_protocol_bounds_all_receives_by_one_turn_deadline() -> None:
+    class TimedConnection(FakeConnection):
+        def __init__(self, messages) -> None:
+            super().__init__(messages)
+            self.timeouts = []
+
+        def recv(self, timeout=None):
+            self.timeouts.append(timeout)
+            return super().recv()
+
+    connection = TimedConnection(successful_messages())
+
+    outcome = CodexAppServerProtocol(connection, timeout_seconds=10).run_initial_turn(
+        prompt="Prove the app-server path",
+        workspace="/workspace",
+        model="gpt-5.6-sol",
+        reasoning_effort="high",
+        conversation_started=lambda thread_id: None,
+    )
+
+    assert outcome.status == "completed"
+    assert connection.timeouts
+    assert all(timeout is not None and 0 < timeout <= 10 for timeout in connection.timeouts)
+
+
 def test_codex_driver_starts_worker_general_conversation_without_job_environment(
     tmp_path,
     monkeypatch,
