@@ -82,12 +82,16 @@ Coding-to-PR is the first application built on Dorf, not the runtime's identity.
 task from an isolated workspace through checks, review, follow-up, and a PR proposal.
 
 ```bash
-dorf start "Fix the checkout timeout and add a regression test" \
-  --provider-connection personal-chatgpt
+dorf start "Fix the checkout timeout and add a regression test"
+# Or leave an issue running unattended:
+dorf afk 42
 dorf status JOB
 dorf verify JOB
 dorf publish JOB
 ```
+
+New coding Jobs use the Provider Connection selected by `dorf setup`. Pass
+`--provider-connection NAME` only to intentionally override that host-local default.
 
 This showcase requires separate repository, GitHub, and coding-image preparation. See the
 [North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) for how it fits

@@ -187,6 +187,23 @@ def test_codex_room_installs_only_derived_config_and_route_key_then_revokes() ->
         "ws://10.42.0.19:4500",
     ]
 
+    review_command = environment.process_command(
+        binding,
+        ["bash", "-lc", "codex exec review"],
+        cwd="/workspace",
+        provider_route=True,
+    )
+    assert "room-scoped-key" not in repr(review_command)
+    assert CODEX_ROUTE_CREDENTIAL_PATH in " ".join(review_command)
+    assert review_command[-3:] == ["bash", "-lc", "codex exec review"]
+
+    check_command = environment.process_command(
+        binding,
+        ["bash", "-lc", "env"],
+        cwd="/workspace",
+    )
+    assert CODEX_ROUTE_CREDENTIAL_PATH not in " ".join(check_command)
+
     environment.check_codex_authentication(binding)
     route_probe = probe.ran[-1]
     assert "curl" in " ".join(route_probe)
