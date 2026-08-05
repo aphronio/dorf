@@ -101,8 +101,8 @@ when all of these agree:
 
 - GitHub reports the release as immutable;
 - GitHub's manifest asset digest matches the downloaded manifest;
-- the manifest schema identifies the `incus` Environment, and its release tag, architecture, VM
-  type, archive name, size, and digest match the release;
+- manifest schema 3 identifies the `incus` Environment and complete Git, Node, and uv workstation,
+  and its release tag, architecture, VM type, archive name, size, and digest match the release;
 - the archive's GitHub digest, manifest digest, and Incus fingerprint are identical; and
 - Incus reports the expected fingerprint after import.
 

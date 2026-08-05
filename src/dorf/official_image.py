@@ -351,8 +351,8 @@ def _parse_manifest(
     expected_tag: str,
     expected_architecture: str,
 ) -> OfficialImageManifest:
-    if not isinstance(data, dict) or data.get("schema_version") != 2:
-        raise OfficialImageError("Official image manifest schema_version must be 2")
+    if not isinstance(data, dict) or data.get("schema_version") != 3:
+        raise OfficialImageError("Official image manifest schema_version must be 3")
     if data.get("release_tag") != expected_tag:
         raise OfficialImageError("Official image manifest release_tag does not match its release")
     if data.get("environment") != "incus":
@@ -395,6 +395,14 @@ def _parse_manifest(
         raise OfficialImageError("Official image manifest Codex version is invalid")
     if not isinstance(npm_integrity, str) or not npm_integrity.startswith("sha512-"):
         raise OfficialImageError("Official image manifest Codex npm integrity is invalid")
+    tools = data.get("tools")
+    if not isinstance(tools, dict) or any(
+        not isinstance(tools.get(name), str) or not tools[name]
+        for name in ("git", "node", "uv")
+    ):
+        raise OfficialImageError(
+            "Official image manifest must identify the complete coding workstation tools"
+        )
     source_commit = data.get("source_commit")
     if not isinstance(source_commit, str) or not _COMMIT_PATTERN.fullmatch(source_commit):
         raise OfficialImageError("Official image manifest source commit is invalid")

@@ -1,4 +1,6 @@
+import runpy
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +32,8 @@ from dorf.runtime import (
     Worker,
     WorkerBinding,
 )
+
+PROJECT_ROOT = Path(__file__).parents[1]
 
 
 def sample_git_author() -> GitAuthorIdentity:
@@ -235,6 +239,62 @@ def test_image_credential_check_rejects_owner_files_and_environment(tmp_path) ->
     assert factory.returncode == 1
     assert "FACTORY_API_KEY" in factory.stderr
     assert "owner-secret" not in factory.stderr
+
+
+def test_workstation_validator_rejects_a_source_other_than_its_checkout(tmp_path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py"),
+            "--image",
+            "candidate",
+            "--image-fingerprint",
+            "a" * 64,
+            "--provider-connection",
+            "test-provider",
+            "--source-commit",
+            "0" * 40,
+            "--proof-id",
+            "test-proof",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--evidence-dir",
+            str(tmp_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "source commit does not match the validation checkout" in result.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_workstation_validator_recovers_the_latest_recorded_room_for_cleanup() -> None:
+    validator = runpy.run_path(
+        str(PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py")
+    )
+    expected = worker_binding()
+
+    class SpawnFailedStore:
+        def get_worker_binding(self, worker_name):
+            assert worker_name == expected.worker.name
+            return None
+
+        def get_worker(self, worker_name):
+            assert worker_name == expected.worker.name
+            return expected.worker
+
+        def get_latest_room(self, worker_name):
+            assert worker_name == expected.worker.name
+            return expected.room
+
+    recovered = validator["_recorded_worker_binding"](
+        SpawnFailedStore(), expected.worker.name
+    )
+
+    assert recovered == expected
 
 
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:

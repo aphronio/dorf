@@ -53,7 +53,7 @@ def main() -> None:
             archive_digest.update(chunk)
     fingerprint = archive_digest.hexdigest()
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "release_tag": args.release_tag,
         "environment": "incus",
         "architecture": "x86_64",

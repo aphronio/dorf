@@ -18,7 +18,7 @@ from dorf.codex_room import new_codex_room_environment
 from dorf.command_runner import shell_command
 from dorf.provider_gateway import ProviderGateway
 from dorf.repo_contract import load_repo_contract
-from dorf.runtime import JobRuntime, NewJob, NewWorker, WorkerRuntime
+from dorf.runtime import JobRuntime, NewJob, NewWorker, WorkerBinding, WorkerRuntime
 from dorf.workflows import CodingStore, prepare_coding_repository, run_coding_job_command
 
 REPOSITORY = "https://github.com/aphronio/dorf.git"
@@ -39,6 +39,7 @@ def main() -> None:
     parser.add_argument("--root-disk-size", default="40GiB")
     args = parser.parse_args()
 
+    _require_exact_source_checkout(args.project_root, args.source_commit)
     contract = load_repo_contract(args.project_root)
     prepare_command = contract.commands.get("prepare")
     check_command = contract.commands.get("check")
@@ -85,7 +86,8 @@ def main() -> None:
                         lifecycle_policy="dedicated",
                     )
                 )
-                binding = JobRuntime(store, environment, driver).assign(
+                job_runtime = JobRuntime(store, environment, driver)
+                binding = job_runtime.assign(
                     NewJob(
                         job_name,
                         worker_name,
@@ -95,7 +97,8 @@ def main() -> None:
                         ),
                         "gpt-5.6-sol",
                         "low",
-                    )
+                    ),
+                    activate=False,
                 )
                 store.create_coding_job(
                     job_name=job_name,
@@ -149,10 +152,9 @@ def main() -> None:
                     monotonic() - preparation_started, 3
                 )
 
+                binding = job_runtime.activate_assignment(job_name)
                 first_input = store.list_job_inputs(job_name)[0]
-                implementation = JobRuntime(store, environment, driver).deliver_input(
-                    job_name, first_input.id
-                )
+                implementation = job_runtime.deliver_input(job_name, first_input.id)
                 if implementation.exit_code != 0:
                     raise RuntimeError("real Codex implementation turn failed")
                 artifact = environment.execute(
@@ -236,8 +238,9 @@ def main() -> None:
                         )
                     except Exception as error:
                         cleanup_failures.append(f"Worker cleanup: {error}")
-                if worker_binding is not None:
-                    consumer = f"room:{worker_binding.room.id}"
+                cleanup_binding = worker_binding or _recorded_worker_binding(store, worker_name)
+                if cleanup_binding is not None:
+                    consumer = f"room:{cleanup_binding.room.id}"
                     remaining_route = gateway.route_for_consumer(consumer)
                     if remaining_route is not None:
                         try:
@@ -245,14 +248,14 @@ def main() -> None:
                         except Exception as error:
                             cleanup_failures.append(f"Provider Route cleanup: {error}")
                     room_info = subprocess.run(
-                        ["incus", "info", worker_binding.environment_id],
+                        ["incus", "info", cleanup_binding.environment_id],
                         text=True,
                         capture_output=True,
                         check=False,
                     )
                     if room_info.returncode == 0:
                         forced = subprocess.run(
-                            ["incus", "delete", worker_binding.environment_id, "--force"],
+                            ["incus", "delete", cleanup_binding.environment_id, "--force"],
                             text=True,
                             capture_output=True,
                             check=False,
@@ -262,7 +265,7 @@ def main() -> None:
                     if gateway.route_for_consumer(consumer) is not None:
                         cleanup_failures.append("Room-scoped provider route survived cleanup")
                     final_room = subprocess.run(
-                        ["incus", "info", worker_binding.environment_id],
+                        ["incus", "info", cleanup_binding.environment_id],
                         text=True,
                         capture_output=True,
                         check=False,
@@ -283,6 +286,41 @@ def _require_success(label: str, result: subprocess.CompletedProcess[str]) -> No
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip() or "command failed"
         raise RuntimeError(f"{label} failed: {message}")
+
+
+def _require_exact_source_checkout(project_root: Path, source_commit: str) -> None:
+    head = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    _require_success("resolve release source checkout", head)
+    if head.stdout.strip() != source_commit:
+        raise RuntimeError(
+            "release source commit does not match the validation checkout: "
+            f"expected {source_commit}, found {head.stdout.strip()}"
+        )
+    status = subprocess.run(
+        ["git", "-C", str(project_root), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    _require_success("inspect release source checkout", status)
+    if status.stdout:
+        raise RuntimeError("release source checkout has uncommitted changes")
+
+
+def _recorded_worker_binding(store: CodingStore, worker_name: str) -> WorkerBinding | None:
+    binding = store.get_worker_binding(worker_name)
+    if binding is not None:
+        return binding
+    worker = store.get_worker(worker_name)
+    room = store.get_latest_room(worker_name)
+    if worker is None or room is None:
+        return None
+    return WorkerBinding(worker, room)
 
 
 def _artifact_record(path: Path) -> dict[str, object]:

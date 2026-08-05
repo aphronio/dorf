@@ -89,6 +89,8 @@ def release_fixture(
     immutable: bool = True,
     archive_digest: str | None = None,
     image_fingerprint: str | None = None,
+    schema_version: int = 3,
+    tools: dict[str, str] | None = None,
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
     tag = "v0.1.1"
@@ -97,7 +99,7 @@ def release_fixture(
     digest = hashlib.sha256(archive).hexdigest()
     manifest = json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": schema_version,
             "release_tag": tag,
             "environment": "incus",
             "architecture": architecture,
@@ -112,7 +114,9 @@ def release_fixture(
                 "version": "0.150.0",
                 "npm_integrity": "sha512-test-integrity",
             },
-            "tools": {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
+            "tools": tools
+            if tools is not None
+            else {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
             "source_commit": "a" * 40,
             "validated_at": "2026-07-31T08:30:00Z",
         },
@@ -275,6 +279,30 @@ def test_installer_rejects_untrusted_release_metadata(
         ).ensure()
 
 
+@pytest.mark.parametrize(
+    ("fixture_kwargs", "message"),
+    [
+        ({"schema_version": 2}, "schema_version must be 3"),
+        ({"tools": {"git": "2.43.0", "node": "v18.19.1"}}, "workstation tools"),
+        ({"tools": {"git": "", "node": "v18.19.1", "uv": "0.8.3"}}, "workstation tools"),
+    ],
+)
+def test_installer_rejects_images_without_the_coding_workstation_capability(
+    tmp_path,
+    fixture_kwargs,
+    message,
+) -> None:
+    responses, _ = release_fixture(b"incus-vm-image", **fixture_kwargs)
+
+    with pytest.raises(OfficialImageError, match=message):
+        OfficialImageInstaller(
+            probe=FakeIncusProbe(),
+            opener=FakeOpener(responses),
+            architecture="x86_64",
+            temp_root=tmp_path,
+        ).ensure()
+
+
 def test_installer_rejects_corrupt_download_before_incus_import(tmp_path) -> None:
     responses, _ = release_fixture(b"incus-vm-image")
     archive_url = next(url for url in responses if url.endswith(".tar.gz"))
@@ -333,7 +361,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
     assert result.returncode == 0, result.stderr
     manifest = json.loads(output.read_text())
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["environment"] == "incus"
     assert manifest["image_fingerprint"] == digest
     assert manifest["archive"] == {
