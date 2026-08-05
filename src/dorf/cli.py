@@ -3114,10 +3114,13 @@ def deployment_image_fingerprint(
     contract: RepoContract,
 ) -> str | None:
     """Use a setup fingerprint only when it describes the requested Room configuration."""
-    requested = IncusConfig.from_mapping(contract.incus_config)
-    if profile is None or profile.incus != requested:
-        return None
-    return profile.image_fingerprint
+    explicit_template = contract.incus_config.get("template")
+    if explicit_template is not None:
+        if re.fullmatch(r"[0-9a-f]{64}", explicit_template):
+            return explicit_template
+        if profile is None or explicit_template != profile.incus.template:
+            return None
+    return profile.image_fingerprint if profile is not None else None
 
 
 def select_coding_deployment_or_exit(

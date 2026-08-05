@@ -1415,6 +1415,50 @@ def test_repository_incus_override_does_not_claim_global_image_fingerprint() -> 
     assert deployment_image_fingerprint(profile, contract) is None
 
 
+@pytest.mark.parametrize(
+    "incus_override",
+    [
+        {"network": "repo-network"},
+        {"root_disk_size": "64GiB"},
+        {"network": "repo-network", "root_disk_size": "64GiB"},
+    ],
+)
+def test_repository_non_image_incus_overrides_preserve_global_image_fingerprint(
+    incus_override,
+) -> None:
+    fingerprint = "f" * 64
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint=fingerprint,
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        incus_config=incus_override,
+    )
+
+    assert deployment_image_fingerprint(profile, contract) == fingerprint
+
+
+def test_explicit_fingerprint_template_becomes_the_immutable_image_pin() -> None:
+    profile_fingerprint = "f" * 64
+    explicit_fingerprint = "e" * 64
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint=profile_fingerprint,
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        incus_config={"template": explicit_fingerprint},
+    )
+
+    assert deployment_image_fingerprint(profile, contract) == explicit_fingerprint
+    assert deployment_image_fingerprint(None, contract) == explicit_fingerprint
+
+
 def test_new_coding_job_without_provider_default_fails_before_branch_or_job_mutation(
     tmp_path, monkeypatch
 ) -> None:

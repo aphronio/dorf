@@ -613,3 +613,88 @@ def test_dossier_keeps_claims_separate_and_renders_ordered_compact_sections(
     assert "[worker claim]" in markdown
     assert "artifact-v1-" in markdown
     assert "image_fingerprint" in markdown
+
+
+def test_delayed_worker_claim_does_not_infer_the_later_active_turn(
+    tmp_path: Path,
+) -> None:
+    store, job, binding = assigned_coding_job(tmp_path)
+    goal_input = store.list_job_inputs(job.job_name)[0]
+    first_turn, _ = store.admit_job_turn(
+        goal_input, output_path=str(tmp_path / "first.log")
+    )
+    store.finish_job_turn(
+        first_turn.id,
+        status="succeeded",
+        exit_code=0,
+        error=None,
+    )
+    later_input, _ = store.enqueue_job_input(
+        job.job_name,
+        message_id="later-input",
+        text="Continue with another turn",
+    )
+    later_turn, _ = store.admit_job_turn(
+        later_input, output_path=str(tmp_path / "later.log")
+    )
+    store.documents.append_event(
+        job.job_name,
+        event_id="report-delayed",
+        source="worker",
+        provenance="claim",
+        kind="progress",
+        summary="Report emitted during the earlier turn",
+        related={
+            "assignment": binding.assignment.id,
+            "conversation": binding.conversation.id,
+            "room": binding.room.id,
+            "worker": binding.worker.name,
+        },
+    )
+
+    dossier = build_proof_dossier(store, job, binding, commit_sha="b" * 40)
+
+    assert later_turn.status == "running"
+    assert dossier.assumptions_and_claims[0].turn_id is None
+    assert any(
+        "without an exact Job turn association" in risk
+        for risk in dossier.unresolved_risks
+    )
+
+
+def test_worker_claim_accepts_only_an_explicit_turn_from_its_job_conversation(
+    tmp_path: Path,
+) -> None:
+    store, job, binding = assigned_coding_job(tmp_path)
+    goal_input = store.list_job_inputs(job.job_name)[0]
+    turn, _ = store.admit_job_turn(
+        goal_input, output_path=str(tmp_path / "turn.log")
+    )
+    related = {
+        "assignment": binding.assignment.id,
+        "conversation": binding.conversation.id,
+        "room": binding.room.id,
+        "worker": binding.worker.name,
+    }
+    store.documents.append_event(
+        job.job_name,
+        event_id="report-explicit-turn",
+        source="worker",
+        provenance="claim",
+        kind="progress",
+        summary="Explicitly related claim",
+        related={**related, "turn": str(turn.id)},
+    )
+    store.documents.append_event(
+        job.job_name,
+        event_id="report-invalid-turn",
+        source="worker",
+        provenance="claim",
+        kind="progress",
+        summary="Claim with an invalid turn",
+        related={**related, "turn": str(turn.id + 1000)},
+    )
+
+    dossier = build_proof_dossier(store, job, binding, commit_sha="b" * 40)
+
+    assert [claim.turn_id for claim in dossier.assumptions_and_claims] == [turn.id, None]

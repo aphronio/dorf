@@ -638,19 +638,19 @@ def _claim_evidence(
     binding: JobBinding,
     artifacts: tuple[DossierArtifact, ...],
 ) -> ProofEvidence:
-    turn = next(
-        (
-            candidate
-            for candidate in reversed(store.list_job_turns(event.job))
-            if candidate.started_at <= event.recorded_at
-            and (candidate.finished_at is None or event.recorded_at <= candidate.finished_at)
-        ),
-        None,
-    )
     related_turn = event.related.get("turn")
-    turn_id = int(related_turn) if related_turn and related_turn.isdigit() else None
-    if turn_id is None and turn is not None:
-        turn_id = turn.id
+    turn_id = None
+    if isinstance(related_turn, str) and related_turn.isdigit():
+        turn = next(
+            (
+                candidate
+                for candidate in store.list_job_turns(event.job)
+                if candidate.id == int(related_turn)
+                and candidate.conversation_id == event.related.get("conversation")
+            ),
+            None,
+        )
+        turn_id = turn.id if turn is not None else None
     return ProofEvidence(
         evidence_id=f"event:{event.sequence}",
         summary=event.summary,
