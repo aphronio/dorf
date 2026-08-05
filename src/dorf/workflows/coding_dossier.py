@@ -15,6 +15,8 @@ from .coding_store import AcceptanceItem, CodingCommandRun, CodingJob, CodingSto
 _CHECKBOX = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.+?)\s*$")
 _HEADING = re.compile(r"^\s*##+\s+(.+?)\s*$")
 REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
+_CODEX_TELEMETRY_DELIMITER = "tokens used"
+_CODEX_TOKEN_COUNT = re.compile(r"^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$")
 _VERIFICATION_COMMANDS = ("check", "smoke")
 
 
@@ -613,13 +615,23 @@ def _relevant_artifacts(evidence: tuple[ProofEvidence, ...]) -> tuple[DossierArt
 def review_output_has_no_findings(output: str) -> bool:
     """Accept only the workflow protocol's exact final reviewer response."""
     non_empty_lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not non_empty_lines or non_empty_lines[-1] != REVIEW_NO_FINDINGS_SENTINEL:
+    if not non_empty_lines:
         return False
     agent_markers = [index for index, line in enumerate(non_empty_lines) if line == "codex"]
     response_lines = (
         non_empty_lines[agent_markers[-1] + 1 :] if agent_markers else non_empty_lines
     )
-    return response_lines == [REVIEW_NO_FINDINGS_SENTINEL]
+    if not agent_markers or _CODEX_TELEMETRY_DELIMITER not in response_lines:
+        return response_lines == [REVIEW_NO_FINDINGS_SENTINEL]
+    delimiter_index = response_lines.index(_CODEX_TELEMETRY_DELIMITER)
+    response = response_lines[:delimiter_index]
+    telemetry = response_lines[delimiter_index + 1 :]
+    return (
+        response == [REVIEW_NO_FINDINGS_SENTINEL]
+        and len(telemetry) == 2
+        and _CODEX_TOKEN_COUNT.fullmatch(telemetry[0]) is not None
+        and telemetry[1] == REVIEW_NO_FINDINGS_SENTINEL
+    )
 
 
 def _command_evidence(

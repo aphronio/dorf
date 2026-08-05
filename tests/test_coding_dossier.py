@@ -15,6 +15,7 @@ from dorf.workflows.coding_dossier import (
     build_proof_dossier,
     compile_acceptance_checklist,
     render_proof_dossier,
+    review_output_has_no_findings,
 )
 
 
@@ -394,6 +395,42 @@ def test_review_acceptance_rejects_findings_even_when_sentinel_is_also_present(
     dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
 
     assert dossier.acceptance[0].status == "unproven"
+
+
+def test_codex_review_parser_accepts_real_clean_transcript_with_telemetry_echo() -> None:
+    output = """\
+Reading additional input from stdin...
+OpenAI Codex v0.150.0
+--------
+workdir: /workspace/jobs/one-file
+codex
+DORF_REVIEW_NO_FINDINGS
+tokens used
+8,859
+DORF_REVIEW_NO_FINDINGS
+"""
+
+    assert review_output_has_no_findings(output) is True
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "codex\n- [P1] A real finding\ntokens used\n8,859\n- [P1] A real finding\n",
+        (
+            "codex\n- [P1] A real finding\nDORF_REVIEW_NO_FINDINGS\n"
+            "tokens used\n8,859\nDORF_REVIEW_NO_FINDINGS\n"
+        ),
+        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\n8,859\nA trailing finding\n",
+        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\nnot-a-count\nDORF_REVIEW_NO_FINDINGS\n",
+        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\n8,59\nDORF_REVIEW_NO_FINDINGS\n",
+        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\nDORF_REVIEW_NO_FINDINGS\n",
+        "preamble\nDORF_REVIEW_NO_FINDINGS\n",
+        "finding\nDORF_REVIEW_NO_FINDINGS\n",
+    ],
+)
+def test_review_parser_rejects_findings_or_malformed_harness_output(output: str) -> None:
+    assert review_output_has_no_findings(output) is False
 
 
 def test_review_acceptance_uses_the_newest_verdict_at_the_commit(
