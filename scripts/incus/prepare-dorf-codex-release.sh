@@ -18,7 +18,7 @@ BUILD_VM="dorf-codex-build-$BUILD_ID"
 PROBE_VM="dorf-codex-probe-$BUILD_ID"
 VALIDATION_VM="dorf-coder-workstation-proof-$BUILD_ID"
 METADATA_PATH="$OUTPUT_DIR/image.json"
-ARCHIVE_BASENAME="dorf-codex-incus-vm-x86_64"
+ARCHIVE_BASENAME="dorf-codex-incus-vm-v3-x86_64"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
 EVIDENCE_DIR="$OUTPUT_DIR/workstation-evidence"
 EVIDENCE_POLICY="${EVIDENCE_POLICY:-retain}"
@@ -28,13 +28,10 @@ if [[ "$EVIDENCE_POLICY" != "retain" && "$EVIDENCE_POLICY" != "remove" ]]; then
   exit 2
 fi
 
-uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
-  --provider-connection "$PROVIDER_CONNECTION" \
-  --network "$NETWORK" \
-  --preflight-only
-
 cleanup() {
+  if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
+    rm -rf -- "$EVIDENCE_DIR"
+  fi
   if incus info "$VALIDATION_VM" >/dev/null 2>&1; then
     incus delete "$VALIDATION_VM" --force >/dev/null 2>&1 || true
   fi
@@ -46,6 +43,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+uv run --project "$PROJECT_ROOT" python \
+  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
+  --provider-connection "$PROVIDER_CONNECTION" \
+  --network "$NETWORK" \
+  --preflight-only
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$METADATA_PATH" "$ARCHIVE_PATH" \

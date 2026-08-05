@@ -341,10 +341,7 @@ class JobRuntime:
         if assigned.assignment.status == "open":
             if activate:
                 return assigned
-            self._store.update_assignment_status(assigned.job.name, "preparing")
-            assigned = self._store.get_job_binding(assigned.job.name)
-            if assigned is None:
-                raise RuntimeError("deferred Job binding could not be reloaded")
+            raise RuntimeError("Job Assignment is already open")
         if assigned.assignment.status not in {"preparing", "workspace-failed"}:
             raise RuntimeError(f"Job Assignment is not assignable: {assigned.assignment.status}")
         if assigned.assignment.status == "workspace-failed":

@@ -11,8 +11,8 @@ PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/room-image}"
 SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
-MANIFEST_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-x86_64.json"
-ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-x86_64.tar.gz"
+MANIFEST_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v3-x86_64.json"
+ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v3-x86_64.tar.gz"
 
 for command in gh incus jq npm uv; do
   if ! command -v "$command" >/dev/null 2>&1; then

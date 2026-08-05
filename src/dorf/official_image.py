@@ -194,7 +194,7 @@ class OfficialImageInstaller:
         releases = self._read_json(self._api_url, max_bytes=MAX_RELEASE_RESPONSE_BYTES)
         if not isinstance(releases, list):
             raise OfficialImageError("Official image release response must be a list")
-        manifest_name = f"dorf-codex-incus-vm-{self._architecture}.json"
+        manifest_name = f"dorf-codex-incus-vm-v3-{self._architecture}.json"
         release = next(
             (
                 item
@@ -367,7 +367,7 @@ def _parse_manifest(
     archive_data = data.get("archive")
     if not isinstance(archive_data, dict):
         raise OfficialImageError("Official image manifest archive must be an object")
-    expected_archive_name = f"dorf-codex-incus-vm-{expected_architecture}.tar.gz"
+    expected_archive_name = f"dorf-codex-incus-vm-v3-{expected_architecture}.tar.gz"
     if archive_data.get("name") != expected_archive_name:
         raise OfficialImageError("Official image manifest archive name is invalid")
     archive_sha256 = _required_sha256(archive_data.get("sha256"), "archive digest")

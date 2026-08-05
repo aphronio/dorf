@@ -300,6 +300,30 @@ def test_deferred_assignment_blocks_admission_and_delivery_until_activation(
     assert len(agent.initial_turns) == 1
 
 
+def test_deferred_reassignment_does_not_demote_or_reset_an_open_assignment(
+    tmp_path: Path,
+) -> None:
+    store, environment, agent = ready_worker(tmp_path)
+    runtime = JobRuntime(store, environment, agent)
+    job = NewJob(
+        "setup-race",
+        "researcher",
+        "Preserve the active workspace",
+        "gpt-5.6-sol",
+        "high",
+    )
+    runtime.assign(job)
+    commands_before_retry = list(environment.executions)
+
+    with pytest.raises(RuntimeError, match="Job Assignment is already open"):
+        runtime.assign(job, activate=False)
+
+    binding = store.get_job_binding("setup-race")
+    assert binding is not None
+    assert binding.assignment.status == "open"
+    assert environment.executions == commands_before_retry
+
+
 def test_assignment_projects_read_only_goal_context_and_scoped_report_outbox(
     tmp_path: Path,
 ) -> None:

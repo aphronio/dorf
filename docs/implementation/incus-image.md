@@ -56,9 +56,11 @@ PROVIDER_CONNECTION=personal-chatgpt \
   scripts/incus/publish-dorf-codex-release.sh
 ```
 
-The x86_64 release assets are named `dorf-codex-incus-vm-x86_64.tar.gz` and
-`dorf-codex-incus-vm-x86_64.json`. The explicit `incus-vm` segment prevents the release artifact
-from looking like a generic Linux filesystem or a portable image for another Environment.
+The schema-3 x86_64 release assets are named `dorf-codex-incus-vm-v3-x86_64.tar.gz` and
+`dorf-codex-incus-vm-v3-x86_64.json`. The explicit `incus-vm` segment prevents the release artifact
+from looking like a generic Linux filesystem or a portable image for another Environment. The
+versioned channel lets v0.1.2 publish the new image and package as one boundary while immutable
+v0.1.1 clients continue using their existing schema-2 assets during publication.
 
 A complete draft containing the archive and manifest is published only when:
 

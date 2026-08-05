@@ -34,7 +34,7 @@ Install and exercise that exact TestPyPI version before production publication.
 
 For production, set the version in `pyproject.toml` and `src/dorf/__init__.py`, merge the release
 commit, and publish a GitHub release whose tag is exactly `v` followed by that version, such as
-`v0.1.1`. The local Room-image publisher creates the complete draft with the credential-free Incus
+`v0.1.2`. The local Room-image publisher creates the complete draft with the credential-free Incus
 archive and compatibility manifest, then publishes it once; that publication triggers this trusted
 Python workflow. The workflow rejects a release tag that does not match the package metadata.
 

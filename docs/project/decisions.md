@@ -726,11 +726,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
 - **Artifact identity:** Attach the image to the normal immutable `vX.Y.Z` Dorf product release
-  instead of creating machine-only releases in the human-facing release feed. Name the x86_64
-  assets `dorf-codex-incus-vm-x86_64.tar.gz` and `dorf-codex-incus-vm-x86_64.json`. Manifest schema
-  3 requires `environment: incus` and the complete Git, Node, and uv coding-workstation inventory;
-  it also records the verified pinned uv release-archive digest. The installer rejects earlier lean
-  image schemas. The two activation-time `room-image-*`
+  instead of creating machine-only releases in the human-facing release feed. Manifest schema 3
+  uses the x86_64 assets `dorf-codex-incus-vm-v3-x86_64.tar.gz` and
+  `dorf-codex-incus-vm-v3-x86_64.json`; it requires `environment: incus`, the complete Git, Node,
+  and uv coding-workstation inventory, and the verified pinned uv release-archive digest. The
+  schema-3 installer selects only that asset channel and rejects earlier lean image schemas. The
+  immutable v0.1.1 client continues selecting its unversioned schema-2 assets until v0.1.2 publishes
+  the new channel and package together, so both sides of the release-publication window retain a
+  valid public image without compatibility parsing. The two activation-time `room-image-*`
   bootstrap releases are removable only after the combined release passes anonymous consumption;
   they were removed after that `v0.1.1` terminal passed on 2026-08-04.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be

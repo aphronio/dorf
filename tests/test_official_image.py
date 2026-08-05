@@ -94,9 +94,9 @@ def release_fixture(
     uv_integrity: str = "sha256:" + "b" * 64,
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
-    tag = "v0.1.1"
-    archive_name = f"dorf-codex-incus-vm-{architecture}.tar.gz"
-    manifest_name = f"dorf-codex-incus-vm-{architecture}.json"
+    tag = "v0.1.2"
+    archive_name = f"dorf-codex-incus-vm-v3-{architecture}.tar.gz"
+    manifest_name = f"dorf-codex-incus-vm-v3-{architecture}.json"
     digest = hashlib.sha256(archive).hexdigest()
     manifest = json.dumps(
         {
@@ -156,7 +156,17 @@ def release_fixture(
                         "browser_download_url": archive_url,
                     },
                 ],
-            }
+            },
+            {
+                "tag_name": "v0.1.1",
+                "draft": False,
+                "prerelease": False,
+                "immutable": True,
+                "assets": [
+                    {"name": f"dorf-codex-incus-vm-{architecture}.json"},
+                    {"name": f"dorf-codex-incus-vm-{architecture}.tar.gz"},
+                ],
+            },
         ]
     ).encode()
     return {
@@ -181,7 +191,7 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
     ).ensure(emit=events.append, progress=lambda current, total: progress.append((current, total)))
 
     assert result.status == "installed"
-    assert result.release_tag == "v0.1.1"
+    assert result.release_tag == "v0.1.2"
     assert result.fingerprint == digest
     assert result.codex_version == "0.150.0"
     assert ["incus", "image", "import"] == probe.ran[1][:3]
@@ -324,7 +334,7 @@ def test_installer_rejects_corrupt_download_before_incus_import(tmp_path) -> Non
 
 
 def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_path) -> None:
-    archive = tmp_path / "dorf-codex-incus-vm-x86_64.tar.gz"
+    archive = tmp_path / "dorf-codex-incus-vm-v3-x86_64.tar.gz"
     archive.write_bytes(b"incus-vm-image")
     metadata = tmp_path / "image.json"
     metadata.write_text(
@@ -338,7 +348,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
             }
         )
     )
-    output = tmp_path / "dorf-codex-incus-vm-x86_64.json"
+    output = tmp_path / "dorf-codex-incus-vm-v3-x86_64.json"
 
     result = subprocess.run(
         [
@@ -349,7 +359,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
             "--image-metadata",
             str(metadata),
             "--release-tag",
-            "v0.1.1",
+            "v0.1.2",
             "--source-commit",
             "a" * 40,
             "--validated-at",

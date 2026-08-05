@@ -192,19 +192,23 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script
     assert "--preflight-only" in release_script
+    assert release_script.index("trap cleanup EXIT") < release_script.index("--preflight-only")
     assert release_script.index("--preflight-only") < release_script.index(
         'IMAGE_ALIAS="$CANDIDATE_ALIAS"'
     )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
-    assert "dorf-codex-incus-vm-x86_64" in release_script
+    assert "dorf-codex-incus-vm-v3-x86_64" in release_script
     assert 'test -x "$(command -v git)"' in release_script
     assert "! command -v npm" in release_script
     assert 'test -x "$(command -v uv)"' in release_script
     assert "validate-dorf-coding-workstation.py" in release_script
     assert 'incus delete "$VALIDATION_VM" --force' in release_script
+    cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
+    assert '[[ "$EVIDENCE_POLICY" == "remove" ]]' in cleanup
+    assert 'rm -rf -- "$EVIDENCE_DIR"' in cleanup
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
-    assert "dorf-codex-incus-vm-x86_64" in publish_script
+    assert "dorf-codex-incus-vm-v3-x86_64" in publish_script
     assert 'gh api "repos/$GITHUB_REPOSITORY" --jq .visibility' in publish_script
     assert "DORF_IMMUTABLE_RELEASES_ENABLED" in publish_script
     assert 'gh release create "$RELEASE_TAG"' in publish_script
