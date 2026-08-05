@@ -269,3 +269,19 @@ def test_local_consumer_proof_uses_one_disposable_vm_and_revokes_its_route() -> 
     assert sum("codex exec" in command for command in joined) == 2
     assert any("DORF_IMPLEMENTATION_READY_" in command for command in joined)
     assert any("DORF_ADMISSION_READY_" in command for command in joined)
+
+
+def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write() -> None:
+    class UnwritableRouteGateway(DisposableGateway):
+        def revoke_route(self, route_id):
+            raise PermissionError("provider route state is unwritable")
+
+    probe = DisposableProbe()
+    backend = ReadyLocalBackend(probe=probe, gateway=UnwritableRouteGateway())
+
+    result = CodingAdmissionPreflight(backend).prove(
+        CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
+    )
+
+    assert [failure.code for failure in result.failures] == ["provider-route-cleanup"]
+    assert sum(command[:2] == ["incus", "delete"] for command in probe.commands) == 1

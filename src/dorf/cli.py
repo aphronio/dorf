@@ -1611,6 +1611,9 @@ def start(
 ) -> None:
     """Create a dedicated Worker and goal-backed coding Job."""
     target = detect_git_target(Path.cwd())
+    if task is not None and issue is not None:
+        typer.echo("Provide exactly one of TASK or --issue.", err=True)
+        raise typer.Exit(1)
     admission = None
     if issue is not None and resume is None:
         admission = prove_coding_admission_or_exit(

@@ -1462,6 +1462,22 @@ def test_afk_aggregated_admission_failure_precedes_coordinator_and_job_mutation(
     assert store.get_afk_coordinator(str(repo.resolve()), 18) is None
 
 
+def test_start_rejects_task_and_issue_before_coding_admission(tmp_path, monkeypatch) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    admission_attempts = []
+    monkeypatch.setattr(
+        "dorf.cli.prove_coding_admission_or_exit",
+        lambda *args, **kwargs: admission_attempts.append((args, kwargs)),
+    )
+
+    result = CliRunner().invoke(app, ["start", "Conflicting task", "--issue", "18"])
+
+    assert result.exit_code == 1
+    assert "Provide exactly one of TASK or --issue." in result.output
+    assert admission_attempts == []
+
+
 def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
     tmp_path, monkeypatch
 ) -> None:

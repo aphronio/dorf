@@ -567,43 +567,47 @@ class LocalCodingAdmissionBackend:
                 )
             )
         finally:
-            if route is not None:
-                try:
-                    if not self._gateway().revoke_route(route.id):
-                        raise RuntimeError("temporary provider route was not found during cleanup")
-                    if self._gateway().route_for_consumer(consumer) is not None:
-                        raise RuntimeError("temporary provider route remains after revocation")
-                except (ProviderGatewayError, RuntimeError) as error:
-                    failures.append(
-                        _failure(
-                            "provider-route-cleanup",
-                            "provider connection owner",
-                            str(error),
-                            "Run `dorf doctor`, revoke the coding-admission route, and retry.",
-                            "Admission is blocked because a scoped route may have leaked.",
+            try:
+                if route is not None:
+                    try:
+                        if not self._gateway().revoke_route(route.id):
+                            raise RuntimeError(
+                                "temporary provider route was not found during cleanup"
+                            )
+                        if self._gateway().route_for_consumer(consumer) is not None:
+                            raise RuntimeError("temporary provider route remains after revocation")
+                    except (OSError, ProviderGatewayError, RuntimeError) as error:
+                        failures.append(
+                            _failure(
+                                "provider-route-cleanup",
+                                "provider connection owner",
+                                str(error),
+                                "Run `dorf doctor`, revoke the coding-admission route, and retry.",
+                                "Admission is blocked because a scoped route may have leaked.",
+                            )
                         )
-                    )
-            if init_attempted:
-                info = self.probe.run(["incus", "info", vm], timeout_seconds=30)
-                if info.returncode == 0:
-                    deleted = self.probe.run(
-                        ["incus", "delete", vm, "--force"], timeout_seconds=60
-                    )
-                elif _incus_instance_absent(info):
-                    deleted = None
-                else:
-                    deleted = info
-                if deleted is not None and deleted.returncode:
-                    failures.append(
-                        _failure(
-                            "disposable-room-cleanup",
-                            "Incus owner",
-                            _message(deleted),
-                            f"Delete disposable VM {vm} with "
-                            f"`incus delete {vm} --force`, then retry.",
-                            "Admission is blocked because its disposable Room remains.",
+            finally:
+                if init_attempted:
+                    info = self.probe.run(["incus", "info", vm], timeout_seconds=30)
+                    if info.returncode == 0:
+                        deleted = self.probe.run(
+                            ["incus", "delete", vm, "--force"], timeout_seconds=60
                         )
-                    )
+                    elif _incus_instance_absent(info):
+                        deleted = None
+                    else:
+                        deleted = info
+                    if deleted is not None and deleted.returncode:
+                        failures.append(
+                            _failure(
+                                "disposable-room-cleanup",
+                                "Incus owner",
+                                _message(deleted),
+                                f"Delete disposable VM {vm} with "
+                                f"`incus delete {vm} --force`, then retry.",
+                                "Admission is blocked because its disposable Room remains.",
+                            )
+                        )
         return tuple(failures)
 
     def proof(self, request: CodingAdmissionRequest) -> CodingAdmissionProof:
