@@ -9,19 +9,31 @@ import re
 import secrets
 import shlex
 import subprocess
+import tempfile
 import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from dorf.adapters.agents.codex import CodexDriver
 from dorf.adapters.agents.codex_config import (
     AgentConfigValidationError,
     CodexConfig,
     resolve_codex_config,
 )
-from dorf.adapters.environments import IncusConfig, IncusDoctor, IncusRunnerProbe
-from dorf.codex_room import CODEX_CONFIG_PATH, CODEX_ROUTE_CREDENTIAL_PATH, CODEX_ROUTE_ENV_KEY
+from dorf.adapters.environments import (
+    IncusConfig,
+    IncusDoctor,
+    IncusEnvironment,
+    IncusRunnerProbe,
+)
+from dorf.codex_room import (
+    CODEX_CONFIG_PATH,
+    CODEX_ROUTE_CREDENTIAL_PATH,
+    CODEX_ROUTE_ENV_KEY,
+    CodexRoomEnvironment,
+)
 from dorf.coding_workspace import GitAuthorIdentity, git_clone_workspace_script
 from dorf.deployment_profile import (
     DeploymentProfileError,
@@ -43,6 +55,15 @@ from dorf.repo_contract import (
     ContractValidationError,
     RepoContract,
     load_repo_contract,
+)
+from dorf.runtime import (
+    Assignment,
+    Job,
+    JobBinding,
+    JobConversation,
+    Room,
+    Worker,
+    WorkerAgentTurn,
 )
 
 ADMISSION_REVIEW_TIMEOUT_SECONDS = 180
@@ -513,18 +534,28 @@ class LocalCodingAdmissionBackend:
     ) -> tuple[AdmissionFailure, ...]:
         assert self.repository is not None
         assert self.contract is not None
+        assert self.codex_config is not None
+        assert self.codex_config.model is not None
+        assert self.codex_config.reasoning_effort is not None
         assert self.environment_config is not None
         assert self.provider_connection is not None
         assert self.image_fingerprint is not None
         assert self.installation_token is not None
         assert self.target_start_sha is not None
         vm = f"dorf-coding-admission-{secrets.token_hex(4)}"
-        consumer = f"coding-admission:{vm}"
+        binding = _disposable_job_binding(vm, self.codex_config)
+        consumer = f"room:{binding.room.id}"
         route = None
         failures: list[AdmissionFailure] = []
-        init_attempted = False
+        vm_created = False
         try:
-            init_attempted = True
+            existing = self.probe.run(["incus", "info", vm], timeout_seconds=30)
+            if existing.returncode == 0:
+                raise RuntimeError(f"disposable VM name already exists: {vm}")
+            if not _incus_instance_absent(existing):
+                raise RuntimeError(
+                    "could not prove disposable VM name is unused: " + _message(existing)
+                )
             init = self.probe.run(
                 [
                     "incus",
@@ -541,6 +572,7 @@ class LocalCodingAdmissionBackend:
             )
             if init.returncode:
                 raise RuntimeError(_message(init))
+            vm_created = True
             start = self.probe.run(["incus", "start", vm], timeout_seconds=60)
             if start.returncode:
                 raise RuntimeError(_message(start))
@@ -553,7 +585,7 @@ class LocalCodingAdmissionBackend:
             self._install_route(vm, route.base_url, route.wire_api, route.api_key)
             self._clone_and_prepare(vm, request)
             self._prove_github_write(vm)
-            self._prove_implementation(vm)
+            self._prove_implementation(binding)
             self._prove_reviewer(vm)
         except (OSError, RuntimeError, subprocess.TimeoutExpired, ProviderGatewayError) as error:
             failures.append(
@@ -587,7 +619,7 @@ class LocalCodingAdmissionBackend:
                             )
                         )
             finally:
-                if init_attempted:
+                if vm_created:
                     info = self.probe.run(["incus", "info", vm], timeout_seconds=30)
                     if info.returncode == 0:
                         deleted = self.probe.run(
@@ -812,49 +844,37 @@ class LocalCodingAdmissionBackend:
                 + (_message(result) if result.returncode else "expected response was absent")
             )
 
-    def _prove_implementation(self, vm: str) -> None:
+    def _prove_implementation(self, binding: JobBinding) -> None:
         assert self.codex_config is not None
         assert self.codex_config.model is not None
         assert self.codex_config.reasoning_effort is not None
+        assert self.environment_config is not None
+        assert self.provider_connection is not None
         nonce = f"DORF_IMPLEMENTATION_READY_{secrets.token_hex(8)}"
-        command = " ".join(
-            shlex.quote(item)
-            for item in (
-                "codex",
-                "exec",
-                "--ephemeral",
-                "-s",
-                "read-only",
-                "-m",
-                self.codex_config.model,
-                "-c",
-                f'model_reasoning_effort="{self.codex_config.reasoning_effort}"',
-                f"Reply with exactly: {nonce}",
+        environment = CodexRoomEnvironment(
+            IncusEnvironment(self.environment_config, probe=self.probe),
+            self._gateway(),
+            connection_name=self.provider_connection,
+        )
+        driver = CodexDriver(environment)
+        driver.prepare(binding)
+        with tempfile.TemporaryDirectory(prefix="dorf-coding-admission-") as output_dir:
+            outcome = driver.start_job_conversation(
+                binding,
+                WorkerAgentTurn(
+                    f"Reply with exactly: {nonce}",
+                    Path(output_dir) / "implementation.log",
+                    self.codex_config.model,
+                    self.codex_config.reasoning_effort,
+                ),
+                conversation_started=lambda thread_id: None,
+                turn_prepared=lambda baseline: None,
+                turn_started=lambda turn_id: None,
+                timeout_seconds=ADMISSION_REVIEW_TIMEOUT_SECONDS,
             )
-        )
-        script = (
-            f"IFS= read -r {CODEX_ROUTE_ENV_KEY} < {CODEX_ROUTE_CREDENTIAL_PATH}; "
-            f"export {CODEX_ROUTE_ENV_KEY}; exec {command}"
-        )
-        result = self.probe.run(
-            [
-                "incus",
-                "exec",
-                vm,
-                "--cwd",
-                ADMISSION_WORKSPACE,
-                "--",
-                "bash",
-                "-lc",
-                script,
-            ],
-            timeout_seconds=ADMISSION_REVIEW_TIMEOUT_SECONDS,
-        )
-        response_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if result.returncode or not response_lines or response_lines[-1] != nonce:
+        if outcome.status != "completed":
             raise RuntimeError(
-                "bounded implementation Codex turn failed: "
-                + (_message(result) if result.returncode else "expected response was absent")
+                f"bounded implementation app-server turn ended with status {outcome.status}"
             )
 
     def _command_env(self, request: CodingAdmissionRequest) -> dict[str, str]:
@@ -904,6 +924,71 @@ def _failure(
     consequence: str,
 ) -> AdmissionFailure:
     return AdmissionFailure(code, owner, summary, repair, consequence, False)
+
+
+def _disposable_job_binding(vm: str, codex_config: CodexConfig) -> JobBinding:
+    worker_name = "coding-admission"
+    job_name = "disposable-admission"
+    room_id = f"admission-{vm}"
+    timestamp = "disposable"
+    return JobBinding(
+        Job(
+            id=0,
+            name=job_name,
+            status="open",
+            goal_version=1,
+            goal="Prove the disposable coding implementation path.",
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+        Assignment(
+            id="disposable-admission",
+            job_name=job_name,
+            worker_name=worker_name,
+            generation=1,
+            status="open",
+            room_id=room_id,
+            workspace=ADMISSION_WORKSPACE,
+            started_at=timestamp,
+            ended_at=None,
+        ),
+        JobConversation(
+            id="disposable-admission",
+            job_name=job_name,
+            native_conversation_id=None,
+            model=codex_config.model or "",
+            reasoning_effort=codex_config.reasoning_effort or "",
+            status="idle",
+            error=None,
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+        Worker(
+            id=0,
+            name=worker_name,
+            harness_type="codex",
+            provenance="coding-workflow",
+            lifecycle_policy="disposable",
+            status="ready",
+            error=None,
+            current_room_id=room_id,
+            general_conversation_id=None,
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+        Room(
+            id=room_id,
+            worker_name=worker_name,
+            room_type=IncusEnvironment.environment_type,
+            provider_id=vm,
+            workspace="/workspace",
+            status="ready",
+            error=None,
+            metadata={},
+            created_at=timestamp,
+            updated_at=timestamp,
+        ),
+    )
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:

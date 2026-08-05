@@ -4,6 +4,7 @@ import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from dorf.adapters.agents.codex_config import CodexConfig
 from dorf.adapters.environments import IncusConfig
@@ -179,14 +180,28 @@ def test_platform_check_reports_invalid_incus_bridge_as_provider_route_failure(
 
 
 class DisposableProbe:
-    def __init__(self) -> None:
+    def __init__(self, *, instance_exists: bool = False) -> None:
         self.commands: list[list[str]] = []
+        self.instance_exists = instance_exists
 
     def which(self, command: str) -> str | None:
         return f"/usr/bin/{command}"
 
     def run(self, argv, *, input=None, timeout_seconds=None):
         self.commands.append(argv)
+        if argv[:2] == ["incus", "info"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0 if self.instance_exists else 1,
+                "status: RUNNING\n" if self.instance_exists else "",
+                "" if self.instance_exists else "Error: Instance not found",
+            )
+        if argv[:2] == ["incus", "init"]:
+            if self.instance_exists:
+                return subprocess.CompletedProcess(argv, 1, "", "Instance already exists")
+            self.instance_exists = True
+        if argv[:2] == ["incus", "delete"]:
+            self.instance_exists = False
         script = " ".join(argv)
         nonce = re.search(r"DORF_(?:IMPLEMENTATION|ADMISSION)_READY_[0-9a-f]{16}", script)
         stdout = f"{nonce.group(0)}\n" if nonce else ""
@@ -250,7 +265,40 @@ class ReadyLocalBackend(LocalCodingAdmissionBackend):
         return ()
 
 
-def test_local_consumer_proof_uses_one_disposable_vm_and_revokes_its_route() -> None:
+def install_app_server_driver(monkeypatch):
+    calls = []
+
+    class AppServerDriver:
+        def __init__(self, environment):
+            calls.append(("driver", environment))
+
+        def prepare(self, binding):
+            calls.append(("prepare", binding))
+
+        def start_job_conversation(
+            self,
+            binding,
+            turn,
+            *,
+            conversation_started,
+            turn_prepared,
+            turn_started,
+            timeout_seconds=None,
+        ):
+            calls.append(("turn", binding, turn, timeout_seconds))
+            conversation_started("thread-admission")
+            turn_prepared(None)
+            turn_started("turn-admission")
+            return SimpleNamespace(status="completed")
+
+    monkeypatch.setattr("dorf.workflows.coding_admission.CodexDriver", AppServerDriver)
+    return calls
+
+
+def test_local_consumer_proof_uses_app_server_and_one_disposable_vm(
+    monkeypatch,
+) -> None:
+    driver_calls = install_app_server_driver(monkeypatch)
     probe = DisposableProbe()
     gateway = DisposableGateway()
     backend = ReadyLocalBackend(probe=probe, gateway=gateway)
@@ -266,12 +314,21 @@ def test_local_consumer_proof_uses_one_disposable_vm_and_revokes_its_route() -> 
     joined = [" ".join(command) for command in probe.commands]
     assert any("git clone" in command for command in joined)
     assert any("git push --dry-run" in command for command in joined)
-    assert sum("codex exec" in command for command in joined) == 2
-    assert any("DORF_IMPLEMENTATION_READY_" in command for command in joined)
+    assert sum("codex exec" in command for command in joined) == 1
     assert any("DORF_ADMISSION_READY_" in command for command in joined)
+    assert [call[0] for call in driver_calls] == ["driver", "prepare", "turn"]
+    _, binding, turn, timeout_seconds = driver_calls[-1]
+    assert binding.environment_id.startswith("dorf-coding-admission-")
+    assert binding.workspace == "/workspace/admission"
+    assert turn.model == "gpt-5.6-sol"
+    assert turn.reasoning_effort == "low"
+    assert timeout_seconds == 180
 
 
-def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write() -> None:
+def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write(
+    monkeypatch,
+) -> None:
+    install_app_server_driver(monkeypatch)
     class UnwritableRouteGateway(DisposableGateway):
         def revoke_route(self, route_id):
             raise PermissionError("provider route state is unwritable")
@@ -285,3 +342,25 @@ def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write() ->
 
     assert [failure.code for failure in result.failures] == ["provider-route-cleanup"]
     assert sum(command[:2] == ["incus", "delete"] for command in probe.commands) == 1
+
+
+def test_local_consumer_proof_preserves_preexisting_instance_on_name_collision(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.secrets.token_hex",
+        lambda length: "collision",
+    )
+    probe = DisposableProbe(instance_exists=True)
+    backend = ReadyLocalBackend(probe=probe, gateway=DisposableGateway())
+
+    result = CodingAdmissionPreflight(backend).prove(
+        CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
+    )
+
+    assert [failure.code for failure in result.failures] == ["consumer-path"]
+    assert "already exists" in result.failures[0].summary
+    assert sum(command[:2] == ["incus", "info"] for command in probe.commands) == 1
+    assert not any(command[:2] == ["incus", "init"] for command in probe.commands)
+    assert not any(command[:2] == ["incus", "delete"] for command in probe.commands)
+    assert probe.instance_exists
