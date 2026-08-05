@@ -473,6 +473,60 @@ def test_default_dossier_omits_multiline_commands_but_json_keeps_them(
     assert len(markdown.splitlines()) <= 50
 
 
+def test_default_dossier_compacts_many_unproven_acceptance_items(
+    tmp_path: Path,
+) -> None:
+    store, job, binding = assigned_coding_job(tmp_path)
+    commit = "b" * 40
+    texts = [
+        f"Behavior {name} is preserved"
+        for name in (
+            "alpha",
+            "bravo",
+            "charlie",
+            "delta",
+            "echo",
+            "foxtrot",
+            "golf",
+            "hotel",
+            "india",
+            "juliet",
+            "kilo",
+        )
+    ]
+    store.record_acceptance_checklist(
+        "proof",
+        goal="Pinned goal",
+        items=tuple(
+            AcceptanceItem(
+                f"issue-{position}",
+                text,
+                "issue",
+                "command",
+                "check",
+                "pytest",
+            )
+            for position, text in enumerate(texts, start=1)
+        ),
+    )
+
+    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
+    markdown = render_proof_dossier(dossier)
+    structured = json.loads(json.dumps(asdict(dossier), sort_keys=True))
+
+    assert dossier.unresolved_risks == (
+        f"11 of 11 acceptance items remain unproven at {commit}",
+    )
+    for text, result in zip(texts, structured["acceptance"], strict=True):
+        detailed_reason = f"No passing observed evidence at {commit}: {text}"
+        assert result["reason"] == detailed_reason
+        assert detailed_reason not in markdown
+        assert markdown.count(text) == 1
+        assert f"{text} — No passing observed evidence at {commit}" in markdown
+    assert markdown.count("acceptance items remain unproven") == 1
+    assert len(markdown.splitlines()) <= 57
+
+
 def test_review_acceptance_rejects_a_changed_command_under_the_same_reviewer(
     tmp_path: Path,
 ) -> None:

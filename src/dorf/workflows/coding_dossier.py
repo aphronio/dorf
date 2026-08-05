@@ -262,7 +262,15 @@ def build_proof_dossier(
         )
         for event in claim_events
     )
-    risks = [result.reason for result in acceptance if result.status != "proven"]
+    unproven_acceptance = [
+        result for result in acceptance if result.status != "proven"
+    ]
+    risks = []
+    if unproven_acceptance:
+        risks.append(
+            f"{len(unproven_acceptance)} of {len(acceptance)} acceptance items remain "
+            f"unproven at {commit_sha}"
+        )
     if checklist is None:
         risks.append("Acceptance checklist was not compiled at admission")
     elif not checklist.items:
@@ -360,7 +368,11 @@ def render_proof_dossier(dossier: ProofDossier) -> str:
         for item in dossier.acceptance:
             mark = "x" if item.status == "proven" else " "
             refs = ", ".join(evidence.evidence_id for evidence in item.evidence)
-            suffix = f" — {refs}" if refs else f" — {item.reason}"
+            suffix = (
+                f" — {refs}"
+                if refs
+                else f" — {_compact_acceptance_reason(item)}"
+            )
             lines.append(f"- [{mark}] {item.text}{suffix}")
     else:
         lines.append("No machine-verifiable acceptance items were admitted.")
@@ -413,6 +425,13 @@ def render_proof_dossier(dossier: ProofDossier) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _compact_acceptance_reason(item: AcceptanceResult) -> str:
+    repeated_text = f": {item.text}"
+    if item.reason.endswith(repeated_text):
+        return item.reason[: -len(repeated_text)]
+    return item.reason
 
 
 def _acceptance_criteria(goal: str) -> list[str]:
