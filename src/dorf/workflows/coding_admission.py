@@ -53,6 +53,7 @@ REQUIRED_GITHUB_APP_PERMISSIONS = {
     "metadata": "read",
     "pull_requests": "write",
 }
+GITHUB_PERMISSION_LEVELS = {"read": 1, "write": 2, "admin": 3}
 ADMISSION_CHECKS = (
     "exact-repository-and-issue",
     "github-app-workflow-authority",
@@ -491,7 +492,7 @@ class LocalCodingAdmissionBackend:
             try:
                 gateway = self._gateway()
                 gateway.require_connection(self.provider_connection)
-            except (ProviderGatewayError, OSError, ValueError) as error:
+            except (ProviderGatewayError, OSError, RuntimeError, ValueError) as error:
                 failures.append(
                     _failure(
                         "provider-route",
@@ -951,5 +952,6 @@ def _missing_app_permissions(permissions: dict[str, str] | None) -> list[str]:
     return [
         f"{name}:{level}"
         for name, level in REQUIRED_GITHUB_APP_PERMISSIONS.items()
-        if permissions.get(name) != level
+        if GITHUB_PERMISSION_LEVELS.get(permissions.get(name, ""), 0)
+        < GITHUB_PERMISSION_LEVELS[level]
     ]

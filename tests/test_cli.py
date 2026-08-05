@@ -17,6 +17,7 @@ from dorf.adapters.environments import (
 from dorf.cli import (
     GitBackedJobBranch,
     app,
+    create_admitted_git_backed_job_branch_or_exit,
     create_git_backed_job_branch_or_exit,
     fetch_github_branch_objects_or_exit,
     github_issue_task,
@@ -1765,6 +1766,55 @@ def test_coding_reservation_is_durable_before_remote_branch_creation(tmp_path, m
         ("reservation", base_sha, "pending"),
         ("branch", "dorf/demo-task", base_sha),
     ]
+
+
+def test_admitted_branch_creation_rejects_target_advance_before_reservation(
+    tmp_path, monkeypatch
+) -> None:
+    base_sha = "b" * 40
+    advanced_sha = "c" * 40
+    target = type(
+        "Target",
+        (),
+        {"repo": tmp_path / "repo", "branch": "main", "start_sha": base_sha},
+    )()
+    admission = CodingAdmissionProof.create(
+        repository="example/repo",
+        issue=GitHubIssue(18, "One admission proof", "Issue body", ()),
+        target_branch="main",
+        target_start_sha=base_sha,
+        image_fingerprint="d" * 64,
+        provider_connection="personal-chatgpt",
+        reviewer="codex",
+        contract=RepoContract(mode="configured", commands={}, env={}),
+        codex_config=CodexConfig("gpt-5.6-sol", "low"),
+        git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
+        environment_config=IncusConfig(template="d" * 64),
+        installation_token="installation-token",
+    )
+    events = []
+
+    class GitHub:
+        def __init__(self, token):
+            assert token == "installation-token"
+
+        def get_branch_sha(self, repo, branch):
+            return advanced_sha
+
+        def create_branch(self, repo, branch, sha):
+            events.append(("branch", branch, sha))
+
+    monkeypatch.setattr("dorf.cli.GitHubRepositoryClient", GitHub)
+
+    with pytest.raises(Exit):
+        create_admitted_git_backed_job_branch_or_exit(
+            target,
+            "dorf/demo-task",
+            admission,
+            before_create=lambda branch: events.append(("reservation", branch.base_sha)),
+        )
+
+    assert events == []
 
 
 @pytest.mark.parametrize("branch_state", ["present", "missing"])

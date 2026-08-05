@@ -2951,9 +2951,21 @@ def create_admitted_git_backed_job_branch_or_exit(
         token=proof.installation_token,
     )
     try:
+        client = GitHubRepositoryClient(proof.installation_token)
+        current_target_sha = client.get_branch_sha(
+            proof.repository,
+            proof.target_branch,
+        )
+        if current_target_sha != proof.target_start_sha:
+            typer.echo(
+                "The target branch advanced after coding admission; repeat the delegation "
+                "to prove its current head.",
+                err=True,
+            )
+            raise typer.Exit(1)
         if before_create is not None:
             before_create(branch)
-        GitHubRepositoryClient(proof.installation_token).create_branch(
+        client.create_branch(
             proof.repository,
             job_branch,
             proof.target_start_sha,

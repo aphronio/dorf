@@ -8,6 +8,7 @@ from pathlib import Path
 from dorf.adapters.agents.codex_config import CodexConfig
 from dorf.adapters.environments import IncusConfig
 from dorf.coding_workspace import GitAuthorIdentity
+from dorf.deployment_profile import DeploymentProfile
 from dorf.github_app import GitHubIssue
 from dorf.provider_gateway import InferenceRoute
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
@@ -17,7 +18,10 @@ from dorf.workflows import (
     CodingAdmissionProof,
     CodingAdmissionRequest,
 )
-from dorf.workflows.coding_admission import LocalCodingAdmissionBackend
+from dorf.workflows.coding_admission import (
+    LocalCodingAdmissionBackend,
+    _missing_app_permissions,
+)
 
 
 def proof() -> CodingAdmissionProof:
@@ -130,6 +134,48 @@ def test_preflight_exercises_real_consumer_path_and_returns_one_reusable_proof()
     assert "installation_token" not in result.proof.record()
     assert backend.calls == ["repository", "github", "platform", "consumer", "proof"]
     assert replace(result.proof, installation_token="rotated").proof_id == result.proof.proof_id
+
+
+def test_github_permission_write_satisfies_required_read_authority() -> None:
+    assert _missing_app_permissions(
+        {
+            "contents": "write",
+            "issues": "write",
+            "metadata": "read",
+            "pull_requests": "admin",
+        }
+    ) == []
+
+
+def test_platform_check_reports_invalid_incus_bridge_as_provider_route_failure(
+    monkeypatch,
+) -> None:
+    class Ipv6OnlyBridgeProbe(DisposableProbe):
+        def run(self, argv, *, input=None, timeout_seconds=None):
+            if argv[:3] == ["incus", "network", "get"]:
+                return subprocess.CompletedProcess(argv, 0, "fd42::1/64\n", "")
+            return super().run(argv, input=input, timeout_seconds=timeout_seconds)
+
+    backend = LocalCodingAdmissionBackend(probe=Ipv6OnlyBridgeProbe())
+    backend.contract = proof().contract
+    profile = DeploymentProfile(
+        provider_connection="personal-chatgpt",
+        image_fingerprint="b" * 64,
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_deployment_profile",
+        lambda: profile,
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.IncusDoctor.fast_check",
+        lambda self, config: type("Result", (), {"failures": []})(),
+    )
+    failures = backend.check_platform(
+        CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
+    )
+
+    assert [item.code for item in failures] == ["provider-route"]
+    assert "does not have a private bridge IPv4 address" in failures[0].summary
 
 
 class DisposableProbe:
