@@ -4,19 +4,20 @@ This is implementation guidance for the credential-free `dorf-codex` VM image us
 built-in Incus Environment. Room provisioning and Worker preparation must not install packages
 from the network.
 
-The default public path consumes a Dorf-built image. The local builder remains available for
-development:
+The default public path consumes a Dorf-built image. It includes Git, uv, Node, and Codex: the
+complete ordinary coding workstation needed to clone a managed repository and run its declared
+preparation and check commands without agent-led tool installation. Build-only npm is removed. The
+local builder remains available for development:
 
 ```bash
 scripts/incus/build-dorf-codex-image.sh
 ```
 
 The build and provisioning scripts are the source of truth for the base fingerprint, installed
-harness, selected Codex release, and credential checks. The public core image retains the Ubuntu
-base, CA certificates, the Node runtime, and Codex app-server harness; build-only npm plus
-coding-workflow tools such as Git and uv are absent. `IMAGE_ALIAS` changes the local published
-alias. The builder resolves the configured Ubuntu VM alias to an immutable fingerprint before
-launching it and records the exact Codex version, npm package integrity, and base fingerprint.
+harness and tools, selected Codex release, and credential checks. `IMAGE_ALIAS` changes the local
+published alias. The builder resolves the configured Ubuntu VM alias to an immutable fingerprint
+before launching it and records the exact Codex version, npm package integrity, Git, Node, and uv
+versions, and base fingerprint.
 
 ## Candidate and release pipeline
 
@@ -26,10 +27,14 @@ launching it and records the exact Codex version, npm package integrity, and bas
 2. resolves the current `@openai/codex@latest`, records its version and npm integrity, and installs
    that exact selected version;
 3. launches a clean probe and checks the image for forbidden credentials and required tools;
-4. completes a real disposable Dorf Worker turn through the selected Provider Connection;
-5. verifies Room destruction and Provider Gateway route revocation;
-6. exports the VM and creates the canonical compatibility manifest; and
-7. reconciles its exact temporary VMs and candidate alias.
+4. clones Dorf at the release source commit and runs `.dorf.toml`'s deterministic preparation;
+5. completes a real Codex implementation turn, the repo-owned checks, and a real Codex review with
+   explicit access to the Room-scoped Provider Route;
+6. records the image fingerprint, commands, preparation elapsed time, reviewer/route proof, and
+   SHA-256-addressed command artifacts in a redacted local evidence directory;
+7. verifies Room, workspace, runtime-state, and Provider Route removal; and
+8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
+   VMs and candidate alias.
 
 Run that proof manually with an already connected Provider Gateway name:
 
@@ -61,9 +66,10 @@ A complete draft containing the archive and manifest is published only when:
 - the named Provider Connection is valid on the local host; and
 - the complete candidate proof passes.
 
-The lean `v0.1.1` release passed this proof on 2026-08-04 with Codex 0.146.0. Its fresh probe
-contained Node and Codex but no Git, npm, uv, provider credential, or generated Room route. A real
-Worker returned the expected response, after which its scoped route and Room were removed. The
+The earlier lean `v0.1.1` release passed the core Worker proof on 2026-08-04 with Codex 0.146.0. Its
+fresh probe contained Node and Codex but no Git, npm, or uv. Releases after the coding-workstation
+slice add Git and uv while retaining the same credential-free boundary; npm remains absent. The
+candidate terminal is now the clone-to-implementation-to-review proof above. The v0.1.1
 published archive is 765,823,845 bytes, about 52 MiB smaller than the previous workflow-tooling
 image. Its archive and Incus fingerprint is
 `0c269e0aa0c5a765e45bb50542b64d06e6c55930b920754459643991c7349775`; the manifest digest is
@@ -82,6 +88,10 @@ owner's ChatGPT subscription state in GitHub Actions and avoids a persistent sel
 public repository. Reconsider unattended publication only with a deliberately scoped non-personal
 CI provider credential and an isolated runner. Do not advertise the official download before its
 anonymous stranger terminal passes.
+
+`EVIDENCE_POLICY=retain` is the candidate proof default and keeps redacted terminal evidence under
+`dist/room-image/workstation-evidence`; `EVIDENCE_POLICY=remove` deletes it after validation. Neither
+policy publishes that temporary evidence or writes it into the candidate image.
 
 ## Verified consumption
 

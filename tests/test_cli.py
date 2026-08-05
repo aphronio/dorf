@@ -1229,7 +1229,9 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     tmp_path, monkeypatch
 ) -> None:
     repo = create_git_repo(tmp_path / "repo")
-    (repo / ".dorf.toml").write_text('[commands]\ncheck = "true"\n')
+    (repo / ".dorf.toml").write_text(
+        '[commands]\nprepare = "uv sync --frozen"\ncheck = "true"\n'
+    )
     git(repo, "add", ".dorf.toml")
     git(repo, "commit", "-m", "contract")
     monkeypatch.chdir(repo)
@@ -1251,10 +1253,15 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
         return branch
 
     monkeypatch.setattr("dorf.cli.create_git_backed_job_branch_or_exit", create_branch)
+    setup_order = []
+    monkeypatch.setattr(
+        "dorf.cli.run_repository_preparation_or_raise",
+        lambda *args: setup_order.append("prepare"),
+    )
     dispatched = []
     monkeypatch.setattr(
         "dorf.cli.launch_job_input_dispatcher",
-        lambda *args: dispatched.append(args) or False,
+        lambda *args: setup_order.append("dispatch") or dispatched.append(args) or False,
     )
     monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
     data_home = tmp_path / "data"
@@ -1303,6 +1310,7 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
         "personal-chatgpt"
     )
     assert len(dispatched) == 1
+    assert setup_order == ["prepare", "dispatch"]
     assert dispatched[0][1] == "abc123-demo-task"
     assert store.list_job_inputs("abc123-demo-task")[0].kind == "goal"
 

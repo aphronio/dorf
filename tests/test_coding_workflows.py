@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from dorf.cli import run_repository_preparation_or_raise
 from dorf.command_runner import shell_command
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.runtime import (
@@ -21,6 +22,7 @@ from dorf.workflows import (
     run_coding_job_command,
 )
 from dorf.workflows.coding import verify_job_readiness
+from dorf.workflows.coding_commands import prepare_coding_repository
 
 
 class Agent:
@@ -284,6 +286,54 @@ def test_coding_command_runs_in_assignment_workspace_and_records_fact_evidence(
     )
     assert event.related["assignment"] == binding.assignment.id
     assert event.artifacts[0].name == "check-output.log"
+
+
+def test_repository_preparation_is_a_recorded_repo_owned_command(tmp_path) -> None:
+    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
+    contract = RepoContract(
+        mode="configured",
+        commands={"prepare": "uv sync --frozen"},
+        env={},
+    )
+
+    run = prepare_coding_repository(store, environment, job, binding, contract)
+
+    assert run is not None
+    assert (run.kind, run.command, run.status) == (
+        "prepare",
+        "uv sync --frozen",
+        "succeeded",
+    )
+    assert environment.processes[-1][2]["cwd"] == binding.workspace
+
+
+def test_repository_preparation_is_optional_for_generic_repositories(tmp_path) -> None:
+    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
+
+    run = prepare_coding_repository(
+        store,
+        environment,
+        job,
+        binding,
+        RepoContract(mode="generic", commands={}, env={}),
+    )
+
+    assert run is None
+    assert environment.processes == []
+
+
+def test_failed_repository_preparation_stops_before_an_agent_turn(tmp_path) -> None:
+    store, environment, agent, _runtime, _job, binding = make_coding_job(tmp_path)
+    contract = RepoContract(
+        mode="configured",
+        commands={"prepare": "false"},
+        env={},
+    )
+
+    with pytest.raises(RuntimeError, match="repository preparation exited with code 1"):
+        run_repository_preparation_or_raise(store, environment, binding, contract)
+
+    assert agent.turns == []
 
 
 def test_readiness_uses_current_assignment_and_passing_command_at_head(tmp_path) -> None:

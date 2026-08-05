@@ -13,6 +13,9 @@ def test_dorf_repo_declares_contract() -> None:
     assert contract.mode == "configured"
     assert isinstance(contract.commands.get("check"), str)
     assert isinstance(contract.commands.get("smoke"), str)
+    assert contract.commands.get("prepare") == (
+        "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups"
+    )
     assert "review" not in contract.commands
     assert contract.review is not None
     assert contract.review.timeout_seconds == 1800
@@ -28,7 +31,7 @@ def test_dorf_repo_declares_contract() -> None:
     assert contract.primary_codex is not None
     assert contract.primary_codex.model == "gpt-5.6-sol"
     assert contract.primary_codex.reasoning_effort == "low"
-    assert contract.env == {"PATH": "host.PATH"}
+    assert contract.env == {}
 
 
 def test_missing_contract_loads_generic_mode(tmp_path: Path) -> None:

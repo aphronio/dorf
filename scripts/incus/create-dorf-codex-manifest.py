@@ -36,10 +36,16 @@ def main() -> None:
         parser.error("image metadata package must be @openai/codex")
     codex_version = metadata.get("version")
     npm_integrity = metadata.get("npm_integrity")
+    tools = metadata.get("tools")
     if not isinstance(codex_version, str) or not codex_version:
         parser.error("image metadata has no Codex version")
     if not isinstance(npm_integrity, str) or not npm_integrity.startswith("sha512-"):
         parser.error("image metadata has no SHA-512 npm integrity")
+    if not isinstance(tools, dict) or any(
+        not isinstance(tools.get(name), str) or not tools[name]
+        for name in ("git", "node", "uv")
+    ):
+        parser.error("image metadata has no complete coding tool inventory")
 
     archive_digest = hashlib.sha256()
     with args.archive.open("rb") as archive_file:
@@ -62,6 +68,7 @@ def main() -> None:
             "version": codex_version,
             "npm_integrity": npm_integrity,
         },
+        "tools": {name: tools[name] for name in ("git", "node", "uv")},
         "source_commit": args.source_commit,
         "validated_at": args.validated_at,
     }

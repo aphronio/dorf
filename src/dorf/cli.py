@@ -13,7 +13,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 import typer
 from rich.console import Console
@@ -143,6 +143,7 @@ from dorf.workflows import (
     CodingWorkflow,
     WorkflowFailure,
     WorkflowOutcome,
+    prepare_coding_repository,
     run_coding_job_command,
 )
 
@@ -1828,6 +1829,7 @@ def launch_coding_job_or_exit(
             branch=job_branch,
             git_author=git_author,
         )
+        run_repository_preparation_or_raise(store, environment, binding, contract)
     except Exception as error:
         if store.get_coding_job(job_name) is not None:
             store.update_status(job_name, "setup-failed")
@@ -1853,6 +1855,25 @@ def launch_coding_job_or_exit(
     )
     echo_contract_summary(contract)
     return job_name
+
+
+def run_repository_preparation_or_raise(
+    store: CodingStore,
+    environment: CodexRoomEnvironment,
+    binding: JobBinding,
+    contract: RepoContract,
+) -> None:
+    job = store.get_coding_job(binding.job.name)
+    if job is None:
+        raise RuntimeError(f"CodingJob not found: {binding.job.name}")
+    started = monotonic()
+    run = prepare_coding_repository(store, environment, job, binding, contract)
+    if run is None:
+        return
+    elapsed = monotonic() - started
+    typer.echo(f"Repository preparation: {run.command} ({elapsed:.1f}s)")
+    if run.exit_code != 0:
+        raise RuntimeError(f"repository preparation exited with code {run.exit_code}")
 
 
 def recover_setup_failed_coding_job_or_exit(
@@ -1948,6 +1969,7 @@ def recover_setup_failed_coding_job_or_exit(
             branch=job.job_branch,
             git_author=resolve_git_author_or_exit(repo),
         )
+        run_repository_preparation_or_raise(store, environment, binding, contract)
     except Exception as error:
         store.update_status(job.job_name, "setup-failed")
         typer.echo(f"Could not recover coding Job setup: {error}", err=True)

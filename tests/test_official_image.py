@@ -112,6 +112,7 @@ def release_fixture(
                 "version": "0.150.0",
                 "npm_integrity": "sha512-test-integrity",
             },
+            "tools": {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
             "source_commit": "a" * 40,
             "validated_at": "2026-07-31T08:30:00Z",
         },
@@ -301,6 +302,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
                 "package": "@openai/codex",
                 "version": "0.150.0",
                 "npm_integrity": "sha512-published-package",
+                "tools": {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
             }
         )
     )
@@ -342,4 +344,9 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
     assert manifest["codex"] == {
         "version": "0.150.0",
         "npm_integrity": "sha512-published-package",
+    }
+    assert manifest["tools"] == {
+        "git": "2.43.0",
+        "node": "v18.19.1",
+        "uv": "0.8.3",
     }

@@ -157,19 +157,28 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
         / "incus"
         / "publish-dorf-codex-release.sh"
     ).read_text()
+    credential_check = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "incus"
+        / "assert-dorf-codex-credential-free.sh"
+    ).read_text()
 
-    assert "test ! -e /root/.codex/auth.json" in build_script
-    assert "test ! -e /root/.codex/config.toml" in build_script
-    assert "test ! -e /root/.config/dorf/provider-route.key" in build_script
-    assert 'test -z "${OPENAI_API_KEY:-}"' in build_script
+    assert "assert-dorf-codex-credential-free.sh" in build_script
+    assert ".codex/auth.json" in credential_check
+    assert ".config/gh/hosts.yml" in credential_check
+    assert ".factory" in credential_check
+    assert "OPENAI_API_KEY" in credential_check
+    assert "GITHUB_TOKEN" in credential_check
+    assert "FACTORY_API_KEY" in credential_check
     assert 'incus image info "$BASE_IMAGE" --vm' in build_script
     assert '"$BASE_REMOTE:$BASE_FINGERPRINT"' in build_script
     assert r"""sed -n 's/.*"version": "\([^"]*\)".*/\1/p'""" in build_script
     assert "npm view @openai/codex@latest version" in provision_script
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
     assert "apt-get purge -y npm" in provision_script
-    assert "git" not in provision_script
-    assert "astral.sh/uv" not in provision_script
+    assert "git" in provision_script
+    assert "astral.sh/uv" in provision_script
     assert "npm_integrity" in provision_script
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script
@@ -179,9 +188,11 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
     assert "dorf-codex-incus-vm-x86_64" in release_script
-    assert "! command -v git" in release_script
+    assert 'test -x "$(command -v git)"' in release_script
     assert "! command -v npm" in release_script
-    assert "! command -v uv" in release_script
+    assert 'test -x "$(command -v uv)"' in release_script
+    assert "validate-dorf-coding-workstation.py" in release_script
+    assert 'incus delete "$VALIDATION_VM" --force' in release_script
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
     assert "dorf-codex-incus-vm-x86_64" in publish_script
@@ -190,6 +201,40 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert 'gh release create "$RELEASE_TAG"' in publish_script
     assert 'gh release edit "$RELEASE_TAG"' in publish_script
     assert "gh release verify-asset" in publish_script
+
+
+def test_image_credential_check_rejects_owner_files_and_environment(tmp_path) -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "incus"
+        / "assert-dorf-codex-credential-free.sh"
+    )
+    clean_env = {
+        "PATH": "/usr/bin:/bin",
+        "DORF_IMAGE_HOME": str(tmp_path),
+    }
+
+    clean = subprocess.run([str(script)], env=clean_env, text=True, capture_output=True)
+    credential = tmp_path / ".config" / "gh" / "hosts.yml"
+    credential.parent.mkdir(parents=True)
+    credential.write_text("oauth_token: owner-secret\n")
+    github = subprocess.run([str(script)], env=clean_env, text=True, capture_output=True)
+    credential.unlink()
+    factory = subprocess.run(
+        [str(script)],
+        env={**clean_env, "FACTORY_API_KEY": "owner-secret"},
+        text=True,
+        capture_output=True,
+    )
+
+    assert clean.returncode == 0
+    assert github.returncode == 1
+    assert "hosts.yml" in github.stderr
+    assert "owner-secret" not in github.stderr
+    assert factory.returncode == 1
+    assert "FACTORY_API_KEY" in factory.stderr
+    assert "owner-secret" not in factory.stderr
 
 
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:

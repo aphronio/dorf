@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol
 
-from dorf.command_runner import CommandInterrupted, CommandSpec, run_job_command
+from dorf.command_runner import CommandInterrupted, CommandSpec, run_job_command, shell_command
 from dorf.repo_contract import RepoContract
 from dorf.runtime import ArtifactInput, JobBinding
 
@@ -97,6 +97,27 @@ def run_coding_job_command(
     if interruption is not None:
         raise CommandInterrupted(recorded) from None
     return recorded
+
+
+def prepare_coding_repository(
+    store: CodingStore,
+    environment: CodingEnvironment,
+    job: CodingJob,
+    binding: JobBinding,
+    contract: RepoContract,
+) -> CodingCommandRun | None:
+    """Run the repository's deterministic preparation before its first agent turn."""
+    command = contract.commands.get("prepare")
+    if command is None:
+        return None
+    return run_coding_job_command(
+        store,
+        environment,
+        job,
+        binding,
+        contract,
+        shell_command("prepare", command),
+    )
 
 
 def _command_env(
