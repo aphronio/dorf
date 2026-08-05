@@ -158,6 +158,11 @@ class JobExecution:
     _agent: CodexDriver
     _git_credential_token: Callable[[str], str] | None
 
+    def _require_runtime(self) -> JobRuntime:
+        if self._runtime is None:
+            raise RuntimeError("Durable Job runtime operations are unavailable")
+        return self._runtime
+
     def admit_message(
         self,
         *,
@@ -166,8 +171,7 @@ class JobExecution:
         model: str | None = None,
         reasoning_effort: str | None = None,
     ) -> tuple[JobInput, bool]:
-        assert self._runtime is not None
-        return self._runtime.admit_message(
+        return self._require_runtime().admit_message(
             self.binding.job.name,
             message_id=message_id,
             text=text,
@@ -176,8 +180,7 @@ class JobExecution:
         )
 
     def deliver_input(self, input_id: str) -> JobTurn:
-        assert self._runtime is not None
-        return self._runtime.deliver_input(self.binding.job.name, input_id)
+        return self._require_runtime().deliver_input(self.binding.job.name, input_id)
 
     def execute(
         self,
@@ -328,9 +331,8 @@ class Dorf:
 
     @staticmethod
     def open_provider_gateway(config: IncusConfig, *, probe=None) -> RoomRouteGateway:
-        return ProviderGateway.open(
-            bind_address=incus_bridge_ipv4(config.network, probe=probe)
-        )
+        bind_address = incus_bridge_ipv4(config.network, probe=probe)
+        return ProviderGateway.open(bind_address=bind_address)
 
     def spawn_worker(
         self,
@@ -589,7 +591,7 @@ class Dorf:
 
     def activate_job(self, name: str) -> JobAssignmentResult:
         execution = self.job_execution(name)
-        binding = self._job_runtime(execution._environment).activate_assignment(name)
+        binding = execution._require_runtime().activate_assignment(name)
         inputs = self._store.list_job_inputs(name)
         if not inputs:
             raise RuntimeError(f"Job {name} has no initial goal input after assignment")
@@ -619,9 +621,8 @@ class Dorf:
             model=model,
             reasoning_effort=reasoning_effort,
         )
-        environment = self._environment_for_binding(binding)
-        queued, created = self._job_runtime(environment).admit_message(
-            name,
+        execution = self.job_execution(name)
+        queued, created = execution.admit_message(
             message_id=_message_id("jmsg", action_id),
             text=text,
             model=model,
