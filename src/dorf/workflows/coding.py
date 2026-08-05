@@ -23,10 +23,16 @@ from dorf.repo_contract import RepoContract
 from dorf.runtime import JobBinding, JobRuntime
 
 from .coding_commands import CodingEnvironment, run_coding_job_command
-from .coding_store import CodingJob, CodingStore
+from .coding_dossier import (
+    REVIEW_NO_FINDINGS_SENTINEL,
+    acceptance_is_proven,
+    build_proof_dossier,
+    render_proof_dossier,
+    review_output_has_no_findings,
+)
+from .coding_store import CodingCommandRun, CodingJob, CodingStore
 
 VERIFY_GATE_FAILURE_LIMIT = 3
-REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
 REVIEW_PROMPT_PLACEHOLDER = "{dorf_review_prompt}"
 AFK_TERMINAL_JOB_STATUSES = frozenset({"abandoned", "merged", "rejected"})
 REVIEW_RESULT_INSTRUCTIONS = f"""\
@@ -519,6 +525,8 @@ class CodingWorkflow:
     def review(self, agents: list[str] | None = None) -> WorkflowOutcome:
         """Run configured review commands once without applying verify policy."""
         requested = self._requested_review_agents(agents)
+        if self.store.get_acceptance_checklist(self.job.job_name) is not None:
+            self.store.freeze_acceptance_checklist(self.job.job_name)
         assert self.contract.review is not None
         exit_code = 0
         for name in requested:
@@ -554,6 +562,7 @@ class CodingWorkflow:
                     error=True,
                 )
             else:
+                self._record_review_verdict(run)
                 self._emit(f"{kind} succeeded for {self.job.job_name}")
             if run.exit_code != 0:
                 exit_code = exit_code or run.exit_code or 1
@@ -569,6 +578,9 @@ class CodingWorkflow:
         """Apply the mechanical readiness gate and persist a ready outcome."""
         if self.job.status in {"discarded", "running"}:
             self._fail(f"CodingJob cannot be marked ready: {self.job.job_name} ({self.job.status})")
+        checklist = self.store.get_acceptance_checklist(self.job.job_name)
+        if checklist is not None:
+            self.store.freeze_acceptance_checklist(self.job.job_name)
         try:
             readiness = verify_job_readiness(
                 self.store,
@@ -591,6 +603,24 @@ class CodingWorkflow:
             for failure in readiness.failures:
                 self._emit(f"- {failure}", error=True)
             raise WorkflowFailure(1, tuple(self._messages), kind="readiness")
+        if checklist is not None:
+            commit_sha = self._read_job_head()
+            dossier = build_proof_dossier(
+                self.store,
+                self.job,
+                self.binding,
+                commit_sha=commit_sha,
+            )
+            if not acceptance_is_proven(dossier):
+                self._emit(
+                    f"CodingJob acceptance is unproven at {commit_sha}: {self.job.job_name}",
+                    error=True,
+                )
+                for result in dossier.acceptance:
+                    if result.status != "proven":
+                        self._emit(f"- {result.reason}", error=True)
+                raise WorkflowFailure(1, tuple(self._messages), kind="readiness")
+            self.store.set_metadata_value(self.job.job_name, "proof_commit", commit_sha)
         self.store.update_status(self.job.job_name, "ready")
         self._emit(f"CodingJob ready: {self.job.job_name}")
         return self._outcome()
@@ -656,7 +686,7 @@ class CodingWorkflow:
                 )
                 continue
             output = command_run_output(run.output_path)
-            if not review_output_has_no_findings(output):
+            if not self._record_review_verdict(run, output=output):
                 payload["findings"].append(
                     {
                         "agent": name,
@@ -669,30 +699,62 @@ class CodingWorkflow:
                 )
         return payload
 
-    def _check_gate(self) -> dict | None:
-        check = self.contract.commands.get("check")
-        if check is None:
-            return None
-        run = self._run_command(shell_command("check", check))
-        if run.exit_code == 0:
-            return None
-        return {
-            "type": "check",
-            "job_name": self.job.job_name,
-            "job_branch": self.job.job_branch,
-            "target_start_sha": self.job.target_start_sha,
-            "failure": {
-                "kind": "check",
-                "run_id": run.id,
-                "exit_code": run.exit_code,
-                "output_path": run.output_path,
-                "message": (
-                    "check did not finish"
-                    if run.exit_code is None
-                    else f"check exited with code {run.exit_code}"
-                ),
+    def _record_review_verdict(
+        self,
+        run: CodingCommandRun,
+        *,
+        output: str | None = None,
+    ) -> bool:
+        observed_output = command_run_output(run.output_path) if output is None else output
+        no_findings = review_output_has_no_findings(observed_output)
+        commit = (
+            run.git_commit_after
+            if run.git_commit_before == run.git_commit_after
+            else None
+        )
+        verdict = "no-findings" if no_findings else "findings"
+        self.store.documents.append_event(
+            self.job.job_name,
+            event_id=f"evt-review-{run.id}-verdict",
+            source="workflow",
+            provenance="fact",
+            kind="review-verdict",
+            summary=f"{run.kind} observed {verdict}",
+            related={
+                "assignment": self.binding.assignment.id,
+                **({"commit": commit} if commit is not None else {}),
+                "run": str(run.id),
+                "verdict": verdict,
             },
-        }
+        )
+        return no_findings
+
+    def _check_gate(self) -> dict | None:
+        for name in ("check", "smoke"):
+            command = self.contract.commands.get(name)
+            if command is None:
+                continue
+            run = self._run_command(shell_command(name, command))
+            if run.exit_code == 0:
+                continue
+            return {
+                "type": name,
+                "job_name": self.job.job_name,
+                "job_branch": self.job.job_branch,
+                "target_start_sha": self.job.target_start_sha,
+                "failure": {
+                    "kind": name,
+                    "run_id": run.id,
+                    "exit_code": run.exit_code,
+                    "output_path": run.output_path,
+                    "message": (
+                        f"{name} did not finish"
+                        if run.exit_code is None
+                        else f"{name} exited with code {run.exit_code}"
+                    ),
+                },
+            }
+        return None
 
     def _ready_gate(self) -> dict | None:
         readiness = verify_job_readiness(
@@ -750,6 +812,8 @@ class CodingWorkflow:
         max_rounds = self.contract.review.max_rounds
         if max_rounds < 1:
             self._fail("review.max_rounds must be at least 1")
+        if self.store.get_acceptance_checklist(self.job.job_name) is not None:
+            self.store.freeze_acceptance_checklist(self.job.job_name)
 
         recovered = self._unsettled_turn()
         if recovered is not None and recovered.exit_code != 0:
@@ -809,6 +873,27 @@ class CodingWorkflow:
                         kind="needs-human",
                     )
                 if not blocking_review_findings(payload):
+                    commit_sha = self._read_job_head()
+                    checklist = self.store.get_acceptance_checklist(self.job.job_name)
+                    if checklist is not None:
+                        dossier = build_proof_dossier(
+                            self.store,
+                            self.job,
+                            self.binding,
+                            commit_sha=commit_sha,
+                        )
+                        self.store.set_metadata_value(
+                            self.job.job_name,
+                            "proof_commit",
+                            commit_sha,
+                        )
+                        if not acceptance_is_proven(dossier):
+                            self._mark_needs_human_and_publish()
+                            self._fail(
+                                f"Verify stopped for {self.job.job_name}: acceptance remains "
+                                f"unproven at {commit_sha}.",
+                                kind="needs-human",
+                            )
                     self.store.update_status(self.job.job_name, "ready")
                     job = self.store.get_coding_job(self.job.job_name)
                     if job is None:
@@ -1419,15 +1504,6 @@ def command_run_output(output_path: str | None) -> str:
     return path.read_text()
 
 
-def review_output_has_no_findings(output: str) -> bool:
-    non_empty_lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not non_empty_lines or non_empty_lines[-1] != REVIEW_NO_FINDINGS_SENTINEL:
-        return False
-    agent_markers = [index for index, line in enumerate(non_empty_lines) if line == "codex"]
-    response_lines = non_empty_lines[agent_markers[-1] + 1 :] if agent_markers else non_empty_lines
-    return response_lines == [REVIEW_NO_FINDINGS_SENTINEL]
-
-
 def blocking_review_findings(payload: dict) -> list[dict]:
     findings = payload.get("findings", [])
     if not isinstance(findings, list):
@@ -1788,26 +1864,28 @@ def verify_job_readiness(
         if commits_beyond_base < 1:
             failures.append("Job branch has no commits beyond target base")
 
-    check_command = contract.commands.get("check")
-    if check_command is not None:
-        runs = store.list_command_runs(job.job_name)
+    runs = store.list_command_runs(job.job_name)
+    for command_name in ("check", "smoke"):
+        required_command = contract.commands.get(command_name)
+        if required_command is None:
+            continue
         latest_head_run = next(
             (
                 run
                 for run in runs
-                if run.kind == "check"
-                and run.command == check_command
+                if run.kind == command_name
+                and run.command == required_command
                 and run.git_commit_before == head_sha
                 and run.git_commit_after == head_sha
             ),
             None,
         )
         if latest_head_run is None:
-            failures.append("required check record did not pass at Job HEAD")
+            failures.append(f"required {command_name} record did not pass at Job HEAD")
         elif latest_head_run.status != "succeeded" or latest_head_run.exit_code != 0:
-            failures.append("latest required check record failed at Job HEAD")
+            failures.append(f"latest required {command_name} record failed at Job HEAD")
         elif latest_head_run.finished_at is None:
-            failures.append("latest required check record did not finish at Job HEAD")
+            failures.append(f"latest required {command_name} record did not finish at Job HEAD")
 
     if remote_error is not None:
         failures.append(f"could not read remote Job branch: {remote_error}")
@@ -1962,6 +2040,17 @@ def github_remote_head(
 
 
 def github_pr_verification_comment(store: CodingStore, job: CodingJob) -> str:
+    checklist = store.get_acceptance_checklist(job.job_name)
+    binding = store.get_job_binding(job.job_name)
+    if checklist is not None and binding is not None:
+        return render_proof_dossier(
+            build_proof_dossier(
+                store,
+                job,
+                binding,
+                commit_sha=proof_dossier_commit(store, job),
+            )
+        )
     runs = store.list_command_runs(job.job_name)
     failing_runs = [run for run in runs if run.exit_code not in {0, None}]
     review_runs = [run for run in runs if run.kind.startswith("review:")]
@@ -2000,6 +2089,15 @@ def github_pr_verification_comment(store: CodingStore, job: CodingJob) -> str:
         else:
             lines.append(f"- dorf runs {job.job_name}")
     return "\n".join(lines)
+
+
+def proof_dossier_commit(store: CodingStore, job: CodingJob) -> str:
+    if commit := job.metadata.get("proof_commit"):
+        return commit
+    for run in store.list_command_runs(job.job_name):
+        if run.git_commit_before == run.git_commit_after and run.git_commit_after:
+            return run.git_commit_after
+    return job.target_start_sha
 
 
 def format_run_summary(runs: list) -> str:
