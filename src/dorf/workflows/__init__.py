@@ -6,6 +6,13 @@ from .coding import (
     WorkflowMessage,
     WorkflowOutcome,
 )
+from .coding_admission import (
+    AdmissionFailure,
+    CodingAdmissionPreflight,
+    CodingAdmissionProof,
+    CodingAdmissionRequest,
+    CodingAdmissionResult,
+)
 from .coding_commands import prepare_coding_repository, run_coding_job_command
 from .coding_pulse import (
     CodingJobPulse,
@@ -27,6 +34,11 @@ from .coding_store import (
 
 __all__ = [
     "AfkCoordinator",
+    "AdmissionFailure",
+    "CodingAdmissionPreflight",
+    "CodingAdmissionProof",
+    "CodingAdmissionRequest",
+    "CodingAdmissionResult",
     "CodingCommandRun",
     "CodingJob",
     "CodingJobPulse",

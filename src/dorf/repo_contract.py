@@ -8,6 +8,7 @@ from dorf.adapters.agents.codex_config import CodexConfig, validate_codex_config
 
 CONTRACT_FILENAME = ".dorf.toml"
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 1800
+REVIEW_PROMPT_PLACEHOLDER = "{dorf_review_prompt}"
 
 
 class ContractValidationError(ValueError):
