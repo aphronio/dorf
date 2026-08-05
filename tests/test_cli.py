@@ -1258,15 +1258,20 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     )
     monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
     data_home = tmp_path / "data"
-    env = {"XDG_DATA_HOME": str(data_home)}
+    config_home = tmp_path / "config"
+    DeploymentProfile(provider_connection="personal-chatgpt").save(
+        config_home=config_home
+    )
+    env = {
+        "XDG_CONFIG_HOME": str(config_home),
+        "XDG_DATA_HOME": str(data_home),
+    }
 
     result = CliRunner().invoke(
         app,
         [
             "start",
             "Demo task",
-            "--provider-connection",
-            "personal-chatgpt",
         ],
         env=env,
     )
@@ -1294,9 +1299,43 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     assert "setup_reasoning_effort" not in coding_job.metadata
     assert "setup_task_prompt" not in coding_job.metadata
     assert coding_job.metadata["github_remote_branch_status"] == "created"
+    assert store.get_job_binding("abc123-demo-task").room.metadata["provider_connection"] == (
+        "personal-chatgpt"
+    )
     assert len(dispatched) == 1
     assert dispatched[0][1] == "abc123-demo-task"
     assert store.list_job_inputs("abc123-demo-task")[0].kind == "goal"
+
+
+def test_new_coding_job_without_provider_default_fails_before_branch_or_job_mutation(
+    tmp_path, monkeypatch
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr("dorf.cli.generate_job_name", lambda task: "no-provider")
+    branch_attempts = []
+    monkeypatch.setattr(
+        "dorf.cli.create_git_backed_job_branch_or_exit",
+        lambda *args, **kwargs: branch_attempts.append((args, kwargs)),
+    )
+    data_home = tmp_path / "data"
+
+    result = CliRunner().invoke(
+        app,
+        ["start", "No provider"],
+        env={
+            "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            "XDG_DATA_HOME": str(data_home),
+        },
+    )
+
+    assert result.exit_code == 1
+    assert "no default Provider Connection" in result.output
+    assert "dorf setup" in result.output
+    assert branch_attempts == []
+    assert CodingStore.open(data_home / "dorf" / "state.sqlite3").get_coding_job(
+        "no-provider"
+    ) is None
 
 
 def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
@@ -1349,7 +1388,12 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
 
     monkeypatch.setattr("dorf.adapters.environments.incus.IncusRunnerProbe.run", run)
     data_home = tmp_path / "data"
-    env = {"XDG_DATA_HOME": str(data_home)}
+    config_home = tmp_path / "config"
+    DeploymentProfile(provider_connection="work-openai").save(config_home=config_home)
+    env = {
+        "XDG_CONFIG_HOME": str(config_home),
+        "XDG_DATA_HOME": str(data_home),
+    }
     runner = CliRunner()
 
     first = runner.invoke(
@@ -1370,7 +1414,10 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
     assert failed_job.status == "setup-failed"
     assert "--resume retry-task" in first.output
     assert initial is not None
+    assert initial.room.metadata["provider_connection"] == "personal-chatgpt"
     store.update_assignment_status("retry-task", "workspace-failed")
+
+    DeploymentProfile(provider_connection="changed-default").save(config_home=config_home)
 
     second = runner.invoke(
         app,
@@ -1379,10 +1426,8 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
             "Retry task",
             "--resume",
             "retry-task",
-            "--provider-connection",
-            "personal-chatgpt",
         ],
-        env=env,
+        env={**env, "XDG_CONFIG_HOME": str(config_home)},
     )
     final = store.get_job_binding("retry-task")
 
@@ -1395,6 +1440,7 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
     assert store.get_worker("coder-retry-task").id == initial.worker.id
     assert store.get_job("retry-task").id == initial.job.id
     assert final.assignment.id == initial.assignment.id
+    assert final.room.metadata["provider_connection"] == "personal-chatgpt"
     assert created and recovered == ["retry-task"]
     assert clone_attempts == 2
 

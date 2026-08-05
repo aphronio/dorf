@@ -1559,10 +1559,10 @@ def start(
         "--resume",
         help="Retry setup for this exact setup-failed coding Job.",
     ),
-    provider_connection: str = typer.Option(
-        ...,
+    provider_connection: str | None = typer.Option(
+        None,
         "--provider-connection",
-        help="Named Provider Connection for the coding Room.",
+        help="Override the setup-selected Provider Connection.",
     ),
 ) -> None:
     """Create a dedicated Worker and goal-backed coding Job."""
@@ -1583,10 +1583,10 @@ def afk(
     reasoning_effort: str | None = typer.Option(
         None, "--reasoning-effort", help="Job conversation reasoning effort."
     ),
-    provider_connection: str = typer.Option(
-        ...,
+    provider_connection: str | None = typer.Option(
+        None,
         "--provider-connection",
-        help="Named Provider Connection for the coding Room.",
+        help="Override the setup-selected Provider Connection.",
     ),
 ) -> None:
     """Compose unattended coding policy over the same Worker and Job runtime."""
@@ -1688,7 +1688,7 @@ def launch_coding_job_or_exit(
     model: str | None = None,
     reasoning_effort: str | None = None,
     resume_job_name: str | None = None,
-    provider_connection: str,
+    provider_connection: str | None,
 ) -> str:
     """Compose a dedicated Worker, Job Assignment, clone, and first delivery."""
     if is_dirty(target.repo):
@@ -1703,12 +1703,6 @@ def launch_coding_job_or_exit(
     except AgentConfigValidationError as error:
         typer.echo(f"Invalid Job Codex configuration: {error}", err=True)
         raise typer.Exit(1) from error
-    environment = get_environment(
-        contract,
-        provider_connection=provider_connection,
-    )
-    exit_if_environment_prerequisites_missing(environment)
-
     job_name = resume_job_name or generate_job_name(coding_task.summary)
     worker_name = f"coder-{job_name}"
     job_branch = f"dorf/{job_name}"
@@ -1739,6 +1733,13 @@ def launch_coding_job_or_exit(
         recover_setup_failed_coding_job_or_exit(store, existing, coding_task)
         return job_name
 
+    selected_provider = select_coding_provider_connection_or_exit(provider_connection)
+    environment = get_environment(
+        contract,
+        provider_connection=selected_provider,
+    )
+    exit_if_environment_prerequisites_missing(environment)
+
     def reserve_coding_job(remote: GitBackedJobBranch) -> None:
         store.create_coding_job(
             job_name=job_name,
@@ -1753,7 +1754,7 @@ def launch_coding_job_or_exit(
                 "setup_model": config.model,
                 "setup_reasoning_effort": config.reasoning_effort,
                 "setup_task_prompt": coding_task.prompt,
-                "setup_provider_connection": provider_connection,
+                "setup_provider_connection": selected_provider,
             },
         )
 
@@ -2893,6 +2894,26 @@ def get_environment(
 ) -> CodexRoomEnvironment:
     config = IncusConfig.from_mapping(contract.incus_config if contract is not None else None)
     return new_codex_room_environment(config, provider_connection)
+
+
+def select_coding_provider_connection_or_exit(override: str | None) -> str:
+    """Select host deployment policy only when creating a new coding Room."""
+    if override is not None:
+        return override
+    try:
+        profile = load_optional_deployment_profile()
+    except DeploymentProfileError as error:
+        typer.echo(f"Could not load the global deployment profile: {error}", err=True)
+        typer.echo("remediation: Run `dorf setup`.", err=True)
+        raise typer.Exit(1) from error
+    if profile is None:
+        typer.echo(
+            "Dorf setup is incomplete: no default Provider Connection is configured.",
+            err=True,
+        )
+        typer.echo("remediation: Run `dorf setup`.", err=True)
+        raise typer.Exit(1)
+    return profile.provider_connection
 
 
 def open_dorf(
