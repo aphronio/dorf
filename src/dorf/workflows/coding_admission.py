@@ -89,6 +89,7 @@ ADMISSION_CHECKS = (
 
 @dataclass(frozen=True)
 class GitHubAuthorityApproval:
+    repository: str
     missing_authority: str
     why_needed: str
     action: str
@@ -105,6 +106,7 @@ class GitHubAuthorityApproval:
             "automatic_resume": self.automatic_resume,
             "decline_consequence": self.decline_consequence,
             "missing_authority": self.missing_authority,
+            "repository": self.repository,
             "scope": self.scope,
             "url": self.url,
             "why_needed": self.why_needed,
@@ -142,6 +144,7 @@ class CodingAdmissionRequest:
     issue_number: int | None
     command: str = "issue"
     target_start_sha: str | None = None
+    repository: str | None = None
     provider_connection: str | None = None
     model: str | None = None
     reasoning_effort: str | None = None
@@ -154,6 +157,7 @@ class CodingAdmissionRequest:
             "provider_connection": self.provider_connection,
             "reasoning_effort": self.reasoning_effort,
             "repo_path": str(Path(self.repo_path).resolve()),
+            "repository": self.repository,
             "target_branch": self.target_branch,
             "target_start_sha": self.target_start_sha,
         }
@@ -366,7 +370,19 @@ class LocalCodingAdmissionBackend:
                 )
             )
         else:
-            self.repository = repository
+            if request.repository is not None and repository != request.repository:
+                failures.append(
+                    _failure(
+                        "delegation-repository-changed",
+                        "repository owner",
+                        "Repository origin changed after this delegation was pinned.",
+                        f"Restore origin to {request.repository} or make a new delegation.",
+                        "Automatic continuation cannot retarget GitHub authority to another "
+                        "repository.",
+                    )
+                )
+            else:
+                self.repository = repository
         try:
             self.contract = load_repo_contract(self.repo)
         except (ContractValidationError, OSError) as error:
@@ -1036,6 +1052,7 @@ def _github_repository_approval(
 ) -> GitHubAuthorityApproval:
     issue = f"issue #{issue_number} and " if issue_number is not None else ""
     return GitHubAuthorityApproval(
+        repository=repository,
         missing_authority=f"Dorf GitHub App access to {repository}",
         why_needed=(
             f"Coding admission must read {issue}{target_branch} and create the Job branch and PR."

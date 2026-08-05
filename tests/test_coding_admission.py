@@ -172,6 +172,33 @@ def test_repository_check_rejects_a_changed_pinned_delegation_start(monkeypatch)
     assert [failure.code for failure in failures] == ["delegation-start-changed"]
 
 
+def test_repository_check_rejects_changed_pinned_github_repository(monkeypatch) -> None:
+    def git(repo, *args):
+        values = {
+            ("status", "--porcelain"): "",
+            ("remote", "get-url", "origin"): "https://github.com/other/repo.git\n",
+            ("config", "user.name"): "Dorf\n",
+            ("config", "user.email"): "dorf@example.com\n",
+        }
+        return subprocess.CompletedProcess(args, 0, values[args], "")
+
+    monkeypatch.setattr("dorf.workflows.coding_admission._git", git)
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_repo_contract", lambda repo: proof().contract
+    )
+
+    failures = LocalCodingAdmissionBackend().check_repository(
+        CodingAdmissionRequest(
+            repo_path="/repo",
+            target_branch="main",
+            issue_number=20,
+            repository="example/repo",
+        )
+    )
+
+    assert [failure.code for failure in failures] == ["delegation-repository-changed"]
+
+
 def test_github_permission_write_satisfies_required_read_authority() -> None:
     assert _missing_app_permissions(
         {
@@ -245,6 +272,7 @@ def test_github_missing_exact_repository_authority_is_one_resumable_approval(
             "delegation automatically."
         ),
         url="https://github.com/settings/installations/123",
+        repository="example/repo",
     )
 
 

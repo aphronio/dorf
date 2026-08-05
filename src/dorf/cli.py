@@ -2216,8 +2216,35 @@ def prove_coding_admission_or_exit(
     )
     result = CodingAdmissionPreflight().prove(request)
     if result.proof is not None:
-        typer.echo(f"Coding admission ready: {result.proof.proof_id}")
-        return result.proof
+        proof = result.proof
+        store = CodingStore.open()
+        retained = store.get_coding_admission_for_request(request.record())
+        if retained is not None and retained.status in {
+            "pending",
+            "approved",
+            "admitted",
+        }:
+            retained_repository = retained.request.get("repository")
+            if retained_repository != proof.repository:
+                typer.echo(
+                    "Retained GitHub authority is pinned to "
+                    f"{retained_repository or 'an unknown repository'}, but the current "
+                    f"checkout resolves to {proof.repository}. Restore the original repository "
+                    "or make a new delegation.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            if retained.status == "admitted":
+                typer.echo(
+                    "This delegation was already admitted as coding Job "
+                    f"{retained.job_name}."
+                )
+                raise typer.Exit(0)
+            if retained.status == "pending":
+                store.approve_coding_admission(retained.id)
+            proof = replace(proof, approval_attempt_id=retained.id)
+        typer.echo(f"Coding admission ready: {proof.proof_id}")
+        return proof
     resumable = [
         failure
         for failure in result.failures
@@ -2226,9 +2253,23 @@ def prove_coding_admission_or_exit(
     if len(result.failures) == 1 and len(resumable) == 1:
         failure = resumable[0]
         assert failure.approval is not None
+        pinned_request = replace(request, repository=failure.approval.repository)
         store = CodingStore.open()
+        retained = store.get_coding_admission_for_request(request.record())
+        if (
+            retained is not None
+            and retained.status in {"pending", "approved", "admitted"}
+            and retained.request.get("repository") != failure.approval.repository
+        ):
+            typer.echo(
+                "This delegation already has retained GitHub authority for "
+                f"{retained.request.get('repository') or 'an unknown repository'}; refusing "
+                f"to retarget it to {failure.approval.repository}.",
+                err=True,
+            )
+            raise typer.Exit(1)
         attempt, created = store.retain_pending_coding_admission(
-            request.record(),
+            pinned_request.record(),
             failure.approval.record(),
             ttl_seconds=GITHUB_AUTHORITY_APPROVAL_TTL_SECONDS,
         )
@@ -2255,7 +2296,7 @@ def prove_coding_admission_or_exit(
         else:
             typer.echo("Reusing approved GitHub authority for this delegation.")
         typer.echo("GitHub authority approved; rerunning exact coding readiness.")
-        resumed = CodingAdmissionPreflight().prove(request)
+        resumed = CodingAdmissionPreflight().prove(pinned_request)
         if resumed.proof is not None:
             proof = replace(resumed.proof, approval_attempt_id=attempt.id)
             typer.echo(f"Coding admission ready: {proof.proof_id}")
@@ -2286,7 +2327,7 @@ def echo_github_authority_attention(
 def await_github_authority_approval(attempt: PendingCodingAdmission) -> str:
     """Open the one scoped GitHub action and observe authority without storing credentials."""
     webbrowser.open(attempt.attention["url"])
-    repo = github_repo_full_name_or_exit(Path(str(attempt.request["repo_path"])))
+    repo = str(attempt.request["repository"])
     branch = str(attempt.request["target_branch"])
     expires_at = datetime.fromisoformat(attempt.expires_at)
     try:

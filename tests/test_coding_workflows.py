@@ -268,6 +268,7 @@ def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotentl
         repo_path=str(tmp_path / "repo"),
         target_branch="main",
         issue_number=20,
+        repository="example/repo",
         provider_connection="personal-chatgpt",
     )
     approval = GitHubAuthorityApproval(
@@ -279,6 +280,7 @@ def test_pending_github_authority_attempt_is_retry_safe_and_approved_idempotentl
         decline_consequence="No Job or GitHub resource is created.",
         automatic_resume="Exact readiness reruns and the delegation continues.",
         url="https://github.com/settings/installations/123",
+        repository="example/repo",
     )
 
     first, created = store.retain_pending_coding_admission(
@@ -327,6 +329,7 @@ def test_decline_or_expiry_ends_pending_authority_without_active_state(
         repo_path=str(tmp_path / "repo"),
         target_branch="main",
         issue_number=20,
+        repository="example/repo",
     )
     approval = GitHubAuthorityApproval(
         missing_authority="Dorf GitHub App access to example/repo",
@@ -337,6 +340,7 @@ def test_decline_or_expiry_ends_pending_authority_without_active_state(
         decline_consequence="No resources are created.",
         automatic_resume="Exact readiness reruns automatically.",
         url="https://github.com/settings/installations/123",
+        repository="example/repo",
     )
     attempt, _ = store.retain_pending_coding_admission(
         request.record(), approval.record(), ttl_seconds=3600
@@ -349,6 +353,18 @@ def test_decline_or_expiry_ends_pending_authority_without_active_state(
     assert sqlite3.connect(store.database_path).execute(
         "SELECT COUNT(*) FROM workers"
     ).fetchone()[0] == 0
+
+    renewed, created = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+
+    assert created is True
+    assert renewed.id != attempt.id
+    assert renewed.status == "pending"
+    assert [item.status for item in store.list_coding_admissions()] == [
+        outcome,
+        "pending",
+    ]
 
 
 def test_coding_command_runs_in_assignment_workspace_and_records_fact_evidence(

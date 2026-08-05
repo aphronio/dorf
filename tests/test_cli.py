@@ -1,6 +1,7 @@
 import json
 import socket
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,11 +17,13 @@ from dorf.adapters.environments import (
 )
 from dorf.cli import (
     GitBackedJobBranch,
+    GitTarget,
     app,
     create_admitted_git_backed_job_branch_or_exit,
     create_git_backed_job_branch_or_exit,
     fetch_github_branch_objects_or_exit,
     github_issue_task,
+    prove_coding_admission_or_exit,
     recover_git_backed_job_branch_or_exit,
     resolve_git_author_or_exit,
     unsafe_dorf_branch_reason,
@@ -47,6 +50,7 @@ from dorf.runtime import ArtifactInput, RuntimeStore, WorkerWaitResult
 from dorf.workflows import (
     AdmissionFailure,
     CodingAdmissionProof,
+    CodingAdmissionRequest,
     CodingAdmissionResult,
     CodingStore,
     GitHubAuthorityApproval,
@@ -1590,6 +1594,7 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
         decline_consequence="The delegation ends without resources.",
         automatic_resume="Exact readiness reruns and this delegation continues.",
         url="https://github.com/settings/installations/123",
+        repository="example/repo",
     )
     missing = AdmissionFailure(
         "github-repository-authority",
@@ -1662,7 +1667,10 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
     assert "Automatic resume: Exact readiness reruns" in result.output
     assert "GitHub authority approved; rerunning exact coding readiness." in result.output
     assert len(preflight_requests) == 2
-    assert preflight_requests[0] == preflight_requests[1]
+    assert preflight_requests[0].repository is None
+    assert preflight_requests[1] == replace(
+        preflight_requests[0], repository="example/repo"
+    )
     store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
     attempts = store.list_coding_admissions()
     assert len(attempts) == 1
@@ -1671,6 +1679,136 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
     assert attempts[0].request["command"] == "afk"
     assert attempts[0].request["target_start_sha"] == git(repo, "rev-parse", "HEAD")
     assert len(store.list_coding_jobs()) == 1
+
+
+@pytest.mark.parametrize("attempt_status", ["pending", "approved"])
+def test_successful_preflight_reuses_active_attempt_after_controller_restart(
+    tmp_path, monkeypatch, attempt_status
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    start_sha = git(repo, "rev-parse", "HEAD")
+    target = GitTarget(repo, "main", start_sha)
+    request = CodingAdmissionRequest(
+        repo_path=str(repo),
+        target_branch="main",
+        issue_number=20,
+        command="afk",
+        target_start_sha=start_sha,
+        repository="example/repo",
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read issue #20 and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The delegation can continue.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+        repository="example/repo",
+    )
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    attempt, _ = store.retain_pending_coding_admission(
+        request.record(), approval.record(), ttl_seconds=3600
+    )
+    if attempt_status == "approved":
+        store.approve_coding_admission(attempt.id)
+    admission = CodingAdmissionProof.create(
+        repository="example/repo",
+        issue=GitHubIssue(20, "Resume one authority approval", "Issue body", ()),
+        target_branch="main",
+        target_start_sha=start_sha,
+        image_fingerprint="b" * 64,
+        provider_connection="personal-chatgpt",
+        reviewer="codex",
+        contract=RepoContract(mode="configured", commands={}, env={}),
+        codex_config=CodexConfig("gpt-5.6-sol", "low"),
+        git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
+        environment_config=IncusConfig(template="b" * 64),
+        installation_token="installation-token",
+    )
+    monkeypatch.setattr(
+        "dorf.cli.CodingAdmissionPreflight.prove",
+        lambda self, request: CodingAdmissionResult(proof=admission),
+    )
+
+    resumed = prove_coding_admission_or_exit(
+        target,
+        command="afk",
+        issue_number=20,
+        model=None,
+        reasoning_effort=None,
+        provider_connection=None,
+    )
+
+    assert resumed.approval_attempt_id == attempt.id
+    assert store.get_coding_admission(attempt.id).status == "approved"
+
+
+def test_successful_preflight_rejects_origin_changed_during_pending_approval(
+    tmp_path, monkeypatch
+) -> None:
+    repo = create_git_repo(tmp_path / "repo")
+    start_sha = git(repo, "rev-parse", "HEAD")
+    target = GitTarget(repo, "main", start_sha)
+    original = CodingAdmissionRequest(
+        repo_path=str(repo),
+        target_branch="main",
+        issue_number=20,
+        command="afk",
+        target_start_sha=start_sha,
+        repository="example/repo",
+    )
+    approval = GitHubAuthorityApproval(
+        missing_authority="Dorf GitHub App access to example/repo",
+        why_needed="Read issue #20 and publish the proposal.",
+        action="Add example/repo to installation 123.",
+        scope="Only example/repo.",
+        approve_consequence="The delegation can continue.",
+        decline_consequence="No resources are created.",
+        automatic_resume="Exact readiness reruns automatically.",
+        url="https://github.com/settings/installations/123",
+        repository="example/repo",
+    )
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    attempt, _ = store.retain_pending_coding_admission(
+        original.record(), approval.record(), ttl_seconds=3600
+    )
+    changed = CodingAdmissionProof.create(
+        repository="other/repo",
+        issue=GitHubIssue(20, "Changed origin", "Issue body", ()),
+        target_branch="main",
+        target_start_sha=start_sha,
+        image_fingerprint="b" * 64,
+        provider_connection="personal-chatgpt",
+        reviewer="codex",
+        contract=RepoContract(mode="configured", commands={}, env={}),
+        codex_config=CodexConfig("gpt-5.6-sol", "low"),
+        git_author=GitAuthorIdentity("Dorf Tests", "dorf@example.com"),
+        environment_config=IncusConfig(template="b" * 64),
+        installation_token="installation-token",
+    )
+    monkeypatch.setattr(
+        "dorf.cli.CodingAdmissionPreflight.prove",
+        lambda self, request: CodingAdmissionResult(proof=changed),
+    )
+
+    with pytest.raises(Exit):
+        prove_coding_admission_or_exit(
+            target,
+            command="afk",
+            issue_number=20,
+            model=None,
+            reasoning_effort=None,
+            provider_connection=None,
+        )
+
+    assert store.get_coding_admission(attempt.id).status == "pending"
+    assert store.list_coding_jobs() == []
 
 
 @pytest.mark.parametrize("outcome", ["declined", "expired"])
@@ -1688,6 +1826,7 @@ def test_afk_github_authority_decline_or_expiry_creates_no_active_state(
         decline_consequence="No resources are created.",
         automatic_resume="Exact readiness reruns automatically.",
         url="https://github.com/settings/installations/123",
+        repository="example/repo",
     )
     failure = AdmissionFailure(
         "github-repository-authority",

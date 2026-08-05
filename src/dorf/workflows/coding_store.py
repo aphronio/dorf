@@ -157,7 +157,7 @@ class CodingStore(RuntimeStore):
         ttl_seconds: int,
     ) -> tuple[PendingCodingAdmission, bool]:
         canonical_request = json.dumps(request, sort_keys=True, separators=(",", ":"))
-        attempt_id = "admission-intent-" + hashlib.sha256(
+        base_attempt_id = "admission-intent-" + hashlib.sha256(
             canonical_request.encode()
         ).hexdigest()[:24]
         now = datetime.now(UTC)
@@ -165,33 +165,79 @@ class CodingStore(RuntimeStore):
         expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat(
             timespec="microseconds"
         )
-        cursor = self._connection.execute(
-            """
-            INSERT OR IGNORE INTO coding_admissions (
-                id, status, request, attention, proof_id, job_name,
-                expires_at, created_at, updated_at
-            ) VALUES (?, 'pending', ?, ?, NULL, NULL, ?, ?, ?)
-            """,
-            (
-                attempt_id,
-                canonical_request,
-                json.dumps(attention, sort_keys=True),
-                expires_at,
-                timestamp,
-                timestamp,
-            ),
-        )
-        self._connection.commit()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            latest = self._connection.execute(
+                """
+                SELECT * FROM coding_admissions
+                WHERE request = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (canonical_request,),
+            ).fetchone()
+            if latest is not None and latest["status"] in {
+                "pending",
+                "approved",
+                "admitted",
+            }:
+                self._connection.commit()
+                return _pending_coding_admission(latest), False
+
+            generation = 1
+            attempt_id = base_attempt_id
+            while self._connection.execute(
+                "SELECT 1 FROM coding_admissions WHERE id = ?", (attempt_id,)
+            ).fetchone() is not None:
+                generation += 1
+                attempt_id = f"{base_attempt_id}-{generation}"
+            self._connection.execute(
+                """
+                INSERT INTO coding_admissions (
+                    id, status, request, attention, proof_id, job_name,
+                    expires_at, created_at, updated_at
+                ) VALUES (?, 'pending', ?, ?, NULL, NULL, ?, ?, ?)
+                """,
+                (
+                    attempt_id,
+                    canonical_request,
+                    json.dumps(attention, sort_keys=True),
+                    expires_at,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
         attempt = self.get_coding_admission(attempt_id)
         if attempt is None:
             raise RuntimeError("retained coding admission could not be loaded")
-        return attempt, cursor.rowcount == 1
+        return attempt, True
 
     def get_coding_admission(self, attempt_id: str) -> PendingCodingAdmission | None:
         row = self._connection.execute(
             "SELECT * FROM coding_admissions WHERE id = ?", (attempt_id,)
         ).fetchone()
         return _pending_coding_admission(row) if row is not None else None
+
+    def get_coding_admission_for_request(
+        self, request: dict[str, object]
+    ) -> PendingCodingAdmission | None:
+        """Find the latest intent, allowing an unpinned repository during discovery."""
+        rows = self._connection.execute(
+            "SELECT * FROM coding_admissions ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        for row in rows:
+            retained = _pending_coding_admission(row)
+            if all(
+                key == "repository" and value is None
+                or retained.request.get(key) == value
+                for key, value in request.items()
+            ):
+                return retained
+        return None
 
     def list_coding_admissions(self) -> list[PendingCodingAdmission]:
         rows = self._connection.execute(
