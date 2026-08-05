@@ -21,6 +21,7 @@ class CommandSpec:
     preview: str
     shell: bool = False
     timeout_seconds: int | None = None
+    requires_provider_route: bool = False
 
 
 class CommandRun(Protocol):
@@ -53,13 +54,20 @@ def argv_command(kind: str, argv: Sequence[str]) -> CommandSpec:
     return CommandSpec(kind=kind, command=list(argv), preview=shlex.join(argv))
 
 
-def shell_command(kind: str, command: str, *, timeout_seconds: int | None = None) -> CommandSpec:
+def shell_command(
+    kind: str,
+    command: str,
+    *,
+    timeout_seconds: int | None = None,
+    requires_provider_route: bool = False,
+) -> CommandSpec:
     return CommandSpec(
         kind=kind,
         command=command,
         preview=command,
         shell=True,
         timeout_seconds=timeout_seconds,
+        requires_provider_route=requires_provider_route,
     )
 
 

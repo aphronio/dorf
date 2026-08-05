@@ -58,7 +58,7 @@ def run_coding_job_command(
             argv,
             cwd=binding.workspace,
             env=_command_env(job, binding, contract),
-            provider_route=spec.kind == "review:codex",
+            provider_route=spec.requires_provider_route,
         ),
         preview=spec.preview,
         timeout_seconds=spec.timeout_seconds,

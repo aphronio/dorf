@@ -388,6 +388,25 @@ def test_check_command_does_not_receive_provider_route_credential(tmp_path) -> N
     assert environment.processes[-1][2]["provider_route"] is False
 
 
+def test_command_capability_not_command_kind_controls_provider_route(tmp_path) -> None:
+    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
+
+    run_coding_job_command(
+        store,
+        environment,
+        job,
+        binding,
+        RepoContract(mode="configured", commands={}, env={}),
+        shell_command(
+            "review:codex",
+            "reviewer",
+            requires_provider_route=False,
+        ),
+    )
+
+    assert environment.processes[-1][2]["provider_route"] is False
+
+
 def test_followup_without_new_feedback_reads_current_assignment_and_keeps_job_open(
     tmp_path,
 ) -> None:

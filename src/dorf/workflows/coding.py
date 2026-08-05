@@ -534,6 +534,7 @@ class CodingWorkflow:
                             job=self.job,
                         ),
                         timeout_seconds=self.contract.review.timeout_seconds,
+                        requires_provider_route=name == "codex",
                     )
                 )
             except CommandInterrupted:
@@ -620,6 +621,7 @@ class CodingWorkflow:
                         job=self.job,
                     ),
                     timeout_seconds=self.contract.review.timeout_seconds,
+                    requires_provider_route=name == "codex",
                 )
             )
             payload["review_runs"].append(
