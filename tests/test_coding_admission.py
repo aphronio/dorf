@@ -7,10 +7,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from dorf.adapters.agents.codex_config import CodexConfig
-from dorf.adapters.environments import IncusConfig
+from dorf.adapters.environments import IncusCheckResult, IncusConfig, IncusFailure
 from dorf.coding_workspace import GitAuthorIdentity
 from dorf.deployment_profile import DeploymentProfile
-from dorf.github_app import GitHubIssue
+from dorf.github_app import GitHubInstallationToken, GitHubIssue, GitHubRepositoryClient
 from dorf.provider_gateway import InferenceRoute
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.workflows import (
@@ -146,6 +146,136 @@ def test_github_permission_write_satisfies_required_read_authority() -> None:
             "pull_requests": "admin",
         }
     ) == []
+
+
+def test_github_check_accepts_installation_authority_when_repository_user_push_is_false(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Dorf"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "dorf@example.com"],
+        check=True,
+    )
+    (tmp_path / "README.md").write_text("ready\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "-m", "Initial"],
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    client = GitHubRepositoryClient("installation-token")
+    requested_paths = []
+
+    def request_json(method, path):
+        requested_paths.append(path)
+        responses = {
+            "/repos/example/repo": {
+                "permissions": {"pull": True, "push": False},
+            },
+            "/repos/example/repo/git/ref/heads/main": {"object": {"sha": head}},
+            "/repos/example/repo/issues/18": {
+                "number": 18,
+                "title": "Replace scattered health checks",
+                "body": "Use one admission proof.",
+            },
+            "/repos/example/repo/issues/18/comments?per_page=100&page=1": [],
+        }
+        return responses[path]
+
+    monkeypatch.setattr(client, "_request_json", request_json)
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_github_app_config",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.GitHubAppTokenClient.mint_installation_token",
+        lambda self, config: GitHubInstallationToken(
+            token="installation-token",
+            permissions={
+                "contents": "write",
+                "issues": "read",
+                "metadata": "read",
+                "pull_requests": "write",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.GitHubRepositoryClient",
+        lambda token: client,
+    )
+    backend = LocalCodingAdmissionBackend()
+    backend.repo = tmp_path
+    backend.repository = "example/repo"
+
+    failures = backend.check_github(
+        CodingAdmissionRequest(
+            repo_path=str(tmp_path),
+            target_branch="main",
+            issue_number=18,
+        )
+    )
+
+    assert failures == ()
+    assert backend.target_start_sha == head
+    assert backend.issue == GitHubIssue(
+        18,
+        "Replace scattered health checks",
+        "Use one admission proof.",
+        (),
+    )
+    assert requested_paths == [
+        "/repos/example/repo/git/ref/heads/main",
+        "/repos/example/repo/issues/18",
+        "/repos/example/repo/issues/18/comments?per_page=100&page=1",
+    ]
+
+
+def test_platform_check_repairs_missing_pinned_image_with_setup_and_repin(
+    monkeypatch,
+) -> None:
+    fingerprint = "b" * 64
+    backend = LocalCodingAdmissionBackend(gateway=DisposableGateway())
+    backend.contract = proof().contract
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.load_deployment_profile",
+        lambda: DeploymentProfile(
+            provider_connection="personal-chatgpt",
+            image_fingerprint=fingerprint,
+        ),
+    )
+    monkeypatch.setattr(
+        "dorf.workflows.coding_admission.IncusDoctor.fast_check",
+        lambda self, config: IncusCheckResult(
+            failures=[
+                IncusFailure(
+                    "incus-template",
+                    f"Incus image/template not found or inaccessible: {fingerprint}",
+                )
+            ],
+            remediation="Run `dorf doctor` and repair the Incus prerequisite.",
+        ),
+    )
+
+    failures = backend.check_platform(
+        CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
+    )
+
+    assert [failure.code for failure in failures] == ["official-image-missing"]
+    assert failures[0].owner == "Dorf setup owner"
+    assert "dorf setup" in failures[0].repair
+    assert "repin" in failures[0].repair
+    assert "dorf doctor" not in failures[0].repair
 
 
 def test_platform_check_reports_invalid_incus_bridge_as_provider_route_failure(

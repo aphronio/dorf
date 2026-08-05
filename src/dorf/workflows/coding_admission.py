@@ -414,17 +414,6 @@ class LocalCodingAdmissionBackend:
                     )
                 )
             client = GitHubRepositoryClient(minted.token)
-            repository_permissions = client.get_repository_permissions(self.repository)
-            if repository_permissions.get("push") is not True:
-                failures.append(
-                    _failure(
-                        "github-repository-write",
-                        "GitHub repository owner",
-                        f"The GitHub App cannot push to {self.repository}.",
-                        "Grant the Dorf GitHub App write access to this exact repository.",
-                        "The coding Job cannot publish its branch.",
-                    )
-                )
             self.target_start_sha = client.get_branch_sha(
                 self.repository, request.target_branch
             )
@@ -499,6 +488,21 @@ class LocalCodingAdmissionBackend:
         if self.environment_config is not None:
             result = IncusDoctor(self.probe).fast_check(self.environment_config)
             for failure in result.failures:
+                if (
+                    failure.code == "incus-template"
+                    and self.image_fingerprint is not None
+                    and self.environment_config.template == self.image_fingerprint
+                ):
+                    failures.append(
+                        _failure(
+                            "official-image-missing",
+                            "Dorf setup owner",
+                            failure.message,
+                            "Run `dorf setup` to reinstall and repin the promoted official image.",
+                            "The disposable proof and admitted Room cannot use the selected image.",
+                        )
+                    )
+                    continue
                 failures.append(
                     _failure(
                         f"incus-{failure.code}",

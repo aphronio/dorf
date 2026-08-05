@@ -237,20 +237,6 @@ class GitHubRepositoryClient:
             raise GitHubRepositoryError("GitHub branch response did not include a SHA")
         return sha
 
-    def get_repository_permissions(self, repo_full_name: str) -> dict[str, bool]:
-        """Return the token's exact repository-level authority flags."""
-        payload = self._request_json("GET", f"/repos/{repo_full_name}")
-        permissions = payload.get("permissions") if isinstance(payload, dict) else None
-        if not isinstance(permissions, dict):
-            raise GitHubRepositoryError(
-                "GitHub repository response did not include token permissions"
-            )
-        return {
-            name: value
-            for name, value in permissions.items()
-            if isinstance(name, str) and isinstance(value, bool)
-        }
-
     def get_issue(self, repo_full_name: str, issue_number: int) -> GitHubIssue:
         payload = self._request_json("GET", f"/repos/{repo_full_name}/issues/{issue_number}")
         if not isinstance(payload, dict):

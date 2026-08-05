@@ -87,27 +87,6 @@ def test_repository_client_get_issue_rejects_pull_request_payload(monkeypatch) -
         client.get_issue("example/repo", 62)
 
 
-def test_repository_client_reports_exact_token_write_authority(monkeypatch) -> None:
-    client = GitHubRepositoryClient("installation-token")
-    monkeypatch.setattr(
-        client,
-        "_request_json",
-        lambda method, path: {
-            "permissions": {
-                "admin": False,
-                "pull": True,
-                "push": True,
-            }
-        },
-    )
-
-    assert client.get_repository_permissions("example/repo") == {
-        "admin": False,
-        "pull": True,
-        "push": True,
-    }
-
-
 def test_manifest_requests_read_access_to_issues() -> None:
     permissions = GitHubAppManifestFlow().manifest()["default_permissions"]
 
