@@ -111,6 +111,7 @@ def _run_process(
                 cwd=workspace_path,
                 env=env,
                 shell=spec.shell,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
