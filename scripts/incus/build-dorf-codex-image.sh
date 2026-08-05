@@ -9,6 +9,7 @@ ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
 IMAGE_METADATA_PATH="${IMAGE_METADATA_PATH:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROVISION_SCRIPT="$SCRIPT_DIR/provision-dorf-codex.sh"
+CREDENTIAL_CHECK_SCRIPT="$SCRIPT_DIR/assert-dorf-codex-credential-free.sh"
 
 cleanup() {
   if incus info "$BUILD_VM" >/dev/null 2>&1; then
@@ -49,15 +50,12 @@ done
 
 incus exec "$BUILD_VM" -- true >/dev/null
 incus file push "$PROVISION_SCRIPT" "$BUILD_VM/tmp/provision-dorf-codex.sh"
+incus file push "$CREDENTIAL_CHECK_SCRIPT" "$BUILD_VM/tmp/assert-dorf-codex-credential-free.sh"
 incus exec "$BUILD_VM" -- chmod +x /tmp/provision-dorf-codex.sh
 incus exec "$BUILD_VM" -- /tmp/provision-dorf-codex.sh
 incus exec "$BUILD_VM" -- rm -f /tmp/provision-dorf-codex.sh
-incus exec "$BUILD_VM" -- bash -lc '
-  test ! -e /root/.codex/auth.json
-  test ! -e /root/.codex/config.toml
-  test ! -e /root/.config/dorf/provider-route.key
-  test -z "${OPENAI_API_KEY:-}"
-'
+incus exec "$BUILD_VM" -- /tmp/assert-dorf-codex-credential-free.sh
+incus exec "$BUILD_VM" -- rm -f /tmp/assert-dorf-codex-credential-free.sh
 CODEX_VERSION="$(
   incus exec "$BUILD_VM" -- \
     sed -n 's/.*"version": "\([^"]*\)".*/\1/p' \

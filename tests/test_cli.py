@@ -1229,7 +1229,9 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
     tmp_path, monkeypatch
 ) -> None:
     repo = create_git_repo(tmp_path / "repo")
-    (repo / ".dorf.toml").write_text('[commands]\ncheck = "true"\n')
+    (repo / ".dorf.toml").write_text(
+        '[commands]\nprepare = "uv sync --frozen"\ncheck = "true"\n'
+    )
     git(repo, "add", ".dorf.toml")
     git(repo, "commit", "-m", "contract")
     monkeypatch.chdir(repo)
@@ -1251,10 +1253,26 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
         return branch
 
     monkeypatch.setattr("dorf.cli.create_git_backed_job_branch_or_exit", create_branch)
+    setup_order = []
+
+    def observe_preparation(store, environment, binding, contract):
+        setup_order.append(("prepare", binding.assignment.status))
+
+    monkeypatch.setattr(
+        "dorf.cli.run_repository_preparation_or_raise",
+        observe_preparation,
+    )
     dispatched = []
+
+    def observe_dispatch(database, name):
+        assignment = CodingStore.open(database).get_job_binding(name).assignment
+        setup_order.append(("dispatch", assignment.status))
+        dispatched.append((database, name))
+        return False
+
     monkeypatch.setattr(
         "dorf.cli.launch_job_input_dispatcher",
-        lambda *args: dispatched.append(args) or False,
+        observe_dispatch,
     )
     monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
     data_home = tmp_path / "data"
@@ -1303,6 +1321,7 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
         "personal-chatgpt"
     )
     assert len(dispatched) == 1
+    assert setup_order == [("prepare", "preparing"), ("dispatch", "open")]
     assert dispatched[0][1] == "abc123-demo-task"
     assert store.list_job_inputs("abc123-demo-task")[0].kind == "goal"
 
@@ -1431,7 +1450,7 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
     )
     final = store.get_job_binding("retry-task")
 
-    assert second.exit_code == 0
+    assert second.exit_code == 0, second.output
     assert store.get_coding_job("retry-task").status == "active"
     assert final.assignment.status == "open"
     assert final.worker.id == initial.worker.id
@@ -1777,7 +1796,7 @@ def test_version() -> None:
     result = CliRunner().invoke(app, ["--version"])
 
     assert result.exit_code == 0
-    assert "0.1.1" in result.output
+    assert "0.1.2" in result.output
 
 
 def test_resolve_git_author_rejects_empty_value(tmp_path, monkeypatch) -> None:

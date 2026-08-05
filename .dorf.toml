@@ -1,4 +1,5 @@
 [commands]
+prepare = "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups"
 check = "UV_CACHE_DIR=.dorf/uv-cache uv run pytest && UV_CACHE_DIR=.dorf/uv-cache uv run ruff check ."
 smoke = "UV_CACHE_DIR=.dorf/uv-cache uv run dorf --help"
 
@@ -25,6 +26,3 @@ command = "droid exec --auto high --model kimi-k2.7-code --reasoning-effort high
 
 [incus]
 template = "dorf-codex"
-
-[env]
-PATH = { source = "host.PATH" }

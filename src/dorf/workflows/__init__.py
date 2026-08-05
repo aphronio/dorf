@@ -6,7 +6,7 @@ from .coding import (
     WorkflowMessage,
     WorkflowOutcome,
 )
-from .coding_commands import run_coding_job_command
+from .coding_commands import prepare_coding_repository, run_coding_job_command
 from .coding_store import (
     AfkCoordinator,
     CodingCommandRun,
@@ -25,5 +25,6 @@ __all__ = [
     "WorkflowFailure",
     "WorkflowMessage",
     "WorkflowOutcome",
+    "prepare_coding_repository",
     "run_coding_job_command",
 ]

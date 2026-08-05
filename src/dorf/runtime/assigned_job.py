@@ -316,14 +316,14 @@ class JobRuntime:
         self._environment = environment
         self._agent = agent
 
-    def assign(self, new_job: NewJob) -> JobBinding:
+    def assign(self, new_job: NewJob, *, activate: bool = True) -> JobBinding:
         validate_job_name(new_job.name)
         if not new_job.goal.strip():
             raise ValueError("Job goal cannot be empty")
         with self._store.job_assignment_lock(new_job.name):
-            return self._assign_locked(new_job)
+            return self._assign_locked(new_job, activate=activate)
 
-    def _assign_locked(self, new_job: NewJob) -> JobBinding:
+    def _assign_locked(self, new_job: NewJob, *, activate: bool) -> JobBinding:
         existing = self._store.get_job_binding(new_job.name)
         if existing is None:
             worker_binding = self._store.get_worker_binding(new_job.worker_name)
@@ -339,9 +339,16 @@ class JobRuntime:
                 raise RuntimeError(f"Worker Room is unavailable: {new_job.worker_name}: {detail}")
         assigned, created = self._store.assign_job(new_job)
         if assigned.assignment.status == "open":
-            return assigned
+            if activate:
+                return assigned
+            raise RuntimeError("Job Assignment is already open")
         if assigned.assignment.status not in {"preparing", "workspace-failed"}:
             raise RuntimeError(f"Job Assignment is not assignable: {assigned.assignment.status}")
+        if assigned.assignment.status == "workspace-failed":
+            self._store.update_assignment_status(assigned.job.name, "preparing")
+            assigned = self._store.get_job_binding(assigned.job.name)
+            if assigned is None:
+                raise RuntimeError("retrying Job binding could not be reloaded")
         room_binding = WorkerBinding(assigned.worker, assigned.room)
         if not created:
             self._environment.execute(
@@ -389,11 +396,30 @@ class JobRuntime:
         except Exception as error:
             self._store.update_assignment_status(assigned.job.name, "workspace-failed")
             raise RuntimeError(f"Could not prepare Assignment reporting: {error}") from error
-        self._store.update_assignment_status(assigned.job.name, "open")
+        if activate:
+            self._store.update_assignment_status(assigned.job.name, "open")
         ready = self._store.get_job_binding(assigned.job.name)
         if ready is None:
             raise RuntimeError("assigned Job binding could not be reloaded")
         return ready
+
+    def activate_assignment(self, job_name: str) -> JobBinding:
+        """Open one fully prepared Assignment for input admission and delivery."""
+        with self._store.job_assignment_lock(job_name):
+            binding = self._store.get_job_binding(job_name)
+            if binding is None:
+                raise RuntimeError(f"Job not found: {job_name}")
+            if binding.assignment.status == "open":
+                return binding
+            if binding.assignment.status != "preparing":
+                raise RuntimeError(
+                    f"Job Assignment is not activatable: {binding.assignment.status}"
+                )
+            self._store.update_assignment_status(job_name, "open")
+            activated = self._store.get_job_binding(job_name)
+            if activated is None:
+                raise RuntimeError("activated Job binding could not be reloaded")
+            return activated
 
     def _prepare_reporting_protocol(self, binding: JobBinding) -> None:
         room_binding = WorkerBinding(binding.worker, binding.room)

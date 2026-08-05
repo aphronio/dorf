@@ -93,7 +93,9 @@ dorf publish JOB
 New coding Jobs use the Provider Connection selected by `dorf setup`. Pass
 `--provider-connection NAME` only to intentionally override that host-local default.
 
-This showcase requires separate repository, GitHub, and coding-image preparation. See the
+The official `dorf-codex` image is the coding workstation: repository preparation and checks come
+from the cloned repository's contract, while GitHub access remains a separately scoped host-side
+integration. See the
 [North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) for how it fits
 the broader runtime.
 

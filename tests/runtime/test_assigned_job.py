@@ -263,6 +263,67 @@ def test_assign_atomically_creates_goal_assignment_initial_input_and_workspace(
     assert agent.initial_turns == []
 
 
+def test_deferred_assignment_blocks_admission_and_delivery_until_activation(
+    tmp_path: Path,
+) -> None:
+    store, environment, agent = ready_worker(tmp_path)
+    runtime = JobRuntime(store, environment, agent)
+
+    binding = runtime.assign(
+        NewJob(
+            "setup-race",
+            "researcher",
+            "Implement only after deterministic preparation",
+            "gpt-5.6-sol",
+            "high",
+        ),
+        activate=False,
+    )
+    initial = store.list_job_inputs("setup-race")[0]
+
+    assert binding.assignment.status == "preparing"
+    with pytest.raises(RuntimeError, match="Job is not open"):
+        runtime.admit_message(
+            "setup-race",
+            message_id="jmsg-concurrent-public-message",
+            text="Concurrent public message",
+        )
+    with pytest.raises(WorkerOfflineError, match="input remains queued"):
+        runtime.deliver_input("setup-race", initial.id)
+    assert agent.initial_turns == []
+
+    activated = runtime.activate_assignment("setup-race")
+    delivered = runtime.deliver_input("setup-race", initial.id)
+
+    assert activated.assignment.status == "open"
+    assert delivered.status == "succeeded"
+    assert len(agent.initial_turns) == 1
+
+
+def test_deferred_reassignment_does_not_demote_or_reset_an_open_assignment(
+    tmp_path: Path,
+) -> None:
+    store, environment, agent = ready_worker(tmp_path)
+    runtime = JobRuntime(store, environment, agent)
+    job = NewJob(
+        "setup-race",
+        "researcher",
+        "Preserve the active workspace",
+        "gpt-5.6-sol",
+        "high",
+    )
+    runtime.assign(job)
+    commands_before_retry = list(environment.executions)
+
+    with pytest.raises(RuntimeError, match="Job Assignment is already open"):
+        runtime.assign(job, activate=False)
+
+    binding = store.get_job_binding("setup-race")
+    assert binding is not None
+    assert binding.assignment.status == "open"
+    assert environment.executions == commands_before_retry
+
+
 def test_assignment_projects_read_only_goal_context_and_scoped_report_outbox(
     tmp_path: Path,
 ) -> None:

@@ -38,6 +38,47 @@ def test_timed_out_job_command_records_terminal_workflow_fact(tmp_path: Path) ->
     assert "Command timed out after 1 seconds." in output
 
 
+def test_job_command_receives_eof_instead_of_coordinator_stdin(tmp_path: Path) -> None:
+    database = tmp_path / "state.sqlite3"
+    store = coding_store(database, "noninteractive-review")
+    coordinator = subprocess.Popen(
+        [
+            "python",
+            "-c",
+            """
+import os, sys
+from pathlib import Path
+from dorf.command_runner import CommandSpec, run_job_command
+from dorf.workflows.coding_store import CodingStore
+store = CodingStore.open(Path(sys.argv[1]))
+run_job_command(
+    store,
+    'noninteractive-review',
+    Path(sys.argv[2]),
+    CommandSpec(
+        kind='review:codex',
+        command=['python', '-c', "import sys; assert sys.stdin.read() == ''; print('stdin-eof')"],
+        preview='python stdin EOF probe',
+        timeout_seconds=1,
+    ),
+    os.environ,
+)
+""",
+            str(database),
+            str(tmp_path),
+        ],
+        env=os.environ,
+        stdin=subprocess.PIPE,
+    )
+
+    assert coordinator.wait(timeout=5) == 0
+    assert coordinator.stdin is not None
+    coordinator.stdin.close()
+    run = store.list_command_runs("noninteractive-review")[0]
+    assert (run.status, run.exit_code) == ("succeeded", 0)
+    assert Path(run.output_path).read_text() == "stdin-eof\n"
+
+
 def test_interrupted_job_command_kills_children_and_records_partial_output(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
     store = coding_store(database, "interrupted-review")

@@ -1,4 +1,6 @@
+import runpy
 import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +32,8 @@ from dorf.runtime import (
     Worker,
     WorkerBinding,
 )
+
+PROJECT_ROOT = Path(__file__).parents[1]
 
 
 def sample_git_author() -> GitAuthorIdentity:
@@ -157,39 +161,149 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
         / "incus"
         / "publish-dorf-codex-release.sh"
     ).read_text()
+    credential_check = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "incus"
+        / "assert-dorf-codex-credential-free.sh"
+    ).read_text()
 
-    assert "test ! -e /root/.codex/auth.json" in build_script
-    assert "test ! -e /root/.codex/config.toml" in build_script
-    assert "test ! -e /root/.config/dorf/provider-route.key" in build_script
-    assert 'test -z "${OPENAI_API_KEY:-}"' in build_script
+    assert "assert-dorf-codex-credential-free.sh" in build_script
+    assert ".codex/auth.json" in credential_check
+    assert ".config/gh/hosts.yml" in credential_check
+    assert ".factory" in credential_check
+    assert "OPENAI_API_KEY" in credential_check
+    assert "GITHUB_TOKEN" in credential_check
+    assert "FACTORY_API_KEY" in credential_check
     assert 'incus image info "$BASE_IMAGE" --vm' in build_script
     assert '"$BASE_REMOTE:$BASE_FINGERPRINT"' in build_script
     assert r"""sed -n 's/.*"version": "\([^"]*\)".*/\1/p'""" in build_script
     assert "npm view @openai/codex@latest version" in provision_script
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
     assert "apt-get purge -y npm" in provision_script
-    assert "git" not in provision_script
-    assert "astral.sh/uv" not in provision_script
+    assert "git" in provision_script
+    assert "astral.sh/uv/install.sh" not in provision_script
+    assert "uv-x86_64-unknown-linux-gnu.tar.gz" in provision_script
+    assert "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb" in (
+        provision_script
+    )
+    assert "sha256sum --check --strict" in provision_script
     assert "npm_integrity" in provision_script
     assert "droid" not in provision_script.lower()
     assert "validate-dorf-codex-image.py" in release_script
     assert "--preflight-only" in release_script
+    assert release_script.index("trap cleanup EXIT") < release_script.index("--preflight-only")
     assert release_script.index("--preflight-only") < release_script.index(
         'IMAGE_ALIAS="$CANDIDATE_ALIAS"'
     )
     assert 'incus image export "$CANDIDATE_ALIAS"' in release_script
-    assert "dorf-codex-incus-vm-x86_64" in release_script
-    assert "! command -v git" in release_script
+    assert "dorf-codex-incus-vm-v3-x86_64" in release_script
+    assert 'test -x "$(command -v git)"' in release_script
     assert "! command -v npm" in release_script
-    assert "! command -v uv" in release_script
+    assert 'test -x "$(command -v uv)"' in release_script
+    assert "validate-dorf-coding-workstation.py" in release_script
+    assert 'incus delete "$VALIDATION_VM" --force' in release_script
+    cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
+    assert '[[ "$EVIDENCE_POLICY" == "remove" ]]' in cleanup
+    assert 'rm -rf -- "$EVIDENCE_DIR"' in cleanup
     assert "create-dorf-codex-manifest.py" in release_script
     assert "prepare-dorf-codex-release.sh" in publish_script
-    assert "dorf-codex-incus-vm-x86_64" in publish_script
+    assert "dorf-codex-incus-vm-v3-x86_64" in publish_script
     assert 'gh api "repos/$GITHUB_REPOSITORY" --jq .visibility' in publish_script
     assert "DORF_IMMUTABLE_RELEASES_ENABLED" in publish_script
     assert 'gh release create "$RELEASE_TAG"' in publish_script
     assert 'gh release edit "$RELEASE_TAG"' in publish_script
     assert "gh release verify-asset" in publish_script
+
+
+def test_image_credential_check_rejects_owner_files_and_environment(tmp_path) -> None:
+    script = (
+        Path(__file__).parents[1]
+        / "scripts"
+        / "incus"
+        / "assert-dorf-codex-credential-free.sh"
+    )
+    clean_env = {
+        "PATH": "/usr/bin:/bin",
+        "DORF_IMAGE_HOME": str(tmp_path),
+    }
+
+    clean = subprocess.run([str(script)], env=clean_env, text=True, capture_output=True)
+    credential = tmp_path / ".config" / "gh" / "hosts.yml"
+    credential.parent.mkdir(parents=True)
+    credential.write_text("oauth_token: owner-secret\n")
+    github = subprocess.run([str(script)], env=clean_env, text=True, capture_output=True)
+    credential.unlink()
+    factory = subprocess.run(
+        [str(script)],
+        env={**clean_env, "FACTORY_API_KEY": "owner-secret"},
+        text=True,
+        capture_output=True,
+    )
+
+    assert clean.returncode == 0
+    assert github.returncode == 1
+    assert "hosts.yml" in github.stderr
+    assert "owner-secret" not in github.stderr
+    assert factory.returncode == 1
+    assert "FACTORY_API_KEY" in factory.stderr
+    assert "owner-secret" not in factory.stderr
+
+
+def test_workstation_validator_rejects_a_source_other_than_its_checkout(tmp_path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py"),
+            "--image",
+            "candidate",
+            "--image-fingerprint",
+            "a" * 64,
+            "--provider-connection",
+            "test-provider",
+            "--source-commit",
+            "0" * 40,
+            "--proof-id",
+            "test-proof",
+            "--project-root",
+            str(PROJECT_ROOT),
+            "--evidence-dir",
+            str(tmp_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "source commit does not match the validation checkout" in result.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_workstation_validator_recovers_the_latest_recorded_room_for_cleanup() -> None:
+    validator = runpy.run_path(
+        str(PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py")
+    )
+    expected = worker_binding()
+
+    class SpawnFailedStore:
+        def get_worker_binding(self, worker_name):
+            assert worker_name == expected.worker.name
+            return None
+
+        def get_worker(self, worker_name):
+            assert worker_name == expected.worker.name
+            return expected.worker
+
+        def get_latest_room(self, worker_name):
+            assert worker_name == expected.worker.name
+            return expected.room
+
+    recovered = validator["_recorded_worker_binding"](
+        SpawnFailedStore(), expected.worker.name
+    )
+
+    assert recovered == expected
 
 
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:

@@ -89,15 +89,18 @@ def release_fixture(
     immutable: bool = True,
     archive_digest: str | None = None,
     image_fingerprint: str | None = None,
+    schema_version: int = 3,
+    tools: dict[str, str] | None = None,
+    uv_integrity: str = "sha256:" + "b" * 64,
 ) -> tuple[dict[str, bytes], str]:
     architecture = "x86_64"
-    tag = "v0.1.1"
-    archive_name = f"dorf-codex-incus-vm-{architecture}.tar.gz"
-    manifest_name = f"dorf-codex-incus-vm-{architecture}.json"
+    tag = "v0.1.2"
+    archive_name = f"dorf-codex-incus-vm-v3-{architecture}.tar.gz"
+    manifest_name = f"dorf-codex-incus-vm-v3-{architecture}.json"
     digest = hashlib.sha256(archive).hexdigest()
     manifest = json.dumps(
         {
-            "schema_version": 2,
+            "schema_version": schema_version,
             "release_tag": tag,
             "environment": "incus",
             "architecture": architecture,
@@ -112,6 +115,10 @@ def release_fixture(
                 "version": "0.150.0",
                 "npm_integrity": "sha512-test-integrity",
             },
+            "tools": tools
+            if tools is not None
+            else {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
+            "tool_integrity": {"uv": uv_integrity},
             "source_commit": "a" * 40,
             "validated_at": "2026-07-31T08:30:00Z",
         },
@@ -149,7 +156,17 @@ def release_fixture(
                         "browser_download_url": archive_url,
                     },
                 ],
-            }
+            },
+            {
+                "tag_name": "v0.1.1",
+                "draft": False,
+                "prerelease": False,
+                "immutable": True,
+                "assets": [
+                    {"name": f"dorf-codex-incus-vm-{architecture}.json"},
+                    {"name": f"dorf-codex-incus-vm-{architecture}.tar.gz"},
+                ],
+            },
         ]
     ).encode()
     return {
@@ -174,7 +191,7 @@ def test_installer_imports_only_an_immutable_digest_verified_vm_image(tmp_path) 
     ).ensure(emit=events.append, progress=lambda current, total: progress.append((current, total)))
 
     assert result.status == "installed"
-    assert result.release_tag == "v0.1.1"
+    assert result.release_tag == "v0.1.2"
     assert result.fingerprint == digest
     assert result.codex_version == "0.150.0"
     assert ["incus", "image", "import"] == probe.ran[1][:3]
@@ -274,6 +291,31 @@ def test_installer_rejects_untrusted_release_metadata(
         ).ensure()
 
 
+@pytest.mark.parametrize(
+    ("fixture_kwargs", "message"),
+    [
+        ({"schema_version": 2}, "schema_version must be 3"),
+        ({"tools": {"git": "2.43.0", "node": "v18.19.1"}}, "workstation tools"),
+        ({"tools": {"git": "", "node": "v18.19.1", "uv": "0.8.3"}}, "workstation tools"),
+        ({"uv_integrity": "sha256:unverified"}, "uv archive integrity"),
+    ],
+)
+def test_installer_rejects_images_without_the_coding_workstation_capability(
+    tmp_path,
+    fixture_kwargs,
+    message,
+) -> None:
+    responses, _ = release_fixture(b"incus-vm-image", **fixture_kwargs)
+
+    with pytest.raises(OfficialImageError, match=message):
+        OfficialImageInstaller(
+            probe=FakeIncusProbe(),
+            opener=FakeOpener(responses),
+            architecture="x86_64",
+            temp_root=tmp_path,
+        ).ensure()
+
+
 def test_installer_rejects_corrupt_download_before_incus_import(tmp_path) -> None:
     responses, _ = release_fixture(b"incus-vm-image")
     archive_url = next(url for url in responses if url.endswith(".tar.gz"))
@@ -292,7 +334,7 @@ def test_installer_rejects_corrupt_download_before_incus_import(tmp_path) -> Non
 
 
 def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_path) -> None:
-    archive = tmp_path / "dorf-codex-incus-vm-x86_64.tar.gz"
+    archive = tmp_path / "dorf-codex-incus-vm-v3-x86_64.tar.gz"
     archive.write_bytes(b"incus-vm-image")
     metadata = tmp_path / "image.json"
     metadata.write_text(
@@ -301,10 +343,12 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
                 "package": "@openai/codex",
                 "version": "0.150.0",
                 "npm_integrity": "sha512-published-package",
+                "tools": {"git": "2.43.0", "node": "v18.19.1", "uv": "0.8.3"},
+                "tool_integrity": {"uv": "sha256:" + "b" * 64},
             }
         )
     )
-    output = tmp_path / "dorf-codex-incus-vm-x86_64.json"
+    output = tmp_path / "dorf-codex-incus-vm-v3-x86_64.json"
 
     result = subprocess.run(
         [
@@ -315,7 +359,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
             "--image-metadata",
             str(metadata),
             "--release-tag",
-            "v0.1.1",
+            "v0.1.2",
             "--source-commit",
             "a" * 40,
             "--validated-at",
@@ -331,7 +375,7 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
     assert result.returncode == 0, result.stderr
     manifest = json.loads(output.read_text())
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    assert manifest["schema_version"] == 2
+    assert manifest["schema_version"] == 3
     assert manifest["environment"] == "incus"
     assert manifest["image_fingerprint"] == digest
     assert manifest["archive"] == {
@@ -343,3 +387,9 @@ def test_manifest_publisher_records_the_exact_export_and_validated_codex(tmp_pat
         "version": "0.150.0",
         "npm_integrity": "sha512-published-package",
     }
+    assert manifest["tools"] == {
+        "git": "2.43.0",
+        "node": "v18.19.1",
+        "uv": "0.8.3",
+    }
+    assert manifest["tool_integrity"] == {"uv": "sha256:" + "b" * 64}

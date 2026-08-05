@@ -255,6 +255,53 @@ def test_sdk_composes_resource_lifecycle_and_retry_safe_messages(tmp_path, monke
     ]
 
 
+def test_public_job_message_is_blocked_while_assignment_is_preparing(
+    tmp_path, monkeypatch
+) -> None:
+    configure_passing_incus(monkeypatch)
+    launched = []
+    monkeypatch.setattr(
+        "dorf.sdk.launch_job_input_dispatcher",
+        lambda database, name: launched.append(("dispatcher", name)) or True,
+    )
+    monkeypatch.setattr(
+        "dorf.sdk.launch_assignment_report_collector",
+        lambda database, job, assignment: launched.append(("collector", job)) or True,
+    )
+    database = tmp_path / "state.sqlite3"
+    dorf = Dorf.open(
+        database,
+        agent_defaults=CodexConfig("test-model", "medium"),
+        provider_connection="personal-chatgpt",
+    )
+    dorf.spawn_worker("coder")
+    dorf.assign_job("setup-race", worker_name="coder", goal="Implement after preparation")
+    RuntimeStore.open(database).update_assignment_status("setup-race", "preparing")
+    launched.clear()
+
+    with pytest.raises(RuntimeError, match="Job is not open: setup-race"):
+        dorf.message_job(
+            "setup-race",
+            "Concurrent public message",
+            action_id="concurrent-message",
+        )
+
+    assert len(RuntimeStore.open(database).list_job_inputs("setup-race")) == 1
+    assert launched == []
+
+    RuntimeStore.open(database).update_assignment_status("setup-race", "open")
+    admitted = dorf.message_job(
+        "setup-race",
+        "Concurrent public message",
+        action_id="concurrent-message",
+    )
+
+    assert admitted.created is True
+    assert admitted.job_input.sequence == 2
+    assert admitted.dispatcher_started is True
+    assert launched == [("collector", "setup-race"), ("dispatcher", "setup-race")]
+
+
 def test_sdk_reads_retained_artifact_after_job_and_room_cleanup(
     tmp_path,
     monkeypatch,

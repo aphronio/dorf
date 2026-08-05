@@ -194,7 +194,7 @@ class OfficialImageInstaller:
         releases = self._read_json(self._api_url, max_bytes=MAX_RELEASE_RESPONSE_BYTES)
         if not isinstance(releases, list):
             raise OfficialImageError("Official image release response must be a list")
-        manifest_name = f"dorf-codex-incus-vm-{self._architecture}.json"
+        manifest_name = f"dorf-codex-incus-vm-v3-{self._architecture}.json"
         release = next(
             (
                 item
@@ -351,8 +351,8 @@ def _parse_manifest(
     expected_tag: str,
     expected_architecture: str,
 ) -> OfficialImageManifest:
-    if not isinstance(data, dict) or data.get("schema_version") != 2:
-        raise OfficialImageError("Official image manifest schema_version must be 2")
+    if not isinstance(data, dict) or data.get("schema_version") != 3:
+        raise OfficialImageError("Official image manifest schema_version must be 3")
     if data.get("release_tag") != expected_tag:
         raise OfficialImageError("Official image manifest release_tag does not match its release")
     if data.get("environment") != "incus":
@@ -367,7 +367,7 @@ def _parse_manifest(
     archive_data = data.get("archive")
     if not isinstance(archive_data, dict):
         raise OfficialImageError("Official image manifest archive must be an object")
-    expected_archive_name = f"dorf-codex-incus-vm-{expected_architecture}.tar.gz"
+    expected_archive_name = f"dorf-codex-incus-vm-v3-{expected_architecture}.tar.gz"
     if archive_data.get("name") != expected_archive_name:
         raise OfficialImageError("Official image manifest archive name is invalid")
     archive_sha256 = _required_sha256(archive_data.get("sha256"), "archive digest")
@@ -395,6 +395,24 @@ def _parse_manifest(
         raise OfficialImageError("Official image manifest Codex version is invalid")
     if not isinstance(npm_integrity, str) or not npm_integrity.startswith("sha512-"):
         raise OfficialImageError("Official image manifest Codex npm integrity is invalid")
+    tools = data.get("tools")
+    if not isinstance(tools, dict) or any(
+        not isinstance(tools.get(name), str) or not tools[name]
+        for name in ("git", "node", "uv")
+    ):
+        raise OfficialImageError(
+            "Official image manifest must identify the complete coding workstation tools"
+        )
+    tool_integrity = data.get("tool_integrity")
+    uv_integrity = tool_integrity.get("uv") if isinstance(tool_integrity, dict) else None
+    if (
+        not isinstance(uv_integrity, str)
+        or not uv_integrity.startswith("sha256:")
+        or not _SHA256_PATTERN.fullmatch(uv_integrity.removeprefix("sha256:"))
+    ):
+        raise OfficialImageError(
+            "Official image manifest must identify verified uv archive integrity"
+        )
     source_commit = data.get("source_commit")
     if not isinstance(source_commit, str) or not _COMMIT_PATTERN.fullmatch(source_commit):
         raise OfficialImageError("Official image manifest source commit is invalid")

@@ -16,17 +16,25 @@ BUILD_ID="$(date -u +%Y%m%d%H%M%S)"
 CANDIDATE_ALIAS="dorf-codex-candidate-$BUILD_ID"
 BUILD_VM="dorf-codex-build-$BUILD_ID"
 PROBE_VM="dorf-codex-probe-$BUILD_ID"
+VALIDATION_VM="dorf-coder-workstation-proof-$BUILD_ID"
 METADATA_PATH="$OUTPUT_DIR/image.json"
-ARCHIVE_BASENAME="dorf-codex-incus-vm-x86_64"
+ARCHIVE_BASENAME="dorf-codex-incus-vm-v3-x86_64"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
+EVIDENCE_DIR="$OUTPUT_DIR/workstation-evidence"
+EVIDENCE_POLICY="${EVIDENCE_POLICY:-retain}"
 
-uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
-  --provider-connection "$PROVIDER_CONNECTION" \
-  --network "$NETWORK" \
-  --preflight-only
+if [[ "$EVIDENCE_POLICY" != "retain" && "$EVIDENCE_POLICY" != "remove" ]]; then
+  echo "EVIDENCE_POLICY must be retain or remove." >&2
+  exit 2
+fi
 
 cleanup() {
+  if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
+    rm -rf -- "$EVIDENCE_DIR"
+  fi
+  if incus info "$VALIDATION_VM" >/dev/null 2>&1; then
+    incus delete "$VALIDATION_VM" --force >/dev/null 2>&1 || true
+  fi
   if incus info "$PROBE_VM" >/dev/null 2>&1; then
     incus delete "$PROBE_VM" --force >/dev/null 2>&1 || true
   fi
@@ -35,6 +43,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+uv run --project "$PROJECT_ROOT" python \
+  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
+  --provider-connection "$PROVIDER_CONNECTION" \
+  --network "$NETWORK" \
+  --preflight-only
 
 mkdir -p "$OUTPUT_DIR"
 rm -f "$METADATA_PATH" "$ARCHIVE_PATH" \
@@ -54,26 +68,49 @@ for _ in {1..60}; do
   fi
   sleep 2
 done
+incus file push \
+  "$SCRIPT_DIR/assert-dorf-codex-credential-free.sh" \
+  "$PROBE_VM/tmp/assert-dorf-codex-credential-free.sh"
+incus exec "$PROBE_VM" -- chmod +x /tmp/assert-dorf-codex-credential-free.sh
+incus exec "$PROBE_VM" -- /tmp/assert-dorf-codex-credential-free.sh
+incus exec "$PROBE_VM" -- rm -f /tmp/assert-dorf-codex-credential-free.sh
 incus exec "$PROBE_VM" -- bash -lc '
-  test ! -e /root/.codex/auth.json
-  test ! -e /root/.codex/config.toml
-  test ! -e /root/.config/dorf/provider-route.key
-  test -z "${OPENAI_API_KEY:-}"
   test -x "$(command -v codex)"
+  test -x "$(command -v git)"
   test -x "$(command -v node)"
-  ! command -v git >/dev/null
   ! command -v npm >/dev/null
-  ! command -v uv >/dev/null
+  test -x "$(command -v uv)"
   test -r /usr/local/share/dorf/image.json
 '
 incus delete "$PROBE_VM" --force
 
+CANDIDATE_FINGERPRINT="$(
+  incus image info "$CANDIDATE_ALIAS" |
+    sed -n 's/^Fingerprint: //p'
+)"
+if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Could not resolve candidate image fingerprint." >&2
+  exit 1
+fi
+rm -rf -- "$EVIDENCE_DIR"
 uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
+  "$SCRIPT_DIR/validate-dorf-coding-workstation.py" \
   --image "$CANDIDATE_ALIAS" \
+  --image-fingerprint "$CANDIDATE_FINGERPRINT" \
   --provider-connection "$PROVIDER_CONNECTION" \
+  --source-commit "$SOURCE_COMMIT" \
+  --proof-id "$BUILD_ID" \
+  --project-root "$PROJECT_ROOT" \
+  --evidence-dir "$EVIDENCE_DIR" \
   --network "$NETWORK" \
   --root-disk-size "$ROOT_DISK_SIZE"
+
+if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
+  rm -rf -- "$EVIDENCE_DIR"
+  echo "Temporary workstation evidence removed by policy."
+else
+  echo "Workstation evidence retained: $EVIDENCE_DIR"
+fi
 
 incus image export "$CANDIDATE_ALIAS" \
   "$OUTPUT_DIR/$ARCHIVE_BASENAME" --vm

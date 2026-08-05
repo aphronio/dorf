@@ -159,7 +159,9 @@ progress, concise explanations, and a copyable next action.
 ## Official Dorf Room image
 
 Dorf publishes and maintains a credential-free, Codex-ready Incus VM image. Users do not build
-an image on the default path.
+an image on the default path. The same official image is the ordinary coding workstation and ships
+Git, uv, Node, and Codex; repository-specific dependencies still come only from the managed
+repository's declared preparation command.
 
 The official image channel means:
 
