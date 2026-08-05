@@ -6,10 +6,12 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from dorf.adapters.agents.codex import CodexDriver
-from dorf.codex_room import recorded_codex_room_environment
-from dorf.runtime import JobInput, JobRuntime, RuntimeStore, WorkerOfflineError
+from dorf.runtime import JobInput, RuntimeStore, WorkerOfflineError
+
+if TYPE_CHECKING:
+    from dorf.sdk import JobExecution
 
 
 def launch_job_input_dispatcher(database_path: Path, job_name: str) -> bool:
@@ -53,9 +55,9 @@ def dispatch_job_inputs(database_path: Path, job_name: str) -> None:
                 or binding.room.status != "ready"
             ):
                 return
-            runtime = _runtime_for_input(store, job_name)
+            execution = _execution_for_input(store, job_name)
             try:
-                outcome = runtime.deliver_input(job_name, target.id)
+                outcome = execution.deliver_input(target.id)
             except WorkerOfflineError:
                 return
             if outcome.status == "succeeded":
@@ -65,12 +67,10 @@ def dispatch_job_inputs(database_path: Path, job_name: str) -> None:
             return
 
 
-def _runtime_for_input(store: RuntimeStore, job_name: str) -> JobRuntime:
-    binding = store.get_job_binding(job_name)
-    if binding is None:
-        raise RuntimeError(f"Job not found: {job_name}")
-    environment = recorded_codex_room_environment(binding)
-    return JobRuntime(store, environment, CodexDriver(environment))
+def _execution_for_input(store: RuntimeStore, job_name: str) -> JobExecution:
+    from dorf.sdk import Dorf
+
+    return Dorf(store).job_execution(job_name)
 
 
 def _next_input(store: RuntimeStore, job_name: str) -> JobInput | None:

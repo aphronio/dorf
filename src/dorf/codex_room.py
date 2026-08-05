@@ -11,6 +11,7 @@ from typing import Protocol
 from dorf.adapters.environments import (
     IncusConfig,
     IncusEnvironment,
+    IncusRunnerProbe,
     incus_bridge_ipv4,
 )
 from dorf.provider_gateway import (
@@ -75,6 +76,9 @@ class CodexRoomEnvironment:
 
     def create(self, binding: WorkerBinding) -> None:
         self._environment.create(binding)
+        self.install_provider_route(binding)
+
+    def install_provider_route(self, binding: WorkerBinding | JobBinding) -> None:
         consumer = _room_consumer(binding)
         route = self._gateway.route_for_consumer(consumer)
         if route is None:
@@ -106,10 +110,11 @@ class CodexRoomEnvironment:
         env: Mapping[str, str] | None = None,
         input: str | None = None,
         timeout_seconds: float | None = None,
+        provider_route: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         return self._environment.execute(
             binding,
-            self._room_argv(argv),
+            self._provider_route_argv(argv) if provider_route else self._room_argv(argv),
             cwd=cwd,
             env=env,
             input=input,
@@ -169,7 +174,7 @@ class CodexRoomEnvironment:
 
     def _install_route(
         self,
-        binding: WorkerBinding,
+        binding: WorkerBinding | JobBinding,
         route: InferenceRoute,
     ) -> None:
         config = _codex_config(route)
@@ -233,11 +238,12 @@ def new_codex_room_environment(
     connection_name: str,
     *,
     gateway: RoomRouteGateway | None = None,
+    probe: IncusRunnerProbe | None = None,
 ) -> CodexRoomEnvironment:
     """Compose the concrete credential-free Codex Room boundary."""
     gateway = gateway or ProviderGateway.open(bind_address=incus_bridge_ipv4(config.network))
     return CodexRoomEnvironment(
-        IncusEnvironment(config),
+        IncusEnvironment(config, probe=probe),
         gateway,
         connection_name=connection_name,
     )
@@ -247,6 +253,7 @@ def recorded_codex_room_environment(
     binding: WorkerBinding | JobBinding,
     *,
     gateway: RoomRouteGateway | None = None,
+    probe: IncusRunnerProbe | None = None,
 ) -> CodexRoomEnvironment:
     """Reconstruct the same Room boundary in detached controller processes."""
     if binding.environment_type != IncusEnvironment.environment_type:
@@ -261,6 +268,7 @@ def recorded_codex_room_environment(
         IncusConfig.from_mapping(binding.metadata),
         connection_name,
         gateway=gateway,
+        probe=probe,
     )
 
 

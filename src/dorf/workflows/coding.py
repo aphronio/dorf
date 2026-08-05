@@ -20,7 +20,8 @@ from dorf.github_app import (
     GitHubRepositoryError,
 )
 from dorf.repo_contract import REVIEW_PROMPT_PLACEHOLDER, RepoContract
-from dorf.runtime import JobBinding, JobRuntime
+from dorf.runtime import JobBinding
+from dorf.sdk import JobExecution
 
 from .coding_commands import CodingEnvironment, run_coding_job_command
 from .coding_dossier import (
@@ -144,9 +145,7 @@ class CodingWorkflow:
         job: CodingJob,
         contract: RepoContract,
         github_client: Callable[[], GitHubRepositoryClient],
-        environment: CodingEnvironment | None = None,
-        runtime: JobRuntime | None = None,
-        refresh_git_credentials: Callable[[JobBinding], None] | None = None,
+        execution: JobExecution | None = None,
         github_app_slug: Callable[[], str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -154,12 +153,10 @@ class CodingWorkflow:
         self.job = job
         self.contract = contract
         self._github_client = github_client
-        self.environment = environment
-        self.runtime = runtime
+        self.execution = execution
         self.binding = store.get_job_binding(job.job_name)
         if self.binding is None:
             raise RuntimeError(f"Job binding not found: {job.job_name}")
-        self._refresh_git_credentials = refresh_git_credentials
         self._github_app_slug = github_app_slug
         self._sleep = sleep
         self._messages: list[WorkflowMessage] = []
@@ -452,26 +449,26 @@ class CodingWorkflow:
         self.store.record_github_pr(job.job_name, number, url)
 
     def _require_execution(self) -> None:
-        if self.environment is None or self.runtime is None:
+        if self.execution is None:
             self._fail(
                 "Coding workflow execution collaborators are unavailable.",
                 kind="infrastructure",
             )
 
     def _require_environment(self) -> CodingEnvironment:
-        if self.environment is None:
+        if self.execution is None:
             self._fail(
                 "Coding workflow environment is unavailable.",
                 kind="infrastructure",
             )
-        return self.environment
+        return self.execution
 
     def _run_command(self, spec):
         self._require_execution()
         try:
             return run_coding_job_command(
                 store=self.store,
-                environment=self.environment,
+                environment=self.execution,
                 job=self.job,
                 binding=self.binding,
                 contract=self.contract,
@@ -498,12 +495,11 @@ class CodingWorkflow:
         self._require_execution()
         message_id = f"jmsg-{hashlib.sha256(turn_key.encode()).hexdigest()[:32]}"
         try:
-            job_input, _ = self.runtime.admit_message(
-                self.job.job_name,
+            job_input, _ = self.execution.admit_message(
                 message_id=message_id,
                 text=prompt,
             )
-            return self.runtime.deliver_input(self.job.job_name, job_input.id)
+            return self.execution.deliver_input(job_input.id)
         except RuntimeError as error:
             self._fail(
                 f"Could not continue {kind}: {error}",
@@ -603,7 +599,6 @@ class CodingWorkflow:
                 self.job,
                 self.contract,
                 github_client=self._github_client,
-                refresh_git_credentials=self._refresh_git_credentials,
             )
         except GitPublicationRepairError as error:
             self._fail(
@@ -778,7 +773,6 @@ class CodingWorkflow:
             self.job,
             self.contract,
             github_client=self._github_client,
-            refresh_git_credentials=self._refresh_git_credentials,
         )
         if not readiness.failures:
             return None
@@ -963,10 +957,8 @@ class CodingWorkflow:
             self.job.job_branch,
         )
         if fetch.returncode != 0 and git_auth_failed(fetch):
-            if self._refresh_git_credentials is None:
-                raise GitPublicationRepairError("Git credential refresh is unavailable")
             try:
-                self._refresh_git_credentials(self.binding)
+                environment.refresh_git_credentials()
             except RuntimeError as error:
                 raise GitPublicationRepairError(str(error)) from error
             fetch = git_output(
@@ -1819,7 +1811,6 @@ def verify_job_readiness(
     contract: RepoContract,
     *,
     github_client: Callable[[], GitHubRepositoryClient] | None = None,
-    refresh_git_credentials: Callable[[JobBinding], None] | None = None,
 ) -> JobReadiness:
     failures: list[str] = []
     dirty_worktree = False
@@ -1915,7 +1906,6 @@ def verify_job_readiness(
                 binding,
                 local_head=head_sha,
                 remote_head=remote_sha,
-                refresh_git_credentials=refresh_git_credentials,
             )
         if not repaired:
             failures.append("remote Job branch does not match Job HEAD")
@@ -1929,7 +1919,6 @@ def git_output(
     *args: str,
 ) -> subprocess.CompletedProcess[str]:
     return environment.execute(
-        binding,
         ["git", *args],
         cwd=binding.workspace,
         env={"GIT_TERMINAL_PROMPT": "0"},
@@ -1969,7 +1958,6 @@ def publish_job_head_if_ahead(
     *,
     local_head: str,
     remote_head: str,
-    refresh_git_credentials: Callable[[JobBinding], None] | None = None,
 ) -> bool:
     if not job_head_is_ahead(environment, binding, remote_head=remote_head):
         return False
@@ -1978,10 +1966,8 @@ def publish_job_head_if_ahead(
     credentials_refreshed = False
     push = git_output(environment, binding, "push", "origin", refspec)
     if push.returncode != 0 and git_auth_failed(push):
-        if refresh_git_credentials is None:
-            raise GitPublicationRepairError("could not refresh Git credentials for Job publication")
         try:
-            refresh_git_credentials(binding)
+            environment.refresh_git_credentials()
         except RuntimeError as error:
             raise GitPublicationRepairError(str(error)) from error
         credentials_refreshed = True

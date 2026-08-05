@@ -255,6 +255,43 @@ def test_sdk_composes_resource_lifecycle_and_retry_safe_messages(tmp_path, monke
     ]
 
 
+def test_public_job_execution_binds_runtime_commands_and_credential_refresh(
+    tmp_path, monkeypatch
+) -> None:
+    commands = configure_passing_incus(monkeypatch)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: False)
+    token_requests = []
+    dorf = Dorf.open(
+        tmp_path / "state.sqlite3",
+        agent_defaults=CodexConfig("test-model", "medium"),
+        provider_connection="personal-chatgpt",
+        git_credential_token=lambda job: token_requests.append(job) or "installation-token",
+    )
+    dorf.spawn_worker("coder")
+    dorf.assign_job("public-handle", worker_name="coder", goal="Exercise the SDK handle")
+
+    execution = dorf.job_execution("public-handle")
+    queued, created = execution.admit_message(
+        message_id="jmsg-public-handle",
+        text="Continue through the public handle",
+    )
+    processed = execution.process_command(
+        ["bash", "-lc", "true"],
+        cwd=execution.binding.workspace,
+        provider_route=True,
+    )
+    result = execution.execute(["git", "status", "--short"], cwd=execution.binding.workspace)
+    execution.refresh_git_credentials()
+
+    assert created is True
+    assert queued.text == "Continue through the public handle"
+    assert processed[:4] == ["incus", "exec", "dorf-coder", "--cwd"]
+    assert result.returncode == 0
+    assert token_requests == ["public-handle"]
+    assert any("credential.helper" in " ".join(command) for command in commands)
+
+
 def test_public_job_message_is_blocked_while_assignment_is_preparing(
     tmp_path, monkeypatch
 ) -> None:

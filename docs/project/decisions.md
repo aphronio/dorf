@@ -904,3 +904,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** GitHub exposes a narrower repository-access callback than authority polling,
   an organization-request flow needs a distinct approval state, or a second concrete authority
   interruption proves a smaller shared primitive without leaking workflow policy into the runtime.
+
+## D045 — Job execution composition is a public SDK handle
+
+- **Status:** Accepted for the coding-to-PR workflow — 2026-08-05
+- **Decision:** `Dorf.job_execution(JOB)` is the one public composition point for a recorded Job's
+  runtime, Room environment, Codex driver, repository command execution, provider-route command
+  rewriting, and Git-credential refresh. The coding workflow consumes that bound handle and keeps
+  GitHub, Git, repository-contract, and coding-store policy; it does not construct runtime or
+  adapter implementations. Disposable admission uses the same facade-owned environment and driver
+  composition without creating a second workflow abstraction.
+- **Why:** Coding setup, admission, active workflow commands, and detached input delivery had each
+  reconstructed overlapping pieces of the same Job execution stack. Their concrete repetition
+  earns this seam, while a bound handle remains smaller than a registry, plugin system, or workflow
+  base class and leaves runtime semantics unchanged.
+- **Reconsider when:** A second real environment or agent implementation proves the concrete facade
+  needs selection policy, or a non-coding workflow demonstrates a smaller shared operation than the
+  bound Job handle.

@@ -894,7 +894,7 @@ def test_worker_message_retains_offline_input_and_wait_pins_exact_message(
             detail="Approve publication",
         )
 
-    monkeypatch.setattr("dorf.cli.WorkerRuntime.observe_wait", observe)
+    monkeypatch.setattr("dorf.sdk.WorkerRuntime.observe_wait", observe)
     waited = CliRunner().invoke(
         app,
         ["worker", "wait", "researcher", "--message", receipt["message_id"]],
@@ -1289,10 +1289,10 @@ def test_coding_start_composes_dedicated_worker_job_and_independent_clone(
         return False
 
     monkeypatch.setattr(
-        "dorf.cli.launch_job_input_dispatcher",
+        "dorf.sdk.launch_job_input_dispatcher",
         observe_dispatch,
     )
-    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: True)
     data_home = tmp_path / "data"
     config_home = tmp_path / "config"
     image_fingerprint = "f" * 64
@@ -1643,8 +1643,8 @@ def test_afk_success_admits_original_issue_with_the_exact_recorded_proof(
         "dorf.cli.create_admitted_git_backed_job_branch_or_exit",
         create_branch,
     )
-    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
-    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: True)
     coordinated = []
     monkeypatch.setattr(
         "dorf.cli.run_coding_job_workflow_or_exit",
@@ -1793,8 +1793,8 @@ def test_afk_missing_github_authority_resumes_original_delegation_after_approval
             )
         ),
     )
-    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
-    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: True)
     monkeypatch.setattr("dorf.cli.run_coding_job_workflow_or_exit", lambda *args: None)
     data_home = tmp_path / "data"
 
@@ -2185,8 +2185,8 @@ def test_coding_start_retries_setup_on_the_same_worker_job_and_assignment(
         "dorf.cli.recover_git_backed_job_branch_or_exit",
         lambda job: recovered.append(job.job_name) or branch,
     )
-    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
-    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: True)
     clone_attempts = 0
 
     def run(self, argv, *, input=None, timeout_seconds=None):
@@ -2302,8 +2302,8 @@ def test_coding_setup_resume_reconciles_a_persisted_reservation_before_resources
         "dorf.cli.recover_git_backed_job_branch_or_exit",
         lambda job: GitBackedJobBranch("example/repo", base_sha, {}, "installation-token"),
     )
-    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
-    monkeypatch.setattr("dorf.cli.launch_assignment_report_collector", lambda *args: True)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_assignment_report_collector", lambda *args: True)
 
     result = CliRunner().invoke(
         app,
@@ -2632,7 +2632,7 @@ def test_coding_terminal_commands_end_jobs_and_retain_caller_managed_workers(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     configure_passing_incus(monkeypatch)
-    monkeypatch.setattr("dorf.cli.launch_job_input_dispatcher", lambda *args: False)
+    monkeypatch.setattr("dorf.sdk.launch_job_input_dispatcher", lambda *args: False)
     data_home = tmp_path / "data"
     env = {"XDG_DATA_HOME": str(data_home)}
     runner = CliRunner()

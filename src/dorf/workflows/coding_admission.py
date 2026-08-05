@@ -16,24 +16,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from dorf.adapters.agents.codex import CodexDriver
-from dorf.adapters.agents.codex_config import (
-    AgentConfigValidationError,
-    CodexConfig,
-    resolve_codex_config,
-)
-from dorf.adapters.environments import (
-    IncusConfig,
-    IncusDoctor,
-    IncusEnvironment,
-    IncusRunnerProbe,
-)
-from dorf.codex_room import (
-    CODEX_CONFIG_PATH,
-    CODEX_ROUTE_CREDENTIAL_PATH,
-    CODEX_ROUTE_ENV_KEY,
-    CodexRoomEnvironment,
-)
 from dorf.coding_workspace import GitAuthorIdentity, git_clone_workspace_script
 from dorf.deployment_profile import (
     DeploymentProfileError,
@@ -49,7 +31,6 @@ from dorf.github_app import (
     GitHubRepositoryError,
     load_github_app_config,
 )
-from dorf.provider_gateway import ProviderGateway, ProviderGatewayError
 from dorf.repo_contract import (
     REVIEW_PROMPT_PLACEHOLDER,
     ContractValidationError,
@@ -63,7 +44,14 @@ from dorf.runtime import (
     JobConversation,
     Room,
     Worker,
-    WorkerAgentTurn,
+)
+from dorf.sdk import (
+    AgentConfigValidationError,
+    CodexConfig,
+    Dorf,
+    IncusConfig,
+    RoomRouteGateway,
+    resolve_codex_config,
 )
 
 ADMISSION_REVIEW_TIMEOUT_SECONDS = 180
@@ -306,10 +294,10 @@ class LocalCodingAdmissionBackend:
     def __init__(
         self,
         *,
-        probe: IncusRunnerProbe | None = None,
-        gateway: ProviderGateway | None = None,
+        probe=None,
+        gateway: RoomRouteGateway | None = None,
     ) -> None:
-        self.probe = probe or IncusRunnerProbe()
+        self.probe = probe or Dorf.new_environment_probe()
         self.gateway = gateway
         self.repo: Path | None = None
         self.repository: str | None = None
@@ -627,7 +615,7 @@ class LocalCodingAdmissionBackend:
                 )
             )
         if self.environment_config is not None:
-            result = IncusDoctor(self.probe).fast_check(self.environment_config)
+            result = Dorf.check_environment(self.environment_config, probe=self.probe)
             for failure in result.failures:
                 if (
                     failure.code == "incus-template"
@@ -658,7 +646,7 @@ class LocalCodingAdmissionBackend:
             try:
                 gateway = self._gateway()
                 gateway.require_connection(self.provider_connection)
-            except (ProviderGatewayError, OSError, RuntimeError, ValueError) as error:
+            except (OSError, RuntimeError, ValueError) as error:
                 failures.append(
                     _failure(
                         "provider-route",
@@ -723,16 +711,21 @@ class LocalCodingAdmissionBackend:
                 raise RuntimeError(_message(start))
             if not self._wait_for_guest(vm):
                 raise RuntimeError("Incus guest agent did not become ready")
-            route = self._gateway().create_route(
-                self.provider_connection,
-                consumer=consumer,
+            execution = Dorf.disposable_job_execution(
+                binding,
+                environment_config=self.environment_config,
+                provider_connection=self.provider_connection,
+                provider_gateway=self._gateway(),
+                environment_probe=self.probe,
             )
-            self._install_route(vm, route.base_url, route.wire_api, route.api_key)
-            self._clone_and_prepare(vm, request)
-            self._prove_github_write(vm)
-            self._prove_implementation(binding)
-            self._prove_reviewer(vm)
-        except (OSError, RuntimeError, subprocess.TimeoutExpired, ProviderGatewayError) as error:
+            route = self._gateway().route_for_consumer(consumer)
+            if route is None:
+                raise RuntimeError("temporary provider route was not installed")
+            self._clone_and_prepare(execution, request)
+            self._prove_github_write(execution)
+            self._prove_implementation(execution)
+            self._prove_reviewer(execution)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
             failures.append(
                 _failure(
                     "consumer-path",
@@ -753,7 +746,7 @@ class LocalCodingAdmissionBackend:
                             )
                         if self._gateway().route_for_consumer(consumer) is not None:
                             raise RuntimeError("temporary provider route remains after revocation")
-                    except (OSError, ProviderGatewayError, RuntimeError) as error:
+                    except (OSError, RuntimeError) as error:
                         failures.append(
                             _failure(
                                 "provider-route-cleanup",
@@ -819,16 +812,11 @@ class LocalCodingAdmissionBackend:
             installation_token=self.installation_token,
         )
 
-    def _gateway(self) -> ProviderGateway:
+    def _gateway(self) -> RoomRouteGateway:
         if self.gateway is None:
             assert self.environment_config is not None
-            from dorf.adapters.environments import incus_bridge_ipv4
-
-            self.gateway = ProviderGateway.open(
-                bind_address=incus_bridge_ipv4(
-                    self.environment_config.network,
-                    probe=self.probe,
-                )
+            self.gateway = Dorf.open_provider_gateway(
+                self.environment_config, probe=self.probe
             )
         return self.gateway
 
@@ -844,41 +832,7 @@ class LocalCodingAdmissionBackend:
                 time.sleep(1)
         return False
 
-    def _install_route(self, vm: str, base_url: str, wire_api: str, api_key: str) -> None:
-        config = "\n".join(
-            (
-                'model_provider = "dorf"',
-                "",
-                "[model_providers.dorf]",
-                'name = "Dorf Provider Gateway"',
-                f"base_url = {json.dumps(base_url)}",
-                f"env_key = {json.dumps(CODEX_ROUTE_ENV_KEY)}",
-                f"wire_api = {json.dumps(wire_api)}",
-                "requires_openai_auth = false",
-                "",
-            )
-        )
-        for path, directory, content in (
-            (CODEX_CONFIG_PATH, "/root/.codex", config),
-            (CODEX_ROUTE_CREDENTIAL_PATH, "/root/.config/dorf", f"{api_key}\n"),
-        ):
-            result = self.probe.run(
-                [
-                    "incus",
-                    "exec",
-                    vm,
-                    "--",
-                    "bash",
-                    "-lc",
-                    f"umask 077; mkdir -p {directory}; cat > {path}",
-                ],
-                input=content,
-                timeout_seconds=30,
-            )
-            if result.returncode:
-                raise RuntimeError("Could not install the disposable provider route")
-
-    def _clone_and_prepare(self, vm: str, request: CodingAdmissionRequest) -> None:
+    def _clone_and_prepare(self, execution, request: CodingAdmissionRequest) -> None:
         assert self.repository is not None
         assert self.contract is not None
         assert self.installation_token is not None
@@ -887,16 +841,9 @@ class LocalCodingAdmissionBackend:
             request.target_branch,
             ADMISSION_WORKSPACE,
         )
-        result = self.probe.run(
-            [
-                "incus",
-                "exec",
-                vm,
-                "--",
-                "bash",
-                "-lc",
-                f"mkdir -p {ADMISSION_WORKSPACE}; {clone}",
-            ],
+        result = execution.execute(
+            ["bash", "-lc", f"mkdir -p {ADMISSION_WORKSPACE}; {clone}"],
+            cwd="/",
             input=f"{self.installation_token}\n",
             timeout_seconds=600,
         )
@@ -909,54 +856,35 @@ class LocalCodingAdmissionBackend:
             command = self.contract.commands.get(kind)
             if command is None:
                 continue
-            result = self.probe.run(
-                [
-                    "incus",
-                    "exec",
-                    vm,
-                    "--cwd",
-                    ADMISSION_WORKSPACE,
-                    "--",
-                    "env",
-                    *[
-                        f"{name}={value}"
-                        for name, value in self._command_env(request).items()
-                    ],
-                    "bash",
-                    "-lc",
-                    command,
-                ],
+            result = execution.execute(
+                ["bash", "-lc", command],
+                cwd=ADMISSION_WORKSPACE,
+                env=self._command_env(request),
                 input="",
                 timeout_seconds=600,
             )
             if result.returncode:
                 raise RuntimeError(f"repository {kind} failed: {_message(result)}")
 
-    def _prove_github_write(self, vm: str) -> None:
+    def _prove_github_write(self, execution) -> None:
         branch = f"refs/heads/dorf-admission-proof-{secrets.token_hex(4)}"
-        result = self.probe.run(
+        result = execution.execute(
             [
-                "incus",
-                "exec",
-                vm,
-                "--cwd",
-                ADMISSION_WORKSPACE,
-                "--",
-                "env",
-                "GIT_TERMINAL_PROMPT=0",
                 "git",
                 "push",
                 "--dry-run",
                 "origin",
                 f"HEAD:{branch}",
             ],
+            cwd=ADMISSION_WORKSPACE,
+            env={"GIT_TERMINAL_PROMPT": "0"},
             input="",
             timeout_seconds=60,
         )
         if result.returncode:
             raise RuntimeError("GitHub dry-run push failed: " + _message(result))
 
-    def _prove_reviewer(self, vm: str) -> None:
+    def _prove_reviewer(self, execution) -> None:
         assert self.contract is not None
         assert self.contract.review is not None
         reviewer = self.contract.review.agents[self.reviewer]
@@ -965,27 +893,15 @@ class LocalCodingAdmissionBackend:
             REVIEW_PROMPT_PLACEHOLDER,
             shlex.quote(f"Reply with exactly: {nonce}"),
         )
-        script = (
-            f"IFS= read -r {CODEX_ROUTE_ENV_KEY} < {CODEX_ROUTE_CREDENTIAL_PATH}; "
-            f"export {CODEX_ROUTE_ENV_KEY}; exec {command}"
-        )
-        result = self.probe.run(
-            [
-                "incus",
-                "exec",
-                vm,
-                "--cwd",
-                ADMISSION_WORKSPACE,
-                "--",
-                "bash",
-                "-lc",
-                script,
-            ],
+        result = execution.execute(
+            ["bash", "-lc", command],
+            cwd=ADMISSION_WORKSPACE,
             input="",
             timeout_seconds=min(
                 self.contract.review.timeout_seconds,
                 ADMISSION_REVIEW_TIMEOUT_SECONDS,
             ),
+            provider_route=True,
         )
         response_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         if result.returncode or not response_lines or response_lines[-1] != nonce:
@@ -994,32 +910,17 @@ class LocalCodingAdmissionBackend:
                 + (_message(result) if result.returncode else "expected response was absent")
             )
 
-    def _prove_implementation(self, binding: JobBinding) -> None:
+    def _prove_implementation(self, execution) -> None:
         assert self.codex_config is not None
         assert self.codex_config.model is not None
         assert self.codex_config.reasoning_effort is not None
-        assert self.environment_config is not None
-        assert self.provider_connection is not None
         nonce = f"DORF_IMPLEMENTATION_READY_{secrets.token_hex(8)}"
-        environment = CodexRoomEnvironment(
-            IncusEnvironment(self.environment_config, probe=self.probe),
-            self._gateway(),
-            connection_name=self.provider_connection,
-        )
-        driver = CodexDriver(environment)
-        driver.prepare(binding)
         with tempfile.TemporaryDirectory(prefix="dorf-coding-admission-") as output_dir:
-            outcome = driver.start_job_conversation(
-                binding,
-                WorkerAgentTurn(
-                    f"Reply with exactly: {nonce}",
-                    Path(output_dir) / "implementation.log",
-                    self.codex_config.model,
-                    self.codex_config.reasoning_effort,
-                ),
-                conversation_started=lambda thread_id: None,
-                turn_prepared=lambda baseline: None,
-                turn_started=lambda turn_id: None,
+            outcome = execution.run_agent_turn(
+                f"Reply with exactly: {nonce}",
+                Path(output_dir) / "implementation.log",
+                model=self.codex_config.model,
+                reasoning_effort=self.codex_config.reasoning_effort,
                 timeout_seconds=ADMISSION_REVIEW_TIMEOUT_SECONDS,
             )
         if outcome.status != "completed":
@@ -1178,7 +1079,7 @@ def _disposable_job_binding(vm: str, codex_config: CodexConfig) -> JobBinding:
         Room(
             id=room_id,
             worker_name=worker_name,
-            room_type=IncusEnvironment.environment_type,
+            room_type=Dorf.environment_type,
             provider_id=vm,
             workspace="/workspace",
             status="ready",

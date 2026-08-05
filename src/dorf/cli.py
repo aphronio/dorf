@@ -34,7 +34,6 @@ from rich.text import Text
 from rich.theme import Theme
 
 from dorf import Dorf, __version__
-from dorf.adapters.agents.codex import CodexDriver
 from dorf.adapters.agents.codex_config import (
     AgentConfigValidationError,
     CodexConfig,
@@ -43,18 +42,11 @@ from dorf.adapters.agents.codex_config import (
 from dorf.adapters.environments import (
     IncusConfig,
     IncusDoctor,
-    IncusEnvironment,
     IncusRunnerProbe,
-)
-from dorf.codex_room import (
-    CodexRoomEnvironment,
-    new_codex_room_environment,
-    recorded_codex_room_environment,
 )
 from dorf.coding_workspace import (
     GitAuthorIdentity,
     coding_job_goal,
-    install_git_credentials,
     prepare_git_workspace,
     reset_git_workspace,
 )
@@ -95,7 +87,6 @@ from dorf.host_setup import (
     repair_incus_host,
     supported_incus_host_recipe,
 )
-from dorf.job_input_dispatcher import launch_job_input_dispatcher
 from dorf.provider_gateway import (
     DeviceAuthorization,
     ProviderConnection,
@@ -108,7 +99,6 @@ from dorf.repo_contract import (
     RepoContract,
     load_repo_contract,
 )
-from dorf.report_collector import launch_assignment_report_collector
 from dorf.runtime import (
     AssignedJobWaitResult,
     InvalidJobNameError,
@@ -116,16 +106,12 @@ from dorf.runtime import (
     JobArtifact,
     JobBinding,
     JobInspection,
-    JobRuntime,
     JobUnsettledError,
-    NewJob,
-    NewWorker,
     TimelineEvent,
     WorkerAlreadyAttachedError,
     WorkerBinding,
     WorkerInspection,
     WorkerOfflineError,
-    WorkerRuntime,
     WorkerUnsettledError,
     WorkerWaitResult,
 )
@@ -133,6 +119,7 @@ from dorf.sdk import (
     DedicatedWorkerCleanupError,
     DorfResourceNotFoundError,
     EnvironmentPrerequisitesError,
+    UnsupportedRoomTypeError,
 )
 from dorf.setup_diagnostics import (
     SetupDiagnostic,
@@ -1859,19 +1846,27 @@ def launch_coding_job_or_exit(
             provider_connection
         )
         image_fingerprint = deployment_image_fingerprint(deployment_profile, contract)
-        environment = get_environment(
-            contract,
+        environment_config = IncusConfig.from_mapping(contract.incus_config)
+        if image_fingerprint is not None:
+            environment_config = replace(environment_config, template=image_fingerprint)
+        dorf = Dorf(
+            store,
+            environment_config=environment_config,
+            agent_defaults=contract.primary_codex,
             provider_connection=selected_provider,
-            image_fingerprint=image_fingerprint,
+            git_credential_token=github_installation_token_for_job,
         )
-        exit_if_environment_prerequisites_missing(environment)
     else:
         selected_provider = admission_proof.provider_connection
         image_fingerprint = admission_proof.image_fingerprint
-        environment = new_codex_room_environment(
-            admission_proof.environment_config,
-            selected_provider,
+        dorf = Dorf(
+            store,
+            environment_config=admission_proof.environment_config,
+            agent_defaults=contract.primary_codex,
+            provider_connection=selected_provider,
+            git_credential_token=github_installation_token_for_job,
         )
+    exit_if_environment_prerequisites_missing(dorf)
     room_image_metadata = (
         {"image_fingerprint": image_fingerprint}
         if image_fingerprint is not None
@@ -1979,27 +1974,22 @@ def launch_coding_job_or_exit(
         typer.echo(f"Could not record coding Job: {error}", err=True)
         raise typer.Exit(1) from error
 
-    driver = CodexDriver(environment)
     try:
-        worker = WorkerRuntime(store, environment, driver).spawn(
-            NewWorker(
-                worker_name,
-                provenance="coding-workflow",
-                lifecycle_policy="dedicated",
-                room_metadata=room_image_metadata,
-            )
+        worker = dorf.spawn_worker(
+            worker_name,
+            provenance="coding-workflow",
+            lifecycle_policy="dedicated",
+            room_metadata=room_image_metadata,
         )
-        job_runtime = JobRuntime(store, environment, driver)
-        binding = job_runtime.assign(
-            NewJob(
-                name=job_name,
-                worker_name=worker.worker.name,
-                goal=goal,
-                model=config.model,
-                reasoning_effort=config.reasoning_effort,
-            ),
+        assignment = dorf.assign_job(
+            job_name,
+            worker_name=worker.worker.name,
+            goal=goal,
+            model=config.model,
+            reasoning_effort=config.reasoning_effort,
             activate=False,
         )
+        binding = assignment.binding
         if admission_proof is not None:
             store.documents.append_event(
                 job_name,
@@ -2034,16 +2024,18 @@ def launch_coding_job_or_exit(
     )
 
     try:
+        execution = dorf.job_execution(job_name)
         prepare_git_workspace(
-            environment,
+            execution,
             binding,
             repo_full_name=remote_branch.repo_full_name,
             token=remote_branch.token,
             branch=job_branch,
             git_author=git_author,
         )
-        run_repository_preparation_or_raise(store, environment, binding, contract)
-        binding = job_runtime.activate_assignment(job_name)
+        run_repository_preparation_or_raise(store, execution, binding, contract)
+        activation = dorf.activate_job(job_name)
+        binding = activation.binding
     except Exception as error:
         if store.get_coding_job(job_name) is not None:
             store.update_status(job_name, "setup-failed")
@@ -2055,8 +2047,7 @@ def launch_coding_job_or_exit(
         raise typer.Exit(1) from error
 
     store.update_status(job_name, "active")
-    launch_assignment_report_collector(store.database_path, binding.job.name, binding.assignment.id)
-    delivery_started = launch_job_input_dispatcher(store.database_path, job_name)
+    delivery_started = activation.dispatcher_started
     typer.echo(f"Started coding Job {job_name}")
     typer.echo(f"Worker: {worker_name} (coding-workflow, dedicated)")
     typer.echo(f"Assignment: {binding.assignment.id}")
@@ -2079,7 +2070,7 @@ def launch_coding_job_or_exit(
 
 def run_repository_preparation_or_raise(
     store: CodingStore,
-    environment: CodexRoomEnvironment,
+    environment,
     binding: JobBinding,
     contract: RepoContract,
 ) -> None:
@@ -2111,20 +2102,27 @@ def recover_setup_failed_coding_job_or_exit(
     binding = store.get_job_binding(job.job_name)
     worker_binding = store.get_worker_binding(worker_name)
     setup_provider_connection = job.metadata.get("setup_provider_connection")
-    environment = (
-        get_environment_for_assignment_or_exit(worker_binding, contract)
-        if worker_binding is not None
-        else get_environment(
-            contract,
-            provider_connection=(
-                setup_provider_connection
-                if setup_provider_connection is not None
-                else _missing_setup_provider_connection(job.job_name)
-            ),
-            image_fingerprint=job.metadata.get("setup_image_fingerprint"),
-        )
+    environment_config = IncusConfig.from_mapping(
+        worker_binding.metadata if worker_binding is not None else contract.incus_config
     )
-    exit_if_environment_prerequisites_missing(environment)
+    if worker_binding is None and "setup_image_fingerprint" in job.metadata:
+        environment_config = replace(
+            environment_config,
+            template=job.metadata["setup_image_fingerprint"],
+        )
+    dorf = Dorf(
+        store,
+        environment_config=environment_config,
+        agent_defaults=contract.primary_codex,
+        provider_connection=(
+            worker_binding.metadata.get("provider_connection")
+            if worker_binding is not None
+            else setup_provider_connection
+            or _missing_setup_provider_connection(job.job_name)
+        ),
+        git_credential_token=github_installation_token_for_job,
+    )
+    exit_if_environment_prerequisites_missing(dorf)
     workspace = f"/workspace/jobs/{job.job_name}"
     setup_task_prompt = job.metadata.get("setup_task_prompt")
     if setup_task_prompt is not None and setup_task_prompt != coding_task.prompt:
@@ -2152,36 +2150,31 @@ def recover_setup_failed_coding_job_or_exit(
                 job.metadata.get("setup_reasoning_effort") if binding is None else None
             ),
         )
-        driver = CodexDriver(environment)
         if worker_binding is None:
-            worker_binding = WorkerRuntime(store, environment, driver).spawn(
-                NewWorker(
-                    worker_name,
-                    provenance="coding-workflow",
-                    lifecycle_policy="dedicated",
-                    room_metadata=(
-                        {"image_fingerprint": job.metadata["setup_image_fingerprint"]}
-                        if "setup_image_fingerprint" in job.metadata
-                        else None
-                    ),
-                )
+            worker_binding = dorf.spawn_worker(
+                worker_name,
+                provenance="coding-workflow",
+                lifecycle_policy="dedicated",
+                room_metadata=(
+                    {"image_fingerprint": job.metadata["setup_image_fingerprint"]}
+                    if "setup_image_fingerprint" in job.metadata
+                    else None
+                ),
             )
         if (
             worker_binding.worker.provenance != "coding-workflow"
             or worker_binding.worker.lifecycle_policy != "dedicated"
         ):
             raise RuntimeError("recorded Worker does not have dedicated coding provenance")
-        job_runtime = JobRuntime(store, environment, driver)
-        binding = job_runtime.assign(
-            NewJob(
-                name=job.job_name,
-                worker_name=worker_binding.worker.name,
-                goal=expected_goal,
-                model=config.model,
-                reasoning_effort=config.reasoning_effort,
-            ),
+        assignment = dorf.assign_job(
+            job.job_name,
+            worker_name=worker_binding.worker.name,
+            goal=expected_goal,
+            model=config.model,
+            reasoning_effort=config.reasoning_effort,
             activate=False,
         )
+        binding = assignment.binding
         store.remove_metadata_keys(
             job.job_name,
             {
@@ -2193,24 +2186,23 @@ def recover_setup_failed_coding_job_or_exit(
         )
         remote_branch = recover_git_backed_job_branch_or_exit(job)
         store.set_metadata_value(job.job_name, "github_remote_branch_status", "created")
-        reset_git_workspace(environment, binding)
+        execution = dorf.job_execution(job.job_name)
+        reset_git_workspace(execution, binding)
         prepare_git_workspace(
-            environment,
+            execution,
             binding,
             repo_full_name=remote_branch.repo_full_name,
             token=remote_branch.token,
             branch=job.job_branch,
             git_author=resolve_git_author_or_exit(repo),
         )
-        run_repository_preparation_or_raise(store, environment, binding, contract)
-        binding = job_runtime.activate_assignment(job.job_name)
+        run_repository_preparation_or_raise(store, execution, binding, contract)
+        binding = dorf.activate_job(job.job_name).binding
     except Exception as error:
         store.update_status(job.job_name, "setup-failed")
         typer.echo(f"Could not recover coding Job setup: {error}", err=True)
         raise typer.Exit(1) from error
     store.update_status(job.job_name, "active")
-    launch_assignment_report_collector(store.database_path, binding.job.name, binding.assignment.id)
-    launch_job_input_dispatcher(store.database_path, job.job_name)
     typer.echo(f"Recovered coding Job setup {job.job_name}")
 
 
@@ -2864,23 +2856,15 @@ def coding_job_workflow_or_exit(
         typer.echo(f"Job binding not found: {job_name}", err=True)
         raise typer.Exit(1)
     contract = load_contract_or_exit(Path(job.target_repo))
-    environment = None
-    runtime = None
+    execution = None
     if require_execution:
-        environment = get_environment_for_assignment_or_exit(binding, contract)
-        runtime = JobRuntime(store, environment, CodexDriver(environment))
+        execution = job_execution_or_exit(store, job_name)
     return CodingWorkflow(
         store=store,
         job=job,
         contract=contract,
-        environment=environment,
-        runtime=runtime,
+        execution=execution,
         github_client=github_repository_client_from_app_token,
-        refresh_git_credentials=(
-            (lambda binding: refresh_job_git_credentials(binding, environment=environment))
-            if environment is not None
-            else None
-        ),
         github_app_slug=github_app_slug,
     )
 
@@ -3191,10 +3175,10 @@ def run_environment_job_command(
     if binding is None:
         typer.echo(f"Job binding not found: {job.job_name}", err=True)
         raise typer.Exit(1)
-    environment = get_environment_for_assignment_or_exit(binding)
+    execution = job_execution_or_exit(store, job.job_name)
     return run_coding_job_command(
         store=store,
-        environment=environment,
+        environment=execution,
         job=job,
         binding=binding,
         contract=contract,
@@ -3202,14 +3186,19 @@ def run_environment_job_command(
     )
 
 
-def refresh_job_git_credentials(
-    binding: JobBinding,
-    *,
-    environment: IncusEnvironment | None = None,
-) -> None:
-    job = CodingStore.open().get_coding_job(binding.job.name)
+def job_execution_or_exit(store: CodingStore, job_name: str):
+    try:
+        dorf = Dorf(store, git_credential_token=github_installation_token_for_job)
+        return dorf.job_execution(job_name)
+    except (UnsupportedRoomTypeError, RuntimeError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from error
+
+
+def github_installation_token_for_job(job_name: str) -> str:
+    job = CodingStore.open().get_coding_job(job_name)
     if job is None:
-        raise RuntimeError(f"Coding Job not found: {binding.job.name}")
+        raise RuntimeError(f"Coding Job not found: {job_name}")
     repo_full_name = job.metadata.get("github_repo")
     if not repo_full_name:
         raise RuntimeError("Coding Job metadata is missing github_repo")
@@ -3218,9 +3207,7 @@ def refresh_job_git_credentials(
         minted = GitHubAppTokenClient().mint_installation_token(config)
     except (GitHubAppConfigError, GitHubAppVerificationError) as error:
         raise RuntimeError(f"could not refresh GitHub App token: {error}") from error
-    token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
-    environment = environment or get_environment_for_assignment_or_exit(binding)
-    install_git_credentials(environment, binding, token=token)
+    return minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
 
 
 def detect_git_target(cwd: Path) -> GitTarget:
@@ -3498,18 +3485,6 @@ def load_contract_or_exit(repo: Path) -> RepoContract:
         raise typer.Exit(1) from error
 
 
-def get_environment(
-    contract: RepoContract | None = None,
-    *,
-    provider_connection: str,
-    image_fingerprint: str | None = None,
-) -> CodexRoomEnvironment:
-    config = IncusConfig.from_mapping(contract.incus_config if contract is not None else None)
-    if image_fingerprint is not None:
-        config = replace(config, template=image_fingerprint)
-    return new_codex_room_environment(config, provider_connection)
-
-
 def deployment_image_fingerprint(
     profile: DeploymentProfile | None,
     contract: RepoContract,
@@ -3566,23 +3541,6 @@ def open_dorf(
     )
 
 
-def get_environment_for_assignment_or_exit(
-    binding: WorkerBinding | JobBinding,
-    contract: RepoContract | None = None,
-) -> CodexRoomEnvironment:
-    if binding.environment_type != IncusEnvironment.environment_type:
-        typer.echo(
-            f"Unsupported Room type: {binding.environment_type}",
-            err=True,
-        )
-        raise typer.Exit(1)
-    try:
-        return recorded_codex_room_environment(binding)
-    except RuntimeError as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(1) from error
-
-
 def _missing_setup_provider_connection(job_name: str) -> str:
     typer.echo(
         f"Coding Job {job_name} has no recorded Provider Connection; recreate it",
@@ -3598,9 +3556,9 @@ def echo_contract_summary(contract: RepoContract) -> None:
 
 
 def exit_if_environment_prerequisites_missing(
-    environment: IncusEnvironment | CodexRoomEnvironment,
+    dorf: Dorf,
 ) -> None:
-    missing = environment.check_prerequisites()
+    missing = dorf.environment_prerequisites()
     if not missing:
         return
     echo_environment_prerequisite_failures(missing)
