@@ -20,7 +20,6 @@ GIT_PROBE_TIMEOUT_SECONDS = 10
 class CodingEnvironment(Protocol):
     def execute(
         self,
-        binding: JobBinding,
         argv: list[str],
         *,
         cwd: str | None = None,
@@ -31,13 +30,14 @@ class CodingEnvironment(Protocol):
 
     def process_command(
         self,
-        binding: JobBinding,
         argv: list[str],
         *,
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
         provider_route: bool = False,
     ) -> list[str]: ...
+
+    def refresh_git_credentials(self) -> None: ...
 
 
 def run_coding_job_command(
@@ -54,7 +54,6 @@ def run_coding_job_command(
     process_spec = CommandSpec(
         kind=spec.kind,
         command=environment.process_command(
-            binding,
             argv,
             cwd=binding.workspace,
             env=_command_env(job, binding, contract),
@@ -165,7 +164,6 @@ def _git_head(
 ) -> str | None:
     try:
         result = environment.execute(
-            binding,
             ["git", "rev-parse", "HEAD"],
             cwd=binding.workspace,
             timeout_seconds=GIT_PROBE_TIMEOUT_SECONDS,

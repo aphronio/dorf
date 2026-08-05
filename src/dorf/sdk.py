@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import subprocess
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic, sleep
 
 from dorf.adapters.agents.codex import CodexDriver
-from dorf.adapters.agents.codex_config import CodexConfig, resolve_codex_config
-from dorf.adapters.environments import IncusConfig, IncusEnvironment, incus_bridge_ipv4
+from dorf.adapters.agents.codex_config import (
+    AgentConfigValidationError as AgentConfigValidationError,
+)
+from dorf.adapters.agents.codex_config import (
+    CodexConfig,
+    resolve_codex_config,
+)
+from dorf.adapters.environments import (
+    IncusConfig,
+    IncusDoctor,
+    IncusEnvironment,
+    IncusRunnerProbe,
+    incus_bridge_ipv4,
+)
 from dorf.codex_room import (
     CodexRoomEnvironment,
     RoomRouteGateway,
@@ -36,6 +50,7 @@ from dorf.runtime import (
     RuntimeStore,
     TimelineEvent,
     Worker,
+    WorkerAgentTurn,
     WorkerAttachResult,
     WorkerBinding,
     WorkerConversation,
@@ -133,8 +148,108 @@ class JobEndResult:
     dedicated_worker: Worker | None
 
 
+@dataclass(frozen=True)
+class JobExecution:
+    """Run one recorded Job without exposing runtime or adapter wiring."""
+
+    binding: JobBinding
+    _runtime: JobRuntime | None
+    _environment: IncusEnvironment | CodexRoomEnvironment
+    _agent: CodexDriver
+    _git_credential_token: Callable[[str], str] | None
+
+    def _require_runtime(self) -> JobRuntime:
+        if self._runtime is None:
+            raise RuntimeError("Durable Job runtime operations are unavailable")
+        return self._runtime
+
+    def admit_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> tuple[JobInput, bool]:
+        return self._require_runtime().admit_message(
+            self.binding.job.name,
+            message_id=message_id,
+            text=text,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+
+    def deliver_input(self, input_id: str) -> JobTurn:
+        return self._require_runtime().deliver_input(self.binding.job.name, input_id)
+
+    def execute(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        input: str | None = None,
+        timeout_seconds: float | None = None,
+        provider_route: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        return self._environment.execute(
+            self.binding,
+            argv,
+            cwd=cwd,
+            env=env,
+            input=input,
+            timeout_seconds=timeout_seconds,
+            provider_route=provider_route,
+        )
+
+    def process_command(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        provider_route: bool = False,
+    ) -> list[str]:
+        return self._environment.process_command(
+            self.binding,
+            argv,
+            cwd=cwd,
+            env=env,
+            provider_route=provider_route,
+        )
+
+    def refresh_git_credentials(self) -> None:
+        if self._git_credential_token is None:
+            raise RuntimeError("Git credential refresh is unavailable")
+        from dorf.coding_workspace import install_git_credentials
+
+        token = self._git_credential_token(self.binding.job.name)
+        install_git_credentials(self, self.binding, token=token)
+
+    def run_agent_turn(
+        self,
+        prompt: str,
+        output_path: Path,
+        *,
+        model: str,
+        reasoning_effort: str,
+        timeout_seconds: float | None = None,
+    ):
+        self._agent.prepare(self.binding)
+        return self._agent.start_job_conversation(
+            self.binding,
+            WorkerAgentTurn(prompt, output_path, model, reasoning_effort),
+            conversation_started=lambda thread_id: None,
+            turn_prepared=lambda baseline: None,
+            turn_started=lambda turn_id: None,
+            timeout_seconds=timeout_seconds,
+        )
+
+
 class Dorf:
     """Use Dorf locally without going through CLI or network transport."""
+
+    environment_type = IncusEnvironment.environment_type
 
     def __init__(
         self,
@@ -144,12 +259,16 @@ class Dorf:
         agent_defaults: CodexConfig | None = None,
         provider_connection: str | None = None,
         provider_gateway: RoomRouteGateway | None = None,
+        git_credential_token: Callable[[str], str] | None = None,
+        environment_probe: IncusRunnerProbe | None = None,
     ) -> None:
         self._store = store
         self._environment_config = environment_config or IncusConfig()
         self._agent_defaults = agent_defaults
         self._provider_connection = provider_connection
         self._provider_gateway = provider_gateway
+        self._git_credential_token = git_credential_token
+        self._environment_probe = environment_probe
 
     @classmethod
     def open(
@@ -160,6 +279,8 @@ class Dorf:
         agent_defaults: CodexConfig | None = None,
         provider_connection: str | None = None,
         provider_gateway: RoomRouteGateway | None = None,
+        git_credential_token: Callable[[str], str] | None = None,
+        environment_probe: IncusRunnerProbe | None = None,
     ) -> Dorf:
         """Open the local durable authority and compose the built-in adapters."""
         return cls(
@@ -168,6 +289,8 @@ class Dorf:
             agent_defaults=agent_defaults,
             provider_connection=provider_connection,
             provider_gateway=provider_gateway,
+            git_credential_token=git_credential_token,
+            environment_probe=environment_probe,
         )
 
     def close(self) -> None:
@@ -195,7 +318,30 @@ class Dorf:
     def get_job_binding(self, name: str) -> JobBinding | None:
         return self._store.get_job_binding(name)
 
-    def spawn_worker(self, name: str) -> WorkerBinding:
+    def environment_prerequisites(self) -> list[str]:
+        return self._new_environment().check_prerequisites()
+
+    @staticmethod
+    def new_environment_probe():
+        return IncusRunnerProbe()
+
+    @staticmethod
+    def check_environment(config: IncusConfig, *, probe=None):
+        return IncusDoctor(probe).fast_check(config)
+
+    @staticmethod
+    def open_provider_gateway(config: IncusConfig, *, probe=None) -> RoomRouteGateway:
+        bind_address = incus_bridge_ipv4(config.network, probe=probe)
+        return ProviderGateway.open(bind_address=bind_address)
+
+    def spawn_worker(
+        self,
+        name: str,
+        *,
+        provenance: str = "caller",
+        lifecycle_policy: str = "caller-managed",
+        room_metadata: dict[str, str] | None = None,
+    ) -> WorkerBinding:
         existing = self._store.get_worker_binding(name)
         if existing is None and self._provider_connection is None:
             raise ValueError("A Provider Connection is required to create a new Worker Room")
@@ -207,7 +353,9 @@ class Dorf:
         failures = environment.check_prerequisites()
         if failures:
             raise EnvironmentPrerequisitesError(failures)
-        return self._worker_runtime(environment).spawn(NewWorker(name=name))
+        return self._worker_runtime(environment).spawn(
+            NewWorker(name, provenance, lifecycle_policy, room_metadata)
+        )
 
     def end_worker(self, name: str, *, interrupt: bool = False) -> WorkerEndResult:
         worker = self._store.get_worker(name)
@@ -244,7 +392,7 @@ class Dorf:
         worker_turns = tuple(worker_runtime.recover_turns(name))
         job_name = self._store.get_open_job_for_worker(name)
         job_turns = (
-            tuple(JobRuntime(self._store, environment, agent).recover_turns(job_name))
+            tuple(self._job_runtime(environment, agent).recover_turns(job_name))
             if job_name
             else ()
         )
@@ -390,6 +538,7 @@ class Dorf:
         configured_defaults: CodexConfig | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        activate: bool = True,
     ) -> JobAssignmentResult:
         worker_binding = self._require_worker_binding(worker_name)
         existing = self._store.get_job_binding(name)
@@ -414,24 +563,45 @@ class Dorf:
                 goal=goal,
                 model=resolved.model,
                 reasoning_effort=resolved.reasoning_effort,
-            )
+            ),
+            activate=activate,
         )
         inputs = self._store.list_job_inputs(name)
         if not inputs:
             raise RuntimeError(f"Job {name} has no initial goal input after assignment")
         initial_input = inputs[0]
-        collector_started = launch_assignment_report_collector(
-            self._store.database_path,
-            binding.job.name,
-            binding.assignment.id,
+        collector_started = (
+            launch_assignment_report_collector(
+                self._store.database_path,
+                binding.job.name,
+                binding.assignment.id,
+            )
+            if activate
+            else False
         )
-        dispatcher_started = launch_job_input_dispatcher(self._store.database_path, name)
+        dispatcher_started = (
+            launch_job_input_dispatcher(self._store.database_path, name) if activate else False
+        )
         return JobAssignmentResult(
             binding,
             initial_input,
             dispatcher_started,
             collector_started,
         )
+
+    def activate_job(self, name: str) -> JobAssignmentResult:
+        execution = self.job_execution(name)
+        binding = execution._require_runtime().activate_assignment(name)
+        inputs = self._store.list_job_inputs(name)
+        if not inputs:
+            raise RuntimeError(f"Job {name} has no initial goal input after assignment")
+        collector_started = launch_assignment_report_collector(
+            self._store.database_path,
+            binding.job.name,
+            binding.assignment.id,
+        )
+        dispatcher_started = launch_job_input_dispatcher(self._store.database_path, name)
+        return JobAssignmentResult(binding, inputs[0], dispatcher_started, collector_started)
 
     def message_job(
         self,
@@ -451,9 +621,8 @@ class Dorf:
             model=model,
             reasoning_effort=reasoning_effort,
         )
-        environment = self._environment_for_binding(binding)
-        queued, created = self._job_runtime(environment).admit_message(
-            name,
+        execution = self.job_execution(name)
+        queued, created = execution.admit_message(
             message_id=_message_id("jmsg", action_id),
             text=text,
             model=model,
@@ -480,7 +649,7 @@ class Dorf:
         binding = self._require_job_binding(name)
         environment = self._environment_for_binding(binding)
         agent = CodexDriver(environment)
-        runtime = JobRuntime(self._store, environment, agent)
+        runtime = self._job_runtime(environment, agent)
         if interrupt:
             runtime.recover_turns(name)
         ended = runtime.end(name, interrupt=interrupt)
@@ -498,6 +667,38 @@ class Dorf:
     def inspect_job(self, name: str) -> JobInspection:
         binding = self._require_job_binding(name)
         return self._job_runtime(self._environment_for_binding(binding)).inspect(name)
+
+    def job_execution(self, name: str) -> JobExecution:
+        binding = self._require_job_binding(name)
+        environment = self._environment_for_binding(binding)
+        agent = CodexDriver(environment)
+        return JobExecution(
+            binding,
+            self._job_runtime(environment, agent),
+            environment,
+            agent,
+            self._git_credential_token,
+        )
+
+    @classmethod
+    def disposable_job_execution(
+        cls,
+        binding: JobBinding,
+        *,
+        environment_config: IncusConfig,
+        provider_connection: str,
+        provider_gateway: RoomRouteGateway,
+        environment_probe: IncusRunnerProbe | None = None,
+    ) -> JobExecution:
+        environment = new_codex_room_environment(
+            environment_config,
+            provider_connection,
+            gateway=provider_gateway,
+            probe=environment_probe,
+        )
+        environment.install_provider_route(binding)
+        agent = CodexDriver(environment)
+        return JobExecution(binding, None, environment, agent, None)
 
     def job_timeline(self, name: str) -> list[TimelineEvent]:
         self._require_job_binding(name)
@@ -613,11 +814,12 @@ class Dorf:
 
     def _new_environment(self) -> IncusEnvironment | CodexRoomEnvironment:
         if self._provider_connection is None:
-            return IncusEnvironment(self._environment_config)
+            return IncusEnvironment(self._environment_config, probe=self._environment_probe)
         return new_codex_room_environment(
             self._environment_config,
             self._provider_connection,
             gateway=self._gateway_for(self._environment_config),
+            probe=self._environment_probe,
         )
 
     def _environment_for_binding(
@@ -630,6 +832,7 @@ class Dorf:
         return recorded_codex_room_environment(
             binding,
             gateway=self._gateway_for(config),
+            probe=self._environment_probe,
         )
 
     def _gateway_for(self, config: IncusConfig) -> RoomRouteGateway:
@@ -648,8 +851,9 @@ class Dorf:
     def _job_runtime(
         self,
         environment: IncusEnvironment | CodexRoomEnvironment,
+        agent: CodexDriver | None = None,
     ) -> JobRuntime:
-        return JobRuntime(self._store, environment, CodexDriver(environment))
+        return JobRuntime(self._store, environment, agent or CodexDriver(environment))
 
     def _require_worker_binding(self, name: str) -> WorkerBinding:
         binding = self._store.get_worker_binding(name)

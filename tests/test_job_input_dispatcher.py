@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from dorf.job_input_dispatcher import _runtime_for_input, dispatch_job_inputs
+from dorf.job_input_dispatcher import _execution_for_input, dispatch_job_inputs
 from dorf.runtime import (
     JobRuntime,
     NewJob,
@@ -56,36 +56,21 @@ class Agent:
         return WorkerTurnOutcome(f"turn-{len(self.prompts)}", "completed")
 
 
-def test_runtime_reconstructs_recorded_codex_room_facade(tmp_path: Path, monkeypatch) -> None:
+def test_dispatcher_reconstructs_execution_through_public_facade(
+    tmp_path: Path, monkeypatch
+) -> None:
     store = RuntimeStore.open(tmp_path / "state.sqlite3")
-    environment = Environment()
-    agent = Agent()
-    WorkerRuntime(store, environment, agent).spawn(NewWorker("researcher"))
-    JobRuntime(store, environment, agent).assign(
-        NewJob(
-            "checkout-perf",
-            "researcher",
-            "Make checkout instant",
-            "gpt-5.6-sol",
-            "high",
-        )
-    )
-    routed_environment = object()
+    execution = object()
     seen = []
 
-    def reconstruct(binding):
-        seen.append(binding)
-        return routed_environment
+    def job_execution(self, job_name):
+        seen.append(job_name)
+        return execution
 
-    monkeypatch.setattr(
-        "dorf.job_input_dispatcher.recorded_codex_room_environment",
-        reconstruct,
-    )
+    monkeypatch.setattr("dorf.sdk.Dorf.job_execution", job_execution)
 
-    runtime = _runtime_for_input(store, "checkout-perf")
-
-    assert runtime._environment is routed_environment
-    assert seen[0].job.name == "checkout-perf"
+    assert _execution_for_input(store, "checkout-perf") is execution
+    assert seen == ["checkout-perf"]
 
 
 def test_dispatcher_drains_job_goal_and_messages_in_order(tmp_path: Path, monkeypatch) -> None:
@@ -110,8 +95,12 @@ def test_dispatcher_drains_job_goal_and_messages_in_order(tmp_path: Path, monkey
         text="Profile the API first",
     )
     monkeypatch.setattr(
-        "dorf.job_input_dispatcher._runtime_for_input",
-        lambda current_store, job: JobRuntime(current_store, environment, agent),
+        "dorf.job_input_dispatcher._execution_for_input",
+        lambda current_store, job: type(
+            "Execution",
+            (),
+            {"deliver_input": lambda self, input_id: runtime.deliver_input(job, input_id)},
+        )(),
     )
 
     dispatch_job_inputs(database, "checkout-perf")
@@ -147,12 +136,12 @@ def test_dispatcher_leaves_unsettled_input_and_later_fifo_for_recovery_slice(
     deliveries = []
 
     class Runtime:
-        def deliver_input(self, job_name, input_id):
-            deliveries.append((job_name, input_id))
+        def deliver_input(self, input_id):
+            deliveries.append(("checkout-perf", input_id))
             return type("Outcome", (), {"status": blocked_status})()
 
     monkeypatch.setattr(
-        "dorf.job_input_dispatcher._runtime_for_input",
+        "dorf.job_input_dispatcher._execution_for_input",
         lambda current_store, job: Runtime(),
     )
 

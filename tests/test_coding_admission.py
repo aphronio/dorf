@@ -444,8 +444,8 @@ def test_platform_check_repairs_missing_pinned_image_with_setup_and_repin(
         ),
     )
     monkeypatch.setattr(
-        "dorf.workflows.coding_admission.IncusDoctor.fast_check",
-        lambda self, config: IncusCheckResult(
+        "dorf.workflows.coding_admission.Dorf.check_environment",
+        lambda config, *, probe=None: IncusCheckResult(
             failures=[
                 IncusFailure(
                     "incus-template",
@@ -487,8 +487,8 @@ def test_platform_check_reports_invalid_incus_bridge_as_provider_route_failure(
         lambda: profile,
     )
     monkeypatch.setattr(
-        "dorf.workflows.coding_admission.IncusDoctor.fast_check",
-        lambda self, config: type("Result", (), {"failures": []})(),
+        "dorf.workflows.coding_admission.Dorf.check_environment",
+        lambda config, *, probe=None: type("Result", (), {"failures": []})(),
     )
     failures = backend.check_platform(
         CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
@@ -613,7 +613,7 @@ def install_app_server_driver(monkeypatch):
             turn_started("turn-admission")
             return SimpleNamespace(status="completed")
 
-    monkeypatch.setattr("dorf.workflows.coding_admission.CodexDriver", AppServerDriver)
+    monkeypatch.setattr("dorf.sdk.CodexDriver", AppServerDriver)
     return calls
 
 

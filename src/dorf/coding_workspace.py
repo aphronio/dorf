@@ -28,7 +28,6 @@ def prepare_git_workspace(
     repo_url = f"https://github.com/{repo_full_name}.git"
     workspace = binding.workspace
     clone = environment.execute(
-        binding,
         ["bash", "-lc", git_clone_workspace_script(repo_url, branch, workspace)],
         cwd="/",
         input=f"{token}\n",
@@ -38,7 +37,6 @@ def prepare_git_workspace(
 
     for key, value in (("user.name", git_author.name), ("user.email", git_author.email)):
         result = environment.execute(
-            binding,
             ["git", "config", "--local", key, value],
             cwd=workspace,
         )
@@ -46,7 +44,6 @@ def prepare_git_workspace(
             raise RuntimeError(_command_message(result))
 
     auth = environment.execute(
-        binding,
         ["git", "ls-remote", "--heads", repo_url, branch],
         cwd=workspace,
         env={"GIT_TERMINAL_PROMPT": "0"},
@@ -61,7 +58,6 @@ def prepare_git_workspace(
 def reset_git_workspace(environment, binding: JobBinding) -> None:
     """Recreate only the failed coding clone, preserving Assignment runtime scope."""
     result = environment.execute(
-        binding,
         [
             "bash",
             "-lc",
@@ -90,7 +86,6 @@ def install_git_credentials(
         """
     ).strip()
     result = environment.execute(
-        binding,
         ["bash", "-lc", script],
         cwd=workspace,
         input=f"{token}\n",

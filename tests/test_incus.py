@@ -468,8 +468,8 @@ def test_job_credential_refresh_uses_assignment_seam_and_redacts_token() -> None
     calls = []
 
     class FailingEnvironment:
-        def execute(self, binding, argv, **kwargs):
-            calls.append((binding, argv, kwargs))
+        def execute(self, argv, **kwargs):
+            calls.append((argv, kwargs))
             return subprocess.CompletedProcess(argv, 1, "", f"failed with {token}")
 
     binding = job_binding()
@@ -477,8 +477,7 @@ def test_job_credential_refresh_uses_assignment_seam_and_redacts_token() -> None
         install_git_credentials(FailingEnvironment(), binding, token=token)
 
     assert len(calls) == 1
-    actual_binding, argv, options = calls[0]
-    assert actual_binding == binding
+    argv, options = calls[0]
     assert options["cwd"] == "/workspace/jobs/demo-task"
     assert options["input"] == f"{token}\n"
     assert token not in " ".join(argv)
@@ -532,9 +531,15 @@ def test_git_workspace_fails_when_normal_auth_check_fails() -> None:
     probe = FakeProbe(
         commands={auth: subprocess.CompletedProcess([], 128, "", "fatal: authentication failed")}
     )
+    environment = IncusEnvironment(probe=probe)
+
+    class Execution:
+        def execute(self, argv, **kwargs):
+            return environment.execute(binding, argv, **kwargs)
+
     with pytest.raises(RuntimeError, match="Job Git credentials"):
         prepare_git_workspace(
-            IncusEnvironment(probe=probe),
+            Execution(),
             binding,
             repo_full_name="example/repo",
             token="installation-token",

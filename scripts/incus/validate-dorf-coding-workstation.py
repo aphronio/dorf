@@ -12,13 +12,10 @@ import tempfile
 from pathlib import Path
 from time import monotonic
 
-from dorf.adapters.agents.codex import CodexDriver
-from dorf.adapters.environments import IncusConfig, incus_bridge_ipv4
-from dorf.codex_room import new_codex_room_environment
 from dorf.command_runner import shell_command
-from dorf.provider_gateway import ProviderGateway
 from dorf.repo_contract import load_repo_contract
-from dorf.runtime import JobRuntime, NewJob, NewWorker, WorkerBinding, WorkerRuntime
+from dorf.runtime import WorkerBinding
+from dorf.sdk import Dorf, IncusConfig
 from dorf.workflows import CodingStore, prepare_coding_repository, run_coding_job_command
 
 REPOSITORY = "https://github.com/aphronio/dorf.git"
@@ -69,37 +66,34 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="dorf-workstation-proof.") as directory:
         store = CodingStore.open(Path(directory) / "runtime.db")
-        with ProviderGateway.open(bind_address=incus_bridge_ipv4(config.network)) as gateway:
-            environment = new_codex_room_environment(
-                config,
-                args.provider_connection,
-                gateway=gateway,
+        with Dorf.open_provider_gateway(config) as gateway:
+            dorf = Dorf(
+                store,
+                environment_config=config,
+                provider_connection=args.provider_connection,
+                provider_gateway=gateway,
             )
-            driver = CodexDriver(environment)
             binding = None
             worker_binding = None
             try:
-                worker_binding = WorkerRuntime(store, environment, driver).spawn(
-                    NewWorker(
-                        worker_name,
-                        provenance="coding-workflow",
-                        lifecycle_policy="dedicated",
-                    )
+                worker_binding = dorf.spawn_worker(
+                    worker_name,
+                    provenance="coding-workflow",
+                    lifecycle_policy="dedicated",
                 )
-                job_runtime = JobRuntime(store, environment, driver)
-                binding = job_runtime.assign(
-                    NewJob(
-                        job_name,
-                        worker_name,
-                        (
-                            f"In {IMPLEMENTATION_ARTIFACT}, write exactly: "
-                            f"{IMPLEMENTATION_CONTENT.strip()}"
-                        ),
-                        "gpt-5.6-sol",
-                        "low",
+                assignment = dorf.assign_job(
+                    job_name,
+                    worker_name=worker_name,
+                    goal=(
+                        f"In {IMPLEMENTATION_ARTIFACT}, write exactly: "
+                        f"{IMPLEMENTATION_CONTENT.strip()}"
                     ),
+                    model="gpt-5.6-sol",
+                    reasoning_effort="low",
                     activate=False,
                 )
+                binding = assignment.binding
+                execution = dorf.job_execution(job_name)
                 store.create_coding_job(
                     job_name=job_name,
                     status="active",
@@ -118,12 +112,11 @@ def main() -> None:
                     ("node", ["node", "--version"]),
                     ("uv", ["uv", "--version"]),
                 ):
-                    observed = environment.execute(binding, argv, cwd=binding.workspace)
+                    observed = execution.execute(argv, cwd=binding.workspace)
                     _require_success(f"observe {name}", observed)
                     observed_tools[name] = observed.stdout.strip()
                 evidence["tools"] = observed_tools
-                clone = environment.execute(
-                    binding,
+                clone = execution.execute(
                     [
                         "git",
                         "clone",
@@ -135,8 +128,7 @@ def main() -> None:
                     timeout_seconds=300,
                 )
                 _require_success("clone", clone)
-                checkout = environment.execute(
-                    binding,
+                checkout = execution.execute(
                     ["git", "checkout", "--detach", args.source_commit],
                     cwd=binding.workspace,
                 )
@@ -144,7 +136,7 @@ def main() -> None:
 
                 preparation_started = monotonic()
                 prepare_run = prepare_coding_repository(
-                    store, environment, store.get_coding_job(job_name), binding, contract
+                    store, execution, store.get_coding_job(job_name), binding, contract
                 )
                 if prepare_run is None or prepare_run.exit_code != 0:
                     raise RuntimeError("repository preparation did not succeed")
@@ -152,13 +144,13 @@ def main() -> None:
                     monotonic() - preparation_started, 3
                 )
 
-                binding = job_runtime.activate_assignment(job_name)
+                binding = dorf.activate_job(job_name).binding
+                execution = dorf.job_execution(job_name)
                 first_input = store.list_job_inputs(job_name)[0]
-                implementation = job_runtime.deliver_input(job_name, first_input.id)
+                implementation = execution.deliver_input(first_input.id)
                 if implementation.exit_code != 0:
                     raise RuntimeError("real Codex implementation turn failed")
-                artifact = environment.execute(
-                    binding,
+                artifact = execution.execute(
                     ["cat", IMPLEMENTATION_ARTIFACT],
                     cwd=binding.workspace,
                 )
@@ -168,7 +160,7 @@ def main() -> None:
 
                 check_run = run_coding_job_command(
                     store,
-                    environment,
+                    execution,
                     store.get_coding_job(job_name),
                     binding,
                     contract,
@@ -186,7 +178,7 @@ def main() -> None:
                 )
                 review_run = run_coding_job_command(
                     store,
-                    environment,
+                    execution,
                     store.get_coding_job(job_name),
                     binding,
                     contract,
@@ -223,19 +215,16 @@ def main() -> None:
             finally:
                 cleanup_failures = []
                 if binding is not None:
-                    job_runtime = JobRuntime(store, environment, driver)
                     current = store.get_job(job_name)
                     if current is not None and current.status != "ended":
                         try:
-                            job_runtime.end(job_name, interrupt=True)
+                            dorf.end_job(job_name, interrupt=True)
                         except Exception as error:
                             cleanup_failures.append(f"Job cleanup: {error}")
                 current_worker = store.get_worker(worker_name)
                 if current_worker is not None and current_worker.status != "ended":
                     try:
-                        WorkerRuntime(store, environment, driver).end(
-                            worker_name, interrupt=True
-                        )
+                        dorf.end_worker(worker_name, interrupt=True)
                     except Exception as error:
                         cleanup_failures.append(f"Worker cleanup: {error}")
                 cleanup_binding = worker_binding or _recorded_worker_binding(store, worker_name)

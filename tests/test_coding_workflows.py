@@ -16,6 +16,7 @@ from dorf.runtime import (
     WorkerRuntime,
     WorkerTurnOutcome,
 )
+from dorf.sdk import JobExecution
 from dorf.workflows import (
     AcceptanceItem,
     CodingStore,
@@ -84,6 +85,7 @@ class Environment:
         self.review_outputs = iter(review_outputs or [])
         self.processes = []
         self.git_head = "b" * 40
+        self.refreshed = []
 
     def environment_id(self, worker_name):
         return f"dorf-{worker_name}"
@@ -100,7 +102,10 @@ class Environment:
     def destroy(self, binding):
         return "deleted"
 
-    def execute(self, binding, argv, **kwargs):
+    def execute(self, binding, argv=None, **kwargs):
+        if argv is None:
+            argv = binding
+            binding = None
         if argv == ["true"]:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[:2] == ["git", "rev-parse"]:
@@ -117,7 +122,10 @@ class Environment:
             return subprocess.CompletedProcess(argv, 0, "", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
-    def process_command(self, binding, argv, **kwargs):
+    def process_command(self, binding, argv=None, **kwargs):
+        if argv is None:
+            argv = binding
+            binding = None
         self.processes.append((binding, argv, kwargs))
         if argv[-1].startswith(("reviewer ", "codex exec ")):
             output = next(self.review_outputs)
@@ -125,6 +133,9 @@ class Environment:
         if argv[-1] == "false":
             return ["bash", "-lc", "exit 1"]
         return ["bash", "-lc", "printf 'command output\\n'"]
+
+    def refresh_git_credentials(self):
+        self.refreshed.append(True)
 
 
 def make_coding_job(tmp_path: Path, *, review_outputs=None):
@@ -208,14 +219,14 @@ def workflow(
     *,
     contract=None,
 ):
+    binding = store.get_job_binding(job.job_name)
+    assert binding is not None
     return CodingWorkflow(
         store=store,
         job=job,
         contract=contract or RepoContract(mode="generic", commands={}, env={}),
-        environment=environment,
-        runtime=runtime,
+        execution=JobExecution(binding, runtime, environment, Agent(), lambda job: "token"),
         github_client=lambda: github,
-        refresh_git_credentials=lambda binding: None,
         github_app_slug=lambda: "dorf-test",
         sleep=lambda seconds: None,
     )
@@ -488,11 +499,12 @@ def test_decline_or_expiry_ends_pending_authority_without_active_state(
 def test_coding_command_runs_in_assignment_workspace_and_records_fact_evidence(
     tmp_path,
 ) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
+    store, environment, agent, runtime, job, binding = make_coding_job(tmp_path)
+    execution = JobExecution(binding, runtime, environment, agent, lambda job: "token")
 
     run = run_coding_job_command(
         store,
-        environment,
+        execution,
         job,
         binding,
         RepoContract(mode="generic", commands={}, env={}),
@@ -595,9 +607,13 @@ def test_readiness_refreshes_credentials_on_current_assignment_and_retries_push(
     pushes = 0
     original_execute = environment.execute
 
-    def execute(actual_binding, argv, **kwargs):
+    def execute(actual_binding, argv=None, **kwargs):
         nonlocal pushes
-        assert actual_binding == binding
+        if argv is None:
+            argv = actual_binding
+            actual_binding = None
+        else:
+            assert actual_binding == binding
         if argv[:2] == ["git", "push"]:
             pushes += 1
             if pushes == 1:
@@ -605,8 +621,6 @@ def test_readiness_refreshes_credentials_on_current_assignment_and_retries_push(
         return original_execute(actual_binding, argv, **kwargs)
 
     environment.execute = execute
-    refreshed = []
-
     class BehindGitHub(GitHubClient):
         def get_branch_sha(self, repo, branch):
             return "c" * 40
@@ -617,11 +631,10 @@ def test_readiness_refreshes_credentials_on_current_assignment_and_retries_push(
         job,
         RepoContract(mode="generic", commands={}, env={}),
         github_client=lambda: BehindGitHub(),
-        refresh_git_credentials=lambda actual: refreshed.append(actual),
     )
 
     assert readiness.failures == []
-    assert refreshed == [binding]
+    assert environment.refreshed == [True]
     assert pushes == 2
 
 
