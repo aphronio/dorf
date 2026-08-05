@@ -123,8 +123,10 @@ model routes. No caller should reconstruct resource-runtime wiring or read SQLit
 Coding workflow behavior is a separate application layer over the same store and runtime because it
 must order repository setup around Worker and Job admission. Coding admission creates a
 provenance-labelled dedicated Worker, a goal-backed Job and Assignment, and an independent clone at
-`/workspace/jobs/JOB`. Repository commands are workflow facts; model implementation, repair, and
-follow-up instructions are Job FIFO inputs.
+`/workspace/jobs/JOB`. The Assignment remains non-admitting and non-deliverable while the workflow
+clones and runs repository preparation, then opens immediately before initial goal dispatch.
+Repository commands are workflow facts; model implementation, repair, and follow-up instructions
+are Job FIFO inputs.
 Worker-addressed attachment is an Environment operation; the Incus adapter opens a direct
 interactive shell while raw provider access remains break-glass. Concrete constructors, retries,
 locks, polling, process launching, file layouts, and output shapes remain in code and tests.

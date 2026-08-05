@@ -1793,14 +1793,16 @@ def launch_coding_job_or_exit(
             job_branch=job_branch,
             workspace=f"/workspace/jobs/{job_name}",
         )
-        binding = JobRuntime(store, environment, driver).assign(
+        job_runtime = JobRuntime(store, environment, driver)
+        binding = job_runtime.assign(
             NewJob(
                 name=job_name,
                 worker_name=worker.worker.name,
                 goal=goal,
                 model=config.model,
                 reasoning_effort=config.reasoning_effort,
-            )
+            ),
+            activate=False,
         )
     except Exception as error:
         store.update_status(job_name, "setup-failed")
@@ -1830,6 +1832,7 @@ def launch_coding_job_or_exit(
             git_author=git_author,
         )
         run_repository_preparation_or_raise(store, environment, binding, contract)
+        binding = job_runtime.activate_assignment(job_name)
     except Exception as error:
         if store.get_coding_job(job_name) is not None:
             store.update_status(job_name, "setup-failed")
@@ -1945,14 +1948,16 @@ def recover_setup_failed_coding_job_or_exit(
             or worker_binding.worker.lifecycle_policy != "dedicated"
         ):
             raise RuntimeError("recorded Worker does not have dedicated coding provenance")
-        binding = JobRuntime(store, environment, driver).assign(
+        job_runtime = JobRuntime(store, environment, driver)
+        binding = job_runtime.assign(
             NewJob(
                 name=job.job_name,
                 worker_name=worker_binding.worker.name,
                 goal=expected_goal,
                 model=config.model,
                 reasoning_effort=config.reasoning_effort,
-            )
+            ),
+            activate=False,
         )
         store.remove_metadata_keys(
             job.job_name,
@@ -1970,6 +1975,7 @@ def recover_setup_failed_coding_job_or_exit(
             git_author=resolve_git_author_or_exit(repo),
         )
         run_repository_preparation_or_raise(store, environment, binding, contract)
+        binding = job_runtime.activate_assignment(job.job_name)
     except Exception as error:
         store.update_status(job.job_name, "setup-failed")
         typer.echo(f"Could not recover coding Job setup: {error}", err=True)
