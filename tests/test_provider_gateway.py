@@ -847,6 +847,7 @@ def test_deepseek_connection_is_host_owned_and_prefixed_in_broker_config(
         assert "codex-api-key:" in config
         assert 'base-url: "https://api.deepseek.com/v1"' in config
         assert 'prefix: "deepseek"' in config
+        assert "force-model-prefix: true" in config
         assert deepseek_key in config  # the broker holds the upstream key host-side
 
         route = gateway.create_route("deepseek-review", consumer="review-client")
@@ -900,6 +901,7 @@ def test_chatgpt_and_deepseek_routes_select_exact_upstreams(tmp_path) -> None:
 
     config = (state_path / "broker.yaml").read_text()
     assert 'prefix: "deepseek"' in config
+    assert "force-model-prefix: true" in config
     assert 'base-url: "https://api.deepseek.com/v1"' in config
     assert 'base-url: "https://api.openai.com/v1"' not in config
     assert 'api-key: "deepseek-upstream-secret"' in config

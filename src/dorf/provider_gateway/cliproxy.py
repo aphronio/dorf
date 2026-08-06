@@ -891,6 +891,10 @@ class ProviderGateway:
             f"host: {json.dumps(self._bind_address)}",
             f"port: {self._port}",
             f"auth-dir: {json.dumps(str(self._auth_path))}",
+            # Prefixed credentials must never be candidates for unprefixed
+            # implementation requests. Without this backend switch, a gpt-* call
+            # can pool onto the prefixed DeepSeek credential despite its prefix.
+            "force-model-prefix: true",
         ]
         # The concrete backend treats an empty list as authentication disabled. Keep one
         # unexposed key configured even when no consumer routes exist.

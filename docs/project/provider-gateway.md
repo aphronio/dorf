@@ -95,8 +95,9 @@ D035 validates the Codex Responses path. The backend cannot guarantee connection
 when two upstream connections share a model namespace, so route creation fails closed
 instead of implicitly pooling them: at most one connection may be unprefixed and every
 prefixed connection must use a distinct model prefix. Prefixed connections (for example
-`deepseek/<model>` for a DeepSeek API-key connection) route by model prefix so the broker
-selects the declared upstream, intended to keep a reviewer connection from pooling or
+`deepseek/<model>` for a DeepSeek API-key connection) route by model prefix, while the
+broker's `force-model-prefix` switch excludes prefixed credentials from unprefixed
+implementation requests. Together these keep a reviewer connection from pooling or
 falling back onto the implementation connection. Prefix pinning guarantees the Pi
 invocation selects the intended model/tools namespace; CLIProxyAPI keys are broker keys,
 not cryptographic per-provider allowlists, so the route credential itself is not claimed

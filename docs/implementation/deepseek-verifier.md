@@ -150,8 +150,9 @@ fails clearly at open instead of being silently misread.
 - The broker config gains a `codex-api-key` entry with `base-url
   https://api.deepseek.com/v1` and `prefix: deepseek`. A request for
   `deepseek/<model>` is designed to route to that entry only with the prefix stripped
-  upstream; unprefixed models (for example the ChatGPT implementation route) cannot
-  silently pool or fall back onto DeepSeek and vice versa. Prefix pinning guarantees
+  upstream. The broker's `force-model-prefix: true` switch excludes prefixed credentials
+  from unprefixed requests, so ChatGPT implementation models cannot silently pool onto
+  DeepSeek. Prefix pinning guarantees
   the Pi invocation selects the intended DeepSeek Pi model/tools and the role exposes
   only the configured DeepSeek Pi model; CLIProxyAPI keys are broker keys, not
   cryptographic per-provider allowlists, so the route credential itself is not
