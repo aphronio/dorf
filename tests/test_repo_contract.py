@@ -19,14 +19,7 @@ def test_dorf_repo_declares_contract() -> None:
     assert "review" not in contract.commands
     assert contract.review is not None
     assert contract.review.timeout_seconds == 1800
-    assert contract.review.agents
-    assert any(agent.enabled for agent in contract.review.agents.values())
-    assert all(agent.command for agent in contract.review.agents.values())
-    assert all("{dorf_review_prompt}" in agent.command for agent in contract.review.agents.values())
-    assert contract.review.agents["codex"].enabled is True
-    assert "2>/dev/null" not in contract.review.agents["codex"].command
-    assert contract.review.agents["droid"].enabled is False
-    assert "kimi-k2.7-code" in contract.review.agents["droid"].command
+    assert contract.review.agents == {}
     assert contract.incus_config.get("template") == "dorf-codex"
     assert contract.primary_codex is not None
     assert contract.primary_codex.model == "gpt-5.6-sol"
