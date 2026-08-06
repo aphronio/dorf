@@ -667,11 +667,18 @@ def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write(
     monkeypatch,
 ) -> None:
     install_app_server_driver(monkeypatch)
+    class FailedReviewerProbe(DisposableProbe):
+        def run(self, argv, *, input=None, timeout_seconds=None):
+            result = super().run(argv, input=input, timeout_seconds=timeout_seconds)
+            if "pi -p --provider dorf-deepseek" in " ".join(argv):
+                return subprocess.CompletedProcess(argv, 0, "unexpected reply\n", "")
+            return result
+
     class UnwritableRouteGateway(DisposableGateway):
         def revoke_route(self, route_id):
             raise PermissionError("provider route state is unwritable")
 
-    probe = DisposableProbe()
+    probe = FailedReviewerProbe()
     backend = ReadyLocalBackend(probe=probe, gateway=UnwritableRouteGateway())
 
     result = CodingAdmissionPreflight(backend).prove(
@@ -682,6 +689,8 @@ def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write(
         "consumer-path",
         "provider-route-cleanup",
     ]
+    assert "reviewer turn failed" in result.failures[0].summary
+    assert "route cleanup also failed" in result.failures[0].summary
     assert sum(command[:2] == ["incus", "delete"] for command in probe.commands) == 1
 
 

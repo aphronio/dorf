@@ -898,25 +898,52 @@ def test_second_deepseek_findings_stop_after_one_fifo_repair(tmp_path) -> None:
     assert len(store.list_job_inputs(job.job_name)) == 2
 
 
-def test_deepseek_result_must_match_the_implementation_commit(tmp_path) -> None:
+def test_mismatched_retained_verifier_run_is_retried_at_the_exact_commit(tmp_path) -> None:
     store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    stale = DiffReviewer(store)
+    run = stale(job, "b" * 40)
+    store.set_command_run_git_commits(run.id, before="b" * 40, after="d" * 40)
     reviewer = DiffReviewer(store)
 
-    def mismatched(current, commit):
-        run = reviewer(current, commit)
-        return store.set_command_run_git_commits(
-            run.id, before=commit, after="d" * 40
-        )
+    workflow(store, environment, runtime, job, GitHubClient(), reviewer=reviewer).verify()
 
-    with pytest.raises(WorkflowFailure, match="not pinned"):
-        workflow(
-            store,
-            environment,
-            runtime,
-            job,
-            GitHubClient(),
-            reviewer=mismatched,
-        ).verify()
+    assert reviewer.commits == ["b" * 40]
+
+
+def test_verify_retries_abandoned_but_not_concurrent_deepseek_run(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    running = store.create_command_run(
+        job.job_name, "verify-role:diff", "pi deepseek-v4-flash", ""
+    )
+    store.set_command_run_git_commits(running.id, before="b" * 40, after=None)
+    reviewer = DiffReviewer(store)
+
+    with store.coding_verifier_lock(job.job_name) as acquired:
+        assert acquired
+        with pytest.raises(WorkflowFailure) as active:
+            workflow(
+                store,
+                environment,
+                runtime,
+                job,
+                GitHubClient(),
+                reviewer=reviewer,
+            ).verify()
+    assert active.value.kind == "active-command"
+    assert store.get_command_run(running.id).status == "running"
+
+    current = store.get_coding_job(job.job_name)
+    workflow(
+        store,
+        environment,
+        runtime,
+        current,
+        GitHubClient(),
+        reviewer=reviewer,
+    ).verify()
+
+    assert store.get_command_run(running.id).status == "interrupted"
+    assert reviewer.commits == ["b" * 40]
 
 
 def test_clean_deepseek_verdict_survives_loss_of_the_mutable_run_log(tmp_path) -> None:

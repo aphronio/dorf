@@ -737,15 +737,13 @@ class CodingWorkflow:
                 and candidate.git_commit_before == commit
                 and candidate.id > after_run_id
                 and candidate.status != "interrupted"
+                and (candidate.status != "succeeded" or candidate.git_commit_after == commit)
             ),
             None,
         )
         if run is not None and run.status == "running":
-            self._fail(
-                f"DeepSeek verifier run {run.id} is still active.",
-                exit_code=75,
-                kind="active-command",
-            )
+            self.store.finish_command_run(run.id, "interrupted", 130)
+            run = None
         if run is None:
             if self._deepseek_diff_review is None:
                 run = self.store.record_command_run(
@@ -778,7 +776,7 @@ class CodingWorkflow:
         if run.exit_code != 0 or run.status != "succeeded":
             self._record_verifier_attention(commit, run)
         if run.git_commit_before != commit or run.git_commit_after != commit:
-            self._fail("DeepSeek verifier result is not pinned to the implementation commit.")
+            self._record_verifier_attention(commit, run)
         if retrying:
             self.store.remove_metadata_keys(
                 self.job.job_name,
@@ -903,7 +901,14 @@ class CodingWorkflow:
                     self._run_verify_fix(payload)
                     continue
                 commit = self._read_job_head()
-                run = self._review_exact_commit(commit)
+                with self.store.coding_verifier_lock(self.job.job_name) as acquired:
+                    if not acquired:
+                        self._fail(
+                            "A DeepSeek verifier is already active for this Job.",
+                            exit_code=75,
+                            kind="active-command",
+                        )
+                    run = self._review_exact_commit(commit)
                 if continue_guard is not None:
                     continue_guard()
                 no_findings, output = self._review_verdict(run)

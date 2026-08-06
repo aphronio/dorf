@@ -708,6 +708,9 @@ class CodingStore(RuntimeStore):
             after=git_commit_after,
         )
 
+    def coding_verifier_lock(self, job_name: str):
+        return self._named_process_lock(job_name, "deepseek-verifier", blocking=False)
+
     def interrupt_abandoned_afk_runs(self, job_name: str) -> list[CodingCommandRun]:
         rows = self._connection.execute(
             """

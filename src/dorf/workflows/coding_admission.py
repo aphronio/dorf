@@ -883,9 +883,15 @@ class LocalCodingAdmissionBackend:
             )
             if result.returncode or result.stdout.strip() != NO_FINDINGS:
                 raise RuntimeError("bounded DeepSeek diff reviewer turn failed")
-        finally:
-            if not gateway.revoke_route(route.id):
-                raise RuntimeError("DeepSeek admission route was not cleaned up")
+        except BaseException as primary:
+            try:
+                if not gateway.revoke_route(route.id):
+                    raise RuntimeError("DeepSeek admission route was not cleaned up")
+            except BaseException as cleanup:
+                raise RuntimeError(f"{primary}; route cleanup also failed: {cleanup}") from primary
+            raise
+        if not gateway.revoke_route(route.id):
+            raise RuntimeError("DeepSeek admission route was not cleaned up")
 
     def _prove_implementation(self, execution) -> None:
         assert self.codex_config is not None

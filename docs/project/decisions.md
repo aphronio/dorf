@@ -722,9 +722,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exactly one Incus archive and one compatibility manifest for that architecture. One repo-owned
   local command builds from an immutable base fingerprint, selects and records the current Codex npm
   release, proves the credential boundary, and completes the real coding tracer from clone and
-  repo-owned preparation through an implementation turn, checks, explicitly routed Codex review,
-  content-addressed evidence, and exact cleanup. The image includes Git and uv as ordinary
-  workstation tools but removes build-only npm. The command exports the untouched candidate and
+  repo-owned preparation through an implementation turn, checks, scoped routing,
+  content-addressed evidence, and exact cleanup. The image includes Git, uv, and the Pi tool used by
+  the separate DeepSeek diff role but removes build-only npm. The command exports the untouched candidate and
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
