@@ -221,3 +221,35 @@ app-server lifecycle and tracks the native guest PID for exact teardown. Repeati
 a non-monotonic `complete` to `scheduled` projection; an integration regression and monotonic SQL
 update fixed it. The earlier PostgreSQL-only delivery failure caused by absent Incus remains useful
 diagnostic evidence, but the terminal above supersedes it as the merge proof.
+
+## Post-review boundary proof — 2026-08-06
+
+Critical-boundary repair Revision `257e90e375c12883af4f38e071acc5bf4fa3755f` was served read-only
+over the private Incus bridge from a bare clone of this real repository because the Assignment's
+short-lived GitHub push credential expired before the proof. A fresh PostgreSQL database applied
+both Dorf migrations and the pinned Absurd 0.5.0 schema. Doctor reported every check ready. The
+provider broker and Git daemon bound only to `10.31.162.1`, the exact configured `incusbr0` IPv4.
+
+Admission key `issue-40-review-proof-v1` produced Job `job-c2331637a51588c8bb6f` and run task
+`019fd968-b56f-740a-9d5d-ea2ef21a9e57`. Admission took 0.015 seconds and the real Go worker took
+50.601 seconds. Sandbox `dorf-55b996f2fdbbe05f4158` cloned
+`git://10.31.162.1:9418/dorf-review-proof.git`; both the admitted Revision and observed guest `HEAD`
+were exactly `257e90e375c12883af4f38e071acc5bf4fa3755f`. Route
+`route-5f78c959cad03b10` reached Codex through the exact bridge address. Native Session
+`019fd969-7230-77a1-9569-1598b4a96943` and turn
+`019fd969-7355-7962-a7ca-84464cfc6c11` completed. Inspection took 0.040 seconds and described
+`observed` as a neutral native-outcome fact, not success.
+
+Repeating the complete admission returned `created=false`, the same Job and run task, in 0.024
+seconds. Worker redelivery took 0.010 seconds. PostgreSQL still contained exactly one Job, Sandbox
+record, Session, and AgentRun. Durable cleanup scheduling took 0.041 seconds and its worker took
+0.696 seconds. Cleanup task `019fd96a-437b-7e03-8c4c-dec58348d508` completed on attempt 1. Replaying
+the validator's `cleanup --cancel-run --now` failure-safe path took 0.014 seconds and changed no
+effect; cleanup-task redelivery took 0.011 seconds. All seven stable Actions remained succeeded at
+one attempt, the route was observed `revoked`, and the Sandbox was observed `deleted`.
+
+After proof, route state contained zero consumers, `incus list` contained zero `dorf-*` instances,
+and no proof broker, Git daemon, listener, PostgreSQL database, gateway authority, bare repository,
+or temporary binary remained. The deterministic suite for this Revision was Go unit, vet, race,
+PostgreSQL advisory-fence and terminal-cancellation integration, Ruff, 180 retained Python tests,
+lock validation, and diff checks; all passed.
