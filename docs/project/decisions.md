@@ -921,3 +921,32 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A second real environment or agent implementation proves the concrete facade
   needs selection policy, or a non-coding workflow demonstrates a smaller shared operation than the
   bound Job handle.
+
+## D046 — Reviewer authentication pauses as one exact coding-workflow decision
+
+- **Status:** Accepted for the coding-to-PR HITL slice — 2026-08-06
+- **Decision:** When a failed configured `codex exec` reviewer run contains a bounded recognized
+  authentication diagnostic, retain one workflow-owned, non-secret attention record bound to that
+  exact Job, consumer, and command run. Keep the coding Job and runtime identities open, publish or
+  retain its draft PR, and require an explicit repair or decline action naming the attention ID.
+  Status reads and ordinary coordinator retries never execute the reviewer. Repair approval permits
+  one retry of only that consumer; a retained retry result is reconciled after controller failure,
+  successful completion clears attention automatically, and another authentication failure creates
+  a new exact decision after blocking the consumed one. Decline, expiry, a changed consumer, and a
+  non-authentication recovery failure remain visibly declined, expired, or blocked rather than
+  becoming human verification policy.
+- **Why:** Provider authority is neither a code finding nor a request for the owner to debug raw
+  command output. Binding the decision to retained evidence makes delivery and retry idempotent,
+  prevents one approval from authorizing a later provider failure, and preserves the admitted Job,
+  Worker, Room, Assignment, native conversation, branch, and PR while a human repairs authority.
+  Keeping this record in the coding workflow preserves the runtime and Provider Gateway boundaries.
+- **Security:** Classification requires a failed provider-route Codex consumer plus a fixed
+  diagnostic signature from at most 64 KiB of retained output. Attention stores only a synthesized
+  observation and never route keys, provider credentials, GitHub credentials, or raw secret text.
+  Commands without an explicit provider-route requirement retain no reviewer capability.
+- **Compatibility:** Attention schema, expiry duration, CLI option names, diagnostic signatures,
+  and rendered pulse fields are internal alpha surfaces. This concrete interruption does not create
+  a generic approval engine.
+- **Reconsider when:** A second post-admission authority interruption proves a smaller shared typed
+  decision, Provider Gateway exposes a stronger typed rejection than command evidence, or bounded
+  recovery needs durable multi-consumer sequencing beyond the configured reviewer set.

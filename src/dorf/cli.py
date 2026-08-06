@@ -1427,6 +1427,17 @@ def echo_coding_job_pulse(pulse: CodingJobPulse, *, json_output: bool) -> None:
         typer.echo(f"latest Worker claim [claim]: {pulse.worker_claim.summary}")
     typer.echo(f"evidence: {pulse.evidence_count} accepted")
     typer.echo(f"attention: {pulse.attention.state} ({pulse.attention.reason})")
+    if pulse.attention.id is not None:
+        typer.echo(f"  item: {pulse.attention.id}")
+        typer.echo(f"  consumer: {pulse.attention.failed_consumer}")
+        typer.echo(f"  evidence: {pulse.attention.observed_evidence}")
+        typer.echo(f"  owner: {pulse.attention.owner}")
+        typer.echo(f"  action: {pulse.attention.exact_action}")
+        typer.echo(f"  consequence: {pulse.attention.consequence}")
+        typer.echo(f"  recommended default: {pulse.attention.recommended_default}")
+        typer.echo(f"  expiry/decline: {pulse.attention.expiry_decline_behavior}")
+        typer.echo(f"  automatic resume: {pulse.attention.automatic_resume}")
+        typer.echo(f"  expires: {pulse.attention.expires_at}")
     typer.echo(f"updated: {pulse.updated_at}")
 
 
@@ -1748,6 +1759,16 @@ def afk_resume(
     takeover: bool = typer.Option(
         False, "--takeover", help="Explicitly replace an interrupted coordinator owner."
     ),
+    repair_attention: str | None = typer.Option(
+        None,
+        "--repair-attention",
+        help="Approve one exact repaired authority failure for bounded automatic retry.",
+    ),
+    decline_attention: str | None = typer.Option(
+        None,
+        "--decline-attention",
+        help="Decline one exact authority repair and leave the workflow visibly blocked.",
+    ),
 ) -> None:
     """Resume an interrupted AFK coordinator for one coding Job."""
     owner_token = secrets.token_hex(16)
@@ -1758,6 +1779,8 @@ def afk_resume(
             job_name=job_name,
             owner_token=owner_token,
             takeover=takeover,
+            repair_attention_id=repair_attention,
+            decline_attention_id=decline_attention,
         )
     except WorkflowFailure as error:
         echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))

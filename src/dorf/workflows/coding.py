@@ -34,6 +34,7 @@ from .coding_dossier import (
 from .coding_store import CodingCommandRun, CodingJob, CodingStore
 
 VERIFY_GATE_FAILURE_LIMIT = 3
+REVIEW_AUTH_EVIDENCE_LIMIT = 64 * 1024
 AFK_TERMINAL_JOB_STATUSES = frozenset({"abandoned", "merged", "rejected"})
 REVIEW_RESULT_INSTRUCTIONS = f"""\
 If there are no actionable findings, print exactly:
@@ -294,6 +295,8 @@ class CodingWorkflow:
         job_name: str,
         owner_token: str,
         takeover: bool,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
     ) -> AfkResume:
         """Claim an existing AFK Job and reconcile abandoned child runs."""
         job = store.get_coding_job(job_name)
@@ -312,6 +315,47 @@ class CodingWorkflow:
             )
         issue_number = int(issue)
         target_repo = str(Path(job.target_repo).resolve())
+        if repair_attention_id is not None and decline_attention_id is not None:
+            raise WorkflowFailure(
+                1,
+                (
+                    WorkflowMessage(
+                        "Choose repair or decline for one attention item, not both.", True
+                    ),
+                ),
+                kind="decision",
+            )
+        store.expire_coding_attention(job_name)
+        decision_id = repair_attention_id or decline_attention_id
+        if decision_id is not None:
+            attention = store.get_latest_coding_attention(job_name)
+            if attention is None or attention.id != decision_id:
+                raise WorkflowFailure(
+                    1,
+                    (
+                        WorkflowMessage(
+                            f"Attention item does not match this Job: {decision_id}", True
+                        ),
+                    ),
+                    kind="decision",
+                )
+            decided = (
+                store.approve_coding_attention(job_name, decision_id)
+                if repair_attention_id is not None
+                else store.decline_coding_attention(job_name, decision_id)
+            )
+            if not decided:
+                raise WorkflowFailure(
+                    1,
+                    (
+                        WorkflowMessage(
+                            f"Attention item cannot be decided from {attention.status}: "
+                            f"{decision_id}",
+                            True,
+                        ),
+                    ),
+                    kind="decision",
+                )
         try:
             reservation = store.claim_afk_coordinator(
                 target_repo,
@@ -343,6 +387,9 @@ class CodingWorkflow:
             if interrupted
             else ()
         )
+        if decision_id is not None:
+            outcome = "repair approved" if repair_attention_id is not None else "declined"
+            messages += (WorkflowMessage(f"Attention {decision_id}: {outcome}."),)
         return AfkResume(
             job,
             target_repo,
@@ -370,7 +417,7 @@ class CodingWorkflow:
                 kind="publication",
             )
 
-        draft = job.status == "needs-human"
+        draft = job.status != "ready"
         try:
             client = self._github_client()
             existing_number = job.github_pr_number
@@ -683,17 +730,20 @@ class CodingWorkflow:
                         else f"review:{name} exited with code {run.exit_code}"
                     )
                 )
-                payload["infrastructure_failures"].append(
-                    {
-                        "agent": name,
-                        "kind": "reviewer_process_failure",
-                        "message": message,
-                        "run_id": run.id,
-                        "status": run.status,
-                        "exit_code": run.exit_code,
-                        "output_path": run.output_path,
-                    }
-                )
+                failure = {
+                    "agent": name,
+                    "kind": "reviewer_process_failure",
+                    "message": message,
+                    "run_id": run.id,
+                    "status": run.status,
+                    "exit_code": run.exit_code,
+                    "output_path": run.output_path,
+                }
+                auth_evidence = reviewer_authentication_evidence(run, agent.command)
+                if auth_evidence is not None:
+                    failure["kind"] = "reviewer_authentication"
+                    failure["observed_evidence"] = auth_evidence
+                payload["infrastructure_failures"].append(failure)
                 continue
             output = command_run_output(run.output_path)
             if not self._record_review_verdict(run, output=output):
@@ -808,6 +858,290 @@ class CodingWorkflow:
             )
         self._emit(f"verify:fix succeeded for {self.job.job_name}")
 
+    def _finish_verified(self) -> WorkflowOutcome:
+        commit_sha = self._read_job_head()
+        checklist = self.store.get_acceptance_checklist(self.job.job_name)
+        if checklist is not None:
+            dossier = build_proof_dossier(
+                self.store,
+                self.job,
+                self.binding,
+                commit_sha=commit_sha,
+            )
+            self.store.set_metadata_value(
+                self.job.job_name,
+                "proof_commit",
+                commit_sha,
+            )
+            if not acceptance_is_proven(dossier):
+                self._mark_needs_human_and_publish()
+                self._fail(
+                    f"Verify stopped for {self.job.job_name}: acceptance remains "
+                    f"unproven at {commit_sha}.",
+                    kind="needs-human",
+                )
+        self.store.update_status(self.job.job_name, "ready")
+        job = self.store.get_coding_job(self.job.job_name)
+        if job is None:
+            self._fail(f"CodingJob not found: {self.job.job_name}")
+        self.job = job
+        self._publish_verified(job)
+        attention = self.store.get_active_coding_attention(self.job.job_name)
+        if attention is not None and attention.status == "recovering":
+            self.store.clear_coding_attention(self.job.job_name, attention.id)
+        self.store.remove_metadata_keys(
+            self.job.job_name,
+            {"afk_attention_id"},
+        )
+        self._emit(f"Verify passed for {self.job.job_name}")
+        return self._outcome()
+
+    def _raise_recorded_attention(self) -> None:
+        attention = self.store.get_latest_coding_attention(self.job.job_name)
+        if attention is None:
+            return
+        if attention.status == "outstanding":
+            self._ensure_attention_projection(attention.id)
+            self._fail(
+                f"Reviewer authority repair required for {attention.failed_consumer}: "
+                f"{attention.exact_action}",
+                exit_code=75,
+                kind="infrastructure-authority",
+            )
+        if attention.status in {"declined", "expired"}:
+            self._set_afk_progress(
+                "blocked",
+                f"reviewer authentication repair {attention.status}",
+            )
+            self._fail(
+                f"Reviewer authority repair was {attention.status} for "
+                f"{attention.failed_consumer}; the coding workflow remains blocked.",
+                kind=f"infrastructure-authority-{attention.status}",
+            )
+        if attention.status == "blocked":
+            self._set_afk_progress(
+                "blocked",
+                "bounded reviewer authority recovery failed",
+            )
+            self._fail(
+                f"Bounded reviewer authority recovery failed for "
+                f"{attention.failed_consumer}; the coding workflow remains blocked.",
+                kind="infrastructure-authority-blocked",
+            )
+
+    def _ensure_attention_projection(self, attention_id: str) -> None:
+        """Reconcile replaceable AFK/PR projections after durable attention commits."""
+        self.store.set_metadata_values(
+            self.job.job_name,
+            {
+                "afk_stage": "blocked",
+                "afk_outcome": "reviewer authentication requires repair",
+                "afk_attention_id": attention_id,
+            },
+        )
+        current = self.store.get_coding_job(self.job.job_name)
+        if current is None:
+            self._fail(f"CodingJob not found: {self.job.job_name}")
+        self.job = current
+        if current.github_pr_number is None:
+            self._publish_verified(current)
+            refreshed = self.store.get_coding_job(self.job.job_name)
+            if refreshed is not None:
+                self.job = refreshed
+
+    def _resume_reviewer_attention(
+        self,
+        requested_agents: list[str],
+    ) -> dict | None:
+        self.store.expire_coding_attention(self.job.job_name)
+        attention = self.store.get_active_coding_attention(self.job.job_name)
+        if attention is None:
+            self._raise_recorded_attention()
+            return None
+        if attention.status == "outstanding":
+            self._raise_recorded_attention()
+        if attention.status not in {"approved", "recovering"}:
+            return None
+        name = attention.failed_consumer.removeprefix("review:")
+        if name not in requested_agents or self.contract.review is None:
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            self._fail(
+                f"Approved reviewer consumer is no longer configured: "
+                f"{attention.failed_consumer}.",
+                kind="infrastructure-authority-blocked",
+            )
+        agent = self.contract.review.agents[name]
+        expected_command = review_command_with_dorf_protocol(
+            agent.command,
+            self.contract.review.prompt,
+            job=self.job,
+        )
+        initial_run = self.store.get_command_run(attention.command_run_id)
+        current_connection = self.binding.room.metadata.get("provider_connection")
+        if (
+            initial_run is None
+            or initial_run.kind != attention.failed_consumer
+            or initial_run.command != expected_command
+            or attention.provider_connection != current_connection
+        ):
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            self._fail(
+                f"Approved reviewer failure no longer matches its retained consumer state: "
+                f"{attention.failed_consumer}.",
+                kind="infrastructure-authority-blocked",
+            )
+        if not reviewer_uses_codex_harness(agent.command):
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            self._fail(
+                f"Approved consumer no longer requires the Codex provider route: "
+                f"{attention.failed_consumer}.",
+                kind="infrastructure-authority-blocked",
+            )
+        recovery_run = next(
+            (
+                run
+                for run in self.store.list_command_runs(self.job.job_name)
+                if run.id > attention.command_run_id
+                and run.kind == attention.failed_consumer
+                and run.command == expected_command
+            ),
+            None,
+        )
+        if recovery_run is None:
+            self.store.begin_coding_attention_recovery(self.job.job_name, attention.id)
+            recovery_run = self._run_command(
+                shell_command(
+                    attention.failed_consumer,
+                    expected_command,
+                    timeout_seconds=self.contract.review.timeout_seconds,
+                    requires_provider_route=True,
+                )
+            )
+        if recovery_run.status == "running":
+            self._fail(
+                f"Reviewer authority recovery run {recovery_run.id} is still active.",
+                exit_code=75,
+                kind="active-command",
+            )
+        if recovery_run.exit_code != 0:
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            auth_evidence = reviewer_authentication_evidence(recovery_run, agent.command)
+            if auth_evidence is not None:
+                next_attention, _ = self.store.record_reviewer_auth_attention(
+                    job_name=self.job.job_name,
+                    failed_consumer=attention.failed_consumer,
+                    command_run_id=recovery_run.id,
+                    observed_evidence=auth_evidence,
+                    provider_connection=self.binding.room.metadata.get(
+                        "provider_connection"
+                    ),
+                )
+                self.store.set_metadata_values(
+                    self.job.job_name,
+                    {
+                        "afk_stage": "blocked",
+                        "afk_outcome": "reviewer authentication recovery failed",
+                        "afk_attention_id": next_attention.id,
+                    },
+                )
+                self._fail(
+                    f"Reviewer authentication is still unavailable for "
+                    f"{attention.failed_consumer}: {next_attention.exact_action}",
+                    exit_code=recovery_run.exit_code or 1,
+                    kind="infrastructure-authority",
+                )
+            self._set_afk_progress("blocked", "bounded reviewer authority recovery failed")
+            self._fail(
+                f"Bounded reviewer authority recovery failed for "
+                f"{attention.failed_consumer} with exit code {recovery_run.exit_code}.",
+                exit_code=recovery_run.exit_code or 1,
+                kind="infrastructure-authority-blocked",
+            )
+        output = command_run_output(recovery_run.output_path)
+        no_findings = self._record_review_verdict(recovery_run, output=output)
+        payload: dict[str, Any] = {
+            "round": 1,
+            "job_name": self.job.job_name,
+            "job_branch": self.job.job_branch,
+            "target_start_sha": self.job.target_start_sha,
+            "findings": [],
+            "infrastructure_failures": [],
+            "review_runs": [
+                {
+                    "agent": name,
+                    "run_id": recovery_run.id,
+                    "exit_code": recovery_run.exit_code,
+                    "status": recovery_run.status,
+                    "output_path": recovery_run.output_path,
+                }
+            ],
+        }
+        if not no_findings:
+            payload["findings"].append(
+                {
+                    "agent": name,
+                    "severity": "suggestion",
+                    "title": f"review:{name} reported suggestions",
+                    "body": output or "Review completed without the no-findings marker.",
+                    "output_path": recovery_run.output_path,
+                    "needs_agent_decision": True,
+                }
+            )
+        return payload
+
+    def _reconcile_reviewer_auth_attention(self, requested_agents: list[str]) -> None:
+        """Recover a decision when the coordinator crashed after the failed command."""
+        assert self.contract.review is not None
+        runs = self.store.list_command_runs(self.job.job_name)
+        recorded = self.store.get_latest_coding_attention(self.job.job_name)
+        for name in requested_agents:
+            agent = self.contract.review.agents[name]
+            if not reviewer_uses_codex_harness(agent.command):
+                continue
+            expected_command = review_command_with_dorf_protocol(
+                agent.command,
+                self.contract.review.prompt,
+                job=self.job,
+            )
+            latest = next(
+                (
+                    run
+                    for run in runs
+                    if run.kind == f"review:{name}" and run.command == expected_command
+                ),
+                None,
+            )
+            if latest is None:
+                continue
+            if recorded is not None and recorded.command_run_id >= latest.id:
+                continue
+            evidence = reviewer_authentication_evidence(latest, agent.command)
+            if evidence is None:
+                continue
+            self._record_reviewer_auth_attention(
+                {
+                    "agent": name,
+                    "run_id": latest.id,
+                    "observed_evidence": evidence,
+                }
+            )
+
+    def _record_reviewer_auth_attention(self, failure: dict[str, Any]) -> None:
+        attention, _ = self.store.record_reviewer_auth_attention(
+            job_name=self.job.job_name,
+            failed_consumer=f"review:{failure['agent']}",
+            command_run_id=int(failure["run_id"]),
+            observed_evidence=str(failure["observed_evidence"]),
+            provider_connection=self.binding.room.metadata.get("provider_connection"),
+        )
+        self._ensure_attention_projection(attention.id)
+        self._fail(
+            f"Reviewer authority repair required for {attention.failed_consumer}: "
+            f"{attention.exact_action}",
+            exit_code=75,
+            kind="infrastructure-authority",
+        )
+
     def verify(
         self,
         agents: list[str] | None = None,
@@ -824,6 +1158,24 @@ class CodingWorkflow:
         if self.store.get_acceptance_checklist(self.job.job_name) is not None:
             self.store.freeze_acceptance_checklist(self.job.job_name)
 
+        self._reconcile_reviewer_auth_attention(requested)
+        resumed_payload = self._resume_reviewer_attention(requested)
+        if resumed_payload is not None:
+            if not blocking_review_findings(resumed_payload):
+                return self._finish_verified()
+            if max_rounds <= 1:
+                self.store.clear_coding_attention(
+                    self.job.job_name,
+                    self.store.get_active_coding_attention(self.job.job_name).id,
+                )
+                self._mark_needs_human_and_publish()
+                self._fail(
+                    f"Verify stopped for {self.job.job_name} after "
+                    f"{max_rounds} review round(s).",
+                    kind="needs-human",
+                )
+            self._run_verify_fix(resumed_payload)
+
         recovered = self._unsettled_turn()
         if recovered is not None and recovered.exit_code != 0:
             self._mark_needs_human_and_publish()
@@ -833,7 +1185,7 @@ class CodingWorkflow:
                 kind="needs-human",
             )
 
-        review_round = 0
+        review_round = 1 if resumed_payload is not None else 0
         gate_failures = 0
         try:
             while True:
@@ -872,6 +1224,16 @@ class CodingWorkflow:
                     continue_guard()
                 infrastructure_failures = payload["infrastructure_failures"]
                 if infrastructure_failures:
+                    authentication = next(
+                        (
+                            failure
+                            for failure in infrastructure_failures
+                            if failure.get("kind") == "reviewer_authentication"
+                        ),
+                        None,
+                    )
+                    if authentication is not None:
+                        self._record_reviewer_auth_attention(authentication)
                     self._mark_needs_human_and_publish()
                     messages = "; ".join(
                         str(item.get("message", "review infrastructure failed"))
@@ -882,35 +1244,7 @@ class CodingWorkflow:
                         kind="needs-human",
                     )
                 if not blocking_review_findings(payload):
-                    commit_sha = self._read_job_head()
-                    checklist = self.store.get_acceptance_checklist(self.job.job_name)
-                    if checklist is not None:
-                        dossier = build_proof_dossier(
-                            self.store,
-                            self.job,
-                            self.binding,
-                            commit_sha=commit_sha,
-                        )
-                        self.store.set_metadata_value(
-                            self.job.job_name,
-                            "proof_commit",
-                            commit_sha,
-                        )
-                        if not acceptance_is_proven(dossier):
-                            self._mark_needs_human_and_publish()
-                            self._fail(
-                                f"Verify stopped for {self.job.job_name}: acceptance remains "
-                                f"unproven at {commit_sha}.",
-                                kind="needs-human",
-                            )
-                    self.store.update_status(self.job.job_name, "ready")
-                    job = self.store.get_coding_job(self.job.job_name)
-                    if job is None:
-                        self._fail(f"CodingJob not found: {self.job.job_name}")
-                    self.job = job
-                    self._publish_verified(job)
-                    self._emit(f"Verify passed for {self.job.job_name}")
-                    return self._outcome()
+                    return self._finish_verified()
                 if review_round >= max_rounds:
                     self._mark_needs_human_and_publish()
                     self._fail(
@@ -1435,6 +1769,19 @@ class CodingWorkflow:
             raise
         except WorkflowFailure as error:
             current = self.store.get_coding_job(self.job.job_name)
+            if error.kind.startswith("infrastructure-authority"):
+                if current is not None:
+                    self.job = current
+                self.store.finish_command_run(afk_run.id, "failed", error.exit_code or 1)
+                attention = self.store.get_latest_coding_attention(self.job.job_name)
+                coordinator_status = attention.status if attention is not None else "blocked"
+                self.store.finish_afk_coordinator(
+                    target_repo,
+                    issue_number,
+                    owner_token,
+                    coordinator_status,
+                )
+                raise
             if (
                 current is not None
                 and current.status in {"ready", "needs-human"}
@@ -1509,6 +1856,52 @@ def command_run_output(output_path: str | None) -> str:
     if not path.is_file():
         return ""
     return path.read_text()
+
+
+def reviewer_authentication_evidence(
+    run: CodingCommandRun,
+    configured_command: str,
+) -> str | None:
+    """Classify only failed Codex consumers with bounded retained process evidence."""
+    if (
+        run.status != "failed"
+        or not run.exit_code
+        or not reviewer_uses_codex_harness(configured_command)
+        or not run.output_path
+    ):
+        return None
+    try:
+        with Path(run.output_path).open(errors="replace") as output:
+            observed = output.read(REVIEW_AUTH_EVIDENCE_LIMIT + 1)
+    except OSError:
+        return None
+    bounded = observed[:REVIEW_AUTH_EVIDENCE_LIMIT].lower()
+    signatures = (
+        ("codex authentication is unavailable", "Codex authentication unavailable"),
+        (
+            "codex inference route authentication is unavailable",
+            "Codex inference route authentication unavailable",
+        ),
+        (
+            "provider connection authentication is unavailable",
+            "provider connection authentication unavailable",
+        ),
+        ("not logged in", "Codex session unavailable"),
+        ("401 unauthorized", "provider rejected authentication (HTTP 401)"),
+        ("403 forbidden", "provider rejected authentication (HTTP 403)"),
+    )
+    matched = next((label for phrase, label in signatures if phrase in bounded), None)
+    if matched is None:
+        return None
+    truncation = (
+        "; bounded output was truncated"
+        if len(observed) > REVIEW_AUTH_EVIDENCE_LIMIT
+        else ""
+    )
+    return (
+        f"{run.kind} command run {run.id} failed with exit code {run.exit_code}; "
+        f"retained bounded evidence matched {matched}{truncation}."
+    )
 
 
 def blocking_review_findings(payload: dict) -> list[dict]:

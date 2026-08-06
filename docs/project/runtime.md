@@ -125,6 +125,9 @@ must order repository setup around Worker and Job admission. Coding admission cr
 provenance-labelled dedicated Worker, a goal-backed Job and Assignment, and an independent clone at
 `/workspace/jobs/JOB`. The Assignment remains non-admitting and non-deliverable while the workflow
 clones and runs repository preparation, then opens immediately before initial goal dispatch.
+After admission, a configured Codex reviewer authentication failure is a coding-workflow authority
+decision under D046: it pauses bounded review without changing runtime identity, exposes one precise
+attention item, and resumes only the failed consumer after explicit repair approval.
 Issue-backed coding delegation first completes one workflow-owned admission proof in an unrecorded
 disposable VM. The proof pins the exact issue, repository head, GitHub App authority, official image,
 provider route, repository preparation/smoke path, dry-run Git write, and real implementation and
