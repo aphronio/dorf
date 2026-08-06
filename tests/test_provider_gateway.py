@@ -790,8 +790,10 @@ def test_chatgpt_and_prefixed_deepseek_can_coexist(tmp_path) -> None:
         assert gateway.create_route("deepseek", consumer="reviewer")
         config = (state_path / "broker.yaml").read_text()
     assert "force-model-prefix: true" in config
+    assert "openai-compatibility:" in config
     assert 'base-url: "https://api.deepseek.com/v1"' in config
     assert 'prefix: "deepseek"' in config
+    assert 'alias: "deepseek-v4-flash"' in config
 
 
 def test_route_fails_closed_instead_of_implicitly_pooling_multiple_connections(

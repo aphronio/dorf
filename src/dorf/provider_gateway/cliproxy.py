@@ -413,9 +413,7 @@ class ProviderGateway:
         secret_path = self._credentials_path / secret_name
         with self._locked():
             previous_records = self._read_connections()
-            existing = next(
-                (record for record in previous_records if record["name"] == name), None
-            )
+            existing = next((record for record in previous_records if record["name"] == name), None)
             if existing is not None and (
                 existing["provider"] != provider or existing["auth_mode"] != "api_key"
             ):
@@ -880,22 +878,36 @@ class ProviderGateway:
         api_key_records = [
             record
             for record in self._read_connections()
-            if record["provider"] in {"openai", "deepseek"}
-            and record["auth_mode"] == "api_key"
+            if record["provider"] in {"openai", "deepseek"} and record["auth_mode"] == "api_key"
         ]
-        if api_key_records:
+        openai_records = [r for r in api_key_records if r["provider"] == "openai"]
+        if openai_records:
             lines.append("codex-api-key:")
-            for record in api_key_records:
+            for record in openai_records:
                 secret = self._read_api_key(record["credential_ref"])
                 lines.extend(
                     (
                         f"  - api-key: {json.dumps(secret)}",
-                        f'    base-url: "https://api.{record["provider"]}.com/v1"',
+                        '    base-url: "https://api.openai.com/v1"',
                     )
                 )
-                if record["provider"] == "deepseek":
-                    lines.append('    prefix: "deepseek"')
             lines.append("")
+        for record in (r for r in api_key_records if r["provider"] == "deepseek"):
+            secret = self._read_api_key(record["credential_ref"])
+            lines.extend(
+                (
+                    "openai-compatibility:",
+                    '  - name: "deepseek"',
+                    '    prefix: "deepseek"',
+                    '    base-url: "https://api.deepseek.com/v1"',
+                    "    api-key-entries:",
+                    f"      - api-key: {json.dumps(secret)}",
+                    "    models:",
+                    '      - name: "deepseek-v4-flash"',
+                    '        alias: "deepseek-v4-flash"',
+                    "",
+                )
+            )
         config = "\n".join(lines)
         self._write_private_text(self._config_path, config)
 
@@ -1054,8 +1066,7 @@ class ProviderGateway:
             ) or (
                 provider in {"openai", "deepseek"}
                 and auth_mode == "api_key"
-                and re.fullmatch(rf"{provider}-[0-9a-f]{{16}}\.key", credential_ref)
-                is not None
+                and re.fullmatch(rf"{provider}-[0-9a-f]{{16}}\.key", credential_ref) is not None
             )
             if not valid_credential or name in names or credential_ref in credential_refs:
                 raise GatewayUnavailableError("Provider gateway connection state is unreadable")
