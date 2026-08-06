@@ -164,6 +164,35 @@ def test_repository_client_converts_an_existing_pull_request_to_draft(monkeypatc
     assert requests[-1][2]["variables"] == {"id": "PR_node"}
 
 
+def test_repository_client_rejects_failed_draft_conversion(monkeypatch) -> None:
+    client = GitHubRepositoryClient("installation-token")
+
+    def request(method, path, *, body=None):
+        if path.endswith("/pulls/35"):
+            return {"number": 35, "draft": False, "node_id": "PR_node"}
+        return {"errors": [{"message": "permission denied"}]}
+
+    monkeypatch.setattr(client, "_request_json", request)
+
+    with pytest.raises(GitHubRepositoryError, match="did not convert"):
+        client.mark_pull_request_draft("example/repo", 35)
+
+
+def test_repository_client_does_not_reconvert_a_draft_pull_request(monkeypatch) -> None:
+    client = GitHubRepositoryClient("installation-token")
+    requests = []
+
+    def request(method, path, *, body=None):
+        requests.append((method, path, body))
+        return {"number": 35, "draft": True, "node_id": "PR_node"}
+
+    monkeypatch.setattr(client, "_request_json", request)
+
+    client.mark_pull_request_draft("example/repo", 35)
+
+    assert len(requests) == 1
+
+
 def test_manifest_requests_read_access_to_issues() -> None:
     permissions = GitHubAppManifestFlow().manifest()["default_permissions"]
 

@@ -394,7 +394,7 @@ class GitHubRepositoryClient:
             raise GitHubRepositoryError(
                 f"Pull request {pull_number} did not include a GraphQL node ID"
             )
-        self._request_json(
+        response = self._request_json(
             "POST",
             "/graphql",
             body={
@@ -406,6 +406,17 @@ class GitHubRepositoryClient:
                 "variables": {"id": node_id},
             },
         )
+        data = response.get("data") if isinstance(response, dict) else None
+        converted = data.get("convertPullRequestToDraft") if isinstance(data, dict) else None
+        if (
+            not isinstance(response, dict)
+            or response.get("errors")
+            or not isinstance(converted, dict)
+            or not converted.get("pullRequest")
+        ):
+            raise GitHubRepositoryError(
+                f"GitHub did not convert pull request {pull_number} to draft"
+            )
 
     def add_pull_request_comment(self, repo_full_name: str, pr_number: int, body: str) -> None:
         self._request_json(

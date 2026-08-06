@@ -175,6 +175,9 @@ def build_proof_dossier(
         for run in runs
     }
     checklist = store.get_acceptance_checklist(job.job_name)
+    active_items = tuple(
+        item for item in (checklist.items if checklist else ()) if item.verifier != "review"
+    )
     acceptance = tuple(
         _evaluate_acceptance_item(
             item,
@@ -182,7 +185,7 @@ def build_proof_dossier(
             run_evidence=run_evidence,
             commit_sha=commit_sha,
         )
-        for item in (checklist.items if checklist else ())
+        for item in active_items
     )
     checks = tuple(
         run_evidence[run.id]
@@ -217,7 +220,7 @@ def build_proof_dossier(
         )
     if checklist is None:
         risks.append("Acceptance checklist was not compiled at admission")
-    elif not checklist.items:
+    elif not active_items:
         risks.append(
             "Repository supplied no machine-verifiable acceptance items; human GitHub "
             "acceptance remains required"

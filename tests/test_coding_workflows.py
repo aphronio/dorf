@@ -876,6 +876,100 @@ def test_review_finding_repairs_through_same_job_fifo_then_rechecks(tmp_path) ->
     assert store.get_job(job.job_name).status == "open"
 
 
+def test_second_deepseek_findings_stop_after_one_fifo_repair(tmp_path) -> None:
+    finding = "- [P1] Still worth reconsidering"
+    store, environment, agent, runtime, job, _binding = make_coding_job(tmp_path)
+    initial = store.list_job_inputs(job.job_name)[0]
+    assert runtime.deliver_input(job.job_name, initial.id).status == "succeeded"
+    github = GitHubClient()
+    reviewer = DiffReviewer(store, [finding, finding])
+
+    def commit_decision():
+        environment.git_head = "c" * 40
+        github.branch_sha = environment.git_head
+
+    agent.on_continue = commit_decision
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(store, environment, runtime, job, github, reviewer=reviewer).verify()
+
+    assert raised.value.kind == "needs-human"
+    assert reviewer.commits == ["b" * 40, "c" * 40]
+    assert len(store.list_job_inputs(job.job_name)) == 2
+
+
+def test_deepseek_result_must_match_the_implementation_commit(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    reviewer = DiffReviewer(store)
+
+    def mismatched(current, commit):
+        run = reviewer(current, commit)
+        return store.set_command_run_git_commits(
+            run.id, before=commit, after="d" * 40
+        )
+
+    with pytest.raises(WorkflowFailure, match="not pinned"):
+        workflow(
+            store,
+            environment,
+            runtime,
+            job,
+            GitHubClient(),
+            reviewer=mismatched,
+        ).verify()
+
+
+def test_clean_deepseek_verdict_survives_loss_of_the_mutable_run_log(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
+    github = GitHubClient()
+    reviewer = DiffReviewer(store)
+
+    workflow(store, environment, runtime, job, github, reviewer=reviewer).verify()
+    run = next(
+        item for item in store.list_command_runs(job.job_name)
+        if item.kind == "verify-role:diff"
+    )
+    Path(run.output_path).unlink()
+    current = store.get_coding_job(job.job_name)
+
+    workflow(store, environment, runtime, current, github, reviewer=reviewer).verify()
+
+    assert reviewer.commits == ["b" * 40]
+    verdicts = [
+        event for event in store.documents.list_events(job.job_name)
+        if event.kind == "review-verdict"
+    ]
+    assert len(verdicts) == 1
+
+
+def test_afk_attention_decision_waits_for_coordinator_ownership(tmp_path) -> None:
+    store, _environment, _agent, _runtime, job, _binding = make_coding_job(tmp_path)
+    repo = str(Path(job.target_repo).resolve())
+    attention = {"id": "attention-exact", "status": "outstanding"}
+    store.set_metadata_values(
+        job.job_name,
+        {
+            "afk_issue_number": "139",
+            "diff_verifier_attention": json.dumps(attention),
+        },
+    )
+    store.claim_afk_coordinator(repo, 139, "current-owner")
+    store.link_afk_job(repo, 139, "current-owner", job.job_name)
+
+    with pytest.raises(WorkflowFailure) as raised:
+        CodingWorkflow.prepare_afk_resume(
+            store,
+            job_name=job.job_name,
+            owner_token="other-owner",
+            takeover=False,
+            repair_attention_id=attention["id"],
+        )
+
+    assert raised.value.kind == "ownership"
+    current = store.get_coding_job(job.job_name)
+    assert json.loads(current.metadata["diff_verifier_attention"])["status"] == "outstanding"
+
+
 def test_interrupted_deepseek_run_stays_interrupted_without_consuming_attention(
     tmp_path,
 ) -> None:

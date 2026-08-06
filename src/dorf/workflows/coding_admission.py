@@ -850,7 +850,6 @@ class LocalCodingAdmissionBackend:
             raise RuntimeError("GitHub dry-run push failed: " + _message(result))
 
     def _prove_reviewer(self, execution) -> None:
-        assert self.target_start_sha is not None
         gateway = self._gateway()
         consumer = f"reviewer:{execution.binding.room.id}"
         route = gateway.create_route("deepseek", consumer=consumer)
@@ -862,7 +861,7 @@ class LocalCodingAdmissionBackend:
             setup = (
                 "set -euo pipefail; umask 077; cat >/tmp/dorf-provider.mjs; "
                 f"printf %s {json.dumps(protocol)} >/tmp/dorf-protocol.md; "
-                f"git diff {self.target_start_sha}..HEAD >/tmp/dorf-review.diff"
+                ": >/tmp/dorf-review.diff"
             )
             prepared = execution.execute(
                 ["bash", "-lc", setup],

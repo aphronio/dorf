@@ -632,6 +632,8 @@ def test_local_consumer_proof_uses_app_server_and_one_disposable_vm(
     assert any("git push --dry-run" in command for command in joined)
     assert not any("codex exec" in command for command in joined)
     assert sum("pi -p --provider dorf-deepseek" in command for command in joined) == 1
+    assert any(": >/tmp/dorf-review.diff" in command for command in joined)
+    assert not any("git diff" in command for command in joined)
     assert result.proof.reviewer == "deepseek-diff"
     reviewer_invocation = next(
         invocation

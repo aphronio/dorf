@@ -311,12 +311,6 @@ class CodingWorkflow:
             )
         issue_number = int(issue)
         target_repo = str(Path(job.target_repo).resolve())
-        decision_messages = CodingWorkflow.decide_verifier_attention(
-            store,
-            job_name,
-            repair_attention_id=repair_attention_id,
-            decline_attention_id=decline_attention_id,
-        )
         try:
             reservation = store.claim_afk_coordinator(
                 target_repo,
@@ -339,6 +333,12 @@ class CodingWorkflow:
                 ),
                 kind="ownership",
             ) from error
+        decision_messages = CodingWorkflow.decide_verifier_attention(
+            store,
+            job_name,
+            repair_attention_id=repair_attention_id,
+            decline_attention_id=decline_attention_id,
+        )
         messages = decision_messages + (
             (
                 WorkflowMessage(
@@ -815,6 +815,33 @@ class CodingWorkflow:
         self._emit(f"Verify passed for {self.job.job_name}")
         return self._outcome()
 
+    def _review_verdict(self, run: CodingCommandRun) -> tuple[bool, str]:
+        event_id = f"evt-deepseek-{run.id}-verdict"
+        events = self.store.documents.list_events(self.job.job_name)
+        existing = next(
+            (event for event in events if event.id == event_id),
+            None,
+        )
+        output = command_run_output(run.output_path)
+        if existing is not None:
+            return existing.related.get("verdict") == "no-findings", output
+        no_findings = review_output_has_no_findings(output)
+        verdict = "no-findings" if no_findings else "findings"
+        self.store.documents.append_event(
+            self.job.job_name,
+            event_id=event_id,
+            source="workflow",
+            provenance="fact",
+            kind="review-verdict",
+            summary=f"DeepSeek diff review observed {verdict}",
+            related={
+                "commit": run.git_commit_after or "",
+                "run": str(run.id),
+                "verdict": verdict,
+            },
+        )
+        return no_findings, output
+
     def verify(
         self,
         *,
@@ -879,8 +906,8 @@ class CodingWorkflow:
                 run = self._review_exact_commit(commit)
                 if continue_guard is not None:
                     continue_guard()
-                output = command_run_output(run.output_path)
-                if review_output_has_no_findings(output):
+                no_findings, output = self._review_verdict(run)
+                if no_findings:
                     return self._finish_verified(commit)
                 if any(
                     DIFF_REPAIR_PREFIX in item.text
