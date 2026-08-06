@@ -145,6 +145,7 @@ from dorf.workflows import (
     run_coding_job_command,
 )
 from dorf.workflows.coding import proof_dossier_commit, review_command_with_dorf_protocol
+from dorf.workflows.shadow_verifier import run_shadow_review
 
 app = typer.Typer(help="Manage durable Workers and Jobs in isolated Rooms.")
 worker_app = typer.Typer(help="Manage durable Workers and their current Rooms.")
@@ -711,7 +712,7 @@ def provider_connect(
     api_key: bool = typer.Option(
         False,
         "--api-key",
-        help="Connect an API key read from OPENAI_API_KEY or a hidden prompt.",
+        help="Connect an API key read from the provider environment or a hidden prompt.",
     ),
 ) -> None:
     """Connect one named upstream provider credential."""
@@ -723,23 +724,29 @@ def provider_connect(
                     name=name,
                     on_authorization=echo_device_authorization,
                 )
-            elif provider == "openai" and api_key and not subscription:
-                credential = os.environ.get("OPENAI_API_KEY")
+            elif provider in {"openai", "deepseek"} and api_key and not subscription:
+                credential = os.environ.get(f"{provider.upper()}_API_KEY")
                 if not credential:
-                    credential = typer.prompt("OpenAI API key", hide_input=True)
-                connection = gateway.connect_openai_api_key(
-                    name=name,
-                    api_key=credential,
+                    credential = typer.prompt(f"{provider.title()} API key", hide_input=True)
+                connector = (
+                    gateway.connect_openai_api_key
+                    if provider == "openai"
+                    else gateway.connect_deepseek_api_key
                 )
+                connection = connector(name=name, api_key=credential)
             else:
                 typer.echo(
-                    "Choose chatgpt --subscription or openai --api-key",
+                    "Choose chatgpt --subscription, openai --api-key, or deepseek --api-key",
                     err=True,
                 )
                 raise typer.Exit(2)
     except (ProviderGatewayError, ValueError) as error:
         echo_provider_error(error)
         raise typer.Exit(1) from error
+    if connection.provider == "deepseek":
+        echo_provider_connection(connection)
+        typer.echo("Reviewer connection kept out of the deployment default.")
+        return
     try:
         set_default_provider_connection(connection.name)
     except (DeploymentProfileError, OSError) as error:
@@ -2914,6 +2921,51 @@ def review(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> Non
 def verify(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> None:
     """Run bounded check, review, and Job-message repair rounds."""
     run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.verify(agents))
+
+
+@app.command("verify-role")
+def verify_role(job_name: str, role: str) -> None:
+    """Run the concrete DeepSeek diff role as a disposable shadow review."""
+    if role != "diff":
+        typer.echo("Only the diff verifier role is supported.", err=True)
+        raise typer.Exit(2)
+    store = CodingStore.open()
+    job = get_runnable_coding_job_or_exit(store, job_name)
+    contract = load_contract_or_exit(Path(job.target_repo))
+    _, profile = select_coding_deployment_or_exit("deepseek")
+    config = IncusConfig.from_mapping(contract.incus_config)
+    fingerprint = deployment_image_fingerprint(profile, contract)
+    if fingerprint is not None:
+        config = replace(config, template=fingerprint)
+    repo = job.metadata.get("github_repo", "")
+    try:
+        app_config = load_github_app_config()
+        minted = GitHubAppTokenClient().mint_installation_token(
+            app_config,
+            repositories=[repo.rsplit("/", 1)[-1]],
+            permissions={"contents": "read"},
+        )
+        gateway = Dorf.open_provider_gateway(config)
+        dorf = Dorf(
+            store,
+            environment_config=config,
+            provider_connection="deepseek",
+            provider_gateway=gateway,
+        )
+        run = run_shadow_review(
+            store,
+            job,
+            dorf,
+            gateway,
+            GitHubRepositoryClient(minted.token),
+            minted.token,
+        )
+    except CommandInterrupted:
+        raise typer.Exit(130) from None
+    except (GitHubAppConfigError, GitHubAppVerificationError, RuntimeError) as error:
+        typer.echo(f"Shadow verifier failed: {error}", err=True)
+        raise typer.Exit(1) from error
+    exit_for_command_run(job_name, run.kind, run.exit_code)
 
 
 @app.command()

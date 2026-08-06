@@ -110,6 +110,7 @@ def main() -> None:
                     ("codex", ["codex", "--version"]),
                     ("git", ["git", "--version"]),
                     ("node", ["node", "--version"]),
+                    ("pi", ["pi", "--version"]),
                     ("uv", ["uv", "--version"]),
                 ):
                     observed = execution.execute(argv, cwd=binding.workspace)

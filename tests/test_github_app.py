@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 
 import pytest
@@ -16,6 +17,17 @@ from dorf.github_app import (
     load_github_app_config,
     save_github_app_config,
 )
+
+
+class Response:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def read(self):
+        return b'{"token":"scoped","permissions":{"contents":"read"}}'
 
 
 class FakeManifestClient:
@@ -43,6 +55,27 @@ class FakeTokenClient(GitHubAppTokenClient):
         if private_key_path is not None:
             assert private_key_path.read_text().startswith("-----BEGIN PRIVATE KEY-----")
         return "installation-token"
+
+
+def test_installation_token_can_be_repository_read_only(monkeypatch, tmp_path) -> None:
+    seen = {}
+    monkeypatch.setattr("dorf.github_app.create_github_app_jwt", lambda *args: "jwt")
+    def open_request(request, timeout):
+        seen["body"] = request.data
+        return Response()
+
+    monkeypatch.setattr("dorf.github_app.urllib.request.urlopen", open_request)
+    token = GitHubAppTokenClient().mint_installation_token(
+        GitHubAppConfig("1", "2"),
+        private_key_path=tmp_path / "unused.pem",
+        repositories=["repo"],
+        permissions={"contents": "read"},
+    )
+    assert token.token == "scoped"
+    assert json.loads(seen["body"]) == {
+        "repositories": ["repo"],
+        "permissions": {"contents": "read"},
+    }
 
 
 def test_repository_client_get_issue_includes_non_empty_comments(monkeypatch) -> None:
