@@ -472,7 +472,9 @@ class CodingWorkflow:
                     body=github_pr_body(job),
                     base=job.target_branch,
                 )
-                if not draft:
+                if draft:
+                    client.mark_pull_request_draft(repo_full_name, existing_number)
+                else:
                     client.mark_pull_request_ready(repo_full_name, existing_number)
                 if existing_url and "html_url" not in payload:
                     payload["html_url"] = existing_url
@@ -527,7 +529,7 @@ class CodingWorkflow:
             )
         return self.execution
 
-    def _run_command(self, spec):
+    def _run_command(self, spec, *, prepared_run: CodingCommandRun | None = None):
         self._require_execution()
         try:
             return run_coding_job_command(
@@ -537,6 +539,7 @@ class CodingWorkflow:
                 binding=self.binding,
                 contract=self.contract,
                 spec=spec,
+                prepared_run=prepared_run,
             )
         except ValueError as error:
             self._fail(str(error), kind="configuration")
@@ -761,7 +764,9 @@ class CodingWorkflow:
                     failure["kind"] = "reviewer_authentication"
                     failure["observed_evidence"] = auth_evidence
                 payload["infrastructure_failures"].append(failure)
-                break
+                if auth_evidence is not None:
+                    break
+                continue
             output = command_run_output(run.output_path)
             if not self._record_review_verdict(run, output=output):
                 payload["findings"].append(
@@ -860,19 +865,26 @@ class CodingWorkflow:
         self.job = job
         self._publish_verified(job)
 
-    def _run_verify_fix(self, payload: dict) -> None:
+    def _run_verify_fix(
+        self,
+        payload: dict,
+        *,
+        recovery_attention_id: str | None = None,
+    ) -> None:
         run = self._run_turn(
             kind="verify:fix",
             turn_key=verify_fix_turn_key(payload),
             prompt=verify_fix_prompt(payload),
         )
         if run.exit_code != 0:
+            self._clear_recovered_attention(recovery_attention_id)
             self._mark_needs_human_and_publish()
             self._fail(
                 f"verify:fix failed for {self.job.job_name} with exit code {run.exit_code}.",
                 exit_code=run.exit_code or 1,
                 kind="needs-human",
             )
+        self._clear_recovered_attention(recovery_attention_id)
         self._emit(f"verify:fix succeeded for {self.job.job_name}")
 
     def _finish_verified(self) -> WorkflowOutcome:
@@ -891,6 +903,10 @@ class CodingWorkflow:
                 commit_sha,
             )
             if not acceptance_is_proven(dossier):
+                attention = self.store.get_active_coding_attention(self.job.job_name)
+                self._clear_recovered_attention(
+                    attention.id if attention is not None else None
+                )
                 self._mark_needs_human_and_publish()
                 self._fail(
                     f"Verify stopped for {self.job.job_name}: acceptance remains "
@@ -912,6 +928,17 @@ class CodingWorkflow:
         )
         self._emit(f"Verify passed for {self.job.job_name}")
         return self._outcome()
+
+    def _clear_recovered_attention(self, attention_id: str | None) -> None:
+        if attention_id is None:
+            return
+        attention = self.store.get_coding_attention(attention_id)
+        if attention is not None and attention.status in {"approved", "recovering"}:
+            self.store.clear_coding_attention(self.job.job_name, attention_id)
+        self.store.remove_metadata_keys(
+            self.job.job_name,
+            {"afk_attention_id"},
+        )
 
     def _raise_recorded_attention(self) -> None:
         attention = self.store.get_latest_coding_attention(self.job.job_name)
@@ -948,6 +975,11 @@ class CodingWorkflow:
 
     def _ensure_attention_projection(self, attention_id: str) -> None:
         """Reconcile replaceable AFK/PR projections after durable attention commits."""
+        previously_projected = (
+            self.job.metadata.get("afk_attention_id") == attention_id
+            and self.job.status != "ready"
+            and self.job.github_pr_number is not None
+        )
         self.store.set_metadata_values(
             self.job.job_name,
             {
@@ -959,8 +991,13 @@ class CodingWorkflow:
         current = self.store.get_coding_job(self.job.job_name)
         if current is None:
             self._fail(f"CodingJob not found: {self.job.job_name}")
+        if current.status == "ready":
+            self.store.update_status(self.job.job_name, "active")
+            current = self.store.get_coding_job(self.job.job_name)
+            if current is None:
+                self._fail(f"CodingJob not found: {self.job.job_name}")
         self.job = current
-        if current.github_pr_number is None:
+        if not previously_projected:
             self._publish_verified(current)
             refreshed = self.store.get_coding_job(self.job.job_name)
             if refreshed is not None:
@@ -1014,25 +1051,43 @@ class CodingWorkflow:
                 f"{attention.failed_consumer}.",
                 kind="infrastructure-authority-blocked",
             )
-        recovery_run = next(
-            (
-                run
-                for run in self.store.list_command_runs(self.job.job_name)
-                if run.id > attention.command_run_id
-                and run.kind == attention.failed_consumer
-                and run.command == expected_command
-            ),
-            None,
+        recovery_run = (
+            self.store.get_command_run(attention.recovery_run_id)
+            if attention.recovery_run_id is not None
+            else None
         )
+        if recovery_run is None and attention.status == "recovering":
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            self._fail(
+                f"Reviewer authority recovery run is missing for "
+                f"{attention.failed_consumer}.",
+                kind="infrastructure-authority-blocked",
+            )
         if recovery_run is None:
-            self.store.begin_coding_attention_recovery(self.job.job_name, attention.id)
+            prepared_run = self.store.begin_coding_attention_recovery(
+                self.job.job_name,
+                attention.id,
+                kind=attention.failed_consumer,
+                command=expected_command,
+            )
             recovery_run = self._run_command(
                 shell_command(
                     attention.failed_consumer,
                     expected_command,
                     timeout_seconds=self.contract.review.timeout_seconds,
                     requires_provider_route=True,
-                )
+                ),
+                prepared_run=prepared_run,
+            )
+        if (
+            recovery_run.kind != attention.failed_consumer
+            or recovery_run.command != expected_command
+        ):
+            self.store.block_coding_attention(self.job.job_name, attention.id)
+            self._fail(
+                f"Reviewer authority recovery run no longer matches "
+                f"{attention.failed_consumer}.",
+                kind="infrastructure-authority-blocked",
             )
         if recovery_run.status == "running":
             self._fail(
@@ -1111,6 +1166,12 @@ class CodingWorkflow:
         assert self.contract.review is not None
         runs = self.store.list_command_runs(self.job.job_name)
         recorded = self.store.get_latest_coding_attention(self.job.job_name)
+        if recorded is not None and recorded.status in {
+            "outstanding",
+            "approved",
+            "recovering",
+        }:
+            return
         for name in requested_agents:
             agent = self.contract.review.agents[name]
             if not reviewer_uses_codex_harness(agent.command):
@@ -1188,20 +1249,25 @@ class CodingWorkflow:
         self._reconcile_reviewer_auth_attention(requested)
         resumed_payload = self._resume_reviewer_attention(requested)
         resumed_commit = None
+        recovery_attention_id = None
         if resumed_payload is not None:
-            resumed_commit = self._read_job_head()
+            recovery_run = self.store.get_command_run(
+                int(resumed_payload["review_runs"][0]["run_id"])
+            )
+            resumed_commit = (
+                recovery_run.git_commit_after
+                if recovery_run is not None
+                and recovery_run.git_commit_before == recovery_run.git_commit_after
+                else None
+            )
             recovered_attention = self.store.get_active_coding_attention(self.job.job_name)
-            if recovered_attention is not None:
-                self.store.clear_coding_attention(
-                    self.job.job_name, recovered_attention.id
-                )
-            self.store.remove_metadata_keys(
-                self.job.job_name,
-                {"afk_attention_id"},
+            recovery_attention_id = (
+                recovered_attention.id if recovered_attention is not None else None
             )
 
         recovered = self._unsettled_turn()
         if recovered is not None and recovered.exit_code != 0:
+            self._clear_recovered_attention(recovery_attention_id)
             self._mark_needs_human_and_publish()
             self._fail(
                 f"Verify found unrecovered Job turn {recovered.id}: {recovered.status}.",
@@ -1230,6 +1296,7 @@ class CodingWorkflow:
                         continue_guard()
                     gate_failures += 1
                     if gate_failures > VERIFY_GATE_FAILURE_LIMIT:
+                        self._clear_recovered_attention(recovery_attention_id)
                         self._mark_needs_human_and_publish()
                         self._fail(
                             f"Verify stopped for {self.job.job_name}: gate failed "
@@ -1237,7 +1304,11 @@ class CodingWorkflow:
                             kind="needs-human",
                         )
                     resumed_payload = None
-                    self._run_verify_fix(payload)
+                    self._run_verify_fix(
+                        payload,
+                        recovery_attention_id=recovery_attention_id,
+                    )
+                    recovery_attention_id = None
                     continue
 
                 if (
@@ -1280,6 +1351,8 @@ class CodingWorkflow:
                     continue_guard()
                 infrastructure_failures = payload["infrastructure_failures"]
                 if infrastructure_failures:
+                    self._clear_recovered_attention(recovery_attention_id)
+                    recovery_attention_id = None
                     authentication = next(
                         (
                             failure
@@ -1288,7 +1361,7 @@ class CodingWorkflow:
                         ),
                         None,
                     )
-                    if authentication is not None:
+                    if authentication is not None and len(infrastructure_failures) == 1:
                         self._record_reviewer_auth_attention(authentication)
                     self._mark_needs_human_and_publish()
                     messages = "; ".join(
@@ -1302,13 +1375,18 @@ class CodingWorkflow:
                 if not blocking_review_findings(payload):
                     return self._finish_verified()
                 if review_round >= max_rounds:
+                    self._clear_recovered_attention(recovery_attention_id)
                     self._mark_needs_human_and_publish()
                     self._fail(
                         f"Verify stopped for {self.job.job_name} after "
                         f"{max_rounds} review round(s).",
                         kind="needs-human",
                     )
-                self._run_verify_fix(payload)
+                self._run_verify_fix(
+                    payload,
+                    recovery_attention_id=recovery_attention_id,
+                )
+                recovery_attention_id = None
         except CommandInterrupted:
             self._fail(
                 f"Verify interrupted for {self.job.job_name}.",

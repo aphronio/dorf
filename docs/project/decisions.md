@@ -929,13 +929,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   authentication diagnostic, retain one workflow-owned, non-secret attention record bound to that
   exact Job, consumer, and command run. Keep the coding Job and runtime identities open, publish or
   retain its draft PR, and require an explicit repair or decline action naming the attention ID.
-  Status reads and ordinary coordinator retries never execute the reviewer. Repair approval permits
-  one retry of only that consumer; a retained retry result is reconciled after controller failure,
-  successful completion clears attention and re-enters fresh repository/readiness gates plus every
-  remaining configured reviewer, and another authentication failure creates a new exact decision
-  after blocking the consumed one. Decline, expiry, a changed consumer, and a non-authentication
-  recovery failure remain visibly declined, expired, or blocked rather than becoming human
-  verification policy.
+  Status reads and ordinary coordinator retries never execute the reviewer. Repair approval
+  atomically binds one new command-run ID before permitting one retry of only that consumer. The
+  attention remains recovering until its retained result is durably consumed by fresh
+  repository/readiness gates plus every remaining configured reviewer; controller failure resumes
+  from that exact run without spending another retry. A blocked re-verification moves a ready Job
+  and PR back to active/draft. Another authentication failure creates a new exact decision after
+  blocking the consumed one. Decline, expiry, a changed consumer, and a non-authentication recovery
+  failure remain visibly declined, expired, or blocked rather than becoming human verification
+  policy.
 - **Why:** Provider authority is neither a code finding nor a request for the owner to debug raw
   command output. Binding the decision to retained evidence makes delivery and retry idempotent,
   prevents one approval from authorizing a later provider failure, and preserves the admitted Job,

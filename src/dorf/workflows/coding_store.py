@@ -105,6 +105,7 @@ class CodingAttention:
     status: str
     failed_consumer: str
     command_run_id: int
+    recovery_run_id: int | None
     provider_connection: str | None
     observed_evidence: str
     owner: str
@@ -514,7 +515,7 @@ class CodingStore(RuntimeStore):
         exact_action = (
             status_action
             + f"dorf {decision_command} {quoted_job_name} "
-            f"--repair-attention {attention_id}."
+            f"--repair-attention {attention_id}"
         )
         try:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -658,14 +659,65 @@ class CodingStore(RuntimeStore):
         self._connection.commit()
         return self.get_latest_coding_attention(job_name)
 
-    def begin_coding_attention_recovery(self, job_name: str, attention_id: str) -> bool:
-        return self._transition_coding_attention(
-            job_name,
-            attention_id,
-            from_statuses=("approved",),
-            to_status="recovering",
-            idempotent_statuses=("recovering",),
-        )
+    def begin_coding_attention_recovery(
+        self,
+        job_name: str,
+        attention_id: str,
+        *,
+        kind: str,
+        command: str,
+    ) -> CodingCommandRun:
+        """Atomically bind one approved decision to its exact recovery command run."""
+        timestamp = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            attention = self._connection.execute(
+                """
+                SELECT status, recovery_run_id FROM coding_attention
+                WHERE id = ? AND job_name = ?
+                """,
+                (attention_id, job_name),
+            ).fetchone()
+            if attention is None:
+                raise RuntimeError(f"Coding attention not found: {attention_id}")
+            recovery_run_id = attention["recovery_run_id"]
+            if recovery_run_id is None:
+                if attention["status"] != "approved":
+                    raise RuntimeError(
+                        f"Coding attention cannot begin recovery from {attention['status']}"
+                    )
+                cursor = self._connection.execute(
+                    """
+                    INSERT INTO coding_command_runs (
+                        job_name, kind, command, status, exit_code, started_at,
+                        finished_at, output_path, git_commit_before, git_commit_after
+                    ) VALUES (?, ?, ?, 'running', NULL, ?, NULL, '', NULL, NULL)
+                    """,
+                    (job_name, kind, command, timestamp),
+                )
+                recovery_run_id = int(cursor.lastrowid)
+                self._connection.execute(
+                    """
+                    UPDATE coding_attention
+                    SET status = 'recovering', recovery_run_id = ?, updated_at = ?
+                    WHERE id = ? AND job_name = ? AND status = 'approved'
+                    """,
+                    (recovery_run_id, timestamp, attention_id, job_name),
+                )
+            elif attention["status"] != "recovering":
+                raise RuntimeError(
+                    f"Coding attention recovery run is retained from {attention['status']}"
+                )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        run = self.get_command_run(recovery_run_id)
+        if run is None:
+            raise RuntimeError("Coding attention recovery run could not be loaded")
+        if run.kind != kind or run.command != command:
+            raise RuntimeError("Coding attention recovery run does not match its consumer")
+        return run
 
     def decline_coding_attention(self, job_name: str, attention_id: str) -> bool:
         return self._transition_coding_attention(
@@ -1244,6 +1296,7 @@ class CodingStore(RuntimeStore):
                 status TEXT NOT NULL,
                 failed_consumer TEXT NOT NULL,
                 command_run_id INTEGER NOT NULL,
+                recovery_run_id INTEGER,
                 provider_connection TEXT,
                 observed_evidence TEXT NOT NULL,
                 owner TEXT NOT NULL,
@@ -1259,6 +1312,14 @@ class CodingStore(RuntimeStore):
             )
             """
         )
+        attention_columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(coding_attention)")
+        }
+        if "recovery_run_id" not in attention_columns:
+            self._connection.execute(
+                "ALTER TABLE coding_attention ADD COLUMN recovery_run_id INTEGER"
+            )
         self._connection.execute(
             """
             CREATE TABLE IF NOT EXISTS coding_acceptance_checklists (
@@ -1339,6 +1400,7 @@ def _coding_attention(row) -> CodingAttention:
         status=row["status"],
         failed_consumer=row["failed_consumer"],
         command_run_id=row["command_run_id"],
+        recovery_run_id=row["recovery_run_id"],
         provider_connection=row["provider_connection"],
         observed_evidence=row["observed_evidence"],
         owner=row["owner"],

@@ -128,7 +128,8 @@ clones and runs repository preparation, then opens immediately before initial go
 After admission, a configured Codex reviewer authentication failure is a coding-workflow authority
 decision under D046: it pauses bounded review without changing runtime identity, exposes one precise
 attention item, and retries only the failed consumer after explicit repair approval before fresh
-repository/readiness gates and the remaining configured reviewers continue.
+repository/readiness gates and the remaining configured reviewers continue. The exact retry run is
+bound durably before execution and a previously ready proposal returns to active/draft while blocked.
 Issue-backed coding delegation first completes one workflow-owned admission proof in an unrecorded
 disposable VM. The proof pins the exact issue, repository head, GitHub App authority, official image,
 provider route, repository preparation/smoke path, dry-run Git write, and real implementation and

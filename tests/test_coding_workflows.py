@@ -184,7 +184,9 @@ def make_coding_job(tmp_path: Path, *, review_outputs=None):
 class GitHubClient:
     def __init__(self) -> None:
         self.created = []
+        self.updated = []
         self.comments = []
+        self.drafted = []
 
     def list_pull_requests_for_branch(self, *args, **kwargs):
         return []
@@ -194,10 +196,14 @@ class GitHubClient:
         return {"number": 42, "html_url": "https://github.test/pull/42"}
 
     def update_pull_request(self, repo, number, **payload):
+        self.updated.append((repo, number, payload))
         return {"number": number, "html_url": "https://github.test/pull/42"}
 
     def mark_pull_request_ready(self, repo, number):
         pass
+
+    def mark_pull_request_draft(self, repo, number):
+        self.drafted.append((repo, number))
 
     def add_pull_request_comment(self, repo, number, body):
         self.comments.append(body)
@@ -781,6 +787,7 @@ def test_codex_reviewer_auth_failure_creates_one_precise_attention_item(tmp_path
     )
     assert "dorf verify checkout-perf" in attention.exact_action
     assert f"--repair-attention {attention.id}" in attention.exact_action
+    assert attention.exact_action.endswith(attention.id)
     assert "same Job" in attention.consequence
     assert attention.recommended_default == "repair-and-resume"
     assert "decline" in attention.expiry_decline_behavior.lower()
@@ -830,6 +837,35 @@ def test_reviewer_prose_about_authentication_is_not_authority_failure(tmp_path) 
         workflow(store, environment, runtime, job, GitHubClient(), contract=contract).verify()
 
     assert raised.value.kind == "needs-human"
+    assert store.list_coding_attention(job.job_name) == []
+
+
+def test_non_auth_reviewer_failure_does_not_skip_later_reviewers(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[(1, "reviewer process failed"), "DORF_REVIEW_NO_FINDINGS"],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={
+                "first": ReviewAgent("first", "reviewer {dorf_review_prompt}"),
+                "second": ReviewAgent("second", "reviewer {dorf_review_prompt}"),
+            },
+        ),
+    )
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(store, environment, runtime, job, GitHubClient(), contract=contract).verify()
+
+    assert raised.value.kind == "needs-human"
+    review_runs = [
+        run for run in store.list_command_runs(job.job_name) if run.kind.startswith("review:")
+    ]
+    assert {run.kind for run in review_runs} == {"review:first", "review:second"}
     assert store.list_coding_attention(job.job_name) == []
 
 
@@ -1082,11 +1118,16 @@ def test_crash_after_approved_reviewer_run_reuses_retained_result(tmp_path) -> N
     attention = store.get_active_coding_attention(job.job_name)
     assert attention is not None
     assert store.approve_coding_attention(job.job_name, attention.id)
-    assert store.begin_coding_attention_recovery(job.job_name, attention.id)
     reviewer_command = review_command_with_dorf_protocol(
         contract.review.agents["codex"].command,
         contract.review.prompt,
         job=job,
+    )
+    prepared = store.begin_coding_attention_recovery(
+        job.job_name,
+        attention.id,
+        kind="review:codex",
+        command=reviewer_command,
     )
     retained = run_coding_job_command(
         store,
@@ -1099,8 +1140,13 @@ def test_crash_after_approved_reviewer_run_reuses_retained_result(tmp_path) -> N
             reviewer_command,
             requires_provider_route=True,
         ),
+        prepared_run=prepared,
     )
     assert retained.exit_code == 0
+    recovering = store.get_coding_attention(attention.id)
+    assert recovering is not None
+    assert recovering.status == "recovering"
+    assert recovering.recovery_run_id == retained.id
     before = len(environment.processes)
 
     workflow(
@@ -1114,6 +1160,106 @@ def test_crash_after_approved_reviewer_run_reuses_retained_result(tmp_path) -> N
 
     assert len(environment.processes) == before
     assert store.get_coding_attention(attention.id).status == "cleared"
+
+
+def test_approved_repair_ignores_matching_reviewer_run_started_before_approval(
+    tmp_path,
+) -> None:
+    clean = "DORF_REVIEW_NO_FINDINGS"
+    store, environment, _agent, runtime, job, binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            (1, "Codex authentication is unavailable: Not logged in"),
+            clean,
+            clean,
+        ],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+    github = GitHubClient()
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    attention = store.get_active_coding_attention(job.job_name)
+    assert attention is not None
+    reviewer_command = review_command_with_dorf_protocol(
+        contract.review.agents["codex"].command,
+        contract.review.prompt,
+        job=job,
+    )
+    preapproval = run_coding_job_command(
+        store,
+        environment,
+        job,
+        binding,
+        contract,
+        shell_command(
+            "review:codex",
+            reviewer_command,
+            requires_provider_route=True,
+        ),
+    )
+
+    workflow(
+        store,
+        environment,
+        runtime,
+        store.get_coding_job(job.job_name),
+        github,
+        contract=contract,
+    ).verify(repair_attention_id=attention.id)
+
+    decided = store.get_coding_attention(attention.id)
+    assert decided is not None and decided.status == "cleared"
+    assert decided.recovery_run_id is not None
+    assert decided.recovery_run_id != preapproval.id
+    review_runs = [
+        run for run in store.list_command_runs(job.job_name) if run.kind == "review:codex"
+    ]
+    assert len(review_runs) == 3
+
+
+def test_auth_attention_moves_ready_job_and_pr_back_to_draft(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            "DORF_REVIEW_NO_FINDINGS",
+            (1, "Codex authentication is unavailable: Not logged in"),
+        ],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+    github = GitHubClient()
+    workflow(store, environment, runtime, job, github, contract=contract).verify()
+    assert store.get_coding_job(job.job_name).status == "ready"
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(
+            store,
+            environment,
+            runtime,
+            store.get_coding_job(job.job_name),
+            github,
+            contract=contract,
+        ).verify()
+
+    assert raised.value.kind == "infrastructure-authority"
+    assert store.get_coding_job(job.job_name).status == "active"
+    assert github.drafted == [("example/repo", 42)]
+    assert github.updated[-1][1] == 42
 
 
 def test_crash_after_failed_auth_recovery_rolls_over_without_third_retry(tmp_path) -> None:
@@ -1137,11 +1283,16 @@ def test_crash_after_failed_auth_recovery_rolls_over_without_third_retry(tmp_pat
     first = store.get_active_coding_attention(job.job_name)
     assert first is not None
     assert store.approve_coding_attention(job.job_name, first.id)
-    assert store.begin_coding_attention_recovery(job.job_name, first.id)
     reviewer_command = review_command_with_dorf_protocol(
         contract.review.agents["codex"].command,
         contract.review.prompt,
         job=job,
+    )
+    prepared = store.begin_coding_attention_recovery(
+        job.job_name,
+        first.id,
+        kind="review:codex",
+        command=reviewer_command,
     )
     failed_retry = run_coding_job_command(
         store,
@@ -1154,6 +1305,7 @@ def test_crash_after_failed_auth_recovery_rolls_over_without_third_retry(tmp_pat
             reviewer_command,
             requires_provider_route=True,
         ),
+        prepared_run=prepared,
     )
     assert failed_retry.exit_code == 1
     before = len(environment.processes)

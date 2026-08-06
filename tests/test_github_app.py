@@ -146,6 +146,41 @@ def test_repository_client_retains_http_status_for_authority_classification(
     assert raised.value.status_code == 404
 
 
+def test_repository_client_can_return_ready_pull_request_to_draft(monkeypatch) -> None:
+    client = GitHubRepositoryClient("installation-token")
+    requests = []
+    monkeypatch.setattr(
+        client,
+        "get_pull_request",
+        lambda repo, number: {"draft": False, "node_id": "PR_node"},
+    )
+    monkeypatch.setattr(
+        client,
+        "_request_json",
+        lambda method, path, **kwargs: requests.append((method, path, kwargs)) or {},
+    )
+
+    client.mark_pull_request_draft("example/repo", 42)
+
+    assert requests[0][0:2] == ("POST", "/graphql")
+    assert "convertPullRequestToDraft" in requests[0][2]["body"]["query"]
+    assert requests[0][2]["body"]["variables"] == {"id": "PR_node"}
+
+
+def test_repository_client_requires_node_id_to_return_pull_request_to_draft(
+    monkeypatch,
+) -> None:
+    client = GitHubRepositoryClient("installation-token")
+    monkeypatch.setattr(
+        client,
+        "get_pull_request",
+        lambda repo, number: {"draft": False},
+    )
+
+    with pytest.raises(GitHubRepositoryError, match="did not include a GraphQL node ID"):
+        client.mark_pull_request_draft("example/repo", 42)
+
+
 def test_manifest_requests_read_access_to_issues() -> None:
     permissions = GitHubAppManifestFlow().manifest()["default_permissions"]
 
