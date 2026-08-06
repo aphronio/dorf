@@ -7,16 +7,26 @@ import os
 import secrets
 import shlex
 from pathlib import Path
+from typing import Protocol
 
 from dorf.command_runner import CommandSpec, run_job_command
 from dorf.github_app import GitHubRepositoryClient
 from dorf.provider_gateway import ProviderGateway
-from dorf.sdk import Dorf
 from dorf.workflows.coding_store import CodingJob, CodingStore
 
 CLONE = "/workspace/verifier"
 NO_FINDINGS = "DORF_REVIEW_NO_FINDINGS"
 MODEL = "deepseek-v4-flash"
+
+
+class ReviewSandboxController(Protocol):
+    """Retained collaborator seam for the later independent-review slice."""
+
+    def spawn_worker(self, name: str, **kwargs): ...
+
+    def worker_execution(self, name: str): ...
+
+    def end_worker(self, name: str, *, interrupt: bool = False): ...
 
 
 def deepseek_extension(base_url: str) -> str:
@@ -46,7 +56,7 @@ def deepseek_command() -> str:
 def run_shadow_review(
     store: CodingStore,
     job: CodingJob,
-    dorf: Dorf,
+    dorf: ReviewSandboxController,
     gateway: ProviderGateway,
     github: GitHubRepositoryClient,
     token: str,

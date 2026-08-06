@@ -29,12 +29,12 @@ not execute a mutable network installer.
 2. resolves the current `@openai/codex@latest`, records its version and npm integrity, and installs
    that exact selected version;
 3. launches a clean probe and checks the image for forbidden credentials and required tools;
-4. clones Dorf at the release source commit and runs `.dorf.toml`'s deterministic preparation;
-5. completes a real Codex implementation turn, the repo-owned checks, and a real Codex review with
-   explicit access to the Room-scoped Provider Route;
-6. records the image fingerprint, commands, preparation elapsed time, reviewer/route proof, and
-   SHA-256-addressed command artifacts in a redacted local evidence directory;
-7. verifies Room, workspace, runtime-state, and Provider Route removal; and
+4. admits the release source commit through the Go durable Job spine and lets its Sandbox clone the
+   repository;
+5. completes one real Codex app-server turn through a scoped Provider Route;
+6. records the image fingerprint, native Session/turn identity, timings, and terminal state in a
+   redacted local evidence directory;
+7. verifies Sandbox and Provider Route cleanup through the same durable Go path; and
 8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
    VMs and candidate alias.
 
@@ -73,7 +73,9 @@ A complete draft containing the archive and manifest is published only when:
 The earlier lean `v0.1.1` release passed the core Worker proof on 2026-08-04 with Codex 0.146.0. Its
 fresh probe contained Node and Codex but no Git, npm, or uv. Releases after the coding-workstation
 slice add Git and uv while retaining the same credential-free boundary; npm remains absent. The
-candidate terminal is now the clone-to-implementation-to-review proof above. The v0.1.1
+issue-40 candidate terminal is the durable clone-to-real-turn proof above. Deterministic Checks and
+independent review remain retained policy for their later replacement slices and are not yet
+claimed by the Go image proof. The v0.1.1
 published archive is 765,823,845 bytes, about 52 MiB smaller than the previous workflow-tooling
 image. Its archive and Incus fingerprint is
 `0c269e0aa0c5a765e45bb50542b64d06e6c55930b920754459643991c7349775`; the manifest digest is

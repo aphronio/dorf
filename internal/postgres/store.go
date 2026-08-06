@@ -17,7 +17,13 @@ var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("Dorf Job not found")
 
-const AbsurdSchemaSHA256 = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
+const (
+	// AbsurdReleaseCommit is the commit behind the SDK's v0.5.0 module tag. The
+	// schema URL uses the immutable commit rather than trusting a mutable tag.
+	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
+	AbsurdSchemaURL     = "https://raw.githubusercontent.com/earendil-works/absurd/" + AbsurdReleaseCommit + "/sql/absurd.sql"
+	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
+)
 
 type Store struct{ DB *sql.DB }
 

@@ -1,103 +1,17 @@
-import runpy
 import subprocess
 import sys
-from dataclasses import replace
 from pathlib import Path
-
-import pytest
 
 from dorf.adapters.environments import (
     IncusConfig,
     IncusDoctor,
-    IncusEnvironment,
     IncusFailure,
     IncusRunnerProbe,
-    UnsafeEnvironmentIdentityError,
     incus_bridge_ipv4,
     remediation_commands,
 )
-from dorf.coding_workspace import (
-    GitAuthorIdentity,
-    coding_job_goal,
-    git_clone_workspace_script,
-    install_git_credentials,
-    prepare_git_workspace,
-)
-from dorf.runtime import (
-    Assignment,
-    Job,
-    JobBinding,
-    JobConversation,
-    Room,
-    Worker,
-    WorkerBinding,
-)
 
 PROJECT_ROOT = Path(__file__).parents[1]
-
-
-def sample_git_author() -> GitAuthorIdentity:
-    return GitAuthorIdentity(name="Dorf Tests", email="dorf@example.com")
-
-
-def worker_binding() -> WorkerBinding:
-    worker = Worker(
-        1,
-        "coder-demo",
-        "codex",
-        "coding-workflow",
-        "dedicated",
-        "assigned",
-        None,
-        "room-1",
-        None,
-        "created",
-        "updated",
-    )
-    room = Room(
-        "room-1",
-        "coder-demo",
-        "incus-vm",
-        "dorf-coder-demo",
-        "/workspace",
-        "ready",
-        None,
-        {},
-        "created",
-        "updated",
-    )
-    return WorkerBinding(worker, room)
-
-
-def job_binding() -> JobBinding:
-    base = worker_binding()
-    return JobBinding(
-        Job(1, "demo-task", "open", 1, "Implement demo", "created", "updated"),
-        Assignment(
-            "assignment-demo",
-            "demo-task",
-            "coder-demo",
-            1,
-            "open",
-            "room-1",
-            "/workspace/jobs/demo-task",
-            "created",
-            None,
-        ),
-        JobConversation(
-            "conversation-demo",
-            "demo-task",
-            None,
-            "gpt-5.6-sol",
-            "high",
-            "idle",
-            None,
-            "created",
-            "updated",
-        ),
-        base.worker,
-        base.room,
-    )
 
 
 class FakeProbe(IncusRunnerProbe):
@@ -207,9 +121,12 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "! command -v npm" in release_script
     assert 'test -x "$(command -v uv)"' in release_script
     assert "validate-dorf-coding-workstation.py" in release_script
-    assert '"pi", ["pi", "--version"]' in workstation_validator
-    assert "review:codex" not in workstation_validator
-    assert "review.agents" not in workstation_validator
+    assert '["go", "build"' in workstation_validator
+    for command in ("admit", "worker", "inspect", "cleanup"):
+        assert f'"{command}"' in workstation_validator
+    assert "dorf.sdk" not in workstation_validator
+    assert "dorf.runtime" not in workstation_validator
+    assert ".dorf.toml" not in workstation_validator
     assert 'incus delete "$VALIDATION_VM" --force' in release_script
     cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
     assert '[[ "$EVIDENCE_POLICY" == "remove" ]]' in cleanup
@@ -258,7 +175,7 @@ def test_image_credential_check_rejects_owner_files_and_environment(tmp_path) ->
     assert "owner-secret" not in factory.stderr
 
 
-def test_workstation_validator_rejects_a_source_other_than_its_checkout(tmp_path) -> None:
+def test_workstation_validator_checks_its_source_before_go_delivery(tmp_path) -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -288,32 +205,6 @@ def test_workstation_validator_rejects_a_source_other_than_its_checkout(tmp_path
     assert not list(tmp_path.iterdir())
 
 
-def test_workstation_validator_recovers_the_latest_recorded_room_for_cleanup() -> None:
-    validator = runpy.run_path(
-        str(PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py")
-    )
-    expected = worker_binding()
-
-    class SpawnFailedStore:
-        def get_worker_binding(self, worker_name):
-            assert worker_name == expected.worker.name
-            return None
-
-        def get_worker(self, worker_name):
-            assert worker_name == expected.worker.name
-            return expected.worker
-
-        def get_latest_room(self, worker_name):
-            assert worker_name == expected.worker.name
-            return expected.room
-
-    recovered = validator["_recorded_worker_binding"](
-        SpawnFailedStore(), expected.worker.name
-    )
-
-    assert recovered == expected
-
-
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:
     probe = FakeProbe(
         commands={
@@ -328,246 +219,6 @@ def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() ->
     )
 
     assert incus_bridge_ipv4("dorfbr0", probe=probe) == "10.125.18.1"
-
-
-def test_incus_environment_creates_worker_room_without_coding_policy() -> None:
-    probe = FakeProbe()
-    environment = IncusEnvironment(
-        IncusConfig("dorf-ubuntu-docker", "dorfbr0", "64GiB"),
-        probe=probe,
-        sleep=lambda seconds: None,
-    )
-    environment.create(worker_binding())
-    assert [
-        "incus",
-        "init",
-        "dorf-ubuntu-docker",
-        "dorf-coder-demo",
-        "--vm",
-        "--network",
-        "dorfbr0",
-        "-d",
-        "root,size=64GiB",
-    ] in probe.ran
-    assert ["incus", "exec", "dorf-coder-demo", "--", "mkdir", "-p", "/workspace"] in probe.ran
-    assert not any("git" in command or "codex" in command for command in probe.ran)
-
-
-def test_incus_attachment_opens_interactive_shell_at_worker_workspace() -> None:
-    probe = FakeProbe()
-
-    exit_code = IncusEnvironment(probe=probe).attach(worker_binding(), cwd="/workspace")
-
-    assert exit_code == 0
-    assert probe.attached == [
-        [
-            "incus",
-            "exec",
-            "dorf-coder-demo",
-            "--cwd",
-            "/workspace",
-            "--mode",
-            "interactive",
-            "--",
-            "bash",
-        ]
-    ]
-
-
-def test_incus_attachment_preserves_interactive_shell_exit_status() -> None:
-    probe = FakeProbe()
-    probe.attach = lambda argv: subprocess.CompletedProcess(argv, 7, None, None)
-
-    exit_code = IncusEnvironment(probe=probe).attach(worker_binding(), cwd="/workspace")
-
-    assert exit_code == 7
-
-
-def test_incus_environment_routes_job_commands_through_worker_room() -> None:
-    probe = FakeProbe()
-    environment = IncusEnvironment(probe=probe)
-    binding = job_binding()
-    result = environment.execute(
-        binding,
-        ["git", "status"],
-        cwd=binding.workspace,
-        env={"GIT_TERMINAL_PROMPT": "0"},
-    )
-    assert result.returncode == 0
-    assert probe.ran == [
-        [
-            "incus",
-            "exec",
-            "dorf-coder-demo",
-            "--cwd",
-            "/workspace/jobs/demo-task",
-            "--",
-            "env",
-            "GIT_TERMINAL_PROMPT=0",
-            "git",
-            "status",
-        ]
-    ]
-
-
-def test_incus_environment_pulls_regular_file_without_following_links(tmp_path) -> None:
-    class PullProbe(FakeProbe):
-        def pull_file(self, argv, destination, *, max_bytes):
-            self.ran.append(argv)
-            destination.write_bytes(b"profile")
-            return subprocess.CompletedProcess(argv, 0, "", "")
-
-    probe = PullProbe()
-    destination = tmp_path / "profile.txt"
-    IncusEnvironment(probe=probe).pull_file(
-        job_binding(),
-        "/run/dorf/jobs/demo-task/outbox/new/report-profile/files/0001",
-        destination,
-        max_bytes=16,
-    )
-    assert destination.read_bytes() == b"profile"
-    assert "O_NOFOLLOW" in probe.ran[-1][6]
-
-
-def test_incus_recovery_restarts_the_exact_stopped_worker_room() -> None:
-    info = subprocess.CompletedProcess([], 0, "Status: STOPPED\n", "")
-    probe = FakeProbe(commands={("incus", "info", "dorf-coder-demo"): info})
-
-    outcome = IncusEnvironment(probe=probe, sleep=lambda seconds: None).restore(worker_binding())
-
-    assert outcome == "restored"
-    assert ["incus", "start", "dorf-coder-demo"] in probe.ran
-    assert ["incus", "exec", "dorf-coder-demo", "--", "true"] in probe.ran
-
-
-def test_incus_cleanup_uses_exact_worker_provider_identity() -> None:
-    missing = subprocess.CompletedProcess([], 1, "", "Error: Instance not found")
-    probe = FakeProbe(commands={("incus", "info", "dorf-coder-demo"): missing})
-    assert IncusEnvironment(probe=probe).stop(worker_binding()) == "absent"
-    assert probe.ran == [["incus", "info", "dorf-coder-demo"]]
-
-
-@pytest.mark.parametrize("provider_id", ["", "dorf-someone-else"])
-def test_incus_cleanup_never_guesses_unknown_room_identity(provider_id) -> None:
-    probe = FakeProbe()
-    binding = worker_binding()
-    unsafe = WorkerBinding(binding.worker, replace(binding.room, provider_id=provider_id))
-    environment = IncusEnvironment(probe=probe)
-    with pytest.raises(UnsafeEnvironmentIdentityError, match="Room"):
-        environment.stop(unsafe)
-    with pytest.raises(UnsafeEnvironmentIdentityError, match="Room"):
-        environment.destroy(unsafe)
-    assert probe.ran == []
-
-
-def test_incus_execution_never_guesses_missing_room_provider_identity() -> None:
-    probe = FakeProbe()
-    binding = job_binding()
-    unsafe = replace(binding, room=replace(binding.room, provider_id=""))
-
-    with pytest.raises(UnsafeEnvironmentIdentityError, match="Room"):
-        IncusEnvironment(probe=probe).execute(unsafe, ["true"])
-
-    assert probe.ran == []
-
-
-def test_job_credential_refresh_uses_assignment_seam_and_redacts_token() -> None:
-    token = "installation-secret-token"
-    calls = []
-
-    class FailingEnvironment:
-        def execute(self, argv, **kwargs):
-            calls.append((argv, kwargs))
-            return subprocess.CompletedProcess(argv, 1, "", f"failed with {token}")
-
-    binding = job_binding()
-    with pytest.raises(RuntimeError) as raised:
-        install_git_credentials(FailingEnvironment(), binding, token=token)
-
-    assert len(calls) == 1
-    argv, options = calls[0]
-    assert options["cwd"] == "/workspace/jobs/demo-task"
-    assert options["input"] == f"{token}\n"
-    assert token not in " ".join(argv)
-    assert token not in str(raised.value)
-    assert "<redacted>" in str(raised.value)
-
-
-def test_coding_goal_names_exact_job_workspace_and_pr_contract() -> None:
-    prompt = coding_job_goal(
-        job_name="demo-task",
-        task="Demo task",
-        job_branch="dorf/demo-task",
-        workspace="/workspace/jobs/demo-task",
-    )
-    assert "Work only in /workspace/jobs/demo-task." in prompt
-    assert "Push HEAD to origin dorf/demo-task" in prompt
-    assert "pr_title: <draft PR title>" in prompt
-
-
-def test_git_clone_script_requires_fresh_job_workspace_and_never_uses_worktree() -> None:
-    script = git_clone_workspace_script(
-        "https://github.com/example/repo.git",
-        "dorf/demo-task",
-        "/workspace/jobs/demo-task",
-    )
-    assert 'test -z "$(find /workspace/jobs/demo-task' in script
-    assert "IFS= read -r GITHUB_TOKEN" in script
-    assert "git clone" in script
-    assert "git worktree" not in script
-    assert "rm -rf" not in script
-    assert subprocess.run(["bash", "-n"], input=script, text=True).returncode == 0
-
-
-def test_git_workspace_fails_when_normal_auth_check_fails() -> None:
-    binding = job_binding()
-    auth = (
-        "incus",
-        "exec",
-        "dorf-coder-demo",
-        "--cwd",
-        binding.workspace,
-        "--",
-        "env",
-        "GIT_TERMINAL_PROMPT=0",
-        "git",
-        "ls-remote",
-        "--heads",
-        "https://github.com/example/repo.git",
-        "dorf/demo-task",
-    )
-    probe = FakeProbe(
-        commands={auth: subprocess.CompletedProcess([], 128, "", "fatal: authentication failed")}
-    )
-    environment = IncusEnvironment(probe=probe)
-
-    class Execution:
-        def execute(self, argv, **kwargs):
-            return environment.execute(binding, argv, **kwargs)
-
-    with pytest.raises(RuntimeError, match="Job Git credentials"):
-        prepare_git_workspace(
-            Execution(),
-            binding,
-            repo_full_name="example/repo",
-            token="installation-token",
-            branch="dorf/demo-task",
-            git_author=sample_git_author(),
-        )
-
-
-def test_incus_environment_waits_for_guest_agent() -> None:
-    check = ("incus", "exec", "dorf-coder-demo", "--", "true")
-    probe = FakeProbe(
-        commands={
-            check: [
-                subprocess.CompletedProcess([], 1, "", "not ready"),
-                subprocess.CompletedProcess([], 0, "", ""),
-            ]
-        }
-    )
-    IncusEnvironment(probe=probe, sleep=lambda seconds: None).create(worker_binding())
-    assert probe.ran.count(list(check)) == 2
 
 
 def test_fast_checks_verify_network_and_template_inputs() -> None:

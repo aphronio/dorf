@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from dorf.cli import run_repository_preparation_or_raise
 from dorf.command_runner import CommandInterrupted, shell_command
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.runtime import (
@@ -17,7 +16,6 @@ from dorf.runtime import (
     WorkerRuntime,
     WorkerTurnOutcome,
 )
-from dorf.sdk import JobExecution
 from dorf.workflows import (
     AcceptanceItem,
     CodingStore,
@@ -139,6 +137,30 @@ class Environment:
 
     def refresh_git_credentials(self):
         self.refreshed.append(True)
+
+
+class JobExecution:
+    """Test collaborator for policy retained beyond the deleted Python terminal."""
+
+    def __init__(self, binding, runtime, environment, agent, token):
+        self.binding = binding
+        self.runtime = runtime
+        self.environment = environment
+
+    def admit_message(self, **kwargs):
+        return self.runtime.admit_message(self.binding.job.name, **kwargs)
+
+    def deliver_input(self, input_id):
+        return self.runtime.deliver_input(self.binding.job.name, input_id)
+
+    def execute(self, argv, **kwargs):
+        return self.environment.execute(self.binding, argv, **kwargs)
+
+    def process_command(self, argv, **kwargs):
+        return self.environment.process_command(self.binding, argv, **kwargs)
+
+    def refresh_git_credentials(self):
+        self.environment.refresh_git_credentials()
 
 
 def make_coding_job(tmp_path: Path, *, review_outputs=None):
@@ -383,9 +405,16 @@ def test_failed_repository_preparation_stops_before_an_agent_turn(tmp_path) -> N
         env={},
     )
 
-    with pytest.raises(RuntimeError, match="repository preparation exited with code 1"):
-        run_repository_preparation_or_raise(store, environment, binding, contract)
+    run = prepare_coding_repository(
+        store,
+        environment,
+        store.get_coding_job(binding.job.name),
+        binding,
+        contract,
+    )
 
+    assert run is not None
+    assert run.exit_code == 1
     assert agent.turns == []
 
 

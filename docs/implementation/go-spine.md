@@ -13,7 +13,9 @@ consumer route and never prints its key.
 
 ## Local prerequisites
 
-Install Go 1.25, PostgreSQL 16 or newer, and Incus. On Ubuntu, PostgreSQL can be a normal local
+Install Go 1.25, PostgreSQL 16 or newer, and Incus. Absurd currently marks its Go SDK experimental
+and its v0.5.0 module declares Go 1.25, so this slice does not claim a stable SDK surface or an older
+Go toolchain. On Ubuntu, PostgreSQL can be a normal local
 cluster:
 
 ```bash
@@ -38,12 +40,14 @@ export DORF_PROVIDER_CONNECTION='primary'
 ```
 
 Initialize the exact Absurd schema through the Go binary. This avoids making Python part of either
-database setup or the demonstrated Job. Dorf verifies the upstream file's pinned SHA-256
+database setup or the demonstrated Job. The Go SDK module is pinned to release `v0.5.0`; tag
+`0.5.0` resolves to verified commit `550d3b9e6f9382d96178de6ab8c90c7f8edf2227`, and the schema is
+downloaded from that immutable commit. Dorf verifies its SHA-256
 `d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab` before executing it.
 
 ```bash
 curl -fsSLo /tmp/absurd-0.5.0.sql \
-  https://raw.githubusercontent.com/earendil-works/absurd/0.5.0/sql/absurd.sql
+  https://raw.githubusercontent.com/earendil-works/absurd/550d3b9e6f9382d96178de6ab8c90c7f8edf2227/sql/absurd.sql
 go build -o ./bin/dorf ./cmd/dorf
 ./bin/dorf migrate --absurd-schema /tmp/absurd-0.5.0.sql
 ./bin/dorf doctor --provider "$DORF_PROVIDER_CONNECTION"
@@ -111,6 +115,11 @@ turn ID and terminal status but no transcript. After cleanup, the route and Sand
 are `revoked` and `deleted`, the Incus list is empty for the Job, and repeating cleanup performs no
 new external effect.
 
+Absurd checkpoints are sequencing evidence, not exactly-once effect authority. Task claims may
+briefly overlap after lease loss, so every clone, Sandbox, route, Session, turn, and cleanup effect
+first receives a stable Dorf Action ID. A retry inspects the external authority and reconciles that
+Action before deciding whether any effect is still required.
+
 The Job ID above is the deterministic SHA-256-derived identity for the literal admission key. If a
 different key is used, take `job_id` from the first admission JSON rather than guessing it.
 
@@ -123,8 +132,13 @@ The parent #36 ledger should receive the captured output from the exact block ab
 - every failed readiness or worker attempt and its repair;
 - the one-row Dorf and Absurd counts, stable native identities, route revocation, and Incus deletion;
 - `go version -m` output showing the Go executable and Absurd module with no Python process;
-- deletion of `src/dorf/workflows/coding_admission.py` and
-  `tests/test_coding_admission.py` in this slice.
+- deletion of the Python admission, CLI/SDK launch and end composition, Codex/Incus environment,
+  route installation, clone helpers, replaceable controllers, and their effect-coupled tests.
+
+Repo-owned Incus image and host-provisioning assets remain as operational evidence. Python
+Checks/review/PR policy also remains for later replacement slices, but the package no longer
+publishes a Python `dorf` CLI or `Dorf` facade and the Go path does not preserve `.dorf.toml`,
+Worker, Room, or Assignment compatibility.
 
 Do not post `routes.json`, gateway authority, route keys, environment dumps, or Codex transcript
 content to the ledger.
