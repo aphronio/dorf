@@ -155,6 +155,9 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     release_script = (
         Path(__file__).parents[1] / "scripts" / "incus" / "prepare-dorf-codex-release.sh"
     ).read_text()
+    workstation_validator = (
+        Path(__file__).parents[1] / "scripts" / "incus" / "validate-dorf-coding-workstation.py"
+    ).read_text()
     publish_script = (
         Path(__file__).parents[1]
         / "scripts"
@@ -204,6 +207,9 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "! command -v npm" in release_script
     assert 'test -x "$(command -v uv)"' in release_script
     assert "validate-dorf-coding-workstation.py" in release_script
+    assert '"pi", ["pi", "--version"]' in workstation_validator
+    assert "review:codex" not in workstation_validator
+    assert "review.agents" not in workstation_validator
     assert 'incus delete "$VALIDATION_VM" --force' in release_script
     cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
     assert '[[ "$EVIDENCE_POLICY" == "remove" ]]' in cleanup

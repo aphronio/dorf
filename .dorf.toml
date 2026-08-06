@@ -7,22 +7,5 @@ smoke = "UV_CACHE_DIR=.dorf/uv-cache uv run dorf --help"
 model = "gpt-5.6-sol"
 reasoning_effort = "low"
 
-[review]
-max_rounds = 3
-timeout_seconds = 1800
-prompt = """
-Review git diff {target_start_sha}...HEAD with a strict code-review rubric.
-Focus on correctness, regressions, security, missing tests, and edge cases.
-Return actionable findings if any.
-"""
-
-[review.agents.codex]
-enabled = true
-command = "codex exec -s read-only -c model='\"gpt-5.6-sol\"' -c model_reasoning_effort='\"high\"' {dorf_review_prompt}"
-
-[review.agents.droid]
-enabled = false
-command = "droid exec --auto high --model kimi-k2.7-code --reasoning-effort high {dorf_review_prompt}"
-
 [incus]
 template = "dorf-codex"

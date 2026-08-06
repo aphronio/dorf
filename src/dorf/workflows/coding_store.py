@@ -708,6 +708,9 @@ class CodingStore(RuntimeStore):
             after=git_commit_after,
         )
 
+    def coding_verifier_lock(self, job_name: str):
+        return self._named_process_lock(job_name, "deepseek-verifier", blocking=False)
+
     def interrupt_abandoned_afk_runs(self, job_name: str) -> list[CodingCommandRun]:
         rows = self._connection.execute(
             """
@@ -715,7 +718,7 @@ class CodingStore(RuntimeStore):
             SET status = 'interrupted', exit_code = 130, finished_at = ?
             WHERE job_name = ? AND status = 'running'
               AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke'
-                   OR kind LIKE 'review:%')
+                   OR kind LIKE 'verify-role:%')
             RETURNING id
             """,
             (_now(), job_name),
@@ -1062,9 +1065,9 @@ def _validate_acceptance_items(items: tuple[AcceptanceItem, ...]) -> None:
             raise ValueError("Acceptance items require a key and text")
         if item.source not in {"goal", "issue", "contract", "human"}:
             raise ValueError(f"Unsupported acceptance source: {item.source}")
-        if item.verifier not in {"command", "review", "manual"}:
+        if item.verifier not in {"command", "manual"}:
             raise ValueError(f"Unsupported acceptance verifier: {item.verifier}")
-        if item.verifier in {"command", "review"} and not item.verifier_command:
+        if item.verifier == "command" and not item.verifier_command:
             raise ValueError(
                 f"{item.verifier.title()} acceptance items require an exact pinned command"
             )

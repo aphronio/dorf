@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -40,10 +39,8 @@ def main() -> None:
     contract = load_repo_contract(args.project_root)
     prepare_command = contract.commands.get("prepare")
     check_command = contract.commands.get("check")
-    review = contract.review
-    reviewer = None if review is None else review.agents.get("codex")
-    if prepare_command is None or check_command is None or reviewer is None:
-        parser.error("Dorf must declare prepare, check, and codex review contracts")
+    if prepare_command is None or check_command is None:
+        parser.error("Dorf must declare prepare and check contracts")
 
     job_name = f"workstation-proof-{args.proof_id}"
     worker_name = f"coder-{job_name}"
@@ -55,7 +52,6 @@ def main() -> None:
         "repository": REPOSITORY,
         "source_commit": args.source_commit,
         "provider_connection": args.provider_connection,
-        "reviewer": {"name": "codex", "provider_route": "explicit"},
         "commands": {"prepare": prepare_command, "check": check_command},
         "cleanup_policy": (
             "remove Room, workspace, scoped route, and runtime state; "
@@ -158,6 +154,10 @@ def main() -> None:
                 if artifact.returncode != 0 or artifact.stdout != IMPLEMENTATION_CONTENT:
                     raise RuntimeError("Codex implementation did not create the expected artifact")
                 evidence["implementation_turn"] = "succeeded"
+                route = gateway.route_for_consumer(f"room:{binding.room.id}")
+                if route is None:
+                    raise RuntimeError("implementation did not use an active Room-scoped route")
+                evidence["provider_route"] = {"route_id": route.id, "status": "succeeded"}
 
                 check_run = run_coding_job_command(
                     store,
@@ -170,44 +170,10 @@ def main() -> None:
                 if check_run.exit_code != 0:
                     raise RuntimeError("repository checks failed")
 
-                review_command = reviewer.command.replace(
-                    "{dorf_review_prompt}",
-                    shlex.quote(
-                        "Review the current working tree. Return actionable findings, or "
-                        "DORF_REVIEW_NO_FINDINGS when there are none."
-                    ),
-                )
-                review_run = run_coding_job_command(
-                    store,
-                    execution,
-                    store.get_coding_job(job_name),
-                    binding,
-                    contract,
-                    shell_command(
-                        "review:codex",
-                        review_command,
-                        timeout_seconds=review.timeout_seconds,
-                        requires_provider_route=True,
-                    ),
-                )
-                if review_run.exit_code != 0:
-                    raise RuntimeError("real Codex review turn failed")
-                route = gateway.route_for_consumer(f"room:{binding.room.id}")
-                if route is None:
-                    raise RuntimeError("review did not use an active Room-scoped route")
-                evidence["reviewer"] = {
-                    "name": "codex",
-                    "command": reviewer.command,
-                    "provider_route": "explicit",
-                    "route_id": route.id,
-                    "status": "succeeded",
-                }
-
                 artifacts = {}
                 for run, name in (
                     (prepare_run, "prepare.log"),
                     (check_run, "check.log"),
-                    (review_run, "review.log"),
                 ):
                     destination = args.evidence_dir / name
                     _copy_redacted(Path(run.output_path), destination, secrets=(route.api_key,))

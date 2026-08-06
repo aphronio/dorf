@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shlex
 import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from dorf.command_runner import CommandInterrupted, shell_command
 from dorf.github_app import (
@@ -19,13 +17,12 @@ from dorf.github_app import (
     GitHubRepositoryClient,
     GitHubRepositoryError,
 )
-from dorf.repo_contract import REVIEW_PROMPT_PLACEHOLDER, RepoContract
+from dorf.repo_contract import RepoContract
 from dorf.runtime import JobBinding
 from dorf.sdk import JobExecution
 
 from .coding_commands import CodingEnvironment, run_coding_job_command
 from .coding_dossier import (
-    REVIEW_NO_FINDINGS_SENTINEL,
     acceptance_is_proven,
     build_proof_dossier,
     render_proof_dossier,
@@ -35,10 +32,8 @@ from .coding_store import CodingCommandRun, CodingJob, CodingStore
 
 VERIFY_GATE_FAILURE_LIMIT = 3
 AFK_TERMINAL_JOB_STATUSES = frozenset({"abandoned", "merged", "rejected"})
-REVIEW_RESULT_INSTRUCTIONS = f"""\
-If there are no actionable findings, print exactly:
-{REVIEW_NO_FINDINGS_SENTINEL}
-"""
+VERIFIER_ATTENTION_KEY = "diff_verifier_attention"
+DIFF_REPAIR_PREFIX = "DeepSeek diff advisory findings for the exact implementation commit"
 
 
 @dataclass(frozen=True)
@@ -146,6 +141,7 @@ class CodingWorkflow:
         contract: RepoContract,
         github_client: Callable[[], GitHubRepositoryClient],
         execution: JobExecution | None = None,
+        deepseek_diff_review: Callable[[CodingJob, str], CodingCommandRun] | None = None,
         github_app_slug: Callable[[], str] | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -154,6 +150,7 @@ class CodingWorkflow:
         self.contract = contract
         self._github_client = github_client
         self.execution = execution
+        self._deepseek_diff_review = deepseek_diff_review
         self.binding = store.get_job_binding(job.job_name)
         if self.binding is None:
             raise RuntimeError(f"Job binding not found: {job.job_name}")
@@ -294,6 +291,8 @@ class CodingWorkflow:
         job_name: str,
         owner_token: str,
         takeover: bool,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
     ) -> AfkResume:
         """Claim an existing AFK Job and reconcile abandoned child runs."""
         job = store.get_coding_job(job_name)
@@ -334,7 +333,13 @@ class CodingWorkflow:
                 ),
                 kind="ownership",
             ) from error
-        messages = (
+        decision_messages = CodingWorkflow.decide_verifier_attention(
+            store,
+            job_name,
+            repair_attention_id=repair_attention_id,
+            decline_attention_id=decline_attention_id,
+        )
+        messages = decision_messages + (
             (
                 WorkflowMessage(
                     f"Reconciled {len(interrupted)} abandoned AFK command run(s) for {job_name}."
@@ -343,6 +348,7 @@ class CodingWorkflow:
             if interrupted
             else ()
         )
+        job = store.get_coding_job(job_name) or job
         return AfkResume(
             job,
             target_repo,
@@ -370,7 +376,7 @@ class CodingWorkflow:
                 kind="publication",
             )
 
-        draft = job.status == "needs-human"
+        draft = job.status == "needs-human" or _verifier_attention(job) is not None
         try:
             client = self._github_client()
             existing_number = job.github_pr_number
@@ -408,7 +414,9 @@ class CodingWorkflow:
                     body=github_pr_body(job),
                     base=job.target_branch,
                 )
-                if not draft:
+                if draft:
+                    client.mark_pull_request_draft(repo_full_name, existing_number)
+                else:
                     client.mark_pull_request_ready(repo_full_name, existing_number)
                 if existing_url and "html_url" not in payload:
                     payload["html_url"] = existing_url
@@ -507,84 +515,6 @@ class CodingWorkflow:
                 kind="active-turn" if "earlier Job input" in str(error) else "infrastructure",
             )
 
-    def _requested_review_agents(self, agents: list[str] | None) -> list[str]:
-        review = self.contract.review
-        configured = review.agents if review is not None else {}
-        if not configured:
-            self._fail(f"No configured review agents for Job {self.job.job_name}.")
-        requested = agents or [name for name, agent in configured.items() if agent.enabled]
-        if not requested:
-            self._fail(f"No enabled review agents for Job {self.job.job_name}.")
-        unknown = next((name for name in requested if name not in configured), None)
-        if unknown is not None:
-            self._fail(f"Unknown review agent: {unknown}")
-        return requested
-
-    def _require_review_protocol(self, requested_agents: list[str]) -> None:
-        assert self.contract.review is not None
-        missing = [
-            name
-            for name in requested_agents
-            if REVIEW_PROMPT_PLACEHOLDER not in self.contract.review.agents[name].command
-        ]
-        if missing:
-            self._fail(
-                "Verify review agents must include "
-                f"{REVIEW_PROMPT_PLACEHOLDER} in their command: {', '.join(missing)}"
-            )
-
-    def review(self, agents: list[str] | None = None) -> WorkflowOutcome:
-        """Run configured review commands once without applying verify policy."""
-        requested = self._requested_review_agents(agents)
-        if self.store.get_acceptance_checklist(self.job.job_name) is not None:
-            self.store.freeze_acceptance_checklist(self.job.job_name)
-        assert self.contract.review is not None
-        exit_code = 0
-        for name in requested:
-            agent = self.contract.review.agents[name]
-            kind = f"review:{name}"
-            try:
-                run = self._run_command(
-                    shell_command(
-                        kind,
-                        review_command_with_dorf_protocol(
-                            agent.command,
-                            self.contract.review.prompt,
-                            job=self.job,
-                        ),
-                        timeout_seconds=self.contract.review.timeout_seconds,
-                        requires_provider_route=reviewer_uses_codex_harness(agent.command),
-                    )
-                )
-            except CommandInterrupted:
-                self._fail(
-                    f"{kind} interrupted for {self.job.job_name}.",
-                    exit_code=130,
-                    kind="interrupted",
-                )
-            if run.exit_code is None:
-                self._emit(
-                    f"{kind} did not finish for {self.job.job_name}.",
-                    error=True,
-                )
-            elif run.exit_code != 0:
-                self._emit(
-                    f"{kind} failed for {self.job.job_name} with exit code {run.exit_code}.",
-                    error=True,
-                )
-            else:
-                self._record_review_verdict(run)
-                self._emit(f"{kind} succeeded for {self.job.job_name}")
-            if run.exit_code != 0:
-                exit_code = exit_code or run.exit_code or 1
-        if exit_code:
-            raise WorkflowFailure(
-                exit_code,
-                tuple(self._messages),
-                kind="review",
-            )
-        return self._outcome()
-
     def mark_ready(self) -> WorkflowOutcome:
         """Apply the mechanical readiness gate and persist a ready outcome."""
         if self.job.status in {"discarded", "running"}:
@@ -634,110 +564,6 @@ class CodingWorkflow:
         self.store.update_status(self.job.job_name, "ready")
         self._emit(f"CodingJob ready: {self.job.job_name}")
         return self._outcome()
-
-    def _review_round(
-        self,
-        requested_agents: list[str],
-        round_number: int,
-    ) -> dict:
-        assert self.contract.review is not None
-        payload: dict[str, Any] = {
-            "round": round_number,
-            "job_name": self.job.job_name,
-            "job_branch": self.job.job_branch,
-            "target_start_sha": self.job.target_start_sha,
-            "findings": [],
-            "infrastructure_failures": [],
-            "review_runs": [],
-        }
-        for name in requested_agents:
-            agent = self.contract.review.agents[name]
-            run = self._run_command(
-                shell_command(
-                    f"review:{name}",
-                    review_command_with_dorf_protocol(
-                        agent.command,
-                        self.contract.review.prompt,
-                        job=self.job,
-                    ),
-                    timeout_seconds=self.contract.review.timeout_seconds,
-                    requires_provider_route=reviewer_uses_codex_harness(agent.command),
-                )
-            )
-            payload["review_runs"].append(
-                {
-                    "agent": name,
-                    "run_id": run.id,
-                    "exit_code": run.exit_code,
-                    "status": run.status,
-                    "output_path": run.output_path,
-                }
-            )
-            if run.exit_code != 0:
-                message = (
-                    f"review:{name} timed out after {self.contract.review.timeout_seconds} seconds"
-                    if run.status == "timed_out"
-                    else (
-                        f"review:{name} did not finish"
-                        if run.exit_code is None
-                        else f"review:{name} exited with code {run.exit_code}"
-                    )
-                )
-                payload["infrastructure_failures"].append(
-                    {
-                        "agent": name,
-                        "kind": "reviewer_process_failure",
-                        "message": message,
-                        "run_id": run.id,
-                        "status": run.status,
-                        "exit_code": run.exit_code,
-                        "output_path": run.output_path,
-                    }
-                )
-                continue
-            output = command_run_output(run.output_path)
-            if not self._record_review_verdict(run, output=output):
-                payload["findings"].append(
-                    {
-                        "agent": name,
-                        "severity": "suggestion",
-                        "title": f"review:{name} reported suggestions",
-                        "body": output or "Review completed without the no-findings marker.",
-                        "output_path": run.output_path,
-                        "needs_agent_decision": True,
-                    }
-                )
-        return payload
-
-    def _record_review_verdict(
-        self,
-        run: CodingCommandRun,
-        *,
-        output: str | None = None,
-    ) -> bool:
-        observed_output = command_run_output(run.output_path) if output is None else output
-        no_findings = review_output_has_no_findings(observed_output)
-        commit = (
-            run.git_commit_after
-            if run.git_commit_before == run.git_commit_after
-            else None
-        )
-        verdict = "no-findings" if no_findings else "findings"
-        self.store.documents.append_event(
-            self.job.job_name,
-            event_id=f"evt-review-{run.id}-verdict",
-            source="workflow",
-            provenance="fact",
-            kind="review-verdict",
-            summary=f"{run.kind} observed {verdict}",
-            related={
-                "assignment": self.binding.assignment.id,
-                **({"commit": commit} if commit is not None else {}),
-                "run": str(run.id),
-                "verdict": verdict,
-            },
-        )
-        return no_findings
 
     def _check_gate(self) -> dict | None:
         for name in ("check", "smoke"):
@@ -808,19 +634,232 @@ class CodingWorkflow:
             )
         self._emit(f"verify:fix succeeded for {self.job.job_name}")
 
+    @staticmethod
+    def decide_verifier_attention(
+        store: CodingStore,
+        job_name: str,
+        *,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
+    ) -> tuple[WorkflowMessage, ...]:
+        if repair_attention_id and decline_attention_id:
+            raise WorkflowFailure(
+                2,
+                (WorkflowMessage("Choose repair or decline, not both.", True),),
+                kind="usage",
+            )
+        decision_id = repair_attention_id or decline_attention_id
+        if decision_id is None:
+            return ()
+        job = store.get_coding_job(job_name)
+        attention = _verifier_attention(job) if job is not None else None
+        if (
+            attention is None
+            or attention.get("id") != decision_id
+            or attention.get("status") != "outstanding"
+        ):
+            raise WorkflowFailure(
+                1,
+                (WorkflowMessage(f"Attention item cannot be decided: {decision_id}", True),),
+                kind="verifier-attention",
+            )
+        status = "approved" if repair_attention_id else "declined"
+        attention["status"] = status
+        if status == "approved":
+            attention["after_run_id"] = max(
+                (run.id for run in store.list_command_runs(job_name)), default=0
+            )
+        store.set_metadata_value(job_name, VERIFIER_ATTENTION_KEY, json.dumps(attention))
+        return (WorkflowMessage(f"Attention {decision_id}: {status}."),)
+
+    def _raise_verifier_attention(self) -> None:
+        attention = _verifier_attention(self.job)
+        if attention is None or attention.get("status") in {"approved", "retrying"}:
+            return
+        if attention.get("status") == "declined":
+            self._mark_needs_human_and_publish()
+            self._fail(
+                "DeepSeek diff advisory review was declined; no review evidence was "
+                "manufactured and the PR remains draft.",
+                kind="needs-human",
+            )
+        self._publish_verified(self.job)
+        attention_id = str(attention["id"])
+        command = "afk-resume" if self.job.metadata.get("afk_issue_number") else "verify"
+        self._fail(
+            f"DeepSeek verifier repair required. Run dorf {command} {self.job.job_name} "
+            f"--repair-attention {attention_id}, or use --decline-attention {attention_id}.",
+            exit_code=75,
+            kind="verifier-attention",
+        )
+
+    def _record_verifier_attention(
+        self,
+        commit: str,
+        run: CodingCommandRun,
+    ) -> None:
+        attention_id = "attention-" + hashlib.sha256(
+            f"{self.job.job_name}:{commit}:{run.id}".encode()
+        ).hexdigest()[:24]
+        self.store.set_metadata_values(
+            self.job.job_name,
+            {
+                VERIFIER_ATTENTION_KEY: json.dumps(
+                    {
+                        "id": attention_id,
+                        "status": "outstanding",
+                        "commit": commit,
+                        "failed_run_id": run.id,
+                    },
+                    sort_keys=True,
+                ),
+                "afk_stage": "blocked",
+                "afk_outcome": "DeepSeek verifier requires repair or decline",
+            },
+        )
+        current = self.store.get_coding_job(self.job.job_name)
+        if current is not None:
+            self.job = current
+        self._raise_verifier_attention()
+
+    def _review_exact_commit(self, commit: str) -> CodingCommandRun:
+        attention = _verifier_attention(self.job)
+        retrying = attention is not None and attention.get("status") in {
+            "approved",
+            "retrying",
+        }
+        after_run_id = int(attention.get("after_run_id", 0)) if retrying else 0
+        run = next(
+            (
+                candidate
+                for candidate in self.store.list_command_runs(self.job.job_name)
+                if candidate.kind == "verify-role:diff"
+                and candidate.git_commit_before == commit
+                and candidate.id > after_run_id
+                and candidate.status != "interrupted"
+                and (candidate.status != "succeeded" or candidate.git_commit_after == commit)
+            ),
+            None,
+        )
+        if run is not None and run.status == "running":
+            self.store.finish_command_run(run.id, "interrupted", 130)
+            run = None
+        if run is None:
+            if self._deepseek_diff_review is None:
+                run = self.store.record_command_run(
+                    self.job.job_name,
+                    "verify-role:diff",
+                    f"pi deepseek-v4-flash diff at {commit}",
+                    "failed",
+                    1,
+                    git_commit_before=commit,
+                )
+                self._record_verifier_attention(commit, run)
+            if retrying and attention is not None and attention.get("status") == "approved":
+                attention["status"] = "retrying"
+                self.store.set_metadata_value(
+                    self.job.job_name, VERIFIER_ATTENTION_KEY, json.dumps(attention)
+                )
+            try:
+                run = self._deepseek_diff_review(self.job, commit)
+            except CommandInterrupted:
+                raise
+            except RuntimeError:
+                run = self.store.record_command_run(
+                    self.job.job_name,
+                    "verify-role:diff",
+                    f"pi deepseek-v4-flash diff at {commit}",
+                    "failed",
+                    1,
+                    git_commit_before=commit,
+                )
+        if run.exit_code != 0 or run.status != "succeeded":
+            self._record_verifier_attention(commit, run)
+        if run.git_commit_before != commit or run.git_commit_after != commit:
+            self._record_verifier_attention(commit, run)
+        if retrying:
+            self.store.remove_metadata_keys(
+                self.job.job_name,
+                {VERIFIER_ATTENTION_KEY, "afk_stage", "afk_outcome"},
+            )
+            refreshed = self.store.get_coding_job(self.job.job_name)
+            if refreshed is not None:
+                self.job = refreshed
+        return run
+
+    def _finish_verified(self, commit_sha: str) -> WorkflowOutcome:
+        checklist = self.store.get_acceptance_checklist(self.job.job_name)
+        if checklist is not None:
+            dossier = build_proof_dossier(
+                self.store,
+                self.job,
+                self.binding,
+                commit_sha=commit_sha,
+            )
+            self.store.set_metadata_value(self.job.job_name, "proof_commit", commit_sha)
+            if not acceptance_is_proven(dossier):
+                self._mark_needs_human_and_publish()
+                self._fail(
+                    f"Verify stopped for {self.job.job_name}: acceptance remains "
+                    f"unproven at {commit_sha}.",
+                    kind="needs-human",
+                )
+        self.store.update_status(self.job.job_name, "ready")
+        job = self.store.get_coding_job(self.job.job_name)
+        if job is None:
+            self._fail(f"CodingJob not found: {self.job.job_name}")
+        self.job = job
+        self._publish_verified(job)
+        self._emit(f"Verify passed for {self.job.job_name}")
+        return self._outcome()
+
+    def _review_verdict(self, run: CodingCommandRun) -> tuple[bool, str]:
+        event_id = f"evt-deepseek-{run.id}-verdict"
+        events = self.store.documents.list_events(self.job.job_name)
+        existing = next(
+            (event for event in events if event.id == event_id),
+            None,
+        )
+        output = command_run_output(run.output_path)
+        if existing is not None:
+            return existing.related.get("verdict") == "no-findings", output
+        no_findings = review_output_has_no_findings(output)
+        verdict = "no-findings" if no_findings else "findings"
+        self.store.documents.append_event(
+            self.job.job_name,
+            event_id=event_id,
+            source="workflow",
+            provenance="fact",
+            kind="review-verdict",
+            summary=f"DeepSeek diff review observed {verdict}",
+            related={
+                "commit": run.git_commit_after or "",
+                "run": str(run.id),
+                "verdict": verdict,
+            },
+        )
+        return no_findings, output
+
     def verify(
         self,
-        agents: list[str] | None = None,
         *,
         continue_guard: Callable[[], None] | None = None,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
     ) -> WorkflowOutcome:
-        """Run bounded check/readiness repair and review rounds, then publish."""
-        requested = self._requested_review_agents(agents)
-        self._require_review_protocol(requested)
-        assert self.contract.review is not None
-        max_rounds = self.contract.review.max_rounds
-        if max_rounds < 1:
-            self._fail("review.max_rounds must be at least 1")
+        """Run checks and one bounded DeepSeek advisory repair before publication."""
+        self._messages.extend(
+            self.decide_verifier_attention(
+                self.store,
+                self.job.job_name,
+                repair_attention_id=repair_attention_id,
+                decline_attention_id=decline_attention_id,
+            )
+        )
+        current = self.store.get_coding_job(self.job.job_name)
+        if current is not None:
+            self.job = current
+        self._raise_verifier_attention()
         if self.store.get_acceptance_checklist(self.job.job_name) is not None:
             self.store.freeze_acceptance_checklist(self.job.job_name)
 
@@ -833,7 +872,6 @@ class CodingWorkflow:
                 kind="needs-human",
             )
 
-        review_round = 0
         gate_failures = 0
         try:
             while True:
@@ -862,63 +900,43 @@ class CodingWorkflow:
                         )
                     self._run_verify_fix(payload)
                     continue
-
-                review_round += 1
-                self._emit(
-                    f"Verify review round {review_round}/{max_rounds} for {self.job.job_name}"
-                )
-                payload = self._review_round(requested, review_round)
+                commit = self._read_job_head()
+                with self.store.coding_verifier_lock(self.job.job_name) as acquired:
+                    if not acquired:
+                        self._fail(
+                            "A DeepSeek verifier is already active for this Job.",
+                            exit_code=75,
+                            kind="active-command",
+                        )
+                    run = self._review_exact_commit(commit)
                 if continue_guard is not None:
                     continue_guard()
-                infrastructure_failures = payload["infrastructure_failures"]
-                if infrastructure_failures:
-                    self._mark_needs_human_and_publish()
-                    messages = "; ".join(
-                        str(item.get("message", "review infrastructure failed"))
-                        for item in infrastructure_failures
-                    )
-                    self._fail(
-                        f"Verify stopped for {self.job.job_name}: {messages}",
-                        kind="needs-human",
-                    )
-                if not blocking_review_findings(payload):
-                    commit_sha = self._read_job_head()
-                    checklist = self.store.get_acceptance_checklist(self.job.job_name)
-                    if checklist is not None:
-                        dossier = build_proof_dossier(
-                            self.store,
-                            self.job,
-                            self.binding,
-                            commit_sha=commit_sha,
-                        )
-                        self.store.set_metadata_value(
-                            self.job.job_name,
-                            "proof_commit",
-                            commit_sha,
-                        )
-                        if not acceptance_is_proven(dossier):
-                            self._mark_needs_human_and_publish()
-                            self._fail(
-                                f"Verify stopped for {self.job.job_name}: acceptance remains "
-                                f"unproven at {commit_sha}.",
-                                kind="needs-human",
-                            )
-                    self.store.update_status(self.job.job_name, "ready")
-                    job = self.store.get_coding_job(self.job.job_name)
-                    if job is None:
-                        self._fail(f"CodingJob not found: {self.job.job_name}")
-                    self.job = job
-                    self._publish_verified(job)
-                    self._emit(f"Verify passed for {self.job.job_name}")
-                    return self._outcome()
-                if review_round >= max_rounds:
+                no_findings, output = self._review_verdict(run)
+                if no_findings:
+                    return self._finish_verified(commit)
+                if any(
+                    DIFF_REPAIR_PREFIX in item.text
+                    for item in self.store.list_job_inputs(self.job.job_name)
+                ):
                     self._mark_needs_human_and_publish()
                     self._fail(
-                        f"Verify stopped for {self.job.job_name} after "
-                        f"{max_rounds} review round(s).",
+                        "DeepSeek reported findings after the one bounded advisory repair.",
                         kind="needs-human",
                     )
+                payload = {
+                    "type": "deepseek-diff-findings",
+                    "job_name": self.job.job_name,
+                    "commit": commit,
+                    "run_id": run.id,
+                    "findings": output or "Verifier returned no structured response.",
+                }
                 self._run_verify_fix(payload)
+                if self._read_job_head() == commit:
+                    self._mark_needs_human_and_publish()
+                    self._fail(
+                        "The implementation Worker did not commit its findings decision.",
+                        kind="needs-human",
+                    )
         except CommandInterrupted:
             self._fail(
                 f"Verify interrupted for {self.job.job_name}.",
@@ -1435,6 +1453,20 @@ class CodingWorkflow:
             raise
         except WorkflowFailure as error:
             current = self.store.get_coding_job(self.job.job_name)
+            if error.kind == "verifier-attention":
+                if current is not None:
+                    self.job = current
+                attention = _verifier_attention(current)
+                self.store.finish_command_run(afk_run.id, "failed", error.exit_code or 1)
+                self.store.finish_afk_coordinator(
+                    target_repo,
+                    issue_number,
+                    owner_token,
+                    str(attention.get("status", "outstanding"))
+                    if attention is not None
+                    else "outstanding",
+                )
+                raise
             if (
                 current is not None
                 and current.status in {"ready", "needs-human"}
@@ -1464,42 +1496,14 @@ class CodingWorkflow:
         return self._outcome()
 
 
-def review_command_with_dorf_protocol(
-    command: str,
-    prompt: str = "",
-    *,
-    job: CodingJob,
-) -> str:
-    if REVIEW_PROMPT_PLACEHOLDER not in command:
-        return command
-    prompt_parts = [
-        part
-        for part in [
-            render_review_prompt(prompt, job).strip(),
-            REVIEW_RESULT_INSTRUCTIONS,
-        ]
-        if part
-    ]
-    rendered_prompt = shlex.quote(chr(10).join(prompt_parts))
-    return command.replace(REVIEW_PROMPT_PLACEHOLDER, rendered_prompt)
-
-
-def reviewer_uses_codex_harness(command: str) -> bool:
-    """Recognize the one supported shell-launched reviewer that needs the Room route."""
+def _verifier_attention(job: CodingJob | None) -> dict | None:
+    if job is None or (raw := job.metadata.get(VERIFIER_ATTENTION_KEY)) is None:
+        return None
     try:
-        argv = shlex.split(command)
-    except ValueError:
-        return False
-    return argv[:2] == ["codex", "exec"]
-
-
-def render_review_prompt(prompt: str, job: CodingJob) -> str:
-    return prompt.format(
-        job_name=job.job_name,
-        job_branch=job.job_branch,
-        target_branch=job.target_branch,
-        target_start_sha=job.target_start_sha,
-    )
+        attention = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return attention if isinstance(attention, dict) else None
 
 
 def command_run_output(output_path: str | None) -> str:
@@ -1511,38 +1515,17 @@ def command_run_output(output_path: str | None) -> str:
     return path.read_text()
 
 
-def blocking_review_findings(payload: dict) -> list[dict]:
-    findings = payload.get("findings", [])
-    if not isinstance(findings, list):
-        return [
-            {
-                "severity": "blocking",
-                "title": "review findings are malformed",
-                "body": "Expected payload findings to be a list.",
-                "worth_fixing": False,
-            }
-        ]
-    # Current review output is advisory. It triggers a primary-agent decision pass,
-    # while the legacy blocking/worth_fixing fields remain accepted for old payloads.
-    return [
-        finding
-        for finding in findings
-        if isinstance(finding, dict)
-        and (
-            finding.get("needs_agent_decision") is True
-            or finding.get("blocking") is True
-            or finding.get("worth_fixing") is True
-            or finding.get("severity") == "blocking"
-        )
-    ]
-
-
 def verify_fix_turn_key(payload: dict) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return f"verify:fix:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def verify_fix_prompt(payload: dict) -> str:
+    diff_prefix = (
+        f"{DIFF_REPAIR_PREFIX}.\n\n"
+        if payload.get("type") == "deepseek-diff-findings"
+        else ""
+    )
     dirty_tree_instruction = (
         "\nThe Job working tree is dirty. Inspect the uncommitted changes. If they are "
         "intentional, run relevant checks, commit them, and push the Job branch. "
@@ -1553,7 +1536,8 @@ def verify_fix_prompt(payload: dict) -> str:
         else ""
     )
     return (
-        "Dorf verify found the following check, readiness, or review failure.\n\n"
+        diff_prefix
+        + "Dorf verify found the following check, readiness, or review failure.\n\n"
         "Treat review findings as suggestions, not instructions. Independently evaluate "
         "each finding using the task, repository, and implementation context. Apply only "
         "changes you judge correct, relevant, and proportionate; reject incorrect, "
@@ -2054,7 +2038,7 @@ def github_pr_verification_comment(store: CodingStore, job: CodingJob) -> str:
         )
     runs = store.list_command_runs(job.job_name)
     failing_runs = [run for run in runs if run.exit_code not in {0, None}]
-    review_runs = [run for run in runs if run.kind.startswith("review:")]
+    review_runs = [run for run in runs if run.kind == "verify-role:diff"]
     fix_runs = [run for run in runs if run.kind == "verify:fix"]
     check_runs = [run for run in runs if run.kind == "check"]
     commit = next(
@@ -2072,15 +2056,18 @@ def github_pr_verification_comment(store: CodingStore, job: CodingJob) -> str:
         f"Commit: {commit}",
         f"Checks: {format_run_summary(check_runs)}",
         f"Readiness result: {'passed' if job.status == 'ready' else 'needs human'}",
-        f"Review result: {format_run_summary(review_runs)}",
+        f"DeepSeek advisory: {format_run_summary(review_runs)}",
     ]
+    attention = _verifier_attention(job)
+    if attention is not None and attention.get("status") == "declined":
+        lines.append("Missing advisory review: DeepSeek verifier repair was declined")
     if job.status == "needs-human":
         lines.extend(
             [
                 "Failure reason: Job needs human review",
                 "Last failing run IDs: "
                 + (", ".join(str(run.id) for run in failing_runs[:5]) or "unknown"),
-                f"Review rounds used: {len(review_runs)}",
+                f"Advisory runs used: {len(review_runs)}",
                 f"Gate-fix attempts used: {len(fix_runs)}",
                 "Inspection commands:",
             ]

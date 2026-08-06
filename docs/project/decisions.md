@@ -722,9 +722,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exactly one Incus archive and one compatibility manifest for that architecture. One repo-owned
   local command builds from an immutable base fingerprint, selects and records the current Codex npm
   release, proves the credential boundary, and completes the real coding tracer from clone and
-  repo-owned preparation through an implementation turn, checks, explicitly routed Codex review,
-  content-addressed evidence, and exact cleanup. The image includes Git and uv as ordinary
-  workstation tools but removes build-only npm. The command exports the untouched candidate and
+  repo-owned preparation through an implementation turn, checks, scoped routing,
+  content-addressed evidence, and exact cleanup. The image includes Git, uv, and the Pi tool used by
+  the separate DeepSeek diff role but removes build-only npm. The command exports the untouched candidate and
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
@@ -832,9 +832,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   a coding Job or branch, or provision a durable Worker Room, run one workflow-owned proof against
   the exact repository head and issue. Aggregate independently discoverable repository, GitHub App,
   official-image, Incus, provider, and reviewer failures. When discovery succeeds, use one
-  unrecorded disposable VM and scoped route to clone the target branch, run repository preparation
+  unrecorded disposable VM and scoped routes to clone the target branch, run repository preparation
   and smoke contracts, dry-run a Git push, and complete bounded real implementation-model and
-  configured Codex-reviewer turns. Revoke the route and destroy the VM before admission. The same
+  DeepSeek diff-review turns. Revoke the routes and destroy the VM before admission. The same
   invocation consumes the proof, records its non-secret facts, and repeated AFK delegation reuses
   the admitted Job and proof rather than duplicating identity or authority.
 - **Why:** Metadata and isolated health probes can report healthy while Git credentials, repository
@@ -851,17 +851,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D043 — Coding acceptance is pinned at admission and proven from retained observations
 
 - **Status:** Accepted for the coding-to-PR workflow — 2026-08-05
-- **Decision:** Compile the pinned issue acceptance criteria plus configured repository check,
-  smoke, and enabled independent-review obligations into a small workflow-owned checklist when a
+- **Decision:** Compile the pinned issue acceptance criteria plus configured repository check and
+  smoke obligations into a small workflow-owned checklist when a
   coding Job is reserved. The checklist remains explicitly human-correctable as a draft until the
   first verification attempt freezes it as the completion contract. Compute proven/unproven state
-  from successful workflow-observed command and no-findings review records whose before/after Git
+  from successful workflow-observed command records whose before/after Git
   commit is the exact dossier commit; Worker reports remain claims and never prove an item. Project
   those records, Runtime identity and Room image metadata, content-addressed Job artifacts,
   assumptions, risks, and cleanup state into one compact Markdown/JSON dossier. Publish that
   dossier to the PR as a view while the Job, workflow command records, and Job documents remain the
   authorities and audit layer. When a generic repository supplies no observable check, smoke, or
-  review verifier, do not manufacture a manual gate that the workflow has no mechanism to satisfy;
+  verifier, do not manufacture a manual gate that the workflow has no mechanism to satisfy;
   preserve the existing PR-proposal path and leave final acceptance to the human GitHub boundary.
 - **Why:** Reviewers need one ordered, commit-pinned assessment rather than reconstructing readiness
   through SQLite, Job-document, and artifact directories. Deriving proof from existing immutable
@@ -921,3 +921,19 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A second real environment or agent implementation proves the concrete facade
   needs selection policy, or a non-coding workflow demonstrates a smaller shared operation than the
   bound Job handle.
+
+## D046 — AFK diff review is one bounded DeepSeek advisory cycle
+
+- **Status:** Accepted for the coding-to-PR AFK slice — 2026-08-06
+- **Decision:** After deterministic gates pass, run the DeepSeek diff role in a fresh disposable
+  verifier Room pinned to the implementation commit. Retain its command result and always remove
+  its Room and scoped route. Findings are claims admitted once through the original Job FIFO; after
+  one implementation decision and new commit, one fresh verifier Room may confirm the result.
+  No-findings permits publication but does not prove acceptance. A verifier infrastructure failure
+  retains one exact repair-or-decline decision. Repair retries in a fresh Room; decline leaves the
+  PR draft with missing advisory evidence stated.
+- **Why:** A separate read-only model supplies useful diff pressure without giving it implementation
+  authority, creating another Job, or turning advisory output into readiness fact. Existing command
+  runs, Job FIFO, and Worker/Room cleanup provide the required custody and crash recovery.
+- **Reconsider when:** Repeated dogfood shows one repair is insufficient, or another concrete
+  verifier needs coordination that cannot compose through the same bounded role.

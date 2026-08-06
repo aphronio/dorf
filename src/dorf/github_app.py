@@ -385,6 +385,39 @@ class GitHubRepositoryClient:
             },
         )
 
+    def mark_pull_request_draft(self, repo_full_name: str, pull_number: int) -> None:
+        pull = self.get_pull_request(repo_full_name, pull_number)
+        if pull.get("draft") is True:
+            return
+        node_id = pull.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            raise GitHubRepositoryError(
+                f"Pull request {pull_number} did not include a GraphQL node ID"
+            )
+        response = self._request_json(
+            "POST",
+            "/graphql",
+            body={
+                "query": (
+                    "mutation($id: ID!) { "
+                    "convertPullRequestToDraft(input: {pullRequestId: $id}) { "
+                    "pullRequest { number } } }"
+                ),
+                "variables": {"id": node_id},
+            },
+        )
+        data = response.get("data") if isinstance(response, dict) else None
+        converted = data.get("convertPullRequestToDraft") if isinstance(data, dict) else None
+        if (
+            not isinstance(response, dict)
+            or response.get("errors")
+            or not isinstance(converted, dict)
+            or not converted.get("pullRequest")
+        ):
+            raise GitHubRepositoryError(
+                f"GitHub did not convert pull request {pull_number} to draft"
+            )
+
     def add_pull_request_comment(self, repo_full_name: str, pr_number: int, body: str) -> None:
         self._request_json(
             "POST",

@@ -15,8 +15,6 @@ from .coding_store import AcceptanceItem, CodingCommandRun, CodingJob, CodingSto
 _CHECKBOX = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.+?)\s*$")
 _HEADING = re.compile(r"^\s*##+\s+(.+?)\s*$")
 REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
-_CODEX_TELEMETRY_DELIMITER = "tokens used"
-_CODEX_TOKEN_COUNT = re.compile(r"^(?:0|[1-9]\d*|[1-9]\d{0,2}(?:,\d{3})+)$")
 _VERIFICATION_COMMANDS = ("check", "smoke")
 
 
@@ -97,30 +95,10 @@ class ProofDossier:
 def compile_acceptance_checklist(
     goal: str,
     contract: RepoContract,
-    *,
-    review_commands: dict[str, str] | None = None,
 ) -> tuple[AcceptanceItem, ...]:
     """Compile concise issue criteria plus concrete repository verification obligations."""
     criteria = _acceptance_criteria(goal)
-    enabled_reviewers = tuple(
-        name
-        for name, agent in (contract.review.agents.items() if contract.review else ())
-        if agent.enabled
-    )
-    if enabled_reviewers:
-        missing = [
-            name
-            for name in enabled_reviewers
-            if not review_commands or not review_commands.get(name)
-        ]
-        if missing:
-            raise ValueError(
-                "Acceptance compilation requires exact rendered review commands: "
-                + ", ".join(missing)
-            )
-    if enabled_reviewers:
-        issue_verifier, issue_verifier_ref = "review", "*"
-    elif "check" in contract.commands:
+    if "check" in contract.commands:
         issue_verifier, issue_verifier_ref = "command", "check"
     elif "smoke" in contract.commands:
         issue_verifier, issue_verifier_ref = "command", "smoke"
@@ -133,11 +111,7 @@ def compile_acceptance_checklist(
             source="issue",
             verifier=issue_verifier,
             verifier_ref=issue_verifier_ref,
-            verifier_command=(
-                contract.commands[issue_verifier_ref]
-                if issue_verifier == "command"
-                else _review_command_pin("*", review_commands or {})
-            ),
+            verifier_command=contract.commands[issue_verifier_ref],
         )
         for position, text in enumerate(criteria, start=1)
         if issue_verifier is not None
@@ -151,11 +125,7 @@ def compile_acceptance_checklist(
                 source="goal",
                 verifier=issue_verifier,
                 verifier_ref=issue_verifier_ref,
-                verifier_command=(
-                    contract.commands[issue_verifier_ref]
-                    if issue_verifier == "command"
-                    else _review_command_pin("*", review_commands or {})
-                ),
+                verifier_command=contract.commands[issue_verifier_ref],
             )
         )
     for name in _VERIFICATION_COMMANDS:
@@ -170,17 +140,6 @@ def compile_acceptance_checklist(
                     verifier_command=command,
                 )
             )
-    for position, name in enumerate(enabled_reviewers, start=1):
-        items.append(
-            AcceptanceItem(
-                key=f"review-{position}-{_key_part(name)}",
-                text=f"Independent review by {name} reports no findings",
-                source="contract",
-                verifier="review",
-                verifier_ref=name,
-                verifier_command=(review_commands or {})[name],
-            )
-        )
     return tuple(items)
 
 
@@ -206,17 +165,6 @@ def build_proof_dossier(
         and event.provenance == "fact"
         and event.kind == "command-result"
     }
-    clean_review_run_ids = frozenset(
-        int(run_id)
-        for event in events
-        if event.source == "workflow"
-        and event.provenance == "fact"
-        and event.kind == "review-verdict"
-        and event.related.get("verdict") == "no-findings"
-        and event.related.get("commit") == commit_sha
-        and (run_id := event.related.get("run")) is not None
-        and run_id.isdigit()
-    )
     run_evidence = {
         run.id: _command_evidence(
             run,
@@ -227,20 +175,17 @@ def build_proof_dossier(
         for run in runs
     }
     checklist = store.get_acceptance_checklist(job.job_name)
+    active_items = tuple(
+        item for item in (checklist.items if checklist else ()) if item.verifier != "review"
+    )
     acceptance = tuple(
         _evaluate_acceptance_item(
             item,
             runs=runs,
             run_evidence=run_evidence,
             commit_sha=commit_sha,
-            expected_reviewers=tuple(
-                candidate.verifier_ref
-                for candidate in checklist.items
-                if candidate.key.startswith("review-") and candidate.verifier_ref
-            ),
-            clean_review_run_ids=clean_review_run_ids,
         )
-        for item in (checklist.items if checklist else ())
+        for item in active_items
     )
     checks = tuple(
         run_evidence[run.id]
@@ -248,7 +193,7 @@ def build_proof_dossier(
     )
     reviews = tuple(
         run_evidence[run.id]
-        for run in _compact_runs(runs, commit_sha, lambda run: run.kind.startswith("review:"))
+        for run in _compact_runs(runs, commit_sha, lambda run: run.kind == "verify-role:diff")
     )
     claim_events = [
         event
@@ -275,11 +220,18 @@ def build_proof_dossier(
         )
     if checklist is None:
         risks.append("Acceptance checklist was not compiled at admission")
-    elif not checklist.items:
+    elif not active_items:
         risks.append(
             "Repository supplied no machine-verifiable acceptance items; human GitHub "
             "acceptance remains required"
         )
+    if raw_attention := job.metadata.get("diff_verifier_attention"):
+        try:
+            attention = json.loads(raw_attention)
+        except json.JSONDecodeError:
+            attention = {}
+        if attention.get("status") == "declined":
+            risks.append("DeepSeek diff advisory review was declined; review evidence is missing")
     image_fingerprint = binding.metadata.get("image_fingerprint")
     if (
         image_fingerprint is None
@@ -449,19 +401,12 @@ def _acceptance_criteria(goal: str) -> list[str]:
     return criteria
 
 
-def _key_part(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
-    return normalized or "reviewer"
-
-
 def _evaluate_acceptance_item(
     item: AcceptanceItem,
     *,
     runs: list[CodingCommandRun],
     run_evidence: dict[int, ProofEvidence],
     commit_sha: str,
-    expected_reviewers: tuple[str, ...],
-    clean_review_run_ids: frozenset[int],
 ) -> AcceptanceResult:
     if item.verifier == "manual":
         return AcceptanceResult(
@@ -472,51 +417,20 @@ def _evaluate_acceptance_item(
             f"Manual acceptance remains unresolved: {item.text}",
             (),
         )
-    if item.verifier == "command":
-        candidates = [
-            run
-            for run in runs
-            if run.kind == item.verifier_ref
-            and run.command == item.verifier_command
-        ]
-        latest = next(
-            (run for run in candidates if _observed_at_commit(run, commit_sha)),
-            None,
-        )
-        matching = (
-            [latest]
-            if latest is not None and _successful_at_commit(latest, commit_sha)
-            else []
-        )
-    else:
-        expected_commands = _review_commands_for_item(item, expected_reviewers)
-        reviewer_names = tuple(expected_commands)
-        matching = []
-        for reviewer in reviewer_names:
-            latest = next(
-                (
-                    run
-                    for run in runs
-                    if run.kind == f"review:{reviewer}"
-                    and run.command == expected_commands[reviewer]
-                    and _observed_at_commit(run, commit_sha)
-                ),
-                None,
-            )
-            if (
-                latest is not None
-                and _successful_at_commit(latest, commit_sha)
-                and latest.id in clean_review_run_ids
-            ):
-                matching.append(latest)
-        candidates = [
-            run
-            for run in runs
-            if run.kind in {f"review:{reviewer}" for reviewer in reviewer_names}
-            and run.command == expected_commands.get(run.kind.removeprefix("review:"))
-        ]
-        if len(matching) != len(reviewer_names):
-            matching = []
+    candidates = [
+        run
+        for run in runs
+        if run.kind == item.verifier_ref and run.command == item.verifier_command
+    ]
+    latest = next(
+        (run for run in candidates if _observed_at_commit(run, commit_sha)),
+        None,
+    )
+    matching = (
+        [latest]
+        if latest is not None and _successful_at_commit(latest, commit_sha)
+        else []
+    )
     if matching:
         return AcceptanceResult(
             item.key,
@@ -556,32 +470,6 @@ def _observed_at_commit(run: CodingCommandRun, commit_sha: str) -> bool:
     return run.git_commit_before == commit_sha and run.git_commit_after == commit_sha
 
 
-def _review_command_pin(verifier_ref: str, commands: dict[str, str]) -> str:
-    if verifier_ref == "*":
-        return json.dumps(commands, sort_keys=True, separators=(",", ":"))
-    return commands[verifier_ref]
-
-
-def _review_commands_for_item(
-    item: AcceptanceItem,
-    expected_reviewers: tuple[str, ...],
-) -> dict[str, str]:
-    if item.verifier_ref != "*":
-        return {item.verifier_ref: item.verifier_command}
-    try:
-        decoded = json.loads(item.verifier_command)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    if not isinstance(decoded, dict):
-        return {}
-    commands = {
-        reviewer: command
-        for reviewer in expected_reviewers
-        if isinstance((command := decoded.get(reviewer)), str) and command
-    }
-    return commands if len(commands) == len(expected_reviewers) else {}
-
-
 def _compact_runs(
     runs: list[CodingCommandRun],
     commit_sha: str,
@@ -613,25 +501,9 @@ def _relevant_artifacts(evidence: tuple[ProofEvidence, ...]) -> tuple[DossierArt
 
 
 def review_output_has_no_findings(output: str) -> bool:
-    """Accept only the workflow protocol's exact final reviewer response."""
+    """Accept only the DeepSeek role's exact clean response."""
     non_empty_lines = [line.strip() for line in output.splitlines() if line.strip()]
-    if not non_empty_lines:
-        return False
-    agent_markers = [index for index, line in enumerate(non_empty_lines) if line == "codex"]
-    response_lines = (
-        non_empty_lines[agent_markers[-1] + 1 :] if agent_markers else non_empty_lines
-    )
-    if not agent_markers or _CODEX_TELEMETRY_DELIMITER not in response_lines:
-        return response_lines == [REVIEW_NO_FINDINGS_SENTINEL]
-    delimiter_index = response_lines.index(_CODEX_TELEMETRY_DELIMITER)
-    response = response_lines[:delimiter_index]
-    telemetry = response_lines[delimiter_index + 1 :]
-    return (
-        response == [REVIEW_NO_FINDINGS_SENTINEL]
-        and len(telemetry) == 2
-        and _CODEX_TOKEN_COUNT.fullmatch(telemetry[0]) is not None
-        and telemetry[1] == REVIEW_NO_FINDINGS_SENTINEL
-    )
+    return non_empty_lines == [REVIEW_NO_FINDINGS_SENTINEL]
 
 
 def _command_evidence(
