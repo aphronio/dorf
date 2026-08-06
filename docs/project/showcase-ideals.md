@@ -1,17 +1,16 @@
-# Showcase Ideals — Workflow-Layer DX on Top of the Runtime
+# Showcase Ideals — Workflow-Layer DX on Top of the Durable Core
 
-Aspirational direction for the applications that compose on the L1 control plane: coding-to-PR
-today, AFK personal capacity later. Companion to [north-star.md](north-star.md), which owns the
-runtime experience. Same status as the north star: direction and taste, not an API spec, backlog,
-or license to build ahead of the stranger loop.
+Aspirational direction for the coding workflow that composes on the durable Job core. Companion to
+[north-star.md](north-star.md), which owns the product experience. Same status as the north star:
+direction and taste, not an API spec, backlog, or license to build ahead of the real coding loop.
 
 The layer rule, shared with the north star:
 
-> **The runtime owns mechanisms, recording, and rendering. Workflows own semantics, policy, and
+> **The durable core owns mechanisms, recording, and rendering. Workflows own semantics, policy, and
 > verification.**
 
-Every ideal below names the runtime hook it builds on. If an ideal needs a hook the runtime does
-not have, that is a north-star conversation first, not a workflow feature reaching into L1.
+Every ideal below names the core capability it builds on. If an ideal needs a capability the core
+does not have, that is an architecture conversation first, not a workflow feature reaching inward.
 
 ## Contract-first jobs
 
@@ -24,13 +23,13 @@ This is [repo contracts over environment cleverness](principles.md) applied at a
 managed repo's own setup, check, and smoke contracts are what turn goal prose into checkable
 items.
 
-Runtime hook: a job may carry structured acceptance items whose proven/unproven state the runtime
-stores and renders. Compiling prose into items and running the verification are workflow work.
+Core capability: a Job may carry structured acceptance items whose proven/unproven state the core
+stores and renders. Compiling prose into items and running verification are workflow work.
 
 ## Verification ladder: claims into facts
 
-The runtime's rule is that claims are never presented as facts. The workflow's ambition is to make
-converting claims into facts cheap: every worker statement that matters ("checks pass", "p95 is
+The core rule is that claims are never presented as facts. The workflow's ambition is to make
+converting claims into facts cheap: every agent statement that matters ("checks pass", "p95 is
 120ms", "this is done") should have a repo-owned command that proves or refutes it without a human
 reading a transcript.
 
@@ -38,7 +37,7 @@ The more of a job that is verifiable, the more of it can be approved after the f
 supervised live. Verification capacity, not model quality, is the practical ceiling on detached
 work.
 
-Runtime hook: claim/observed provenance on state and evidence.
+Core capability: claim/observed provenance on state and Evidence.
 
 ## Calibrated isolated verification roles
 
@@ -60,24 +59,22 @@ Example roles make the boundaries concrete:
 A plausible first execution shape is not a mandatory order:
 
 ```text
-                         ┌─ acceptance/QA Room ─────────────┐
-implementation commit ──┼─ diff correctness Room ──────────┼─ findings and evidence
-                         └─ simplification Room (optional) ─┘          │
+                         ┌─ acceptance/QA AgentRun ─────────────┐
+implementation commit ──┼─ diff correctness AgentRun ─────────┼─ findings and Evidence
+                         └─ simplification AgentRun (optional) ┘          │
                                                                        ▼
-                                                         implementation Job FIFO
+                                                         implementation Session
 ```
 
-Give each selected role its own disposable Room by default. It receives a fresh clone at the exact
-implementation commit, a fresh agent session, only role-appropriate tools and a scoped provider
-route, bounded execution, and exact cleanup. This deliberately spends some Room startup time to
-remove per-task isolation decisions, prevent mutable verifier state from leaking between roles,
-and make parallel experiments comparable. Reconsider the default when repeated measurements show
-that Room cost dominates without improving independence, evidence quality, concurrency safety, or
-defect yield.
+Give each selected Role a bounded AgentRun against the exact Revision, with role-appropriate tools,
+a scoped provider route, and explicit cleanup. Use a separate disposable Sandbox only when the Role
+needs executable isolation or mutable tools; a read-only reviewer may consume an immutable checkout
+or diff without paying Sandbox startup cost. Reconsider either posture from measured independence,
+evidence quality, concurrency safety, defect yield, latency, and cost rather than ritual.
 
-The original coding Job, branch, and PR remain authoritative. A verifier Room is a bounded workflow
-run attached to that Job commit, not another coding Job, implementation branch, or PR. Its feedback
-returns through the implementation Job's input sequence. Agent conclusions remain claims;
+The original coding Job, branch, and proposal remain authoritative. A verifier AgentRun is attached
+to one Revision, not another Job, branch, or proposal. Its feedback returns to the implementation
+Session. Agent conclusions remain claims;
 workflow-observed commands, interactions, measurements, and retained artifacts become facts.
 
 Promote a role through evidence rather than enthusiasm:
@@ -90,15 +87,15 @@ Promote a role through evidence rather than enthusiasm:
 6. demotion or removal when its marginal value disappears.
 
 Measure unique material findings or newly proven acceptance items, overlap, false positives,
-reviewer-induced regressions, repair churn, latency, provider and Room cost, cleanup, and escaped
+reviewer-induced regressions, repair churn, latency, provider and Sandbox cost, cleanup, and escaped
 defects. Roles may run in parallel against one immutable commit when their environments and
 capabilities permit it. A repair creates a new commit and invalidates affected evidence; rerun only
 the roles whose evidence became stale. Ordering remains an empirical workflow choice rather than a
 generic graph scheduler built in advance.
 
-Runtime hooks: isolated Room lifecycle and capability boundaries, durable Job input, and
-commit-pinned claim/observed evidence. If bounded verifier Rooms cannot compose through those hooks,
-settle that runtime boundary before encoding role semantics into L1.
+Core capabilities: isolated Sandbox lifecycle and capability boundaries, durable Job input, and
+Revision-pinned claim/observed Evidence. If bounded AgentRuns cannot compose through those
+capabilities, settle that core boundary before encoding Role semantics into the workflow.
 
 ## Autonomy labels and roads
 
@@ -111,22 +108,23 @@ more. Deterministic setup, exhaustive checks, and smoke contracts are the roads;
 after-the-fact approval can safely cover. Models improving moves the default dial position; it
 never removes the dial, because irreversible and spending actions stay gateable by construction.
 
-Runtime hook: the boundary envelope (egress, injected secrets, brokered verbs) and its approval
+Core capability: the boundary envelope (egress, injected secrets, brokered verbs) and its approval
 queue.
 
-## Calibrated workers
+## Calibrated agent configurations
 
-A worker accrues a per-repo track record. The pulse can then say: "self-estimate: done in 12m;
-historically 30% optimistic here." The DX of trust is not only seeing what the worker claims but
-knowing what its claims have historically been worth. That calibration is what a scheduler-human
-actually needs to allocate attention.
+A Role, model, and reasoning configuration accrues a per-repository track record. The pulse can then
+say: "self-estimate: done in 12m; historically 30% optimistic here." The DX of trust is not only
+seeing what an agent claims but knowing what claims from that configuration have historically been
+worth. That calibration helps the orchestrator and human allocate attention without inventing a
+cross-Job Worker identity.
 
-Runtime hook: self-estimates and outcomes recorded as ordinary timeline entries; computing and
+Core capability: self-estimates and outcomes recorded as ordinary timeline entries; computing and
 displaying calibration is workflow work.
 
 ## Coding attention semantics
 
-The runtime's attention contract carries urgency tiers and batching; the coding workflow decides
+The core attention contract carries urgency tiers and batching; the coding workflow decides
 what maps to which. A red check mid-job is digest material; a boundary approval or an irreversible
 choice is a ping. Review requests batch to the human's schedule.
 
@@ -134,7 +132,7 @@ At publish time the evidence pack is projected into the PR (body, comments, chec
 happens where reviewing already lives. GitHub gets the story at the moment it matters; the job
 record keeps the full history.
 
-Runtime hook: the state/attention two-channel contract, the inbox, and artifacts with provenance.
+Core capability: the state/attention two-channel contract, the inbox, and artifacts with provenance.
 
 ## Dogfood bar: the phone-only week
 
@@ -148,6 +146,6 @@ the evidence that AFK capacity is real.
 | Do | Do not |
 | --- | --- |
 | Judge workflow-layer PRs against these ideals | Encode any of them into runtime surfaces |
-| Name the runtime hook before building on it | Reach into L1 for a missing hook |
+| Name the core capability before building on it | Reach into the core for a missing capability |
 | Let dogfood evidence promote an ideal into work | Treat this document as a backlog |
 | Record accepted choices in [decisions.md](decisions.md) | Build showcase polish before the stranger loop is excellent |

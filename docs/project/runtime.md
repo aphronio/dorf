@@ -1,5 +1,10 @@
 # Internal Worker, Room, and Job Runtime
 
+> **Legacy implementation reference.** D047 supersedes this Python/SQLite runtime as product and
+> architecture direction. Read this document only to recover observed behavior and failure evidence while
+> the replacement is incomplete. Do not preserve its Worker, Room, Assignment, SDK, schema, CLI, or package
+> boundaries unless new dogfood independently justifies them.
+
 This document records the current **responsibility and dependency boundary**. It is deliberately not
 an API inventory. Exact Python surfaces live in code, command syntax lives in CLI help, and protected
 behavior lives in tests. Consequential rationale belongs in [decisions.md](decisions.md).

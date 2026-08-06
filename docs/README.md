@@ -4,7 +4,7 @@
 
 | Intent | Read |
 | --- | --- |
-| Install Dorf and run the supported Worker/Job loop | [Getting started](getting-started.md) |
+| Install and run the existing Python implementation | [Getting started](getting-started.md) |
 | Diagnose setup, host, Incus, Codex, or provider trouble | [Setup support](support.md) |
 
 Command syntax comes from the installed CLI. Run `dorf --help`, `dorf worker --help`, or
@@ -14,8 +14,9 @@ Command syntax comes from the installed CLI. Run `dorf --help`, `dorf worker --h
 
 | Intent | Read |
 | --- | --- |
-| Understand the product before contributing | [North Star](project/north-star.md) and [Principles](project/principles.md) |
-| Understand the runtime boundary that exists now | [Runtime Surface](project/runtime.md) |
+| Understand the accepted product direction | [North Star](project/north-star.md) and [Principles](project/principles.md) |
+| Understand the selected Go and Absurd design | [Greenfield Architecture](project/architecture.md) |
+| Read the superseded Python boundary as behavioral evidence | [Legacy Runtime Surface](project/runtime.md) |
 | Contribute code | [Contributing](../CONTRIBUTING.md) |
 | Report a vulnerability | [Security policy](../SECURITY.md) |
 | Publish a release | [Release process](releasing.md) |
@@ -30,7 +31,8 @@ compatibility promises.
 
 - [North Star](project/north-star.md) — approved experience and product direction; aspirational
 - [Principles](project/principles.md) — enduring product and engineering judgment
-- [Runtime Surface](project/runtime.md) — current portable responsibility boundary
+- [Greenfield Architecture](project/architecture.md) — accepted Go, Absurd, and PostgreSQL boundaries
+- [Runtime Surface](project/runtime.md) — superseded Python/SQLite boundary retained as evidence
 - [Showcase Ideals](project/showcase-ideals.md) — workflow-layer direction kept outside the runtime
 - [Provider Gateway](project/provider-gateway.md) — provider connection and scoped-route boundary
 - [Decision Log](project/decisions.md) — accepted choices and reconsideration triggers
