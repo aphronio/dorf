@@ -32,6 +32,15 @@ def test_dorf_repo_declares_contract() -> None:
     assert contract.primary_codex.model == "gpt-5.6-sol"
     assert contract.primary_codex.reasoning_effort == "low"
     assert contract.env == {}
+    assert contract.verifier_roles
+    assert contract.verifier_roles["diff"].harness == "pi"
+    assert contract.verifier_roles["diff"].connection == "deepseek"
+    assert contract.verifier_roles["diff"].model == "deepseek-v4-flash"
+    assert contract.verifier_roles["diff"].reasoning_effort == "max"
+    assert contract.verifier_roles["diff"].authority == "shadow"
+    assert contract.verifier_roles["diff"].room == "dedicated"
+    assert contract.verifier_roles["diff"].timeout_seconds == 1800
+    assert contract.verifier_roles["diff"].prompt
 
 
 def test_missing_contract_loads_generic_mode(tmp_path: Path) -> None:
@@ -251,4 +260,42 @@ PATH = { source = 123 }
     )
 
     with pytest.raises(ContractValidationError, match="env.PATH.source must be a string"):
+        load_repo_contract(tmp_path)
+
+
+_ROLE_AUTHORITY_CONTRACT = """
+[verification.roles.diff]
+harness = "pi"
+connection = "deepseek"
+model = "deepseek-v4-flash"
+reasoning_effort = "max"
+authority = "{authority}"
+room = "dedicated"
+""".strip()
+
+
+@pytest.mark.parametrize("authority", ["shadow", "advisory"])
+def test_verifier_role_accepts_exactly_shadow_or_advisory_authority(
+    tmp_path: Path, authority: str
+) -> None:
+    (tmp_path / ".dorf.toml").write_text(
+        _ROLE_AUTHORITY_CONTRACT.format(authority=authority)
+    )
+
+    contract = load_repo_contract(tmp_path)
+
+    assert contract.verifier_roles["diff"].authority == authority
+
+
+@pytest.mark.parametrize("authority", ["auto", "final", "reviewer", ""])
+def test_verifier_role_rejects_authority_outside_shadow_or_advisory(
+    tmp_path: Path, authority: str
+) -> None:
+    (tmp_path / ".dorf.toml").write_text(
+        _ROLE_AUTHORITY_CONTRACT.format(authority=authority)
+    )
+
+    with pytest.raises(
+        ContractValidationError, match="authority must be one of: advisory, shadow"
+    ):
         load_repo_contract(tmp_path)

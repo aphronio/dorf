@@ -1,6 +1,7 @@
 import json
 import socket
 import subprocess
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from dorf.deployment_profile import (
 )
 from dorf.github_app import (
     GitHubAppConfig,
+    GitHubAppTokenClient,
     GitHubInstallationToken,
     GitHubIssue,
     GitHubRepositoryError,
@@ -50,7 +52,7 @@ from dorf.provider_gateway import (
     ProviderGateway,
 )
 from dorf.repo_contract import RepoContract
-from dorf.runtime import ArtifactInput, RuntimeStore, WorkerWaitResult
+from dorf.runtime import ArtifactInput, NewJob, RuntimeStore, WorkerWaitResult
 from dorf.workflows import (
     AdmissionFailure,
     CodingAdmissionProof,
@@ -2707,3 +2709,497 @@ def test_resolve_git_author_rejects_empty_value(tmp_path, monkeypatch) -> None:
         resolve_git_author_or_exit(repo)
 
     assert error.value.exit_code == 1
+
+
+class CliFakeBinding:
+    def __init__(self, name: str, *, status: str = "ready") -> None:
+        self.worker = type("W", (), {"name": name})()
+        self.room = type("R", (), {"id": f"room-{name}", "status": status})()
+
+
+class CliFakeGateway:
+    def __init__(self) -> None:
+        self.revoked = []
+
+    def route_for_consumer(self, consumer):
+        return InferenceRoute(
+            "route-1",
+            "deepseek-review",
+            "http://127.0.0.1:8317/v1",
+            "responses",
+            "agw_broker_local",
+            model_prefix="deepseek",
+        )
+
+    def revoke_route(self, route_id):
+        self.revoked.append(route_id)
+        return True
+
+
+class CliVerifierExecution:
+    """The CLI-boundary fake Room: responds to every verifier preparation command.
+
+    Deliberately has no ``check_codex_authentication``: the Pi + DeepSeek
+    verifier must never call the implementation-agent probe.
+    """
+
+    def __init__(self, binding, dorf: "CliVerifierDorf") -> None:
+        self.binding = binding
+        self.dorf = dorf
+        self.written = {}
+        self.clone_input = None
+
+    def execute(self, argv, **kwargs):
+        script = argv[-1] if argv[:2] == ["bash", "-lc"] else None
+        if script is not None and "verifier clone ready" in script:
+            self.clone_input = kwargs.get("input")
+            return subprocess.CompletedProcess(argv, 0, "verifier clone ready\n", "")
+        if script is not None and "verifier-tooling: ready" in script:
+            return subprocess.CompletedProcess(argv, 0, "verifier-tooling: ready\n", "")
+        if script is not None and "review-diff.txt" in script:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if script is not None and "cat >" in script:
+            path = script.rsplit("cat > ", 1)[1].split()[0]
+            self.written[path] = kwargs.get("input", "")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if script is not None and "rm -rf" in script:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:2] == ["git", "rev-parse"] and argv[-1] == "HEAD":
+            return subprocess.CompletedProcess(argv, 0, f"{'c' * 40}\n", "")
+        if argv[:2] == ["git", "rev-parse"] and argv[-1] == "HEAD^{tree}":
+            return subprocess.CompletedProcess(argv, 0, f"{'t' * 40}\n", "")
+        if argv[:2] == ["git", "status"]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if argv[:2] == ["git", "-C"]:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        raise AssertionError(f"unexpected verifier command: {argv!r} {kwargs!r}")
+
+    def process_command(self, argv, **kwargs):
+        from dorf.workflows.coding_dossier import REVIEW_NO_FINDINGS_SENTINEL
+
+        return ["bash", "-lc", f"printf '%b' {REVIEW_NO_FINDINGS_SENTINEL!r}"]
+
+
+class CliVerifierDorf:
+    """The CLI-boundary fake Dorf: records the exact provider connection chosen."""
+
+    instances: list["CliVerifierDorf"] = []
+
+    def __init__(
+        self,
+        store,
+        *,
+        environment_config=None,
+        provider_connection=None,
+        provider_gateway=None,
+    ) -> None:
+        self.store = store
+        self.environment_config = environment_config
+        self.provider_connection = provider_connection
+        self.provider_gateway = provider_gateway
+        self.bindings: dict[str, CliFakeBinding] = {}
+        self.executions: dict[str, CliVerifierExecution] = {}
+        self.spawns = []
+        self.ended = []
+        self.messages = []
+        type(self).instances.append(self)
+
+    @staticmethod
+    def open_provider_gateway(environment_config, *, probe=None):
+        return CliFakeGateway()
+
+    def environment_prerequisites(self):
+        return []
+
+    def get_worker_binding(self, name):
+        return self.bindings.get(name)
+
+    def spawn_worker(self, name, *, provenance, lifecycle_policy, room_metadata=None):
+        self.spawns.append((name, provenance, lifecycle_policy))
+        binding = CliFakeBinding(name)
+        self.bindings[name] = binding
+        return binding
+
+    def end_worker(self, name, *, interrupt=False):
+        self.ended.append((name, interrupt))
+        self.bindings[name] = CliFakeBinding(name, status="absent")
+
+    def worker_execution(self, name):
+        execution = self.executions.get(name)
+        if execution is None:
+            execution = CliVerifierExecution(self.bindings[name], self)
+            self.executions[name] = execution
+        return execution
+
+    def message_job(self, name, text, *, action_id=None):
+        self.messages.append((name, text, action_id))
+        receipt = type("R", (), {"job_input": type("I", (), {"id": "jmsg-1"})()})()
+        return receipt
+
+
+def test_verify_role_cli_uses_narrow_read_token_and_typed_room_connection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """CLI-level verifier test: catches a callable-vs-client wiring bug and
+    validates the exact provider connection chosen for the verifier Room."""
+    repo = create_git_repo(tmp_path / "repo")
+    (repo / ".dorf.toml").write_text(
+        textwrap.dedent(
+            """
+            [verification.roles.diff]
+            harness = "pi"
+            connection = "deepseek-review"
+            model = "deepseek-v4-flash"
+            reasoning_effort = "max"
+            authority = "advisory"
+            room = "dedicated"
+            timeout_seconds = 120
+            prompt = "Review the exact implementation diff."
+            """
+        )
+    )
+    data_home = tmp_path / "data"
+    config_home = tmp_path / "config"
+    env = {"XDG_CONFIG_HOME": str(config_home), "XDG_DATA_HOME": str(data_home)}
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    store.create_coding_job(
+        job_name="checkout-perf",
+        metadata={
+            "task": "Improve checkout performance",
+            "target_repo": str(repo),
+            "target_branch": "main",
+            "target_start_sha": "a" * 40,
+            "job_branch": "dorf/checkout-perf",
+            "github_repo": "example/repo",
+        },
+    )
+    store.create_worker_with_room(
+        name="checkout-perf-worker",
+        harness_type="codex",
+        provenance="coding",
+        lifecycle_policy="dedicated",
+        room_id="room-checkout-perf",
+        room_type="incus",
+        provider_id="chatgpt",
+        workspace="/workspace/jobs/checkout-perf",
+        metadata={},
+    )
+    store.update_room_status("room-checkout-perf", "ready", None)
+    store.update_worker_status("checkout-perf-worker", "ready", None)
+    store.assign_job(
+        NewJob(
+            name="checkout-perf",
+            worker_name="checkout-perf-worker",
+            goal="Improve checkout performance",
+            model="gpt-5.6-sol",
+            reasoning_effort="low",
+        )
+    )
+
+    minted_bodies = []
+
+    def fake_mint(
+        self,
+        config,
+        *,
+        config_home=None,
+        private_key_path=None,
+        repositories=None,
+        permissions=None,
+    ):
+        minted_bodies.append({"repositories": repositories, "permissions": permissions})
+        return GitHubInstallationToken(
+            token="narrow-read-token",
+            expires_at="2026-08-06T12:00:00Z",
+            permissions=permissions,
+        )
+
+    monkeypatch.setattr(GitHubAppTokenClient, "mint_installation_token", fake_mint)
+    monkeypatch.setattr(
+        "dorf.cli.load_github_app_config",
+        lambda: GitHubAppConfig("1", "2", "dorf-test"),
+    )
+    # Branch resolution uses the real GitHubRepositoryClient but never the
+    # network: the HTTP layer is replaced with the pinned branch payload.
+    monkeypatch.setattr(
+        "dorf.github_app.GitHubRepositoryClient._request_json",
+        lambda self, method, path: {"object": {"sha": "c" * 40}},
+    )
+    monkeypatch.setattr("dorf.cli.Dorf", CliVerifierDorf)
+
+    result = CliRunner().invoke(
+        app,
+        ["verify-role", "checkout-perf", "diff"],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "verifier advisory diff run 1: no-findings" in result.output
+    assert "verifier cleanup: clean" in result.output
+    assert minted_bodies == [
+        {"repositories": ["repo"], "permissions": {"contents": "read"}}
+    ]
+    assert "write" not in repr(minted_bodies)
+    assert "narrow-read-token" not in result.output
+
+    # The exact provider connection chosen for the verifier Room is the typed
+    # role connection, never the profile default.
+    assert CliVerifierDorf.instances[0].provider_connection == "deepseek-review"
+
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    runs = store.list_verifier_runs("checkout-perf")
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.verdict == "no-findings"
+    assert run.status == "verdict"
+    assert run.cleanup_status == "clean"
+    assert run.cleanup_route_revoked is True
+    assert run.cleanup_room_gone is True
+    events = store.documents.list_events("checkout-perf")
+    verdicts = [event for event in events if event.kind == "verifier-verdict"]
+    assert len(verdicts) == 1
+    assert verdicts[0].related["verdict"] == "no-findings"
+    assert verdicts[0].related["authority"] == "advisory"
+    assert verdicts[0].related["config_digest"].startswith("sha256:")
+    assert verdicts[0].related["config_model"] == "deepseek-v4-flash"
+    assert verdicts[0].related["config_connection"] == "deepseek-review"
+
+    dorf = CliVerifierDorf.instances[0]
+    assert dorf.spawns == [
+        (run.worker_name, "verification", "dedicated"),
+    ]
+    assert dorf.ended == [(run.worker_name, False)]
+    assert dorf.provider_gateway.revoked == [run.route_id]
+    execution = dorf.worker_execution(run.worker_name)
+    assert execution.clone_input.strip() == "narrow-read-token"
+    extension = next(
+        content
+        for path, content in execution.written.items()
+        if path.endswith("dorf-deepseek-provider.mjs")
+    )
+    assert "'deepseek/deepseek-v4-flash'" in extension
+    assert "${DORF_PROVIDER_ROUTE_KEY}" in extension
+    assert "chatgpt" not in extension.casefold()
+    assert CliVerifierDorf.instances[0].messages == []  # no-findings: no FIFO input
+
+
+def test_verify_role_cli_shadow_findings_are_retained_and_not_delivered(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """CLI-level shadow run: findings verdict without any Job FIFO delivery."""
+    repo = create_git_repo(tmp_path / "repo")
+    (repo / ".dorf.toml").write_text(
+        textwrap.dedent(
+            """
+            [verification.roles.diff]
+            harness = "pi"
+            connection = "deepseek-review"
+            model = "deepseek-v4-flash"
+            reasoning_effort = "max"
+            authority = "shadow"
+            room = "dedicated"
+            timeout_seconds = 120
+            prompt = "Review the exact implementation diff."
+            """
+        )
+    )
+    data_home = tmp_path / "data"
+    config_home = tmp_path / "config"
+    env = {"XDG_CONFIG_HOME": str(config_home), "XDG_DATA_HOME": str(data_home)}
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    store.create_coding_job(
+        job_name="checkout-perf",
+        metadata={
+            "task": "Improve checkout performance",
+            "target_repo": str(repo),
+            "target_branch": "main",
+            "target_start_sha": "a" * 40,
+            "job_branch": "dorf/checkout-perf",
+            "github_repo": "example/repo",
+        },
+    )
+    store.create_worker_with_room(
+        name="checkout-perf-worker",
+        harness_type="codex",
+        provenance="coding",
+        lifecycle_policy="dedicated",
+        room_id="room-checkout-perf",
+        room_type="incus",
+        provider_id="chatgpt",
+        workspace="/workspace/jobs/checkout-perf",
+        metadata={},
+    )
+    store.update_room_status("room-checkout-perf", "ready", None)
+    store.update_worker_status("checkout-perf-worker", "ready", None)
+    store.assign_job(
+        NewJob(
+            name="checkout-perf",
+            worker_name="checkout-perf-worker",
+            goal="Improve checkout performance",
+            model="gpt-5.6-sol",
+            reasoning_effort="low",
+        )
+    )
+
+    class ShadowCliVerifierExecution(CliVerifierExecution):
+        def process_command(self, argv, **kwargs):
+            return ["bash", "-lc", f"printf '%b' {'finding text'!r}"]
+
+    def shadow_worker_execution(self, name):
+        execution = self.executions.get(name)
+        if execution is None:
+            execution = ShadowCliVerifierExecution(self.bindings[name], self)
+            self.executions[name] = execution
+        return execution
+
+    monkeypatch.setattr(CliVerifierDorf, "worker_execution", shadow_worker_execution)
+    monkeypatch.setattr(
+        "dorf.cli.GitHubAppTokenClient.mint_installation_token",
+        lambda self, config, **kwargs: GitHubInstallationToken(
+            token="narrow-read-token",
+            expires_at="2026-08-06T12:00:00Z",
+            permissions={"contents": "read"},
+        ),
+    )
+    monkeypatch.setattr(
+        "dorf.cli.load_github_app_config",
+        lambda: GitHubAppConfig("1", "2", "dorf-test"),
+    )
+    monkeypatch.setattr(
+        "dorf.github_app.GitHubRepositoryClient._request_json",
+        lambda self, method, path: {"object": {"sha": "c" * 40}},
+    )
+    monkeypatch.setattr("dorf.cli.Dorf", CliVerifierDorf)
+
+    result = CliRunner().invoke(
+        app,
+        ["verify-role", "checkout-perf", "diff"],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "verifier shadow diff run 1: findings" in result.output
+    assert "shadow findings retained as verifier evidence" in result.output
+    assert "not delivered to the Job FIFO" in result.output
+    dorf = CliVerifierDorf.instances[-1]
+    assert dorf.messages == []  # shadow never enqueues findings
+    store = CodingStore.open(data_home / "dorf" / "state.sqlite3")
+    run = store.list_verifier_runs("checkout-perf")[0]
+    assert run.verdict == "findings"
+    assert run.authority == "shadow"
+    assert run.feedback_input_id is None
+    assert run.cleanup_status == "clean"
+    verdicts = [
+        event
+        for event in store.documents.list_events("checkout-perf")
+        if event.kind == "verifier-verdict"
+    ]
+    assert verdicts[0].related["authority"] == "shadow"
+    assert verdicts[0].related["input"] == ""
+
+
+def test_deepseek_connect_never_replaces_the_implementation_default(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "gateway"
+    executable = tmp_path / "provider-broker"
+    write_cli_provider_broker(executable)
+    port = free_provider_port()
+    open_gateway = ProviderGateway.open
+    monkeypatch.setattr(
+        "dorf.cli.ProviderGateway.open",
+        classmethod(
+            lambda cls: open_gateway(
+                state_path=state_path,
+                executable_path=executable,
+                port=port,
+            )
+        ),
+    )
+    config_home = tmp_path / "config"
+
+    implementation = CliRunner().invoke(
+        app,
+        ["provider", "connect", "openai", "--api-key", "--name", "work-openai"],
+        env={"OPENAI_API_KEY": "openai-secret", "XDG_CONFIG_HOME": str(config_home)},
+    )
+    assert implementation.exit_code == 0
+    assert (
+        load_deployment_profile(config_home=config_home).provider_connection
+        == "work-openai"
+    )
+
+    deepseek_key = "deepseek-secret-that-must-not-appear"
+    reviewer = CliRunner().invoke(
+        app,
+        ["provider", "connect", "deepseek", "--api-key", "--name", "deepseek-review"],
+        env={"DEEPSEEK_API_KEY": deepseek_key, "XDG_CONFIG_HOME": str(config_home)},
+    )
+    assert reviewer.exit_code == 0
+    assert "deepseek-review · deepseek · api_key · connected" in reviewer.output
+    assert "Reviewer connection kept out of the deployment profile default" in reviewer.output
+    assert deepseek_key not in reviewer.output
+    assert (
+        load_deployment_profile(config_home=config_home).provider_connection
+        == "work-openai"
+    )
+
+    listed = CliRunner().invoke(app, ["provider", "list"])
+    assert listed.exit_code == 0
+    assert "deepseek-review · deepseek · api_key · connected" in listed.output
+    assert deepseek_key not in listed.output
+
+    with open_gateway(
+        state_path=state_path,
+        executable_path=executable,
+        port=port,
+    ) as gateway:
+        config = (state_path / "broker.yaml").read_text()
+        assert 'prefix: "deepseek"' in config
+        assert 'base-url: "https://api.deepseek.com/v1"' in config
+        assert gateway.route_for_consumer("missing") is None
+
+
+def test_deepseek_connect_set_default_is_explicit_and_leaves_default_path_visible(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "gateway"
+    executable = tmp_path / "provider-broker"
+    write_cli_provider_broker(executable)
+    port = free_provider_port()
+    open_gateway = ProviderGateway.open
+    monkeypatch.setattr(
+        "dorf.cli.ProviderGateway.open",
+        classmethod(
+            lambda cls: open_gateway(
+                state_path=state_path,
+                executable_path=executable,
+                port=port,
+            )
+        ),
+    )
+    config_home = tmp_path / "config"
+
+    explicit = CliRunner().invoke(
+        app,
+        [
+            "provider",
+            "connect",
+            "deepseek",
+            "--api-key",
+            "--name",
+            "deepseek-review",
+            "--set-default",
+        ],
+        env={"DEEPSEEK_API_KEY": "deepseek-secret", "XDG_CONFIG_HOME": str(config_home)},
+    )
+    assert explicit.exit_code == 0
+    assert "Default for new Rooms: deepseek-review" in explicit.output
+    assert (
+        load_deployment_profile(config_home=config_home).provider_connection
+        == "deepseek-review"
+    )

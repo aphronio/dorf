@@ -88,6 +88,9 @@ dorf afk 42
 dorf job inspect JOB
 dorf job inspect JOB --json  # structured outcome pulse for agents
 dorf verify JOB
+# Optional shadow diff-correctness role in its own disposable Room
+# (explicit opt-in; automatic AFK composition is a later step):
+dorf verify-role JOB diff
 dorf publish JOB
 ```
 

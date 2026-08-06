@@ -135,6 +135,8 @@ from dorf.workflows import (
     CodingStore,
     CodingWorkflow,
     PendingCodingAdmission,
+    VerifierCoordinator,
+    VerifierInfrastructureFailed,
     WorkflowFailure,
     WorkflowOutcome,
     build_coding_job_pulse,
@@ -711,7 +713,12 @@ def provider_connect(
     api_key: bool = typer.Option(
         False,
         "--api-key",
-        help="Connect an API key read from OPENAI_API_KEY or a hidden prompt.",
+        help="Connect an API key read from the provider environment or a hidden prompt.",
+    ),
+    set_default: bool = typer.Option(
+        False,
+        "--set-default",
+        help="Select this connection for new Rooms (never implied for reviewers).",
     ),
 ) -> None:
     """Connect one named upstream provider credential."""
@@ -731,15 +738,30 @@ def provider_connect(
                     name=name,
                     api_key=credential,
                 )
+            elif provider == "deepseek" and api_key and not subscription:
+                credential = os.environ.get("DEEPSEEK_API_KEY")
+                if not credential:
+                    credential = typer.prompt("DeepSeek API key", hide_input=True)
+                connection = gateway.connect_deepseek_api_key(
+                    name=name,
+                    api_key=credential,
+                )
             else:
                 typer.echo(
-                    "Choose chatgpt --subscription or openai --api-key",
+                    "Choose chatgpt --subscription, openai --api-key, or deepseek --api-key",
                     err=True,
                 )
                 raise typer.Exit(2)
     except (ProviderGatewayError, ValueError) as error:
         echo_provider_error(error)
         raise typer.Exit(1) from error
+    select_default = set_default or connection.provider != "deepseek"
+    if not select_default:
+        echo_provider_connection(connection)
+        typer.echo(
+            f"Reviewer connection kept out of the deployment profile default: {connection.name}"
+        )
+        return
     try:
         set_default_provider_connection(connection.name)
     except (DeploymentProfileError, OSError) as error:
@@ -2916,6 +2938,68 @@ def verify(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> Non
     run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.verify(agents))
 
 
+@app.command("verify-role")
+def verify_role(
+    job_name: str,
+    role: str = typer.Argument(..., help="Typed verification role from [verification.roles]."),
+) -> None:
+    """Run one shadow or advisory verification role in a disposable Room for a coding Job.
+
+    An advisory role may enqueue findings to the implementation Job FIFO exactly
+    once; a shadow role persists verdict and evidence and cleans its resources
+    but never enqueues findings.
+    """
+    store = CodingStore.open()
+    job = get_runnable_coding_job_or_exit(store, job_name)
+    contract = load_contract_or_exit(Path(job.target_repo))
+    selected = contract.verifier_roles.get(role)
+    if selected is None:
+        available = ", ".join(sorted(contract.verifier_roles)) or "none configured"
+        typer.echo(f"Verifier role not found: {role} (configured: {available})", err=True)
+        raise typer.Exit(1)
+    selected_provider, deployment_profile = select_coding_deployment_or_exit(
+        selected.connection
+    )
+    environment_config = IncusConfig.from_mapping(contract.incus_config)
+    image_fingerprint = deployment_image_fingerprint(deployment_profile, contract)
+    if image_fingerprint is not None:
+        environment_config = replace(environment_config, template=image_fingerprint)
+    try:
+        gateway = Dorf.open_provider_gateway(environment_config)
+        dorf = Dorf(
+            store,
+            environment_config=environment_config,
+            provider_connection=selected_provider,
+            provider_gateway=gateway,
+        )
+        exit_if_environment_prerequisites_missing(dorf)
+        read_client, read_token = github_read_only_repository_client_for_job(job_name)
+        coordinator = VerifierCoordinator(
+            store=store,
+            job=job,
+            role=selected,
+            dorf=dorf,
+            gateway=gateway,
+            github_client=read_client,
+            token_provider=lambda: read_token,
+        )
+        outcome = coordinator.run()
+    except VerifierInfrastructureFailed as error:
+        typer.echo(str(error), err=True)
+        typer.echo("verifier outcome: infrastructure (not a code finding)", err=True)
+        raise typer.Exit(1) from error
+    except EnvironmentPrerequisitesError as error:
+        echo_environment_prerequisite_failures(error.failures)
+        raise typer.Exit(1) from error
+    except RuntimeError as error:
+        typer.echo(f"verifier could not run: {error}", err=True)
+        raise typer.Exit(1) from error
+    for message in outcome.messages:
+        typer.echo(message, err=outcome.exit_code != 0)
+    if outcome.exit_code:
+        raise typer.Exit(outcome.exit_code)
+
+
 @app.command()
 def followup(job_name: str) -> None:
     """Route linked PR feedback through the same Job conversation."""
@@ -3208,6 +3292,39 @@ def github_installation_token_for_job(job_name: str) -> str:
     except (GitHubAppConfigError, GitHubAppVerificationError) as error:
         raise RuntimeError(f"could not refresh GitHub App token: {error}") from error
     return minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+
+
+def github_read_only_repository_client_for_job(
+    job_name: str,
+) -> tuple[GitHubRepositoryClient, str]:
+    """Mint one narrowly scoped read-only installation token for the Job repo.
+
+    The verifier only needs branch resolution and a read-only clone of the exact
+    repository, so the token is restricted to that one repository with
+    ``contents: read`` only; the same token serves branch resolution and clone.
+    """
+    job = CodingStore.open().get_coding_job(job_name)
+    if job is None:
+        raise RuntimeError(f"Coding Job not found: {job_name}")
+    repo_full_name = job.metadata.get("github_repo")
+    if not repo_full_name:
+        raise RuntimeError("Coding Job metadata is missing github_repo")
+    repository = repo_full_name.rsplit("/", 1)[-1]
+    if not repository:
+        raise RuntimeError(f"Coding Job metadata has an invalid github_repo: {repo_full_name}")
+    try:
+        config = load_github_app_config()
+        minted = GitHubAppTokenClient().mint_installation_token(
+            config,
+            repositories=[repository],
+            permissions={"contents": "read"},
+        )
+    except (GitHubAppConfigError, GitHubAppVerificationError) as error:
+        raise RuntimeError(f"could not mint a read-only GitHub App token: {error}") from error
+    token = minted.token if isinstance(minted, GitHubInstallationToken) else str(minted)
+    if not token:
+        raise RuntimeError("GitHub App token response did not include a token")
+    return GitHubRepositoryClient(token), token
 
 
 def detect_git_target(cwd: Path) -> GitTarget:

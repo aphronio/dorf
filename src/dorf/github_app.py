@@ -179,12 +179,29 @@ class GitHubAppTokenClient:
         *,
         config_home: Path | None = None,
         private_key_path: Path | None = None,
+        repositories: list[str] | None = None,
+        permissions: dict[str, str] | None = None,
     ) -> GitHubInstallationToken:
+        """Mint an installation token, optionally scoped to exact repositories.
+
+        Passing ``repositories`` and/or ``permissions`` adds the GitHub-supported
+        request body so the token is restricted to those repositories and
+        permission levels (for example ``contents: read`` only).
+        """
         key_path = private_key_path or github_app_paths(config_home).private_key_path
         jwt = create_github_app_jwt(config.app_id, key_path)
+        body = None
+        if repositories is not None or permissions is not None:
+            scoped: dict[str, object] = {}
+            if repositories is not None:
+                scoped["repositories"] = repositories
+            if permissions is not None:
+                scoped["permissions"] = permissions
+            body = json.dumps(scoped).encode("utf-8")
         request = urllib.request.Request(
             f"{self.api_url}/app/installations/{config.installation_id}/access_tokens",
             method="POST",
+            data=body,
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {jwt}",

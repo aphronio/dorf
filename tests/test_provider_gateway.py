@@ -797,7 +797,7 @@ def test_route_fails_closed_instead_of_implicitly_pooling_multiple_connections(
 
         with pytest.raises(
             ProviderSelectionUnsupportedError,
-            match="Multiple provider connections are not supported",
+            match="require distinct model prefixes for exact selection",
         ):
             gateway.create_route("chatgpt-one", consumer="test-client")
         gateway.shutdown()
@@ -815,3 +815,122 @@ def _model_status(base_url: str, api_key: str | None = None) -> int:
             return response.status
     except urllib.error.HTTPError as error:
         return error.code
+
+
+def test_deepseek_connection_is_host_owned_and_prefixed_in_broker_config(
+    tmp_path,
+) -> None:
+    executable = tmp_path / "provider-broker"
+    _write_test_broker(executable)
+    state_path = tmp_path / "gateway"
+    port = _free_port()
+    deepseek_key = "deepseek-upstream-secret-must-not-leak"
+
+    with ProviderGateway.open(
+        state_path=state_path,
+        executable_path=executable,
+        port=port,
+    ) as gateway:
+        connection = gateway.connect_deepseek_api_key(
+            name="deepseek-review",
+            api_key=deepseek_key,
+        )
+        assert connection.provider == "deepseek"
+        assert connection.auth_mode == "api_key"
+        assert connection.status == "connected"
+
+        listed = gateway.list_connections()
+        assert listed == (connection,)
+        assert deepseek_key not in str(listed)
+
+        config = (state_path / "broker.yaml").read_text()
+        assert "codex-api-key:" in config
+        assert 'base-url: "https://api.deepseek.com/v1"' in config
+        assert 'prefix: "deepseek"' in config
+        assert deepseek_key in config  # the broker holds the upstream key host-side
+
+        route = gateway.create_route("deepseek-review", consumer="review-client")
+        assert route.model_prefix == "deepseek"
+        assert route.connection_name == "deepseek-review"
+
+        recovered = gateway.route_for_consumer("review-client")
+        assert recovered is not None
+        assert recovered.model_prefix == "deepseek"
+        assert deepseek_key not in recovered.api_key
+
+        credentials_dir = state_path / "credentials"
+        assert credentials_dir.stat().st_mode & 0o777 == 0o700
+        secret = next(credentials_dir.iterdir())
+        assert secret.stat().st_mode & 0o777 == 0o600
+        assert secret.read_text().strip() == deepseek_key
+
+        gateway.shutdown()
+
+    assert os.stat(state_path).st_mode & 0o777 == 0o700
+
+
+def test_chatgpt_and_deepseek_routes_select_exact_upstreams(tmp_path) -> None:
+    executable = tmp_path / "provider-broker"
+    _write_test_broker(executable)
+    state_path = tmp_path / "gateway"
+    port = _free_port()
+
+    with ProviderGateway.open(
+        state_path=state_path,
+        executable_path=executable,
+        port=port,
+    ) as gateway:
+        gateway.connect_chatgpt_subscription(
+            name="chatgpt-work",
+            on_authorization=lambda challenge: None,
+        )
+        gateway.connect_deepseek_api_key(
+            name="deepseek-review",
+            api_key="deepseek-upstream-secret",
+        )
+        chatgpt_route = gateway.create_route("chatgpt-work", consumer="coder-room")
+        deepseek_route = gateway.create_route(
+            "deepseek-review",
+            consumer="verifier-room",
+        )
+        gateway.shutdown()
+
+    assert chatgpt_route.model_prefix is None
+    assert deepseek_route.model_prefix == "deepseek"
+
+    config = (state_path / "broker.yaml").read_text()
+    assert 'prefix: "deepseek"' in config
+    assert 'base-url: "https://api.deepseek.com/v1"' in config
+    assert 'base-url: "https://api.openai.com/v1"' not in config
+    assert 'api-key: "deepseek-upstream-secret"' in config
+    assert "deepseek-upstream-secret" not in str(chatgpt_route)
+    assert "deepseek-upstream-secret" not in str(deepseek_route)
+
+
+def test_duplicate_prefixed_connections_fail_closed(tmp_path) -> None:
+    executable = tmp_path / "provider-broker"
+    _write_test_broker(executable)
+    state_path = tmp_path / "gateway"
+    port = _free_port()
+
+    with ProviderGateway.open(
+        state_path=state_path,
+        executable_path=executable,
+        port=port,
+    ) as gateway:
+        gateway.connect_deepseek_api_key(
+            name="deepseek-one",
+            api_key="secret-one",
+        )
+        gateway.connect_deepseek_api_key(
+            name="deepseek-two",
+            api_key="secret-two",
+        )
+        with pytest.raises(
+            ProviderSelectionUnsupportedError,
+            match="require distinct model prefixes for exact selection",
+        ):
+            gateway.create_route("deepseek-one", consumer="client")
+        gateway.shutdown()
+
+    assert not (state_path / "routes.json").exists()

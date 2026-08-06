@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -113,6 +115,45 @@ class AcceptanceChecklist:
     items: tuple[AcceptanceItem, ...]
     state: str
     revision: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class VerifierRun:
+    """One workflow-owned verifier role run pinned to an exact commit and config.
+
+    ``authority``, ``config_digest``, and ``config_snapshot`` persist the exact
+    typed role configuration the run executed under, so a configuration change
+    can never reuse or retroactively deliver a verdict produced under a
+    different configuration.
+    """
+
+    id: int
+    job_name: str
+    role: str
+    commit_sha: str
+    generation: int
+    worker_name: str
+    room_id: str
+    route_id: str
+    status: str
+    verdict: str | None
+    failure_kind: str | None
+    command_run_id: int | None
+    feedback_input_id: str | None
+    commit_before: str | None
+    commit_after: str | None
+    tree_before: str | None
+    tree_after: str | None
+    worktree_before: str | None
+    worktree_after: str | None
+    cleanup_status: str
+    cleanup_route_revoked: bool
+    cleanup_room_gone: bool
+    authority: str
+    config_digest: str
+    config_snapshot: str
     created_at: str
     updated_at: str
 
@@ -894,6 +935,253 @@ class CodingStore(RuntimeStore):
             raise RuntimeError("recorded followup feedback could not be loaded")
         return recorded
 
+    @contextmanager
+    def verifier_run_lock(self, job_name: str, role: str) -> Iterator[None]:
+        """Serialize one role coordinator across its full external execution.
+
+        Reserving a durable run is idempotent, but two processes must not drive
+        the same disposable Room or Pi session concurrently. The role is hashed
+        before it enters the lock filename because TOML role keys are not path
+        components.
+        """
+        role_digest = hashlib.sha256(role.encode()).hexdigest()[:16]
+        with self._named_process_lock(job_name, f"verifier-{role_digest}"):
+            yield
+
+    def create_verifier_run(
+        self,
+        *,
+        job_name: str,
+        role: str,
+        commit_sha: str,
+        generation: int,
+        worker_name: str,
+        room_id: str,
+        route_id: str,
+        authority: str,
+        config_digest: str,
+        config_snapshot: str,
+    ) -> VerifierRun:
+        """Reserve one commit- and configuration-pinned verifier run idempotently.
+
+        The run identity includes the canonical configuration digest: a changed
+        typed configuration (shadow vs advisory, model, reasoning effort,
+        connection, prompt, ...) reserves a fresh run even at the same
+        generation number instead of reusing the old row.
+        """
+        now = _now()
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            existing = self._connection.execute(
+                "SELECT id FROM verifier_runs WHERE job_name = ? AND role = ? "
+                "AND commit_sha = ? AND config_digest = ? AND generation = ?",
+                (job_name, role, commit_sha, config_digest, generation),
+            ).fetchone()
+            if existing is not None:
+                self._connection.commit()
+                run = self.get_verifier_run(int(existing["id"]))
+                if run is None:
+                    raise RuntimeError("recorded verifier run could not be loaded")
+                return run
+            cursor = self._connection.execute(
+                """
+                INSERT INTO verifier_runs (
+                    job_name, role, commit_sha, generation, worker_name, room_id,
+                    route_id, status, cleanup_status, authority, config_digest,
+                    config_snapshot, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', 'pending', ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_name,
+                    role,
+                    commit_sha,
+                    generation,
+                    worker_name,
+                    room_id,
+                    route_id,
+                    authority,
+                    config_digest,
+                    config_snapshot,
+                    now,
+                    now,
+                ),
+            )
+            self._connection.commit()
+        except BaseException:
+            self._connection.rollback()
+            raise
+        created = self.get_verifier_run(int(cursor.lastrowid))
+        if created is None:
+            raise RuntimeError("created verifier run could not be loaded")
+        return created
+
+    def get_latest_verifier_run(
+        self,
+        job_name: str,
+        role: str,
+        commit_sha: str,
+    ) -> VerifierRun | None:
+        row = self._connection.execute(
+            """
+            SELECT * FROM verifier_runs
+            WHERE job_name = ? AND role = ? AND commit_sha = ?
+            ORDER BY generation DESC, id DESC LIMIT 1
+            """,
+            (job_name, role, commit_sha),
+        ).fetchone()
+        return _verifier_run(row) if row is not None else None
+
+    def get_verifier_run(self, run_id: int) -> VerifierRun | None:
+        row = self._connection.execute(
+            "SELECT * FROM verifier_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return _verifier_run(row) if row is not None else None
+
+    def list_verifier_runs(self, job_name: str) -> list[VerifierRun]:
+        rows = self._connection.execute(
+            """
+            SELECT * FROM verifier_runs
+            WHERE job_name = ? ORDER BY created_at DESC, id DESC
+            """,
+            (job_name,),
+        ).fetchall()
+        return [_verifier_run(row) for row in rows]
+
+    def set_verifier_run_room(
+        self,
+        run_id: int,
+        room_id: str,
+        route_id: str,
+    ) -> VerifierRun:
+        self._connection.execute(
+            """
+            UPDATE verifier_runs
+            SET room_id = ?, route_id = ?, updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (room_id, route_id, _now(), run_id),
+        )
+        self._connection.commit()
+        updated = self.get_verifier_run(run_id)
+        if updated is None:
+            raise RuntimeError("updated verifier run could not be loaded")
+        return updated
+
+    def update_verifier_run_observations(
+        self,
+        run_id: int,
+        *,
+        commit_before: str | None,
+        commit_after: str | None,
+        tree_before: str | None,
+        tree_after: str | None,
+        worktree_before: str | None,
+        worktree_after: str | None,
+    ) -> VerifierRun:
+        self._connection.execute(
+            """
+            UPDATE verifier_runs
+            SET commit_before = ?, commit_after = ?, tree_before = ?, tree_after = ?,
+                worktree_before = ?, worktree_after = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                commit_before,
+                commit_after,
+                tree_before,
+                tree_after,
+                worktree_before,
+                worktree_after,
+                _now(),
+                run_id,
+            ),
+        )
+        self._connection.commit()
+        updated = self.get_verifier_run(run_id)
+        if updated is None:
+            raise RuntimeError("updated verifier run could not be loaded")
+        return updated
+
+    def finish_verifier_run(
+        self,
+        run_id: int,
+        *,
+        verdict: str,
+        failure_kind: str | None = None,
+        command_run_id: int | None = None,
+    ) -> VerifierRun:
+        """Record one terminal verdict without authorizing any merge."""
+        status = "verdict" if verdict != "infrastructure" else "infrastructure"
+        self._connection.execute(
+            """
+            UPDATE verifier_runs
+            SET status = ?, verdict = ?, failure_kind = ?, command_run_id = ?,
+                updated_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (status, verdict, failure_kind, command_run_id, _now(), run_id),
+        )
+        self._connection.commit()
+        updated = self.get_verifier_run(run_id)
+        if updated is None:
+            raise RuntimeError("finished verifier run could not be loaded")
+        return updated
+
+    def mark_verifier_run_failure(
+        self,
+        run_id: int,
+        failure_kind: str,
+    ) -> VerifierRun:
+        """Terminate a run as an infrastructure outcome, never a code finding."""
+        return self.finish_verifier_run(
+            run_id,
+            verdict="infrastructure",
+            failure_kind=failure_kind,
+        )
+
+    def record_verifier_feedback_input(
+        self,
+        run_id: int,
+        input_id: str,
+    ) -> VerifierRun:
+        self._connection.execute(
+            """
+            UPDATE verifier_runs
+            SET feedback_input_id = ?, updated_at = ?
+            WHERE id = ? AND status = 'verdict'
+            """,
+            (input_id, _now(), run_id),
+        )
+        self._connection.commit()
+        updated = self.get_verifier_run(run_id)
+        if updated is None:
+            raise RuntimeError("updated verifier run could not be loaded")
+        return updated
+
+    def set_verifier_cleanup(
+        self,
+        run_id: int,
+        *,
+        route_revoked: bool,
+        room_gone: bool,
+    ) -> VerifierRun:
+        """Record the exact cleanup truth; incomplete stays visibly pending."""
+        cleaned = route_revoked and room_gone
+        self._connection.execute(
+            """
+            UPDATE verifier_runs
+            SET cleanup_route_revoked = ?, cleanup_room_gone = ?,
+                cleanup_status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (int(route_revoked), int(room_gone), "clean" if cleaned else "pending", _now(), run_id),
+        )
+        self._connection.commit()
+        updated = self.get_verifier_run(run_id)
+        if updated is None:
+            raise RuntimeError("updated verifier run could not be loaded")
+        return updated
+
     def _migrate(self) -> None:
         super()._migrate()
         self._connection.execute(
@@ -982,7 +1270,65 @@ class CodingStore(RuntimeStore):
             )
             """
         )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS verifier_runs (
+                id INTEGER PRIMARY KEY,
+                job_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                generation INTEGER NOT NULL DEFAULT 1,
+                worker_name TEXT NOT NULL,
+                room_id TEXT NOT NULL,
+                route_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                verdict TEXT,
+                failure_kind TEXT,
+                command_run_id INTEGER,
+                feedback_input_id TEXT,
+                commit_before TEXT,
+                commit_after TEXT,
+                tree_before TEXT,
+                tree_after TEXT,
+                worktree_before TEXT,
+                worktree_after TEXT,
+                cleanup_status TEXT NOT NULL,
+                cleanup_route_revoked INTEGER NOT NULL DEFAULT 0,
+                cleanup_room_gone INTEGER NOT NULL DEFAULT 0,
+                authority TEXT NOT NULL,
+                config_digest TEXT NOT NULL,
+                config_snapshot TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(job_name, role, commit_sha, config_digest, generation)
+            )
+            """
+        )
+        self._require_verifier_run_schema()
         self._connection.commit()
+
+    def _require_verifier_run_schema(self) -> None:
+        """Fail clearly instead of silently misreading an experimental table.
+
+        The verifier_runs table is experimental local state with no
+        compatibility burden. A table created before the typed configuration
+        columns existed cannot be read safely (every row would lack the
+        authority/config identity that drives delivery decisions), so refuse to
+        operate on it with a deterministic remediation instead of guessing.
+        """
+        columns = {
+            row["name"]
+            for row in self._connection.execute("PRAGMA table_info(verifier_runs)")
+        }
+        missing = {"authority", "config_digest", "config_snapshot"} - columns
+        if missing:
+            raise RuntimeError(
+                "verifier_runs table is missing columns "
+                + ", ".join(sorted(missing))
+                + "; the experimental verifier schema changed. Delete the "
+                "verifier_runs table (or the whole local state database) to "
+                "recreate it, then rerun the verifier role."
+            )
 
 
 def _coding_job(row) -> CodingJob:
@@ -1022,6 +1368,38 @@ def _followup_feedback(row) -> FollowupFeedback:
         comment_id=row["comment_id"],
         status=row["status"],
         commit_sha=row["commit_sha"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _verifier_run(row) -> VerifierRun:
+    return VerifierRun(
+        id=row["id"],
+        job_name=row["job_name"],
+        role=row["role"],
+        commit_sha=row["commit_sha"],
+        generation=row["generation"],
+        worker_name=row["worker_name"],
+        room_id=row["room_id"],
+        route_id=row["route_id"],
+        status=row["status"],
+        verdict=row["verdict"],
+        failure_kind=row["failure_kind"],
+        command_run_id=row["command_run_id"],
+        feedback_input_id=row["feedback_input_id"],
+        commit_before=row["commit_before"],
+        commit_after=row["commit_after"],
+        tree_before=row["tree_before"],
+        tree_after=row["tree_after"],
+        worktree_before=row["worktree_before"],
+        worktree_after=row["worktree_after"],
+        cleanup_status=row["cleanup_status"],
+        cleanup_route_revoked=bool(row["cleanup_route_revoked"]),
+        cleanup_room_gone=bool(row["cleanup_room_gone"]),
+        authority=row["authority"],
+        config_digest=row["config_digest"],
+        config_snapshot=row["config_snapshot"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

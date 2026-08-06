@@ -91,9 +91,17 @@ ChatGPT subscription or OpenAI API key
         real codex app-server
 ```
 
-D035 validates the Codex Responses path. The current backend cannot guarantee connection affinity
-when more than one upstream connection is active, so route creation fails closed instead of
-implicitly pooling them. This is an observed backend constraint, not a provider-selection framework.
+D035 validates the Codex Responses path. The backend cannot guarantee connection affinity
+when two upstream connections share a model namespace, so route creation fails closed
+instead of implicitly pooling them: at most one connection may be unprefixed and every
+prefixed connection must use a distinct model prefix. Prefixed connections (for example
+`deepseek/<model>` for a DeepSeek API-key connection) route by model prefix so the broker
+selects the declared upstream, intended to keep a reviewer connection from pooling or
+falling back onto the implementation connection. Prefix pinning guarantees the Pi
+invocation selects the intended model/tools namespace; CLIProxyAPI keys are broker keys,
+not cryptographic per-provider allowlists, so the route credential itself is not claimed
+to be provider-exclusive. Exact live affinity is only established by the real-broker
+terminal. This is an observed backend constraint, not a provider-selection framework.
 
 ## Failure and security semantics
 

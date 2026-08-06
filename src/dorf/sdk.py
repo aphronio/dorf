@@ -246,6 +246,50 @@ class JobExecution:
         )
 
 
+@dataclass(frozen=True)
+class WorkerExecution:
+    """Operate one recorded Worker Room without exposing adapter wiring."""
+
+    binding: WorkerBinding
+    _environment: CodexRoomEnvironment
+
+    def execute(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        input: str | None = None,
+        timeout_seconds: float | None = None,
+        provider_route: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        return self._environment.execute(
+            self.binding,
+            argv,
+            cwd=cwd,
+            env=env,
+            input=input,
+            timeout_seconds=timeout_seconds,
+            provider_route=provider_route,
+        )
+
+    def process_command(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        provider_route: bool = False,
+    ) -> list[str]:
+        return self._environment.process_command(
+            self.binding,
+            argv,
+            cwd=cwd,
+            env=env,
+            provider_route=provider_route,
+        )
+
+
 class Dorf:
     """Use Dorf locally without going through CLI or network transport."""
 
@@ -679,6 +723,11 @@ class Dorf:
             agent,
             self._git_credential_token,
         )
+
+    def worker_execution(self, name: str) -> WorkerExecution:
+        """Compose one recorded Worker Room for bounded workflow operations."""
+        binding = self._require_worker_binding(name)
+        return WorkerExecution(binding, self._environment_for_binding(binding))
 
     @classmethod
     def disposable_job_execution(

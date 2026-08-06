@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dorf.adapters.agents.codex_config import CodexConfig, validate_codex_config
+from dorf.verifier_tooling import PI_REASONING_EFFORTS
 
 CONTRACT_FILENAME = ".dorf.toml"
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 1800
 REVIEW_PROMPT_PLACEHOLDER = "{dorf_review_prompt}"
+VERIFIER_ROLE_HARNESS = "pi"
+VERIFIER_ROLE_AUTHORITIES = frozenset({"shadow", "advisory"})
+VERIFIER_ROLE_ROOM = "dedicated"
+VERIFIER_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 class ContractValidationError(ValueError):
@@ -31,6 +37,21 @@ class ReviewConfig:
 
 
 @dataclass(frozen=True)
+class VerifierRole:
+    """One typed isolated verification role with no repository-owned host commands."""
+
+    name: str
+    harness: str
+    connection: str
+    model: str
+    reasoning_effort: str
+    authority: str
+    room: str
+    timeout_seconds: int
+    prompt: str
+
+
+@dataclass(frozen=True)
 class RepoContract:
     mode: str
     commands: dict[str, str]
@@ -38,6 +59,7 @@ class RepoContract:
     review: ReviewConfig | None = None
     incus_config: dict[str, str] = field(default_factory=dict)
     primary_codex: CodexConfig | None = None
+    verifier_roles: dict[str, VerifierRole] = field(default_factory=dict)
 
 
 def load_repo_contract(repo: Path) -> RepoContract:
@@ -146,6 +168,20 @@ def load_repo_contract(repo: Path) -> RepoContract:
             raise ContractValidationError(f"env.{name}.source must be a string")
         parsed_env[name] = source
 
+    verification = data.get("verification", {})
+    if verification is None:
+        verification = {}
+    if not isinstance(verification, dict):
+        raise ContractValidationError("[verification] must be a table")
+    roles = verification.get("roles", {})
+    if roles is None:
+        roles = {}
+    if not isinstance(roles, dict):
+        raise ContractValidationError("[verification.roles] must be a table")
+    parsed_roles: dict[str, VerifierRole] = {}
+    for name, role in roles.items():
+        parsed_roles[name] = _parse_verifier_role(name, role)
+
     incus = data.get("incus", {})
     if incus is None:
         incus = {}
@@ -169,4 +205,79 @@ def load_repo_contract(repo: Path) -> RepoContract:
         ),
         incus_config=parsed_incus_config,
         primary_codex=primary_codex,
+        verifier_roles=parsed_roles,
+    )
+
+
+def _parse_verifier_role(name: str, role: object) -> VerifierRole:
+    """Parse one typed verification role without permitting repository-owned commands."""
+    if not isinstance(role, dict):
+        raise ContractValidationError(f"verification.roles.{name} must be a table")
+    if "command" in role or "commands" in role:
+        raise ContractValidationError(
+            f"verification.roles.{name} must not declare repository-owned commands"
+        )
+    harness = role.get("harness")
+    if harness != VERIFIER_ROLE_HARNESS:
+        raise ContractValidationError(
+            f"verification.roles.{name}.harness must be {VERIFIER_ROLE_HARNESS!r}"
+        )
+    connection = role.get("connection")
+    if not isinstance(connection, str) or not connection.strip():
+        raise ContractValidationError(
+            f"verification.roles.{name}.connection must be a provider connection name"
+        )
+    connection = connection.strip()
+    if re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", connection) is None:
+        raise ContractValidationError(
+            f"verification.roles.{name}.connection must use lowercase letters, "
+            "numbers, and single hyphens"
+        )
+    model = role.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ContractValidationError(f"verification.roles.{name}.model must be a string")
+    model = model.strip()
+    if VERIFIER_MODEL_PATTERN.fullmatch(model) is None:
+        raise ContractValidationError(
+            f"verification.roles.{name}.model must contain only letters, "
+            "numbers, '.', '_' and '-'"
+        )
+    reasoning_effort = role.get("reasoning_effort")
+    if (
+        not isinstance(reasoning_effort, str)
+        or reasoning_effort not in PI_REASONING_EFFORTS
+    ):
+        choices = ", ".join(sorted(PI_REASONING_EFFORTS))
+        raise ContractValidationError(
+            f"verification.roles.{name}.reasoning_effort must be one of: {choices}"
+        )
+    authority = role.get("authority")
+    if authority not in VERIFIER_ROLE_AUTHORITIES:
+        choices = ", ".join(sorted(VERIFIER_ROLE_AUTHORITIES))
+        raise ContractValidationError(
+            f"verification.roles.{name}.authority must be one of: {choices}"
+        )
+    room = role.get("room")
+    if room != VERIFIER_ROLE_ROOM:
+        raise ContractValidationError(
+            f"verification.roles.{name}.room must be {VERIFIER_ROLE_ROOM!r}"
+        )
+    timeout_seconds = role.get("timeout_seconds", DEFAULT_REVIEW_TIMEOUT_SECONDS)
+    if not isinstance(timeout_seconds, int) or timeout_seconds < 1:
+        raise ContractValidationError(
+            f"verification.roles.{name}.timeout_seconds must be a positive integer"
+        )
+    prompt = role.get("prompt", "")
+    if not isinstance(prompt, str):
+        raise ContractValidationError(f"verification.roles.{name}.prompt must be a string")
+    return VerifierRole(
+        name=name,
+        harness=harness,
+        connection=connection,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        authority=authority,
+        room=room,
+        timeout_seconds=timeout_seconds,
+        prompt=prompt,
     )

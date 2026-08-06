@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 
 import pytest
@@ -88,6 +89,57 @@ def test_repository_client_get_issue_rejects_pull_request_payload(monkeypatch) -
 
     with pytest.raises(GitHubRepositoryError, match="#62 is a pull request, not an issue"):
         client.get_issue("example/repo", 62)
+
+
+def test_mint_installation_token_sends_scoped_repository_and_permissions_body(
+    tmp_path, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_jwt(app_id, key_path):
+        return "fake-jwt"
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data.decode()) if request.data else None
+        captured["method"] = request.get_method()
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "token": "narrow-token",
+                    "expires_at": "2026-08-06T12:00:00Z",
+                    "permissions": {"contents": "read"},
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("dorf.github_app.create_github_app_jwt", fake_jwt)
+    monkeypatch.setattr("dorf.github_app.urllib.request.urlopen", fake_urlopen)
+    config = GitHubAppConfig(app_id="123", installation_id="456", app_slug="dorf-local")
+
+    token = GitHubAppTokenClient().mint_installation_token(
+        config,
+        private_key_path=tmp_path / "unused.pem",
+        repositories=["repo-name"],
+        permissions={"contents": "read"},
+    )
+
+    assert token.token == "narrow-token"
+    assert captured["method"] == "POST"
+    assert str(captured["url"]).endswith("/app/installations/456/access_tokens")
+    assert captured["body"] == {
+        "repositories": ["repo-name"],
+        "permissions": {"contents": "read"},
+    }
+    assert "write" not in json.dumps(captured["body"])
+
+    # Unscoped minting keeps the existing behavior: no request body at all.
+    captured.clear()
+    GitHubAppTokenClient().mint_installation_token(
+        config,
+        private_key_path=tmp_path / "unused.pem",
+    )
+    assert captured["body"] is None
 
 
 def test_repository_client_retains_http_status_for_authority_classification(
