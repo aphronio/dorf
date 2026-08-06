@@ -25,7 +25,11 @@ func TestPostgresAdmissionSeparatesProductFactsAndSchedulesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close PostgreSQL connection: %v", err)
+		}
+	})
 	ctx := context.Background()
 	store := postgres.Store{DB: db}
 	if err := store.Migrate(ctx); err != nil {
@@ -46,6 +50,14 @@ func TestPostgresAdmissionSeparatesProductFactsAndSchedulesOnce(t *testing.T) {
 	if !created {
 		t.Fatal("first admission was not created")
 	}
+	taskIDs := []string{first.TaskID}
+	t.Cleanup(func() {
+		for _, taskID := range taskIDs {
+			if _, err := db.ExecContext(context.Background(), `select absurd.cancel_task($1,$2::uuid)`, config.QueueName, taskID); err != nil {
+				t.Errorf("cancel Absurd integration task %s: %v", taskID, err)
+			}
+		}
+	})
 	second, created, err := workflow.Admit(ctx, store, client, input)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +109,7 @@ func TestPostgresAdmissionSeparatesProductFactsAndSchedulesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	taskIDs = append(taskIDs, scheduled.CleanupTaskID)
 	if err := store.CompleteCleanup(ctx, first.ID); err != nil {
 		t.Fatal(err)
 	}
