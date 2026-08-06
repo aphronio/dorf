@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shlex
 import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -92,28 +91,6 @@ class PendingCodingAdmission:
     attention: dict[str, str]
     proof_id: str | None
     job_name: str | None
-    expires_at: str
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class CodingAttention:
-    id: str
-    job_name: str
-    kind: str
-    status: str
-    failed_consumer: str
-    command_run_id: int
-    recovery_run_id: int | None
-    provider_connection: str | None
-    observed_evidence: str
-    owner: str
-    exact_action: str
-    consequence: str
-    recommended_default: str
-    expiry_decline_behavior: str
-    automatic_resume: str
     expires_at: str
     created_at: str
     updated_at: str
@@ -478,301 +455,6 @@ class CodingStore(RuntimeStore):
         ).fetchall()
         return [_coding_job(row) for row in rows]
 
-    def record_reviewer_auth_attention(
-        self,
-        *,
-        job_name: str,
-        failed_consumer: str,
-        command_run_id: int,
-        observed_evidence: str,
-        provider_connection: str | None = None,
-        ttl_seconds: int = 3600,
-    ) -> tuple[CodingAttention, bool]:
-        """Converge one exact failed reviewer run on one non-secret decision."""
-        digest = hashlib.sha256(
-            f"{job_name}\0reviewer-authentication\0{failed_consumer}\0{command_run_id}".encode()
-        ).hexdigest()[:24]
-        attention_id = f"attention-{digest}"
-        now = datetime.now(UTC)
-        timestamp = now.isoformat(timespec="microseconds")
-        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat(
-            timespec="microseconds"
-        )
-        connection = provider_connection or "the configured Provider Connection"
-        job = self.get_coding_job(job_name)
-        if job is None:
-            raise RuntimeError(f"Coding Job not found: {job_name}")
-        decision_command = (
-            "afk-resume" if job.metadata.get("afk_issue_number") is not None else "verify"
-        )
-        quoted_job_name = shlex.quote(job_name)
-        status_action = (
-            f"Run dorf provider status {shlex.quote(provider_connection)} and complete its "
-            "printed remediation. Then run "
-            if provider_connection is not None
-            else "Restore the configured Provider Connection, then run "
-        )
-        exact_action = (
-            status_action
-            + f"dorf {decision_command} {quoted_job_name} "
-            f"--repair-attention {attention_id}"
-        )
-        try:
-            self._connection.execute("BEGIN IMMEDIATE")
-            existing = self._connection.execute(
-                "SELECT * FROM coding_attention WHERE id = ?",
-                (attention_id,),
-            ).fetchone()
-            if existing is not None:
-                self._connection.commit()
-                return _coding_attention(existing), False
-            current = self._connection.execute(
-                """
-                SELECT * FROM coding_attention
-                WHERE job_name = ? AND status IN ('outstanding', 'approved', 'recovering')
-                ORDER BY created_at DESC, id DESC LIMIT 1
-                """,
-                (job_name,),
-            ).fetchone()
-            if current is not None:
-                if (
-                    current["status"] == "recovering"
-                    and current["failed_consumer"] == failed_consumer
-                    and current["command_run_id"] < command_run_id
-                ):
-                    self._connection.execute(
-                        """
-                        UPDATE coding_attention SET status = 'blocked', updated_at = ?
-                        WHERE id = ? AND status = 'recovering'
-                        """,
-                        (timestamp, current["id"]),
-                    )
-                else:
-                    self._connection.commit()
-                    return _coding_attention(current), False
-            self._connection.execute(
-                """
-                INSERT INTO coding_attention (
-                    id, job_name, kind, status, failed_consumer, command_run_id,
-                    provider_connection,
-                    observed_evidence, owner, exact_action, consequence,
-                    recommended_default, expiry_decline_behavior, automatic_resume,
-                    expires_at, created_at, updated_at
-                ) VALUES (
-                    ?, ?, 'reviewer-authentication', 'outstanding',
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                )
-                """,
-                (
-                    attention_id,
-                    job_name,
-                    failed_consumer,
-                    command_run_id,
-                    provider_connection,
-                    observed_evidence,
-                    f"Dorf operator responsible for {connection}",
-                    exact_action,
-                    (
-                        "The failed reviewer is retried once on the same Job, Worker, Room, "
-                        "Assignment, branch, and PR; implementation is not replayed."
-                    ),
-                    "repair-and-resume",
-                    (
-                        f"Decline with dorf {decision_command} {quoted_job_name} "
-                        f"--decline-attention {attention_id}; expiry or decline "
-                        "leaves the coding workflow visibly blocked."
-                    ),
-                    (
-                        "After explicit repair approval, Dorf automatically retries only the "
-                        "failed reviewer and continues verification."
-                    ),
-                    expires_at,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            self._connection.commit()
-        except BaseException:
-            self._connection.rollback()
-            raise
-        recorded = self.get_coding_attention(attention_id)
-        if recorded is None:
-            raise RuntimeError("recorded coding attention could not be loaded")
-        return recorded, True
-
-    def get_coding_attention(self, attention_id: str) -> CodingAttention | None:
-        row = self._connection.execute(
-            "SELECT * FROM coding_attention WHERE id = ?", (attention_id,)
-        ).fetchone()
-        return _coding_attention(row) if row is not None else None
-
-    def list_coding_attention(self, job_name: str) -> list[CodingAttention]:
-        rows = self._connection.execute(
-            """
-            SELECT * FROM coding_attention
-            WHERE job_name = ? ORDER BY created_at, id
-            """,
-            (job_name,),
-        ).fetchall()
-        return [_coding_attention(row) for row in rows]
-
-    def get_active_coding_attention(self, job_name: str) -> CodingAttention | None:
-        row = self._connection.execute(
-            """
-            SELECT * FROM coding_attention
-            WHERE job_name = ? AND status IN ('outstanding', 'approved', 'recovering')
-            ORDER BY created_at DESC, id DESC LIMIT 1
-            """,
-            (job_name,),
-        ).fetchone()
-        return _coding_attention(row) if row is not None else None
-
-    def get_latest_coding_attention(self, job_name: str) -> CodingAttention | None:
-        row = self._connection.execute(
-            """
-            SELECT * FROM coding_attention
-            WHERE job_name = ? ORDER BY created_at DESC, id DESC LIMIT 1
-            """,
-            (job_name,),
-        ).fetchone()
-        return _coding_attention(row) if row is not None else None
-
-    def approve_coding_attention(self, job_name: str, attention_id: str) -> bool:
-        self.expire_coding_attention(job_name)
-        return self._transition_coding_attention(
-            job_name,
-            attention_id,
-            from_statuses=("outstanding",),
-            to_status="approved",
-            idempotent_statuses=("approved", "recovering"),
-        )
-
-    def expire_coding_attention(self, job_name: str) -> CodingAttention | None:
-        now = _now()
-        self._connection.execute(
-            """
-            UPDATE coding_attention SET status = 'expired', updated_at = ?
-            WHERE job_name = ? AND status = 'outstanding' AND expires_at <= ?
-            """,
-            (now, job_name, now),
-        )
-        self._connection.commit()
-        return self.get_latest_coding_attention(job_name)
-
-    def begin_coding_attention_recovery(
-        self,
-        job_name: str,
-        attention_id: str,
-        *,
-        kind: str,
-        command: str,
-    ) -> CodingCommandRun:
-        """Atomically bind one approved decision to its exact recovery command run."""
-        timestamp = _now()
-        try:
-            self._connection.execute("BEGIN IMMEDIATE")
-            attention = self._connection.execute(
-                """
-                SELECT status, recovery_run_id FROM coding_attention
-                WHERE id = ? AND job_name = ?
-                """,
-                (attention_id, job_name),
-            ).fetchone()
-            if attention is None:
-                raise RuntimeError(f"Coding attention not found: {attention_id}")
-            recovery_run_id = attention["recovery_run_id"]
-            if recovery_run_id is None:
-                if attention["status"] != "approved":
-                    raise RuntimeError(
-                        f"Coding attention cannot begin recovery from {attention['status']}"
-                    )
-                cursor = self._connection.execute(
-                    """
-                    INSERT INTO coding_command_runs (
-                        job_name, kind, command, status, exit_code, started_at,
-                        finished_at, output_path, git_commit_before, git_commit_after
-                    ) VALUES (?, ?, ?, 'running', NULL, ?, NULL, '', NULL, NULL)
-                    """,
-                    (job_name, kind, command, timestamp),
-                )
-                recovery_run_id = int(cursor.lastrowid)
-                self._connection.execute(
-                    """
-                    UPDATE coding_attention
-                    SET status = 'recovering', recovery_run_id = ?, updated_at = ?
-                    WHERE id = ? AND job_name = ? AND status = 'approved'
-                    """,
-                    (recovery_run_id, timestamp, attention_id, job_name),
-                )
-            elif attention["status"] != "recovering":
-                raise RuntimeError(
-                    f"Coding attention recovery run is retained from {attention['status']}"
-                )
-            self._connection.commit()
-        except BaseException:
-            self._connection.rollback()
-            raise
-        run = self.get_command_run(recovery_run_id)
-        if run is None:
-            raise RuntimeError("Coding attention recovery run could not be loaded")
-        if run.kind != kind or run.command != command:
-            raise RuntimeError("Coding attention recovery run does not match its consumer")
-        return run
-
-    def decline_coding_attention(self, job_name: str, attention_id: str) -> bool:
-        return self._transition_coding_attention(
-            job_name,
-            attention_id,
-            from_statuses=("outstanding",),
-            to_status="declined",
-            idempotent_statuses=("declined",),
-        )
-
-    def clear_coding_attention(self, job_name: str, attention_id: str) -> bool:
-        return self._transition_coding_attention(
-            job_name,
-            attention_id,
-            from_statuses=("approved", "recovering"),
-            to_status="cleared",
-            idempotent_statuses=("cleared",),
-        )
-
-    def block_coding_attention(self, job_name: str, attention_id: str) -> bool:
-        return self._transition_coding_attention(
-            job_name,
-            attention_id,
-            from_statuses=("approved", "recovering"),
-            to_status="blocked",
-            idempotent_statuses=("blocked",),
-        )
-
-    def _transition_coding_attention(
-        self,
-        job_name: str,
-        attention_id: str,
-        *,
-        from_statuses: tuple[str, ...],
-        to_status: str,
-        idempotent_statuses: tuple[str, ...],
-    ) -> bool:
-        placeholders = ", ".join("?" for _ in from_statuses)
-        now = _now()
-        cursor = self._connection.execute(
-            f"""
-            UPDATE coding_attention SET status = ?, updated_at = ?
-            WHERE id = ? AND job_name = ? AND status IN ({placeholders})
-            """,
-            (to_status, now, attention_id, job_name, *from_statuses),
-        )
-        current = self._connection.execute(
-            "SELECT status FROM coding_attention WHERE id = ? AND job_name = ?",
-            (attention_id, job_name),
-        ).fetchone()
-        self._connection.commit()
-        return cursor.rowcount == 1 or (
-            current is not None and current["status"] in idempotent_statuses
-        )
-
     def update_status(self, job_name: str, status: str) -> None:
         cursor = self._connection.execute(
             "UPDATE coding_jobs SET status = ?, updated_at = ? WHERE job_name = ?",
@@ -1033,7 +715,7 @@ class CodingStore(RuntimeStore):
             SET status = 'interrupted', exit_code = 130, finished_at = ?
             WHERE job_name = ? AND status = 'running'
               AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke'
-                   OR kind LIKE 'review:%')
+                   OR kind LIKE 'verify-role:%')
             RETURNING id
             """,
             (_now(), job_name),
@@ -1289,39 +971,6 @@ class CodingStore(RuntimeStore):
         )
         self._connection.execute(
             """
-            CREATE TABLE IF NOT EXISTS coding_attention (
-                id TEXT PRIMARY KEY,
-                job_name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                status TEXT NOT NULL,
-                failed_consumer TEXT NOT NULL,
-                command_run_id INTEGER NOT NULL,
-                recovery_run_id INTEGER,
-                provider_connection TEXT,
-                observed_evidence TEXT NOT NULL,
-                owner TEXT NOT NULL,
-                exact_action TEXT NOT NULL,
-                consequence TEXT NOT NULL,
-                recommended_default TEXT NOT NULL,
-                expiry_decline_behavior TEXT NOT NULL,
-                automatic_resume TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(job_name, kind, failed_consumer, command_run_id)
-            )
-            """
-        )
-        attention_columns = {
-            row["name"]
-            for row in self._connection.execute("PRAGMA table_info(coding_attention)")
-        }
-        if "recovery_run_id" not in attention_columns:
-            self._connection.execute(
-                "ALTER TABLE coding_attention ADD COLUMN recovery_run_id INTEGER"
-            )
-        self._connection.execute(
-            """
             CREATE TABLE IF NOT EXISTS coding_acceptance_checklists (
                 job_name TEXT PRIMARY KEY,
                 goal_digest TEXT NOT NULL,
@@ -1392,29 +1041,6 @@ def _pending_coding_admission(row) -> PendingCodingAdmission:
     )
 
 
-def _coding_attention(row) -> CodingAttention:
-    return CodingAttention(
-        id=row["id"],
-        job_name=row["job_name"],
-        kind=row["kind"],
-        status=row["status"],
-        failed_consumer=row["failed_consumer"],
-        command_run_id=row["command_run_id"],
-        recovery_run_id=row["recovery_run_id"],
-        provider_connection=row["provider_connection"],
-        observed_evidence=row["observed_evidence"],
-        owner=row["owner"],
-        exact_action=row["exact_action"],
-        consequence=row["consequence"],
-        recommended_default=row["recommended_default"],
-        expiry_decline_behavior=row["expiry_decline_behavior"],
-        automatic_resume=row["automatic_resume"],
-        expires_at=row["expires_at"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-
-
 def _acceptance_checklist(row) -> AcceptanceChecklist:
     return AcceptanceChecklist(
         job_name=row["job_name"],
@@ -1436,9 +1062,9 @@ def _validate_acceptance_items(items: tuple[AcceptanceItem, ...]) -> None:
             raise ValueError("Acceptance items require a key and text")
         if item.source not in {"goal", "issue", "contract", "human"}:
             raise ValueError(f"Unsupported acceptance source: {item.source}")
-        if item.verifier not in {"command", "review", "manual"}:
+        if item.verifier not in {"command", "manual"}:
             raise ValueError(f"Unsupported acceptance verifier: {item.verifier}")
-        if item.verifier in {"command", "review"} and not item.verifier_command:
+        if item.verifier == "command" and not item.verifier_command:
             raise ValueError(
                 f"{item.verifier.title()} acceptance items require an exact pinned command"
             )

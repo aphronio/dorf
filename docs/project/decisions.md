@@ -832,9 +832,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   a coding Job or branch, or provision a durable Worker Room, run one workflow-owned proof against
   the exact repository head and issue. Aggregate independently discoverable repository, GitHub App,
   official-image, Incus, provider, and reviewer failures. When discovery succeeds, use one
-  unrecorded disposable VM and scoped route to clone the target branch, run repository preparation
+  unrecorded disposable VM and scoped routes to clone the target branch, run repository preparation
   and smoke contracts, dry-run a Git push, and complete bounded real implementation-model and
-  configured Codex-reviewer turns. Revoke the route and destroy the VM before admission. The same
+  DeepSeek diff-review turns. Revoke the routes and destroy the VM before admission. The same
   invocation consumes the proof, records its non-secret facts, and repeated AFK delegation reuses
   the admitted Job and proof rather than duplicating identity or authority.
 - **Why:** Metadata and isolated health probes can report healthy while Git credentials, repository
@@ -851,17 +851,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D043 — Coding acceptance is pinned at admission and proven from retained observations
 
 - **Status:** Accepted for the coding-to-PR workflow — 2026-08-05
-- **Decision:** Compile the pinned issue acceptance criteria plus configured repository check,
-  smoke, and enabled independent-review obligations into a small workflow-owned checklist when a
+- **Decision:** Compile the pinned issue acceptance criteria plus configured repository check and
+  smoke obligations into a small workflow-owned checklist when a
   coding Job is reserved. The checklist remains explicitly human-correctable as a draft until the
   first verification attempt freezes it as the completion contract. Compute proven/unproven state
-  from successful workflow-observed command and no-findings review records whose before/after Git
+  from successful workflow-observed command records whose before/after Git
   commit is the exact dossier commit; Worker reports remain claims and never prove an item. Project
   those records, Runtime identity and Room image metadata, content-addressed Job artifacts,
   assumptions, risks, and cleanup state into one compact Markdown/JSON dossier. Publish that
   dossier to the PR as a view while the Job, workflow command records, and Job documents remain the
   authorities and audit layer. When a generic repository supplies no observable check, smoke, or
-  review verifier, do not manufacture a manual gate that the workflow has no mechanism to satisfy;
+  verifier, do not manufacture a manual gate that the workflow has no mechanism to satisfy;
   preserve the existing PR-proposal path and leave final acceptance to the human GitHub boundary.
 - **Why:** Reviewers need one ordered, commit-pinned assessment rather than reconstructing readiness
   through SQLite, Job-document, and artifact directories. Deriving proof from existing immutable
@@ -922,34 +922,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   needs selection policy, or a non-coding workflow demonstrates a smaller shared operation than the
   bound Job handle.
 
-## D046 — Reviewer authentication pauses as one exact coding-workflow decision
+## D046 — AFK diff review is one bounded DeepSeek advisory cycle
 
-- **Status:** Accepted for the coding-to-PR HITL slice — 2026-08-06
-- **Decision:** When a failed configured `codex exec` reviewer run contains a bounded recognized
-  authentication diagnostic, retain one workflow-owned, non-secret attention record bound to that
-  exact Job, consumer, and command run. Keep the coding Job and runtime identities open, publish or
-  retain its draft PR, and require an explicit repair or decline action naming the attention ID.
-  Status reads and ordinary coordinator retries never execute the reviewer. Repair approval
-  atomically binds one new command-run ID before permitting one retry of only that consumer. The
-  attention remains recovering until its retained result is durably consumed by fresh
-  repository/readiness gates plus every remaining configured reviewer; controller failure resumes
-  from that exact run without spending another retry. A blocked re-verification moves a ready Job
-  and PR back to active/draft. Another authentication failure creates a new exact decision after
-  blocking the consumed one. Decline, expiry, a changed consumer, and a non-authentication recovery
-  failure remain visibly declined, expired, or blocked rather than becoming human verification
-  policy.
-- **Why:** Provider authority is neither a code finding nor a request for the owner to debug raw
-  command output. Binding the decision to retained evidence makes delivery and retry idempotent,
-  prevents one approval from authorizing a later provider failure, and preserves the admitted Job,
-  Worker, Room, Assignment, native conversation, branch, and PR while a human repairs authority.
-  Keeping this record in the coding workflow preserves the runtime and Provider Gateway boundaries.
-- **Security:** Classification requires a failed provider-route Codex consumer plus a fixed
-  diagnostic signature from at most 64 KiB of retained output. Attention stores only a synthesized
-  observation and never route keys, provider credentials, GitHub credentials, or raw secret text.
-  Commands without an explicit provider-route requirement retain no reviewer capability.
-- **Compatibility:** Attention schema, expiry duration, CLI option names, diagnostic signatures,
-  and rendered pulse fields are internal alpha surfaces. This concrete interruption does not create
-  a generic approval engine.
-- **Reconsider when:** A second post-admission authority interruption proves a smaller shared typed
-  decision, Provider Gateway exposes a stronger typed rejection than command evidence, or bounded
-  recovery needs durable multi-consumer sequencing beyond the configured reviewer set.
+- **Status:** Accepted for the coding-to-PR AFK slice — 2026-08-06
+- **Decision:** After deterministic gates pass, run the DeepSeek diff role in a fresh disposable
+  verifier Room pinned to the implementation commit. Retain its command result and always remove
+  its Room and scoped route. Findings are claims admitted once through the original Job FIFO; after
+  one implementation decision and new commit, one fresh verifier Room may confirm the result.
+  No-findings permits publication but does not prove acceptance. A verifier infrastructure failure
+  retains one exact repair-or-decline decision. Repair retries in a fresh Room; decline leaves the
+  PR draft with missing advisory evidence stated.
+- **Why:** A separate read-only model supplies useful diff pressure without giving it implementation
+  authority, creating another Job, or turning advisory output into readiness fact. Existing command
+  runs, Job FIFO, and Worker/Room cleanup provide the required custody and crash recovery.
+- **Reconsider when:** Repeated dogfood shows one repair is insufficient, or another concrete
+  verifier needs coordination that cannot compose through the same bounded role.

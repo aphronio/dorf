@@ -47,8 +47,6 @@ def run_coding_job_command(
     binding: JobBinding,
     contract: RepoContract,
     spec: CommandSpec,
-    *,
-    prepared_run: CodingCommandRun | None = None,
 ) -> CodingCommandRun:
     before = _git_head(environment, binding)
     interruption = None
@@ -71,7 +69,6 @@ def run_coding_job_command(
             workspace_path=store.database_path.parent,
             spec=process_spec,
             env=os.environ.copy(),
-            prepared_run=prepared_run,
         )
     except CommandInterrupted as error:
         run = error.run

@@ -7,7 +7,6 @@ import json
 import os
 import re
 import secrets
-import shlex
 import subprocess
 import tempfile
 import time
@@ -31,12 +30,7 @@ from dorf.github_app import (
     GitHubRepositoryError,
     load_github_app_config,
 )
-from dorf.repo_contract import (
-    REVIEW_PROMPT_PLACEHOLDER,
-    ContractValidationError,
-    RepoContract,
-    load_repo_contract,
-)
+from dorf.repo_contract import ContractValidationError, RepoContract, load_repo_contract
 from dorf.runtime import (
     Assignment,
     Job,
@@ -52,6 +46,11 @@ from dorf.sdk import (
     IncusConfig,
     RoomRouteGateway,
     resolve_codex_config,
+)
+from dorf.workflows.shadow_verifier import (
+    NO_FINDINGS,
+    deepseek_command,
+    deepseek_extension,
 )
 
 ADMISSION_REVIEW_TIMEOUT_SECONDS = 180
@@ -71,7 +70,7 @@ ADMISSION_CHECKS = (
     "github-dry-run-push",
     "scoped-provider-route",
     "bounded-implementation-turn",
-    "bounded-codex-reviewer-turn",
+    "bounded-deepseek-diff-turn",
 )
 
 
@@ -312,7 +311,7 @@ class LocalCodingAdmissionBackend:
         self.installation_id: str | None = None
         self.issue: GitHubIssue | None = None
         self.target_start_sha: str | None = None
-        self.reviewer = "codex"
+        self.reviewer = "deepseek-diff"
 
     def check_repository(
         self, request: CodingAdmissionRequest
@@ -408,41 +407,6 @@ class LocalCodingAdmissionBackend:
                         str(error),
                         "Repair [agent.codex] or the model override.",
                         "The implementation harness cannot start with the selected model.",
-                    )
-                )
-            reviewer = (
-                self.contract.review.agents.get(self.reviewer)
-                if self.contract.review is not None
-                else None
-            )
-            if reviewer is None or not reviewer.enabled:
-                failures.append(
-                    _failure(
-                        "codex-reviewer-config",
-                        "repository owner",
-                        "No enabled review.agents.codex command is configured.",
-                        "Configure and enable review.agents.codex in .dorf.toml.",
-                        "AFK verification has no configured Codex reviewer path.",
-                    )
-                )
-            elif REVIEW_PROMPT_PLACEHOLDER not in reviewer.command:
-                failures.append(
-                    _failure(
-                        "codex-reviewer-prompt",
-                        "repository owner",
-                        f"review.agents.codex.command lacks {REVIEW_PROMPT_PLACEHOLDER}.",
-                        f"Add {REVIEW_PROMPT_PLACEHOLDER} to review.agents.codex.command.",
-                        "The bounded proof cannot send its real reviewer turn.",
-                    )
-                )
-            elif _command_prefix(reviewer.command) != ["codex", "exec"]:
-                failures.append(
-                    _failure(
-                        "codex-reviewer-command",
-                        "repository owner",
-                        "review.agents.codex.command does not invoke `codex exec`.",
-                        "Configure review.agents.codex.command to invoke `codex exec`.",
-                        "Reviewer binary, model, and credential execution are unproved.",
                     )
                 )
         name = _git(self.repo, "config", "user.name")
@@ -645,7 +609,8 @@ class LocalCodingAdmissionBackend:
         if self.provider_connection is not None and self.environment_config is not None:
             try:
                 gateway = self._gateway()
-                gateway.require_connection(self.provider_connection)
+                for connection in (self.provider_connection, "deepseek"):
+                    gateway.require_connection(connection)
             except (OSError, RuntimeError, ValueError) as error:
                 failures.append(
                     _failure(
@@ -657,7 +622,7 @@ class LocalCodingAdmissionBackend:
                             "remediation",
                             "Reconnect the selected Provider Connection.",
                         ),
-                        "Implementation and Codex review inference cannot execute.",
+                        "Implementation or DeepSeek diff verification cannot execute.",
                     )
                 )
         return tuple(failures)
@@ -885,30 +850,43 @@ class LocalCodingAdmissionBackend:
             raise RuntimeError("GitHub dry-run push failed: " + _message(result))
 
     def _prove_reviewer(self, execution) -> None:
-        assert self.contract is not None
-        assert self.contract.review is not None
-        reviewer = self.contract.review.agents[self.reviewer]
-        nonce = f"DORF_ADMISSION_READY_{secrets.token_hex(8)}"
-        command = reviewer.command.replace(
-            REVIEW_PROMPT_PLACEHOLDER,
-            shlex.quote(f"Reply with exactly: {nonce}"),
-        )
-        result = execution.execute(
-            ["bash", "-lc", command],
-            cwd=ADMISSION_WORKSPACE,
-            input="",
-            timeout_seconds=min(
-                self.contract.review.timeout_seconds,
-                ADMISSION_REVIEW_TIMEOUT_SECONDS,
-            ),
-            provider_route=True,
-        )
-        response_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if result.returncode or not response_lines or response_lines[-1] != nonce:
-            raise RuntimeError(
-                "bounded Codex reviewer turn failed: "
-                + (_message(result) if result.returncode else "expected response was absent")
+        assert self.target_start_sha is not None
+        gateway = self._gateway()
+        consumer = f"reviewer:{execution.binding.room.id}"
+        route = gateway.create_route("deepseek", consumer=consumer)
+        try:
+            protocol = (
+                "Review /tmp/dorf-review.diff with read-only tools. "
+                f"If it has no actionable findings, reply exactly: {NO_FINDINGS}\n"
             )
+            setup = (
+                "set -euo pipefail; umask 077; cat >/tmp/dorf-provider.mjs; "
+                f"printf %s {json.dumps(protocol)} >/tmp/dorf-protocol.md; "
+                f"git diff {self.target_start_sha}..HEAD >/tmp/dorf-review.diff"
+            )
+            prepared = execution.execute(
+                ["bash", "-lc", setup],
+                cwd=ADMISSION_WORKSPACE,
+                input=deepseek_extension(route.base_url),
+                timeout_seconds=60,
+            )
+            if prepared.returncode:
+                raise RuntimeError("could not prepare DeepSeek diff admission proof")
+            command = (
+                "IFS= read -r DORF_PROVIDER_ROUTE_KEY; "
+                f"export DORF_PROVIDER_ROUTE_KEY; {deepseek_command()}"
+            )
+            result = execution.execute(
+                ["bash", "-lc", command],
+                cwd=ADMISSION_WORKSPACE,
+                input=f"{route.api_key}\n",
+                timeout_seconds=ADMISSION_REVIEW_TIMEOUT_SECONDS,
+            )
+            if result.returncode or result.stdout.strip() != NO_FINDINGS:
+                raise RuntimeError("bounded DeepSeek diff reviewer turn failed")
+        finally:
+            if not gateway.revoke_route(route.id):
+                raise RuntimeError("DeepSeek admission route was not cleaned up")
 
     def _prove_implementation(self, execution) -> None:
         assert self.codex_config is not None
@@ -1112,13 +1090,6 @@ def _redact(message: str, secret: str) -> str:
     return message.replace(secret, "<redacted>").replace(
         urllib.parse.quote(secret, safe=""), "<redacted>"
     )
-
-
-def _command_prefix(command: str) -> list[str]:
-    try:
-        return shlex.split(command)[:2]
-    except ValueError:
-        return []
 
 
 def _incus_instance_absent(result: subprocess.CompletedProcess[str]) -> bool:

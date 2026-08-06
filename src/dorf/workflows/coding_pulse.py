@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from dorf.runtime import JobInspection, TimelineEvent
 
@@ -44,17 +44,6 @@ class PulseWorkerClaim:
 class PulseAttention:
     state: str
     reason: str
-    id: str | None = None
-    kind: str | None = None
-    failed_consumer: str | None = None
-    observed_evidence: str | None = None
-    owner: str | None = None
-    exact_action: str | None = None
-    consequence: str | None = None
-    recommended_default: str | None = None
-    expiry_decline_behavior: str | None = None
-    automatic_resume: str | None = None
-    expires_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +138,7 @@ def build_coding_job_pulse(
         terminal_source=terminal_source,
     )
     attention = _attention(
-        store,
+        coding_job,
         inspection,
         outcome_stage=outcome_stage,
         terminal=terminal,
@@ -160,9 +149,6 @@ def build_coding_job_pulse(
         latest_delta.updated_at,
         *(event.recorded_at for event in events),
     ]
-    latest_attention = store.get_latest_coding_attention(inspection.job.name)
-    if latest_attention is not None:
-        timestamps.append(latest_attention.updated_at)
     if inspection.latest_turn is not None:
         timestamps.append(inspection.latest_turn.finished_at or inspection.latest_turn.started_at)
     if active_command is not None:
@@ -353,7 +339,7 @@ def _observed_activity(
 
 
 def _attention(
-    store: CodingStore,
+    coding_job: CodingJob,
     inspection: JobInspection,
     *,
     outcome_stage: str,
@@ -361,33 +347,16 @@ def _attention(
 ) -> PulseAttention:
     if terminal is not None:
         return PulseAttention("none", f"Job is terminal: {terminal}")
-    item = store.get_latest_coding_attention(inspection.job.name)
-    if item is not None and item.status != "cleared":
-        item_status = item.status
-        if (
-            item_status == "outstanding"
-            and datetime.fromisoformat(item.expires_at) <= datetime.now(UTC)
-        ):
-            item_status = "expired"
-        return PulseAttention(
-            item_status,
-            (
-                f"{item.failed_consumer} requires reviewer authentication repair"
-                if item_status in {"outstanding", "approved", "recovering"}
-                else f"Reviewer authentication repair is {item_status}"
-            ),
-            item.id,
-            item.kind,
-            item.failed_consumer,
-            item.observed_evidence,
-            item.owner,
-            item.exact_action,
-            item.consequence,
-            item.recommended_default,
-            item.expiry_decline_behavior,
-            item.automatic_resume,
-            item.expires_at,
-        )
+    if raw := coding_job.metadata.get("diff_verifier_attention"):
+        try:
+            verifier = json.loads(raw)
+        except json.JSONDecodeError:
+            verifier = {}
+        if verifier.get("status"):
+            return PulseAttention(
+                str(verifier["status"]),
+                f"DeepSeek diff advisory decision {verifier.get('id', 'is retained')}",
+            )
     if outcome_stage == "needs-human":
         return PulseAttention("needs-human", "Coding workflow requires a human decision")
     turn = inspection.latest_turn

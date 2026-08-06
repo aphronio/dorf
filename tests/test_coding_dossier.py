@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from dorf.cli import app
-from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
+from dorf.repo_contract import RepoContract
 from dorf.runtime import ArtifactInput, JobRuntime, NewJob, NewWorker, WorkerRuntime
 from dorf.workflows import CodingStore
 from dorf.workflows.coding_dossier import (
@@ -89,70 +89,18 @@ Proof, not vibes.
         mode="configured",
         commands={"prepare": "uv sync", "check": "uv run pytest", "smoke": "./smoke.sh"},
         env={},
-        review=ReviewConfig(
-            agents={
-                "codex": ReviewAgent(
-                    "codex", "codex exec {dorf_review_prompt}", enabled=True
-                )
-            }
-        ),
     )
 
-    pinned_review_command = "codex exec 'pinned Dorf review protocol'"
-    checklist = compile_acceptance_checklist(
-        prompt,
-        contract,
-        review_commands={"codex": pinned_review_command},
-    )
+    checklist = compile_acceptance_checklist(prompt, contract)
 
     assert [item.text for item in checklist] == [
         "Checkout is faster than 200ms.",
         "The fallback remains correct.",
         "Repository check passes: uv run pytest",
         "Repository smoke passes: ./smoke.sh",
-        "Independent review by codex reports no findings",
     ]
-    assert [item.verifier for item in checklist] == [
-        "review",
-        "review",
-        "command",
-        "command",
-        "review",
-    ]
-    assert all(
-        pinned_review_command in item.verifier_command
-        for item in checklist
-        if item.verifier == "review"
-    )
-
-
-def test_acceptance_reviewer_keys_survive_slug_collisions(tmp_path: Path) -> None:
-    contract = RepoContract(
-        mode="configured",
-        commands={},
-        env={},
-        review=ReviewConfig(
-            agents={
-                "foo-bar": ReviewAgent("foo-bar", "first", enabled=True),
-                "foo_bar": ReviewAgent("foo_bar", "second", enabled=True),
-            }
-        ),
-    )
-    checklist = compile_acceptance_checklist(
-        "Pinned goal",
-        contract,
-        review_commands={"foo-bar": "first", "foo_bar": "second"},
-    )
-    store, _, _ = assigned_coding_job(tmp_path)
-
-    recorded = store.record_acceptance_checklist(
-        "proof", goal="Pinned goal", items=checklist
-    )
-
-    reviewer_keys = [
-        item.key for item in recorded.items if item.verifier_ref in {"foo-bar", "foo_bar"}
-    ]
-    assert len(reviewer_keys) == len(set(reviewer_keys)) == 2
+    assert {item.verifier for item in checklist} == {"command"}
+    assert {item.verifier_ref for item in checklist} == {"check", "smoke"}
 
 
 def test_generic_repo_does_not_compile_an_unprovable_manual_gate() -> None:
@@ -176,7 +124,9 @@ def test_command_acceptance_requires_an_exact_pinned_command(tmp_path: Path) -> 
 
 def test_acceptance_can_be_corrected_until_frozen(tmp_path: Path) -> None:
     store, _, _ = assigned_coding_job(tmp_path)
-    initial = (AcceptanceItem("issue-1", "Original", "issue", "review", "*", "{}"),)
+    initial = (
+        AcceptanceItem("issue-1", "Original", "issue", "command", "check", "pytest"),
+    )
     store.record_acceptance_checklist("proof", goal="Pinned goal", items=initial)
 
     corrected = (replace(initial[0], text="Human-corrected"),)
@@ -367,147 +317,31 @@ def test_command_acceptance_uses_the_newest_observation_at_the_commit(
     assert dossier.acceptance[0].status == "unproven"
 
 
-def test_review_acceptance_rejects_findings_even_when_sentinel_is_also_present(
-    tmp_path: Path,
-) -> None:
+def test_deepseek_review_is_advisory_and_decline_is_a_visible_risk(tmp_path: Path) -> None:
     store, job, binding = assigned_coding_job(tmp_path)
     commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "review-codex",
-                "Independent review is clean",
-                "contract",
-                "review",
-                "codex",
-                "reviewer",
-            ),
-        ),
-    )
     output = tmp_path / "review.log"
-    output.write_text("A blocking finding\nDORF_REVIEW_NO_FINDINGS\n")
-    run = store.create_command_run("proof", "review:codex", "reviewer", str(output))
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert dossier.acceptance[0].status == "unproven"
-
-
-def test_codex_review_parser_accepts_real_clean_transcript_with_telemetry_echo() -> None:
-    output = """\
-Reading additional input from stdin...
-OpenAI Codex v0.150.0
---------
-workdir: /workspace/jobs/one-file
-codex
-DORF_REVIEW_NO_FINDINGS
-tokens used
-8,859
-DORF_REVIEW_NO_FINDINGS
-"""
-
-    assert review_output_has_no_findings(output) is True
-
-
-@pytest.mark.parametrize(
-    "output",
-    [
-        "codex\n- [P1] A real finding\ntokens used\n8,859\n- [P1] A real finding\n",
-        (
-            "codex\n- [P1] A real finding\nDORF_REVIEW_NO_FINDINGS\n"
-            "tokens used\n8,859\nDORF_REVIEW_NO_FINDINGS\n"
-        ),
-        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\n8,859\nA trailing finding\n",
-        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\nnot-a-count\nDORF_REVIEW_NO_FINDINGS\n",
-        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\n8,59\nDORF_REVIEW_NO_FINDINGS\n",
-        "codex\nDORF_REVIEW_NO_FINDINGS\ntokens used\nDORF_REVIEW_NO_FINDINGS\n",
-        "preamble\nDORF_REVIEW_NO_FINDINGS\n",
-        "finding\nDORF_REVIEW_NO_FINDINGS\n",
-    ],
-)
-def test_review_parser_rejects_findings_or_malformed_harness_output(output: str) -> None:
-    assert review_output_has_no_findings(output) is False
-
-
-def test_review_acceptance_uses_the_newest_verdict_at_the_commit(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "review-codex",
-                "Independent review is clean",
-                "contract",
-                "review",
-                "codex",
-                "reviewer",
-            ),
-        ),
-    )
-    clean = store.create_command_run(
-        "proof", "review:codex", "reviewer", str(tmp_path / "clean.log")
-    )
-    store.finish_command_run(clean.id, "succeeded", 0)
-    store.set_command_run_git_commits(clean.id, before=commit, after=commit)
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-review-{clean.id}-verdict",
-        source="workflow",
-        provenance="fact",
-        kind="review-verdict",
-        summary="review:codex observed no findings",
-        related={"commit": commit, "run": str(clean.id), "verdict": "no-findings"},
-    )
-    findings = store.create_command_run(
-        "proof", "review:codex", "reviewer", str(tmp_path / "findings.log")
-    )
-    store.finish_command_run(findings.id, "succeeded", 0)
-    store.set_command_run_git_commits(findings.id, before=commit, after=commit)
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-review-{findings.id}-verdict",
-        source="workflow",
-        provenance="fact",
-        kind="review-verdict",
-        summary="review:codex observed findings",
-        related={"commit": commit, "run": str(findings.id), "verdict": "findings"},
-    )
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert dossier.acceptance[0].status == "unproven"
-
-
-def test_default_dossier_omits_multiline_commands_but_json_keeps_them(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    command = "codex exec --readonly <<'REVIEW'\nreview the exact diff\nREVIEW"
-    store.record_acceptance_checklist("proof", goal="Pinned goal", items=())
+    output.write_text("DORF_REVIEW_NO_FINDINGS\n")
     run = store.create_command_run(
-        "proof", "review:codex", command, str(tmp_path / "review.log")
+        "proof", "verify-role:diff", "pi deepseek-v4-flash", str(output)
     )
     store.finish_command_run(run.id, "succeeded", 0)
     store.set_command_run_git_commits(run.id, before=commit, after=commit)
 
     dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-    markdown = render_proof_dossier(dossier)
-    structured = json.dumps(asdict(dossier), sort_keys=True)
 
-    assert dossier.independent_review[0].command == command
-    assert json.loads(structured)["independent_review"][0]["command"] == command
-    assert command not in markdown
-    assert f"run:{run.id}" in markdown
-    assert len(markdown.splitlines()) <= 50
+    assert review_output_has_no_findings(output.read_text())
+    assert dossier.independent_review[0].command_run_id == run.id
+    assert dossier.acceptance == ()
+
+    store.set_metadata_value(
+        "proof",
+        "diff_verifier_attention",
+        json.dumps({"id": "attention-1", "status": "declined"}),
+    )
+    job = store.get_coding_job("proof")
+    declined = build_proof_dossier(store, job, binding, commit_sha=commit)
+    assert any("review was declined" in risk for risk in declined.unresolved_risks)
 
 
 def test_default_dossier_compacts_many_unproven_acceptance_items(
@@ -562,103 +396,6 @@ def test_default_dossier_compacts_many_unproven_acceptance_items(
         assert f"{text} — No passing observed evidence at {commit}" in markdown
     assert markdown.count("acceptance items remain unproven") == 1
     assert len(markdown.splitlines()) <= 57
-
-
-def test_review_acceptance_rejects_a_changed_command_under_the_same_reviewer(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "review-codex",
-                "Independent review is clean",
-                "contract",
-                "review",
-                "codex",
-                "reviewer --pinned-protocol",
-            ),
-        ),
-    )
-    run = store.create_command_run(
-        "proof",
-        "review:codex",
-        "reviewer --changed-protocol",
-        str(tmp_path / "review.log"),
-    )
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-review-{run.id}-verdict",
-        source="workflow",
-        provenance="fact",
-        kind="review-verdict",
-        summary="review:codex observed no findings",
-        related={"commit": commit, "run": str(run.id), "verdict": "no-findings"},
-    )
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert dossier.acceptance[0].status == "unproven"
-
-
-def test_review_acceptance_uses_immutable_observed_verdict_not_mutable_run_log(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "review-codex",
-                "Independent review is clean",
-                "contract",
-                "review",
-                "codex",
-                "reviewer",
-            ),
-        ),
-    )
-    output = tmp_path / "review.log"
-    output.write_text("DORF_REVIEW_NO_FINDINGS\n")
-    run = store.create_command_run("proof", "review:codex", "reviewer", str(output))
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-command-{run.id}-output",
-        source="workflow",
-        provenance="fact",
-        kind="command-result",
-        summary="review:codex succeeded (exit 0)",
-        related={"run": str(run.id)},
-        artifacts=[ArtifactInput("review-output.log", output, "text/plain")],
-    )
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-review-{run.id}-verdict",
-        source="workflow",
-        provenance="fact",
-        kind="review-verdict",
-        summary="review:codex observed no findings",
-        related={"commit": commit, "run": str(run.id), "verdict": "no-findings"},
-    )
-    output.write_text("A finding inserted after observation\n")
-
-    mutated = build_proof_dossier(store, job, binding, commit_sha=commit)
-    output.unlink()
-    deleted = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert mutated.acceptance[0].status == "proven"
-    assert deleted.acceptance[0].status == "proven"
-    assert mutated.acceptance[0].evidence[0].artifacts[0].name == "review-output.log"
-    assert mutated.relevant_artifacts[0].name == "review-output.log"
 
 
 def test_dossier_reports_missing_immutable_image_provenance_as_a_risk(tmp_path: Path) -> None:

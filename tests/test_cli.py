@@ -242,43 +242,6 @@ def test_help_exposes_resource_first_l1_without_bare_compatibility_commands() ->
     assert CliRunner().invoke(app, ["send", "anything", "hello"]).exit_code == 2
 
 
-def test_verify_routes_exact_attention_decision_to_workflow(monkeypatch) -> None:
-    captured = {}
-
-    class Workflow:
-        def verify(
-            self,
-            agents,
-            *,
-            repair_attention_id=None,
-            decline_attention_id=None,
-        ):
-            captured.update(
-                agents=agents,
-                repair_attention_id=repair_attention_id,
-                decline_attention_id=decline_attention_id,
-            )
-
-    def run(job_name, operation):
-        captured["job_name"] = job_name
-        operation(Workflow())
-
-    monkeypatch.setattr("dorf.cli.run_coding_job_workflow_or_exit", run)
-
-    result = CliRunner().invoke(
-        app,
-        ["verify", "ordinary-job", "--repair-attention", "attention-123"],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert captured == {
-        "job_name": "ordinary-job",
-        "agents": None,
-        "repair_attention_id": "attention-123",
-        "decline_attention_id": None,
-    }
-
-
 def test_doctor_reports_sanitized_provider_gateway_health(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     configure_passing_incus(monkeypatch)

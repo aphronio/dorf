@@ -144,7 +144,7 @@ from dorf.workflows import (
     render_proof_dossier,
     run_coding_job_command,
 )
-from dorf.workflows.coding import proof_dossier_commit, review_command_with_dorf_protocol
+from dorf.workflows.coding import proof_dossier_commit
 from dorf.workflows.shadow_verifier import run_shadow_review
 
 app = typer.Typer(help="Manage durable Workers and Jobs in isolated Rooms.")
@@ -159,11 +159,6 @@ job_app.add_typer(job_artifact_app, name="artifact")
 app.add_typer(github_app, name="github")
 app.add_typer(provider_app, name="provider")
 COMMAND_ARGV_ARGUMENT = typer.Argument(..., help="Command argv to run after --.")
-REVIEW_AGENT_OPTION = typer.Option(
-    None,
-    "--agent",
-    help="Review agent to run. Repeat to run more than one.",
-)
 ARTIFACT_DESTINATION_OPTION = typer.Option(
     ...,
     "--to",
@@ -1427,17 +1422,6 @@ def echo_coding_job_pulse(pulse: CodingJobPulse, *, json_output: bool) -> None:
         typer.echo(f"latest Worker claim [claim]: {pulse.worker_claim.summary}")
     typer.echo(f"evidence: {pulse.evidence_count} accepted")
     typer.echo(f"attention: {pulse.attention.state} ({pulse.attention.reason})")
-    if pulse.attention.id is not None:
-        typer.echo(f"  item: {pulse.attention.id}")
-        typer.echo(f"  consumer: {pulse.attention.failed_consumer}")
-        typer.echo(f"  evidence: {pulse.attention.observed_evidence}")
-        typer.echo(f"  owner: {pulse.attention.owner}")
-        typer.echo(f"  action: {pulse.attention.exact_action}")
-        typer.echo(f"  consequence: {pulse.attention.consequence}")
-        typer.echo(f"  recommended default: {pulse.attention.recommended_default}")
-        typer.echo(f"  expiry/decline: {pulse.attention.expiry_decline_behavior}")
-        typer.echo(f"  automatic resume: {pulse.attention.automatic_resume}")
-        typer.echo(f"  expires: {pulse.attention.expires_at}")
     typer.echo(f"updated: {pulse.updated_at}")
 
 
@@ -1759,16 +1743,8 @@ def afk_resume(
     takeover: bool = typer.Option(
         False, "--takeover", help="Explicitly replace an interrupted coordinator owner."
     ),
-    repair_attention: str | None = typer.Option(
-        None,
-        "--repair-attention",
-        help="Approve one exact repaired authority failure for bounded automatic retry.",
-    ),
-    decline_attention: str | None = typer.Option(
-        None,
-        "--decline-attention",
-        help="Decline one exact authority repair and leave the workflow visibly blocked.",
-    ),
+    repair_attention: str | None = typer.Option(None, "--repair-attention"),
+    decline_attention: str | None = typer.Option(None, "--decline-attention"),
 ) -> None:
     """Resume an interrupted AFK coordinator for one coding Job."""
     owner_token = secrets.token_hex(16)
@@ -1940,12 +1916,7 @@ def launch_coding_job_or_exit(
                 else {}
             ),
         }
-        admitted_job = CodingJob(job_name, "setting-up", coding_metadata, None, None, "", "")
-        acceptance_items = compile_acceptance_checklist(
-            coding_task.prompt,
-            contract,
-            review_commands=rendered_review_commands(contract, admitted_job),
-        )
+        acceptance_items = compile_acceptance_checklist(coding_task.prompt, contract)
         store.create_coding_job_with_acceptance(
             job_name=job_name,
             metadata=coding_metadata,
@@ -2754,11 +2725,7 @@ def acceptance(
             typer.echo(f"Acceptance checklist file not found: {from_file}", err=True)
             raise typer.Exit(1)
         contract = load_contract_or_exit(Path(job.target_repo))
-        compiled = compile_acceptance_checklist(
-            from_file.read_text(),
-            contract,
-            review_commands=rendered_review_commands(contract, job),
-        )
+        compiled = compile_acceptance_checklist(from_file.read_text(), contract)
         corrected = tuple(
             replace(item, source="human")
             if item.source in {"goal", "issue"}
@@ -2894,6 +2861,9 @@ def coding_job_workflow_or_exit(
         job=job,
         contract=contract,
         execution=execution,
+        deepseek_diff_review=lambda current, commit: run_deepseek_diff_role(
+            store, current, contract, commit=commit
+        ),
         github_client=github_repository_client_from_app_token,
         github_app_slug=github_app_slug,
     )
@@ -2935,34 +2905,55 @@ def run_coding_job_workflow_or_exit(
 
 
 @app.command()
-def review(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> None:
-    """Run configured one-shot review commands for a coding Job."""
-    run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.review(agents))
-
-
-@app.command()
 def verify(
     job_name: str,
-    agents: list[str] | None = REVIEW_AGENT_OPTION,
-    repair_attention: str | None = typer.Option(
-        None,
-        "--repair-attention",
-        help="Approve one exact repaired authority failure for bounded automatic retry.",
-    ),
-    decline_attention: str | None = typer.Option(
-        None,
-        "--decline-attention",
-        help="Decline one exact authority repair and leave the workflow visibly blocked.",
-    ),
+    repair_attention: str | None = typer.Option(None, "--repair-attention"),
+    decline_attention: str | None = typer.Option(None, "--decline-attention"),
 ) -> None:
-    """Run bounded check, review, and Job-message repair rounds."""
+    """Run checks and the bounded DeepSeek diff advisory cycle."""
     run_coding_job_workflow_or_exit(
         job_name,
         lambda workflow: workflow.verify(
-            agents,
             repair_attention_id=repair_attention,
             decline_attention_id=decline_attention,
         ),
+    )
+
+
+def run_deepseek_diff_role(
+    store: CodingStore,
+    job: CodingJob,
+    contract: RepoContract,
+    *,
+    commit: str | None = None,
+):
+    _, profile = select_coding_deployment_or_exit("deepseek")
+    config = IncusConfig.from_mapping(contract.incus_config)
+    fingerprint = deployment_image_fingerprint(profile, contract)
+    if fingerprint is not None:
+        config = replace(config, template=fingerprint)
+    repo = job.metadata.get("github_repo", "")
+    app_config = load_github_app_config()
+    minted = GitHubAppTokenClient().mint_installation_token(
+        app_config,
+        repositories=[repo.rsplit("/", 1)[-1]],
+        permissions={"contents": "read"},
+    )
+    gateway = Dorf.open_provider_gateway(config)
+    dorf = Dorf(
+        store,
+        environment_config=config,
+        provider_connection="deepseek",
+        provider_gateway=gateway,
+    )
+    return run_shadow_review(
+        store,
+        job,
+        dorf,
+        gateway,
+        GitHubRepositoryClient(minted.token),
+        minted.token,
+        commit=commit,
     )
 
 
@@ -2974,34 +2965,9 @@ def verify_role(job_name: str, role: str) -> None:
         raise typer.Exit(2)
     store = CodingStore.open()
     job = get_runnable_coding_job_or_exit(store, job_name)
-    contract = load_contract_or_exit(Path(job.target_repo))
-    _, profile = select_coding_deployment_or_exit("deepseek")
-    config = IncusConfig.from_mapping(contract.incus_config)
-    fingerprint = deployment_image_fingerprint(profile, contract)
-    if fingerprint is not None:
-        config = replace(config, template=fingerprint)
-    repo = job.metadata.get("github_repo", "")
     try:
-        app_config = load_github_app_config()
-        minted = GitHubAppTokenClient().mint_installation_token(
-            app_config,
-            repositories=[repo.rsplit("/", 1)[-1]],
-            permissions={"contents": "read"},
-        )
-        gateway = Dorf.open_provider_gateway(config)
-        dorf = Dorf(
-            store,
-            environment_config=config,
-            provider_connection="deepseek",
-            provider_gateway=gateway,
-        )
-        run = run_shadow_review(
-            store,
-            job,
-            dorf,
-            gateway,
-            GitHubRepositoryClient(minted.token),
-            minted.token,
+        run = run_deepseek_diff_role(
+            store, job, load_contract_or_exit(Path(job.target_repo))
         )
     except CommandInterrupted:
         raise typer.Exit(130) from None
@@ -3185,17 +3151,6 @@ def run_configured_job_command(job_name: str, command_name: str) -> None:
     except CommandInterrupted:
         raise typer.Exit(130) from None
     exit_for_command_run(job_name, command_name, run.exit_code)
-
-
-def rendered_review_commands(contract: RepoContract, job: CodingJob) -> dict[str, str]:
-    review = contract.review
-    if review is None:
-        return {}
-    return {
-        name: review_command_with_dorf_protocol(agent.command, review.prompt, job=job)
-        for name, agent in review.agents.items()
-        if agent.enabled
-    }
 
 
 def validate_dorf_branch_or_exit(branch: str, *, target_branch: str) -> None:

@@ -26,9 +26,7 @@ class CommandSpec:
 
 class CommandRun(Protocol):
     id: int
-    job_name: str
     kind: str
-    command: str
     status: str
 
 
@@ -79,21 +77,13 @@ def run_job_command(
     workspace_path: Path,
     spec: CommandSpec,
     env: Mapping[str, str],
-    prepared_run: CommandRun | None = None,
 ) -> CommandRun:
-    run = prepared_run or store.create_command_run(
+    run = store.create_command_run(
         job_name=job_name,
         kind=spec.kind,
         command=spec.preview,
         output_path="",
     )
-    if (
-        run.job_name != job_name
-        or run.kind != spec.kind
-        or run.command != spec.preview
-        or run.status != "running"
-    ):
-        raise RuntimeError("Prepared command run does not match the requested command")
     output_path = (
         store.database_path.parent / "runs" / "coding" / job_name / str(run.id) / "output.log"
     )

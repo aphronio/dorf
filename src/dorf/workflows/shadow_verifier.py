@@ -19,6 +19,30 @@ NO_FINDINGS = "DORF_REVIEW_NO_FINDINGS"
 MODEL = "deepseek-v4-flash"
 
 
+def deepseek_extension(base_url: str) -> str:
+    return f"""export default function (pi) {{
+  pi.registerProvider("dorf-deepseek", {{
+    baseUrl: {json.dumps(base_url)}, apiKey: "${{DORF_PROVIDER_ROUTE_KEY}}",
+    api: "openai-responses", models: [{{ id: "deepseek/{MODEL}",
+    name: "DeepSeek V4 Flash", reasoning: true, input: ["text"],
+    cost: {{input:0,output:0,cacheRead:0,cacheWrite:0}},
+    contextWindow: 1000000, maxTokens: 384000,
+    thinkingLevelMap: {{low:null,medium:null,high:"default",max:"max"}} }}]
+  }});
+}}"""
+
+
+def deepseek_command() -> str:
+    return (
+        f"pi -p --provider dorf-deepseek "
+        f"--model dorf-deepseek/deepseek/{MODEL} "
+        "--thinking max --tools read,grep,find,ls "
+        "--no-session --no-approve --no-context-files --no-extensions "
+        "--no-skills --no-prompt-templates "
+        "-e /tmp/dorf-provider.mjs @/tmp/dorf-protocol.md"
+    )
+
+
 def run_shadow_review(
     store: CodingStore,
     job: CodingJob,
@@ -26,10 +50,15 @@ def run_shadow_review(
     gateway: ProviderGateway,
     github: GitHubRepositoryClient,
     token: str,
+    *,
+    commit: str | None = None,
 ):
     """Review one remote Job head and always retire the verifier Room."""
     repo = job.metadata["github_repo"]
-    commit = github.get_branch_sha(repo, job.job_branch)
+    remote_commit = github.get_branch_sha(repo, job.job_branch)
+    if commit is not None and remote_commit != commit:
+        raise RuntimeError("Verifier commit does not match the remote Job branch")
+    commit = commit or remote_commit
     worker = f"verify-{job.job_name[:32]}-{secrets.token_hex(3)}"
     binding = dorf.spawn_worker(
         worker, provenance="verification", lifecycle_policy="dedicated"
@@ -60,16 +89,7 @@ git -C {CLONE} remote set-url origin {shlex.quote(f"https://github.com/{repo}.gi
         if result.returncode:
             raise RuntimeError("Could not clone the verifier commit")
 
-        extension = f"""export default function (pi) {{
-  pi.registerProvider("dorf-deepseek", {{
-    baseUrl: {json.dumps(route.base_url)}, apiKey: "${{DORF_PROVIDER_ROUTE_KEY}}",
-    api: "openai-responses", models: [{{ id: "deepseek/{MODEL}",
-    name: "DeepSeek V4 Flash", reasoning: true, input: ["text"],
-    cost: {{input:0,output:0,cacheRead:0,cacheWrite:0}},
-    contextWindow: 1000000, maxTokens: 384000,
-    thinkingLevelMap: {{low:null,medium:null,high:"default",max:"max"}} }}]
-  }});
-}}"""
+        extension = deepseek_extension(route.base_url)
         protocol = f"""Shadow-review the exact diff in /tmp/dorf-review.diff.
 Use only read, grep, find, and ls. Never modify files.
 Focus on correctness, regressions, unsafe authority, and missing tests.
@@ -90,13 +110,7 @@ git -C {CLONE} diff {shlex.quote(job.target_start_sha)}..{commit} >/tmp/dorf-rev
             raise RuntimeError("Could not prepare the verifier protocol")
 
         pi = (
-            f"before=$(git rev-parse HEAD); "
-            f"pi -p --provider dorf-deepseek "
-            f"--model dorf-deepseek/deepseek/{MODEL} "
-            "--thinking max --tools read,grep,find,ls "
-            "--no-session --no-approve --no-context-files --no-extensions "
-            "--no-skills --no-prompt-templates "
-            "-e /tmp/dorf-provider.mjs @/tmp/dorf-protocol.md; rc=$?; "
+            f"before=$(git rev-parse HEAD); {deepseek_command()}; rc=$?; "
             "after=$(git rev-parse HEAD); dirty=$(git status --porcelain); "
             "if test \"$before\" != \"$after\" || test -n \"$dirty\"; then exit 70; fi; "
             "exit $rc"

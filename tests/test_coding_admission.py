@@ -17,7 +17,7 @@ from dorf.github_app import (
     GitHubRepositoryError,
 )
 from dorf.provider_gateway import InferenceRoute
-from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
+from dorf.repo_contract import RepoContract
 from dorf.workflows import (
     AdmissionFailure,
     CodingAdmissionPreflight,
@@ -41,19 +41,11 @@ def proof() -> CodingAdmissionProof:
         target_start_sha="a" * 40,
         image_fingerprint="b" * 64,
         provider_connection="personal-chatgpt",
-        reviewer="codex",
+        reviewer="deepseek-diff",
         contract=RepoContract(
             mode="configured",
             commands={"prepare": "true", "smoke": "true"},
             env={},
-            review=ReviewConfig(
-                agents={
-                    "codex": ReviewAgent(
-                        "codex",
-                        "codex exec {dorf_review_prompt}",
-                    )
-                }
-            ),
         ),
         codex_config=CodexConfig("gpt-5.6-sol", "low"),
         git_author=GitAuthorIdentity("Dorf", "dorf@example.com"),
@@ -526,6 +518,8 @@ class DisposableProbe:
         script = " ".join(argv)
         nonce = re.search(r"DORF_(?:IMPLEMENTATION|ADMISSION)_READY_[0-9a-f]{16}", script)
         stdout = f"{nonce.group(0)}\n" if nonce else ""
+        if "pi -p --provider dorf-deepseek" in script:
+            stdout = "DORF_REVIEW_NO_FINDINGS\n"
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
 
@@ -538,7 +532,7 @@ class DisposableGateway:
 
     def create_route(self, connection_name, *, consumer, wire_api="responses"):
         route = InferenceRoute(
-            "route-admission",
+            f"route-admission-{len(self.routes) + 1}",
             connection_name,
             "http://10.42.0.1:8317/v1",
             "responses",
@@ -636,14 +630,16 @@ def test_local_consumer_proof_uses_app_server_and_one_disposable_vm(
     joined = [" ".join(command) for command in probe.commands]
     assert any("git clone" in command for command in joined)
     assert any("git push --dry-run" in command for command in joined)
-    assert sum("codex exec" in command for command in joined) == 1
-    assert any("DORF_ADMISSION_READY_" in command for command in joined)
+    assert not any("codex exec" in command for command in joined)
+    assert sum("pi -p --provider dorf-deepseek" in command for command in joined) == 1
+    assert result.proof.reviewer == "deepseek-diff"
     reviewer_invocation = next(
         invocation
         for invocation in probe.invocations
-        if "codex exec" in " ".join(invocation[0])
+        if "pi -p --provider dorf-deepseek" in " ".join(invocation[0])
     )
-    assert reviewer_invocation[1:] == ("", 180)
+    assert reviewer_invocation[1][:-1] == "temporary-route-key"
+    assert reviewer_invocation[2] == 180
     repository_commands = [
         invocation
         for invocation in probe.invocations
@@ -680,7 +676,10 @@ def test_local_consumer_proof_deletes_vm_when_route_revocation_cannot_write(
         CodingAdmissionRequest(repo_path="/repo", target_branch="main", issue_number=18)
     )
 
-    assert [failure.code for failure in result.failures] == ["provider-route-cleanup"]
+    assert [failure.code for failure in result.failures] == [
+        "consumer-path",
+        "provider-route-cleanup",
+    ]
     assert sum(command[:2] == ["incus", "delete"] for command in probe.commands) == 1
 
 
