@@ -498,6 +498,13 @@ class CodingStore(RuntimeStore):
             timespec="microseconds"
         )
         connection = provider_connection or "the configured Provider Connection"
+        job = self.get_coding_job(job_name)
+        if job is None:
+            raise RuntimeError(f"Coding Job not found: {job_name}")
+        decision_command = (
+            "afk-resume" if job.metadata.get("afk_issue_number") is not None else "verify"
+        )
+        quoted_job_name = shlex.quote(job_name)
         status_action = (
             f"Run dorf provider status {shlex.quote(provider_connection)} and complete its "
             "printed remediation. Then run "
@@ -506,7 +513,8 @@ class CodingStore(RuntimeStore):
         )
         exact_action = (
             status_action
-            + f"dorf afk-resume {job_name} --repair-attention {attention_id}."
+            + f"dorf {decision_command} {quoted_job_name} "
+            f"--repair-attention {attention_id}."
         )
         try:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -526,8 +534,21 @@ class CodingStore(RuntimeStore):
                 (job_name,),
             ).fetchone()
             if current is not None:
-                self._connection.commit()
-                return _coding_attention(current), False
+                if (
+                    current["status"] == "recovering"
+                    and current["failed_consumer"] == failed_consumer
+                    and current["command_run_id"] < command_run_id
+                ):
+                    self._connection.execute(
+                        """
+                        UPDATE coding_attention SET status = 'blocked', updated_at = ?
+                        WHERE id = ? AND status = 'recovering'
+                        """,
+                        (timestamp, current["id"]),
+                    )
+                else:
+                    self._connection.commit()
+                    return _coding_attention(current), False
             self._connection.execute(
                 """
                 INSERT INTO coding_attention (
@@ -556,8 +577,8 @@ class CodingStore(RuntimeStore):
                     ),
                     "repair-and-resume",
                     (
-                        "Decline with dorf afk-resume "
-                        f"{job_name} --decline-attention {attention_id}; expiry or decline "
+                        f"Decline with dorf {decision_command} {quoted_job_name} "
+                        f"--decline-attention {attention_id}; expiry or decline "
                         "leaves the coding workflow visibly blocked."
                     ),
                     (

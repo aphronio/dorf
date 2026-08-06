@@ -779,6 +779,7 @@ def test_codex_reviewer_auth_failure_creates_one_precise_attention_item(tmp_path
     assert attention.owner == (
         "Dorf operator responsible for the configured Provider Connection"
     )
+    assert "dorf verify checkout-perf" in attention.exact_action
     assert f"--repair-attention {attention.id}" in attention.exact_action
     assert "same Job" in attention.consequence
     assert attention.recommended_default == "repair-and-resume"
@@ -863,7 +864,6 @@ def test_approved_reviewer_auth_repair_retries_once_and_clears_attention(tmp_pat
         workflow(store, environment, runtime, job, github, contract=contract).verify()
     attention = store.get_active_coding_attention(job.job_name)
     assert attention is not None
-    assert store.approve_coding_attention(job.job_name, attention.id)
 
     outcome = workflow(
         store,
@@ -872,9 +872,10 @@ def test_approved_reviewer_auth_repair_retries_once_and_clears_attention(tmp_pat
         store.get_coding_job(job.job_name),
         github,
         contract=contract,
-    ).verify()
+    ).verify(repair_attention_id=attention.id)
 
     assert outcome.messages[-1].text == "Verify passed for checkout-perf"
+    assert outcome.messages[0].text == f"Attention {attention.id}: repair approved."
     review_runs = [
         run for run in store.list_command_runs(job.job_name) if run.kind == "review:codex"
     ]
@@ -1115,6 +1116,229 @@ def test_crash_after_approved_reviewer_run_reuses_retained_result(tmp_path) -> N
     assert store.get_coding_attention(attention.id).status == "cleared"
 
 
+def test_crash_after_failed_auth_recovery_rolls_over_without_third_retry(tmp_path) -> None:
+    unavailable = "Codex authentication is unavailable: Not logged in"
+    store, environment, _agent, runtime, job, binding = make_coding_job(
+        tmp_path,
+        review_outputs=[(1, unavailable), (1, unavailable)],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+    github = GitHubClient()
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    first = store.get_active_coding_attention(job.job_name)
+    assert first is not None
+    assert store.approve_coding_attention(job.job_name, first.id)
+    assert store.begin_coding_attention_recovery(job.job_name, first.id)
+    reviewer_command = review_command_with_dorf_protocol(
+        contract.review.agents["codex"].command,
+        contract.review.prompt,
+        job=job,
+    )
+    failed_retry = run_coding_job_command(
+        store,
+        environment,
+        job,
+        binding,
+        contract,
+        shell_command(
+            "review:codex",
+            reviewer_command,
+            requires_provider_route=True,
+        ),
+    )
+    assert failed_retry.exit_code == 1
+    before = len(environment.processes)
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(
+            store,
+            environment,
+            runtime,
+            store.get_coding_job(job.job_name),
+            github,
+            contract=contract,
+        ).verify()
+
+    assert raised.value.kind == "infrastructure-authority"
+    assert len(environment.processes) == before
+    items = store.list_coding_attention(job.job_name)
+    assert [item.status for item in items] == ["blocked", "outstanding"]
+    assert items[1].command_run_id == failed_retry.id
+
+
+def test_recovered_reviewer_runs_fresh_gates_and_remaining_reviewers(tmp_path) -> None:
+    clean = "DORF_REVIEW_NO_FINDINGS"
+    finding = "The remaining reviewer found an actionable regression."
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            (1, "Codex authentication is unavailable: Not logged in"),
+            clean,
+            finding,
+        ],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={"check": "true"},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={
+                "codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}"),
+                "droid": ReviewAgent("droid", "reviewer {dorf_review_prompt}"),
+            },
+        ),
+    )
+    github = GitHubClient()
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    assert [item[1][-1].split()[0] for item in environment.processes] == [
+        "true",
+        "codex",
+    ]
+    attention = store.get_active_coding_attention(job.job_name)
+    assert attention is not None
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(
+            store,
+            environment,
+            runtime,
+            store.get_coding_job(job.job_name),
+            github,
+            contract=contract,
+        ).verify(repair_attention_id=attention.id)
+
+    assert raised.value.kind == "needs-human"
+    commands = [item[1][-1] for item in environment.processes]
+    assert commands[0] == "true"
+    assert commands[1].startswith("codex exec ")
+    assert commands[2].startswith("codex exec ")
+    assert commands[3] == "true"
+    assert commands[4].startswith("reviewer ")
+    assert store.get_coding_attention(attention.id).status == "cleared"
+    assert store.get_active_coding_attention(job.job_name) is None
+    assert store.get_coding_job(job.job_name).status == "needs-human"
+
+
+def test_recovered_reviewer_finishes_only_after_all_reviewers_pass(tmp_path) -> None:
+    clean = "DORF_REVIEW_NO_FINDINGS"
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            (1, "Codex authentication is unavailable: Not logged in"),
+            clean,
+            clean,
+        ],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={"check": "true"},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={
+                "codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}"),
+                "droid": ReviewAgent("droid", "reviewer {dorf_review_prompt}"),
+            },
+        ),
+    )
+    github = GitHubClient()
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    attention = store.get_active_coding_attention(job.job_name)
+    assert attention is not None
+
+    outcome = workflow(
+        store,
+        environment,
+        runtime,
+        store.get_coding_job(job.job_name),
+        github,
+        contract=contract,
+    ).verify(repair_attention_id=attention.id)
+
+    assert outcome.messages[-1].text == "Verify passed for checkout-perf"
+    assert store.get_coding_job(job.job_name).status == "ready"
+    assert store.get_coding_attention(attention.id).status == "cleared"
+    review_runs = [
+        run for run in store.list_command_runs(job.job_name) if run.kind.startswith("review:")
+    ]
+    assert [run.kind for run in reversed(review_runs)] == [
+        "review:codex",
+        "review:codex",
+        "review:droid",
+    ]
+
+
+def test_recovered_reviewer_is_rerun_when_fresh_gate_changes_head(tmp_path) -> None:
+    clean = "DORF_REVIEW_NO_FINDINGS"
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            (1, "Codex authentication is unavailable: Not logged in"),
+            clean,
+            clean,
+        ],
+    )
+    original_process_command = environment.process_command
+    gate_runs = 0
+    mutate_gate = False
+
+    def process_command(binding, argv=None, **kwargs):
+        nonlocal gate_runs, mutate_gate
+        command = binding if argv is None else argv
+        if command[-1] == "mutating-check":
+            gate_runs += 1
+            if mutate_gate:
+                environment.git_head = "c" * 40
+        return original_process_command(binding, argv, **kwargs)
+
+    environment.process_command = process_command
+    contract = RepoContract(
+        mode="configured",
+        commands={"check": "mutating-check"},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+    github = GitHubClient()
+    initial = store.list_job_inputs(job.job_name)[0]
+    assert runtime.deliver_input(job.job_name, initial.id).status == "succeeded"
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    attention = store.get_active_coding_attention(job.job_name)
+    assert attention is not None
+    mutate_gate = True
+
+    outcome = workflow(
+        store,
+        environment,
+        runtime,
+        store.get_coding_job(job.job_name),
+        github,
+        contract=contract,
+    ).verify(repair_attention_id=attention.id)
+
+    assert outcome.messages[-1].text == "Verify passed for checkout-perf"
+    assert gate_runs == 3
+    review_runs = [
+        run for run in store.list_command_runs(job.job_name) if run.kind == "review:codex"
+    ]
+    assert len(review_runs) == 3
+
+
 def test_crash_after_auth_command_before_attention_reconciles_without_rerun(tmp_path) -> None:
     store, environment, _agent, runtime, job, binding = make_coding_job(
         tmp_path,
@@ -1194,6 +1418,7 @@ def test_afk_attention_decision_resumes_same_coordinator_identity(tmp_path) -> N
     attention = store.get_active_coding_attention(job.job_name)
     assert stopped.value.kind == "infrastructure-authority"
     assert attention is not None
+    assert f"dorf afk-resume {job.job_name}" in attention.exact_action
     assert store.get_afk_coordinator(target_repo, 21).status == "outstanding"
 
     resume = CodingWorkflow.prepare_afk_resume(

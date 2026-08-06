@@ -931,10 +931,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   retain its draft PR, and require an explicit repair or decline action naming the attention ID.
   Status reads and ordinary coordinator retries never execute the reviewer. Repair approval permits
   one retry of only that consumer; a retained retry result is reconciled after controller failure,
-  successful completion clears attention automatically, and another authentication failure creates
-  a new exact decision after blocking the consumed one. Decline, expiry, a changed consumer, and a
-  non-authentication recovery failure remain visibly declined, expired, or blocked rather than
-  becoming human verification policy.
+  successful completion clears attention and re-enters fresh repository/readiness gates plus every
+  remaining configured reviewer, and another authentication failure creates a new exact decision
+  after blocking the consumed one. Decline, expiry, a changed consumer, and a non-authentication
+  recovery failure remain visibly declined, expired, or blocked rather than becoming human
+  verification policy.
 - **Why:** Provider authority is neither a code finding nor a request for the owner to debug raw
   command output. Binding the decision to retained evidence makes delivery and retry idempotent,
   prevents one approval from authorizing a later provider failure, and preserves the admitted Job,

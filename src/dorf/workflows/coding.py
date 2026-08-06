@@ -289,6 +289,60 @@ class CodingWorkflow:
         )
 
     @staticmethod
+    def decide_attention(
+        store: CodingStore,
+        *,
+        job_name: str,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
+    ) -> tuple[WorkflowMessage, ...]:
+        """Apply one explicit operator decision to the Job's latest attention item."""
+        if repair_attention_id is not None and decline_attention_id is not None:
+            raise WorkflowFailure(
+                1,
+                (
+                    WorkflowMessage(
+                        "Choose repair or decline for one attention item, not both.", True
+                    ),
+                ),
+                kind="decision",
+            )
+        store.expire_coding_attention(job_name)
+        decision_id = repair_attention_id or decline_attention_id
+        if decision_id is None:
+            return ()
+        attention = store.get_latest_coding_attention(job_name)
+        if attention is None or attention.id != decision_id:
+            raise WorkflowFailure(
+                1,
+                (
+                    WorkflowMessage(
+                        f"Attention item does not match this Job: {decision_id}", True
+                    ),
+                ),
+                kind="decision",
+            )
+        decided = (
+            store.approve_coding_attention(job_name, decision_id)
+            if repair_attention_id is not None
+            else store.decline_coding_attention(job_name, decision_id)
+        )
+        if not decided:
+            raise WorkflowFailure(
+                1,
+                (
+                    WorkflowMessage(
+                        f"Attention item cannot be decided from {attention.status}: "
+                        f"{decision_id}",
+                        True,
+                    ),
+                ),
+                kind="decision",
+            )
+        outcome = "repair approved" if repair_attention_id is not None else "declined"
+        return (WorkflowMessage(f"Attention {decision_id}: {outcome}."),)
+
+    @staticmethod
     def prepare_afk_resume(
         store: CodingStore,
         *,
@@ -315,47 +369,12 @@ class CodingWorkflow:
             )
         issue_number = int(issue)
         target_repo = str(Path(job.target_repo).resolve())
-        if repair_attention_id is not None and decline_attention_id is not None:
-            raise WorkflowFailure(
-                1,
-                (
-                    WorkflowMessage(
-                        "Choose repair or decline for one attention item, not both.", True
-                    ),
-                ),
-                kind="decision",
-            )
-        store.expire_coding_attention(job_name)
-        decision_id = repair_attention_id or decline_attention_id
-        if decision_id is not None:
-            attention = store.get_latest_coding_attention(job_name)
-            if attention is None or attention.id != decision_id:
-                raise WorkflowFailure(
-                    1,
-                    (
-                        WorkflowMessage(
-                            f"Attention item does not match this Job: {decision_id}", True
-                        ),
-                    ),
-                    kind="decision",
-                )
-            decided = (
-                store.approve_coding_attention(job_name, decision_id)
-                if repair_attention_id is not None
-                else store.decline_coding_attention(job_name, decision_id)
-            )
-            if not decided:
-                raise WorkflowFailure(
-                    1,
-                    (
-                        WorkflowMessage(
-                            f"Attention item cannot be decided from {attention.status}: "
-                            f"{decision_id}",
-                            True,
-                        ),
-                    ),
-                    kind="decision",
-                )
+        decision_messages = CodingWorkflow.decide_attention(
+            store,
+            job_name=job_name,
+            repair_attention_id=repair_attention_id,
+            decline_attention_id=decline_attention_id,
+        )
         try:
             reservation = store.claim_afk_coordinator(
                 target_repo,
@@ -387,9 +406,7 @@ class CodingWorkflow:
             if interrupted
             else ()
         )
-        if decision_id is not None:
-            outcome = "repair approved" if repair_attention_id is not None else "declined"
-            messages += (WorkflowMessage(f"Attention {decision_id}: {outcome}."),)
+        messages += decision_messages
         return AfkResume(
             job,
             target_repo,
@@ -744,7 +761,7 @@ class CodingWorkflow:
                     failure["kind"] = "reviewer_authentication"
                     failure["observed_evidence"] = auth_evidence
                 payload["infrastructure_failures"].append(failure)
-                continue
+                break
             output = command_run_output(run.output_path)
             if not self._record_review_verdict(run, output=output):
                 payload["findings"].append(
@@ -1147,8 +1164,18 @@ class CodingWorkflow:
         agents: list[str] | None = None,
         *,
         continue_guard: Callable[[], None] | None = None,
+        repair_attention_id: str | None = None,
+        decline_attention_id: str | None = None,
     ) -> WorkflowOutcome:
         """Run bounded check/readiness repair and review rounds, then publish."""
+        self._messages.extend(
+            self.decide_attention(
+                self.store,
+                job_name=self.job.job_name,
+                repair_attention_id=repair_attention_id,
+                decline_attention_id=decline_attention_id,
+            )
+        )
         requested = self._requested_review_agents(agents)
         self._require_review_protocol(requested)
         assert self.contract.review is not None
@@ -1160,21 +1187,18 @@ class CodingWorkflow:
 
         self._reconcile_reviewer_auth_attention(requested)
         resumed_payload = self._resume_reviewer_attention(requested)
+        resumed_commit = None
         if resumed_payload is not None:
-            if not blocking_review_findings(resumed_payload):
-                return self._finish_verified()
-            if max_rounds <= 1:
+            resumed_commit = self._read_job_head()
+            recovered_attention = self.store.get_active_coding_attention(self.job.job_name)
+            if recovered_attention is not None:
                 self.store.clear_coding_attention(
-                    self.job.job_name,
-                    self.store.get_active_coding_attention(self.job.job_name).id,
+                    self.job.job_name, recovered_attention.id
                 )
-                self._mark_needs_human_and_publish()
-                self._fail(
-                    f"Verify stopped for {self.job.job_name} after "
-                    f"{max_rounds} review round(s).",
-                    kind="needs-human",
-                )
-            self._run_verify_fix(resumed_payload)
+            self.store.remove_metadata_keys(
+                self.job.job_name,
+                {"afk_attention_id"},
+            )
 
         recovered = self._unsettled_turn()
         if recovered is not None and recovered.exit_code != 0:
@@ -1185,7 +1209,7 @@ class CodingWorkflow:
                 kind="needs-human",
             )
 
-        review_round = 1 if resumed_payload is not None else 0
+        review_round = 0
         gate_failures = 0
         try:
             while True:
@@ -1212,14 +1236,46 @@ class CodingWorkflow:
                             f"{gate_failures} time(s).",
                             kind="needs-human",
                         )
+                    resumed_payload = None
                     self._run_verify_fix(payload)
                     continue
 
+                if (
+                    resumed_payload is not None
+                    and resumed_commit != self._read_job_head()
+                ):
+                    resumed_payload = None
                 review_round += 1
                 self._emit(
                     f"Verify review round {review_round}/{max_rounds} for {self.job.job_name}"
                 )
-                payload = self._review_round(requested, review_round)
+                round_agents = requested
+                if resumed_payload is not None:
+                    recovered_agents = {
+                        str(run["agent"]) for run in resumed_payload["review_runs"]
+                    }
+                    round_agents = [
+                        name for name in requested if name not in recovered_agents
+                    ]
+                    payload = {
+                        **resumed_payload,
+                        "round": review_round,
+                        "findings": list(resumed_payload["findings"]),
+                        "infrastructure_failures": list(
+                            resumed_payload["infrastructure_failures"]
+                        ),
+                        "review_runs": list(resumed_payload["review_runs"]),
+                    }
+                    resumed_payload = None
+                    if round_agents:
+                        remaining = self._review_round(round_agents, review_round)
+                        payload["findings"].extend(remaining["findings"])
+                        payload["infrastructure_failures"].extend(
+                            remaining["infrastructure_failures"]
+                        )
+                        payload["review_runs"].extend(remaining["review_runs"])
+                else:
+                    payload = self._review_round(round_agents, review_round)
                 if continue_guard is not None:
                     continue_guard()
                 infrastructure_failures = payload["infrastructure_failures"]

@@ -2941,9 +2941,29 @@ def review(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> Non
 
 
 @app.command()
-def verify(job_name: str, agents: list[str] | None = REVIEW_AGENT_OPTION) -> None:
+def verify(
+    job_name: str,
+    agents: list[str] | None = REVIEW_AGENT_OPTION,
+    repair_attention: str | None = typer.Option(
+        None,
+        "--repair-attention",
+        help="Approve one exact repaired authority failure for bounded automatic retry.",
+    ),
+    decline_attention: str | None = typer.Option(
+        None,
+        "--decline-attention",
+        help="Decline one exact authority repair and leave the workflow visibly blocked.",
+    ),
+) -> None:
     """Run bounded check, review, and Job-message repair rounds."""
-    run_coding_job_workflow_or_exit(job_name, lambda workflow: workflow.verify(agents))
+    run_coding_job_workflow_or_exit(
+        job_name,
+        lambda workflow: workflow.verify(
+            agents,
+            repair_attention_id=repair_attention,
+            decline_attention_id=decline_attention,
+        ),
+    )
 
 
 @app.command("verify-role")
