@@ -26,6 +26,7 @@ done
 
 for variable in \
   OPENAI_API_KEY \
+  DEEPSEEK_API_KEY \
   GITHUB_TOKEN \
   GH_TOKEN \
   FACTORY_API_KEY \

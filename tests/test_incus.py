@@ -173,6 +173,7 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert ".config/gh/hosts.yml" in credential_check
     assert ".factory" in credential_check
     assert "OPENAI_API_KEY" in credential_check
+    assert "DEEPSEEK_API_KEY" in credential_check
     assert "GITHUB_TOKEN" in credential_check
     assert "FACTORY_API_KEY" in credential_check
     assert 'incus image info "$BASE_IMAGE" --vm' in build_script
@@ -180,7 +181,8 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert r"""sed -n 's/.*"version": "\([^"]*\)".*/\1/p'""" in build_script
     assert "npm view @openai/codex@latest version" in provision_script
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
-    assert "apt-get purge -y npm" in provision_script
+    assert 'NODE_VERSION="22.23.2"' in provision_script
+    assert 'npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION"' in provision_script
     assert "git" in provision_script
     assert "astral.sh/uv/install.sh" not in provision_script
     assert "uv-x86_64-unknown-linux-gnu.tar.gz" in provision_script

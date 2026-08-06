@@ -775,6 +775,27 @@ def test_disconnect_revokes_every_route_owned_by_the_connection(
         gateway.shutdown()
 
 
+def test_chatgpt_and_prefixed_deepseek_can_coexist(tmp_path) -> None:
+    executable = tmp_path / "provider-broker"
+    _write_test_broker(executable)
+    state_path = tmp_path / "gateway"
+    with ProviderGateway.open(
+        state_path=state_path, executable_path=executable, port=_free_port()
+    ) as gateway:
+        gateway.connect_chatgpt_subscription(
+            name="chatgpt", on_authorization=lambda challenge: None
+        )
+        gateway.connect_deepseek_api_key(name="deepseek", api_key="secret")
+        assert gateway.create_route("chatgpt", consumer="coder")
+        assert gateway.create_route("deepseek", consumer="reviewer")
+        config = (state_path / "broker.yaml").read_text()
+    assert "force-model-prefix: true" in config
+    assert "openai-compatibility:" in config
+    assert 'base-url: "https://api.deepseek.com/v1"' in config
+    assert 'prefix: "deepseek"' in config
+    assert 'alias: "deepseek-v4-flash"' in config
+
+
 def test_route_fails_closed_instead_of_implicitly_pooling_multiple_connections(
     tmp_path,
 ) -> None:

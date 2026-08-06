@@ -246,6 +246,18 @@ class JobExecution:
         )
 
 
+@dataclass(frozen=True)
+class WorkerExecution:
+    binding: WorkerBinding
+    _environment: CodexRoomEnvironment
+
+    def execute(self, argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        return self._environment.execute(self.binding, argv, **kwargs)
+
+    def process_command(self, argv: list[str], **kwargs) -> list[str]:
+        return self._environment.process_command(self.binding, argv, **kwargs)
+
+
 class Dorf:
     """Use Dorf locally without going through CLI or network transport."""
 
@@ -667,6 +679,10 @@ class Dorf:
     def inspect_job(self, name: str) -> JobInspection:
         binding = self._require_job_binding(name)
         return self._job_runtime(self._environment_for_binding(binding)).inspect(name)
+
+    def worker_execution(self, name: str) -> WorkerExecution:
+        binding = self._require_worker_binding(name)
+        return WorkerExecution(binding, self._environment_for_binding(binding))
 
     def job_execution(self, name: str) -> JobExecution:
         binding = self._require_job_binding(name)

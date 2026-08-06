@@ -142,7 +142,7 @@ class ProviderConnection:
     """Sanitized upstream authentication owned by the provider gateway."""
 
     name: str
-    provider: Literal["chatgpt", "openai"]
+    provider: Literal["chatgpt", "openai", "deepseek"]
     auth_mode: Literal["subscription", "api_key"]
     status: Literal[
         "connected",
@@ -393,27 +393,29 @@ class ProviderGateway:
             )
         return connection
 
-    def connect_openai_api_key(
+    def connect_openai_api_key(self, *, name: str, api_key: str) -> ProviderConnection:
+        return self._connect_api_key(name, api_key, "openai")
+
+    def connect_deepseek_api_key(self, *, name: str, api_key: str) -> ProviderConnection:
+        return self._connect_api_key(name, api_key, "deepseek")
+
+    def _connect_api_key(
         self,
-        *,
         name: str,
         api_key: str,
+        provider: Literal["openai", "deepseek"],
     ) -> ProviderConnection:
-        """Connect one named OpenAI Platform credential without exposing it."""
         name = _validate_connection_name(name)
         api_key = api_key.strip()
         if not api_key:
             raise ValueError("api_key cannot be empty")
-        secret_name = f"openai-{hashlib.sha256(name.encode()).hexdigest()[:16]}.key"
+        secret_name = f"{provider}-{hashlib.sha256(name.encode()).hexdigest()[:16]}.key"
         secret_path = self._credentials_path / secret_name
         with self._locked():
             previous_records = self._read_connections()
-            existing = next(
-                (record for record in previous_records if record["name"] == name),
-                None,
-            )
+            existing = next((record for record in previous_records if record["name"] == name), None)
             if existing is not None and (
-                existing["provider"] != "openai" or existing["auth_mode"] != "api_key"
+                existing["provider"] != provider or existing["auth_mode"] != "api_key"
             ):
                 raise ValueError(f"Provider connection already exists: {name}")
             try:
@@ -431,7 +433,7 @@ class ProviderGateway:
             records.append(
                 {
                     "name": name,
-                    "provider": "openai",
+                    "provider": provider,
                     "auth_mode": "api_key",
                     "credential_ref": secret_name,
                 }
@@ -452,12 +454,7 @@ class ProviderGateway:
             except ProviderGatewayError:
                 pass
             raise
-        return ProviderConnection(
-            name=name,
-            provider="openai",
-            auth_mode="api_key",
-            status="connected",
-        )
+        return ProviderConnection(name, provider, "api_key", "connected")
 
     def connect_chatgpt_subscription(
         self,
@@ -651,9 +648,10 @@ class ProviderGateway:
             connection_names = {connection.name for connection in connections}
             if connection_name not in connection_names:
                 raise ProviderConnectionNotFoundError(connection_name)
-            if len(connections) != 1:
+            prefixed = sum(connection.provider == "deepseek" for connection in connections)
+            if prefixed > 1 or len(connections) - prefixed > 1:
                 raise ProviderSelectionUnsupportedError(
-                    "Multiple provider connections are not supported"
+                    "Multiple provider connections are not supported without distinct prefixes"
                 )
             routes = self._read_routes()
             route = InferenceRoute(
@@ -849,6 +847,7 @@ class ProviderGateway:
             f"host: {json.dumps(self._bind_address)}",
             f"port: {self._port}",
             f"auth-dir: {json.dumps(str(self._auth_path))}",
+            "force-model-prefix: true",
         ]
         # The concrete backend treats an empty list as authentication disabled. Keep one
         # unexposed key configured even when no consumer routes exist.
@@ -879,11 +878,12 @@ class ProviderGateway:
         api_key_records = [
             record
             for record in self._read_connections()
-            if record["provider"] == "openai" and record["auth_mode"] == "api_key"
+            if record["provider"] in {"openai", "deepseek"} and record["auth_mode"] == "api_key"
         ]
-        if api_key_records:
+        openai_records = [r for r in api_key_records if r["provider"] == "openai"]
+        if openai_records:
             lines.append("codex-api-key:")
-            for record in api_key_records:
+            for record in openai_records:
                 secret = self._read_api_key(record["credential_ref"])
                 lines.extend(
                     (
@@ -892,6 +892,22 @@ class ProviderGateway:
                     )
                 )
             lines.append("")
+        for record in (r for r in api_key_records if r["provider"] == "deepseek"):
+            secret = self._read_api_key(record["credential_ref"])
+            lines.extend(
+                (
+                    "openai-compatibility:",
+                    '  - name: "deepseek"',
+                    '    prefix: "deepseek"',
+                    '    base-url: "https://api.deepseek.com/v1"',
+                    "    api-key-entries:",
+                    f"      - api-key: {json.dumps(secret)}",
+                    "    models:",
+                    '      - name: "deepseek-v4-flash"',
+                    '        alias: "deepseek-v4-flash"',
+                    "",
+                )
+            )
         config = "\n".join(lines)
         self._write_private_text(self._config_path, config)
 
@@ -1048,9 +1064,9 @@ class ProviderGateway:
                 and auth_mode == "subscription"
                 and re.fullmatch(r"codex-dorf-[0-9a-f]{16}\.json", credential_ref) is not None
             ) or (
-                provider == "openai"
+                provider in {"openai", "deepseek"}
                 and auth_mode == "api_key"
-                and re.fullmatch(r"openai-[0-9a-f]{16}\.key", credential_ref) is not None
+                and re.fullmatch(rf"{provider}-[0-9a-f]{{16}}\.key", credential_ref) is not None
             )
             if not valid_credential or name in names or credential_ref in credential_refs:
                 raise GatewayUnavailableError("Provider gateway connection state is unreadable")
@@ -1370,7 +1386,7 @@ def _validate_connection_name(name: str) -> str:
 def _reconnect_remediation(provider: str, auth_mode: str, name: str) -> str:
     if provider == "chatgpt" and auth_mode == "subscription":
         return f"Run: dorf provider connect chatgpt --subscription --name {name}"
-    return f"Run: dorf provider connect openai --api-key --name {name}"
+    return f"Run: dorf provider connect {provider} --api-key --name {name}"
 
 
 def _safe_plan(entry: dict[str, object]) -> str | None:

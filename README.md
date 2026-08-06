@@ -88,6 +88,8 @@ dorf afk 42
 dorf job inspect JOB
 dorf job inspect JOB --json  # structured outcome pulse for agents
 dorf verify JOB
+# Explicit read-only shadow review in a disposable DeepSeek/Pi Room:
+dorf verify-role JOB diff
 dorf publish JOB
 ```
 

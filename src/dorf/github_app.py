@@ -179,12 +179,20 @@ class GitHubAppTokenClient:
         *,
         config_home: Path | None = None,
         private_key_path: Path | None = None,
+        repositories: list[str] | None = None,
+        permissions: dict[str, str] | None = None,
     ) -> GitHubInstallationToken:
         key_path = private_key_path or github_app_paths(config_home).private_key_path
         jwt = create_github_app_jwt(config.app_id, key_path)
+        body = (
+            json.dumps({"repositories": repositories, "permissions": permissions}).encode()
+            if repositories is not None and permissions is not None
+            else None
+        )
         request = urllib.request.Request(
             f"{self.api_url}/app/installations/{config.installation_id}/access_tokens",
             method="POST",
+            data=body,
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {jwt}",
