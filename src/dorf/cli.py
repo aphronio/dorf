@@ -9,11 +9,9 @@ import signal
 import subprocess
 import sys
 import urllib.parse
-import webbrowser
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
 
@@ -127,14 +125,10 @@ from dorf.setup_diagnostics import (
     write_setup_diagnostic,
 )
 from dorf.workflows import (
-    CodingAdmissionPreflight,
-    CodingAdmissionProof,
-    CodingAdmissionRequest,
     CodingJob,
     CodingJobPulse,
     CodingStore,
     CodingWorkflow,
-    PendingCodingAdmission,
     WorkflowFailure,
     WorkflowOutcome,
     build_coding_job_pulse,
@@ -183,8 +177,6 @@ DORF_MAIN_TEXT = "#CEB87D"
 DORF_MUTED_TEXT = "#B8A369"
 DORF_ACTIVE = "#F6BD4B"
 DORF_ACTIVE_RGB = (246, 189, 75)
-GITHUB_AUTHORITY_APPROVAL_TTL_SECONDS = 3600
-GITHUB_AUTHORITY_POLL_SECONDS = 10
 DORF_THEME = Theme(
     {
         "progress.download": DORF_MAIN_TEXT,
@@ -1600,7 +1592,6 @@ def echo_job_resource_wait_result(
 @app.command()
 def start(
     task: str | None = typer.Argument(None, help="Coding task for the new Job."),
-    issue: int | None = typer.Option(None, "--issue", min=1, help="GitHub issue to start."),
     resume: str | None = typer.Option(
         None,
         "--resume",
@@ -1614,171 +1605,16 @@ def start(
 ) -> None:
     """Create a dedicated Worker and goal-backed coding Job."""
     target = detect_git_target(Path.cwd())
-    if task is not None and issue is not None:
-        typer.echo("Provide exactly one of TASK or --issue.", err=True)
-        raise typer.Exit(1)
-    admission = None
-    if issue is not None and resume is None:
-        admission = prove_coding_admission_or_exit(
-            target,
-            command="start",
-            issue_number=issue,
-            model=None,
-            reasoning_effort=None,
-            provider_connection=provider_connection,
-        )
-        assert admission.issue is not None
-        coding_task = github_issue_task(admission.repository, admission.issue)
-    else:
-        coding_task = resolve_coding_task_or_exit(
-            target.repo,
-            task=task,
-            issue_number=issue,
-        )
+    coding_task = resolve_coding_task_or_exit(
+        target.repo,
+        task=task,
+        issue_number=None,
+    )
     launch_coding_job_or_exit(
         target,
         coding_task,
         resume_job_name=resume,
         provider_connection=provider_connection,
-        admission_proof=admission,
-    )
-
-
-@app.command()
-def afk(
-    issue_number: int = typer.Argument(..., min=1, help="GitHub issue to implement."),
-    model: str | None = typer.Option(None, "--model", help="Job conversation model."),
-    reasoning_effort: str | None = typer.Option(
-        None, "--reasoning-effort", help="Job conversation reasoning effort."
-    ),
-    provider_connection: str | None = typer.Option(
-        None,
-        "--provider-connection",
-        help="Override the setup-selected Provider Connection.",
-    ),
-) -> None:
-    """Compose unattended coding policy over the same Worker and Job runtime."""
-    target = detect_git_target(Path.cwd())
-    store = CodingStore.open()
-    target_repo = str(target.repo.resolve())
-    try:
-        existing = CodingWorkflow.existing_afk_job(
-            store,
-            target_repo=target_repo,
-            issue_number=issue_number,
-        )
-    except WorkflowFailure as error:
-        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
-        raise typer.Exit(error.exit_code) from error
-    admission = None
-    coding_task = None
-    if existing is None:
-        admission = prove_coding_admission_or_exit(
-            target,
-            command="afk",
-            issue_number=issue_number,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            provider_connection=provider_connection,
-        )
-        assert admission.issue is not None
-        coding_task = github_issue_task(admission.repository, admission.issue)
-    else:
-        proof_record = existing.metadata.get("admission_proof")
-        if proof_record:
-            try:
-                proof_id = json.loads(proof_record).get("proof_id")
-            except (json.JSONDecodeError, AttributeError):
-                proof_id = None
-            if isinstance(proof_id, str):
-                typer.echo(f"Reusing coding admission proof: {proof_id}")
-    owner_token = secrets.token_hex(16)
-    try:
-        afk_start = CodingWorkflow.prepare_afk_start(
-            store,
-            target_repo=target_repo,
-            issue_number=issue_number,
-            owner_token=owner_token,
-        )
-    except WorkflowFailure as error:
-        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
-        store.release_unlinked_afk_coordinator(target_repo, issue_number, owner_token)
-        raise typer.Exit(error.exit_code) from error
-    echo_workflow_outcome(WorkflowOutcome(afk_start.messages))
-    try:
-        if afk_start.action == "launch":
-            assert admission is not None and coding_task is not None
-            job_name = launch_coding_job_or_exit(
-                target,
-                coding_task,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                provider_connection=provider_connection,
-                metadata={
-                    "afk_issue_number": str(issue_number),
-                    "afk_stage": "implementation",
-                },
-                admission_proof=admission,
-            )
-            store.link_afk_job(target_repo, issue_number, owner_token, job_name)
-        else:
-            assert afk_start.job_name is not None
-            job_name = afk_start.job_name
-    except BaseException:
-        store.release_unlinked_afk_coordinator(target_repo, issue_number, owner_token)
-        raise
-    run_coding_job_workflow_or_exit(
-        job_name,
-        lambda workflow: workflow.coordinate_afk(
-            issue_number=issue_number,
-            target_repo=target_repo,
-            owner_token=owner_token,
-        ),
-    )
-
-
-@app.command("afk-resume")
-def afk_resume(
-    job_name: str,
-    takeover: bool = typer.Option(
-        False, "--takeover", help="Explicitly replace an interrupted coordinator owner."
-    ),
-    repair_attention: str | None = typer.Option(None, "--repair-attention"),
-    decline_attention: str | None = typer.Option(None, "--decline-attention"),
-) -> None:
-    """Resume an interrupted AFK coordinator for one coding Job."""
-    owner_token = secrets.token_hex(16)
-    store = CodingStore.open()
-    try:
-        resume = CodingWorkflow.prepare_afk_resume(
-            store,
-            job_name=job_name,
-            owner_token=owner_token,
-            takeover=takeover,
-            repair_attention_id=repair_attention,
-            decline_attention_id=decline_attention,
-        )
-    except WorkflowFailure as error:
-        echo_workflow_outcome(WorkflowOutcome(error.messages, error.exit_code))
-        raise typer.Exit(error.exit_code) from error
-    echo_workflow_outcome(WorkflowOutcome(resume.messages))
-    if resume.job.status in {"setting-up", "setup-failed"}:
-        recover_setup_failed_coding_job_or_exit(
-            store,
-            resume.job,
-            resolve_coding_task_or_exit(
-                Path(resume.job.target_repo),
-                task=None,
-                issue_number=resume.issue_number,
-            ),
-        )
-    run_coding_job_workflow_or_exit(
-        job_name,
-        lambda workflow: workflow.coordinate_afk(
-            issue_number=resume.issue_number,
-            target_repo=resume.target_repo,
-            owner_token=owner_token,
-        ),
     )
 
 
@@ -1791,32 +1627,20 @@ def launch_coding_job_or_exit(
     reasoning_effort: str | None = None,
     resume_job_name: str | None = None,
     provider_connection: str | None,
-    admission_proof: CodingAdmissionProof | None = None,
 ) -> str:
     """Compose a dedicated Worker, Job Assignment, clone, and first delivery."""
-    if admission_proof is None:
-        if is_dirty(target.repo):
-            typer.echo("Target repo has uncommitted changes.", err=True)
-            raise typer.Exit(1)
-        git_author = resolve_git_author_or_exit(target.repo)
-        contract = load_contract_or_exit(target.repo)
-        try:
-            config = resolve_codex_config(
-                contract.primary_codex, model=model, reasoning_effort=reasoning_effort
-            )
-        except AgentConfigValidationError as error:
-            typer.echo(f"Invalid Job Codex configuration: {error}", err=True)
-            raise typer.Exit(1) from error
-    else:
-        if (
-            admission_proof.target_branch != target.branch
-            or admission_proof.issue is None
-        ):
-            typer.echo("Coding admission proof does not match this delegation.", err=True)
-            raise typer.Exit(1)
-        git_author = admission_proof.git_author
-        contract = admission_proof.contract
-        config = admission_proof.codex_config
+    if is_dirty(target.repo):
+        typer.echo("Target repo has uncommitted changes.", err=True)
+        raise typer.Exit(1)
+    git_author = resolve_git_author_or_exit(target.repo)
+    contract = load_contract_or_exit(target.repo)
+    try:
+        config = resolve_codex_config(
+            contract.primary_codex, model=model, reasoning_effort=reasoning_effort
+        )
+    except AgentConfigValidationError as error:
+        typer.echo(f"Invalid Job Codex configuration: {error}", err=True)
+        raise typer.Exit(1) from error
     job_name = resume_job_name or generate_job_name(coding_task.summary)
     worker_name = f"coder-{job_name}"
     job_branch = f"dorf/{job_name}"
@@ -1847,31 +1671,20 @@ def launch_coding_job_or_exit(
         recover_setup_failed_coding_job_or_exit(store, existing, coding_task)
         return job_name
 
-    if admission_proof is None:
-        selected_provider, deployment_profile = select_coding_deployment_or_exit(
-            provider_connection
-        )
-        image_fingerprint = deployment_image_fingerprint(deployment_profile, contract)
-        environment_config = IncusConfig.from_mapping(contract.incus_config)
-        if image_fingerprint is not None:
-            environment_config = replace(environment_config, template=image_fingerprint)
-        dorf = Dorf(
-            store,
-            environment_config=environment_config,
-            agent_defaults=contract.primary_codex,
-            provider_connection=selected_provider,
-            git_credential_token=github_installation_token_for_job,
-        )
-    else:
-        selected_provider = admission_proof.provider_connection
-        image_fingerprint = admission_proof.image_fingerprint
-        dorf = Dorf(
-            store,
-            environment_config=admission_proof.environment_config,
-            agent_defaults=contract.primary_codex,
-            provider_connection=selected_provider,
-            git_credential_token=github_installation_token_for_job,
-        )
+    selected_provider, deployment_profile = select_coding_deployment_or_exit(
+        provider_connection
+    )
+    image_fingerprint = deployment_image_fingerprint(deployment_profile, contract)
+    environment_config = IncusConfig.from_mapping(contract.incus_config)
+    if image_fingerprint is not None:
+        environment_config = replace(environment_config, template=image_fingerprint)
+    dorf = Dorf(
+        store,
+        environment_config=environment_config,
+        agent_defaults=contract.primary_codex,
+        provider_connection=selected_provider,
+        git_credential_token=github_installation_token_for_job,
+    )
     exit_if_environment_prerequisites_missing(dorf)
     room_image_metadata = (
         {"image_fingerprint": image_fingerprint}
@@ -1906,15 +1719,6 @@ def launch_coding_job_or_exit(
                 if image_fingerprint is not None
                 else {}
             ),
-            **(
-                {
-                    "admission_proof": json.dumps(
-                        admission_proof.record(), sort_keys=True
-                    )
-                }
-                if admission_proof is not None
-                else {}
-            ),
         }
         acceptance_items = compile_acceptance_checklist(coding_task.prompt, contract)
         store.create_coding_job_with_acceptance(
@@ -1922,28 +1726,14 @@ def launch_coding_job_or_exit(
             metadata=coding_metadata,
             goal=goal,
             items=acceptance_items,
-            admission_attempt_id=(
-                admission_proof.approval_attempt_id
-                if admission_proof is not None
-                else None
-            ),
         )
         reservation_committed = True
 
     try:
-        remote_branch = (
-            create_git_backed_job_branch_or_exit(
-                target,
-                job_branch,
-                before_create=reserve_coding_job,
-            )
-            if admission_proof is None
-            else create_admitted_git_backed_job_branch_or_exit(
-                target,
-                job_branch,
-                admission_proof,
-                before_create=reserve_coding_job,
-            )
+        remote_branch = create_git_backed_job_branch_or_exit(
+            target,
+            job_branch,
+            before_create=reserve_coding_job,
         )
         store.set_metadata_value(job_name, "github_remote_branch_status", "created")
     except typer.Exit:
@@ -1965,13 +1755,6 @@ def launch_coding_job_or_exit(
                 err=True,
             )
             raise typer.Exit(1) from error
-        if admission_proof is not None and admission_proof.approval_attempt_id:
-            attempt = store.get_coding_admission(admission_proof.approval_attempt_id)
-            if attempt is not None and attempt.status == "admitted":
-                typer.echo(
-                    f"This delegation was already admitted as coding Job {attempt.job_name}."
-                )
-                raise typer.Exit(0) from error
         typer.echo(f"Could not record coding Job: {error}", err=True)
         raise typer.Exit(1) from error
 
@@ -1991,20 +1774,6 @@ def launch_coding_job_or_exit(
             activate=False,
         )
         binding = assignment.binding
-        if admission_proof is not None:
-            store.documents.append_event(
-                job_name,
-                event_id=f"evt-{admission_proof.proof_id}",
-                source="workflow",
-                provenance="fact",
-                kind="admission-proof",
-                summary=f"Coding admission proved by {admission_proof.proof_id}",
-                related={
-                    "assignment": binding.assignment.id,
-                    "proof": admission_proof.proof_id,
-                    "worker": binding.worker.name,
-                },
-            )
     except Exception as error:
         store.update_status(job_name, "setup-failed")
         typer.echo(f"Could not create coding Worker and Job {job_name}: {error}", err=True)
@@ -2251,223 +2020,6 @@ def resolve_coding_task_or_exit(
         )
         raise typer.Exit(1) from error
     return github_issue_task(repo_full_name, issue)
-
-
-def prove_coding_admission_or_exit(
-    target: GitTarget,
-    *,
-    command: str,
-    issue_number: int,
-    model: str | None,
-    reasoning_effort: str | None,
-    provider_connection: str | None,
-) -> CodingAdmissionProof:
-    """Run the AFK delegation's single proof before any workflow mutation."""
-    request = CodingAdmissionRequest(
-        repo_path=str(target.repo),
-        target_branch=target.branch,
-        issue_number=issue_number,
-        command=command,
-        target_start_sha=target.start_sha,
-        provider_connection=provider_connection,
-        model=model,
-        reasoning_effort=reasoning_effort,
-    )
-    result = CodingAdmissionPreflight().prove(request)
-    if result.proof is not None:
-        proof = result.proof
-        store = CodingStore.open()
-        retained = store.get_coding_admission_for_request(request.record())
-        if retained is not None and retained.status in {
-            "pending",
-            "approved",
-            "admitted",
-        }:
-            retained_repository = retained.request.get("repository")
-            if retained_repository != proof.repository:
-                typer.echo(
-                    "Retained GitHub authority is pinned to "
-                    f"{retained_repository or 'an unknown repository'}, but the current "
-                    f"checkout resolves to {proof.repository}. Restore the original repository "
-                    "or make a new delegation.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            retained_installation = retained.request.get("installation_id")
-            if retained_installation != proof.installation_id:
-                typer.echo(
-                    "Retained GitHub authority is pinned to installation "
-                    f"{retained_installation or 'unknown'}, but readiness used installation "
-                    f"{proof.installation_id}. Restore the original installation or make a new "
-                    "delegation.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            if retained.status == "admitted":
-                typer.echo(
-                    "This delegation was already admitted as coding Job "
-                    f"{retained.job_name}."
-                )
-                raise typer.Exit(0)
-            if store.approve_coding_admission(retained.id):
-                proof = replace(proof, approval_attempt_id=retained.id)
-        typer.echo(f"Coding admission ready: {proof.proof_id}")
-        return proof
-    resumable = [
-        failure
-        for failure in result.failures
-        if failure.automatic_continuation and failure.approval is not None
-    ]
-    if len(result.failures) == 1 and len(resumable) == 1:
-        failure = resumable[0]
-        assert failure.approval is not None
-        pinned_request = replace(
-            request,
-            repository=failure.approval.repository,
-            installation_id=failure.approval.installation_id,
-        )
-        store = CodingStore.open()
-        retained = store.get_coding_admission_for_request(request.record())
-        if (
-            retained is not None
-            and retained.status in {"pending", "approved", "admitted"}
-            and (
-                retained.request.get("repository") != failure.approval.repository
-                or retained.request.get("installation_id")
-                != failure.approval.installation_id
-            )
-        ):
-            typer.echo(
-                "This delegation already has retained GitHub authority for "
-                f"{retained.request.get('repository') or 'an unknown repository'}; refusing "
-                f"to retarget it to {failure.approval.repository} through installation "
-                f"{failure.approval.installation_id}.",
-                err=True,
-            )
-            raise typer.Exit(1)
-        attempt, created = store.retain_pending_coding_admission(
-            pinned_request.record(),
-            failure.approval.record(),
-            ttl_seconds=GITHUB_AUTHORITY_APPROVAL_TTL_SECONDS,
-        )
-        if attempt.status == "admitted":
-            typer.echo(
-                f"This delegation was already admitted as coding Job {attempt.job_name}."
-            )
-            raise typer.Exit(0)
-        if attempt.status in {"declined", "expired"}:
-            typer.echo(
-                f"This GitHub authority approval attempt already ended: {attempt.status}.",
-                err=True,
-            )
-            raise typer.Exit(1)
-        if attempt.status == "pending":
-            echo_github_authority_attention(attempt, retried=not created)
-            outcome = await_github_authority_approval(attempt)
-            if outcome == "installation-changed":
-                typer.echo(
-                    "Configured GitHub App installation changed while approval was pending. "
-                    f"Restore installation {attempt.request['installation_id']} and retry.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            if outcome in {"declined", "expired"}:
-                store.end_pending_coding_admission(attempt.id, outcome)
-                typer.echo(f"GitHub authority approval {outcome}.", err=True)
-                typer.echo(failure.approval.decline_consequence, err=True)
-                raise typer.Exit(1)
-            if not store.approve_coding_admission(attempt.id):
-                typer.echo("GitHub authority approval expired.", err=True)
-                raise typer.Exit(1)
-        else:
-            typer.echo("Reusing approved GitHub authority for this delegation.")
-        typer.echo("GitHub authority approved; rerunning exact coding readiness.")
-        resumed = CodingAdmissionPreflight().prove(pinned_request)
-        if resumed.proof is not None:
-            if resumed.proof.installation_id != attempt.request.get("installation_id"):
-                typer.echo(
-                    "Coding readiness used a different GitHub App installation than the "
-                    "retained approval.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            if not store.approve_coding_admission(attempt.id):
-                typer.echo("GitHub authority approval expired during readiness.", err=True)
-                raise typer.Exit(1)
-            proof = replace(resumed.proof, approval_attempt_id=attempt.id)
-            typer.echo(f"Coding admission ready: {proof.proof_id}")
-            return proof
-        _echo_coding_admission_failures(resumed.failures)
-        raise typer.Exit(1)
-    _echo_coding_admission_failures(result.failures)
-    raise typer.Exit(1)
-
-
-def echo_github_authority_attention(
-    attempt: PendingCodingAdmission, *, retried: bool
-) -> None:
-    attention = attempt.attention
-    typer.echo("Attention: GitHub authority approval required")
-    typer.echo(f"Attempt: {attempt.id}" + (" (retained)" if retried else ""))
-    typer.echo(f"Missing authority: {attention['missing_authority']}")
-    typer.echo(f"Why needed: {attention['why_needed']}")
-    typer.echo(f"Approval action: {attention['action']}")
-    typer.echo(f"Approval URL: {attention['url']}")
-    typer.echo(f"Scope: {attention['scope']}")
-    typer.echo(f"If approved: {attention['approve_consequence']}")
-    typer.echo(f"If declined or expired: {attention['decline_consequence']}")
-    typer.echo(f"Automatic resume: {attention['automatic_resume']}")
-    typer.echo(f"Expires: {attempt.expires_at}")
-
-
-def await_github_authority_approval(attempt: PendingCodingAdmission) -> str:
-    """Open the one scoped GitHub action and observe authority without storing credentials."""
-    webbrowser.open(attempt.attention["url"])
-    repo = str(attempt.request["repository"])
-    branch = str(attempt.request["target_branch"])
-    installation_id = str(attempt.request["installation_id"])
-    expires_at = datetime.fromisoformat(attempt.expires_at)
-    try:
-        while datetime.now(UTC) < expires_at:
-            try:
-                config = load_github_app_config()
-                if config.installation_id != installation_id:
-                    return "installation-changed"
-                minted = GitHubAppTokenClient().mint_installation_token(config)
-                token = (
-                    minted.token
-                    if isinstance(minted, GitHubInstallationToken)
-                    else str(minted)
-                )
-                GitHubRepositoryClient(token).get_branch_sha(repo, branch)
-                return "approved"
-            except (
-                GitHubAppConfigError,
-                GitHubAppVerificationError,
-                GitHubRepositoryError,
-            ):
-                sleep(GITHUB_AUTHORITY_POLL_SECONDS)
-    except KeyboardInterrupt:
-        return "declined"
-    return "expired"
-
-
-def _echo_coding_admission_failures(failures) -> None:
-    typer.echo(
-        "Coding admission failed with "
-        f"{len(failures)} independently discovered failure(s):",
-        err=True,
-    )
-    for failure in failures:
-        typer.echo(f"- [{failure.code}] {failure.summary}", err=True)
-        typer.echo(f"  owner: {failure.owner}", err=True)
-        typer.echo(f"  repair: {failure.repair}", err=True)
-        typer.echo(f"  consequence: {failure.consequence}", err=True)
-        typer.echo(
-            "  automatic continuation: "
-            + ("yes" if failure.automatic_continuation else "no"),
-            err=True,
-        )
 
 
 def github_issue_task(repo_full_name: str, issue: GitHubIssue) -> CodingTask:
@@ -3319,53 +2871,6 @@ def create_git_backed_job_branch_or_exit(
         typer.echo(f"Could not create remote Job branch: {error}", err=True)
         raise typer.Exit(1) from error
 
-    return branch
-
-
-def create_admitted_git_backed_job_branch_or_exit(
-    target: GitTarget,
-    job_branch: str,
-    proof: CodingAdmissionProof,
-    before_create: Callable[[GitBackedJobBranch], None] | None = None,
-) -> GitBackedJobBranch:
-    """Create only the branch already authorized by an exact admission proof."""
-    if target.branch != proof.target_branch or target.start_sha != proof.target_start_sha:
-        typer.echo("Coding admission proof no longer matches the target branch.", err=True)
-        raise typer.Exit(1)
-    branch = GitBackedJobBranch(
-        repo_full_name=proof.repository,
-        base_sha=proof.target_start_sha,
-        metadata={
-            "local_target_repo": str(target.repo),
-            "github_repo": proof.repository,
-            "github_base_branch": proof.target_branch,
-            "github_remote_branch_status": "pending",
-        },
-        token=proof.installation_token,
-    )
-    try:
-        client = GitHubRepositoryClient(proof.installation_token)
-        current_target_sha = client.get_branch_sha(
-            proof.repository,
-            proof.target_branch,
-        )
-        if current_target_sha != proof.target_start_sha:
-            typer.echo(
-                "The target branch advanced after coding admission; repeat the delegation "
-                "to prove its current head.",
-                err=True,
-            )
-            raise typer.Exit(1)
-        if before_create is not None:
-            before_create(branch)
-        client.create_branch(
-            proof.repository,
-            job_branch,
-            proof.target_start_sha,
-        )
-    except GitHubRepositoryError as error:
-        typer.echo(f"Could not create admitted remote Job branch: {error}", err=True)
-        raise typer.Exit(1) from error
     return branch
 
 

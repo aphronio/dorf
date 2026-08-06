@@ -3,7 +3,7 @@
 - **Status:** Accepted direction; ChatGPT-to-Codex Room path validated
 - **First validated route:** D035, ChatGPT subscription to Codex app-server through CLIProxyAPI
 - **Implemented control plane:** named ChatGPT-subscription and OpenAI-Platform connections plus
-  scoped Responses routes
+  scoped Responses routes; the Go Job spine reconciles per-Sandbox routes directly
 
 The Provider Gateway connects upstream model providers and issues scoped routes to trusted host
 clients and isolated Rooms. It is a sibling application subsystem rather than part of the portable
@@ -13,14 +13,15 @@ Worker and Job runtime.
 
 | Concept | Meaning |
 | --- | --- |
-| **Provider Gateway** | Programmatic Python facade for connection, route, health, and broker lifecycle operations |
+| **Provider Gateway** | Application subsystem for connection, route, health, and broker lifecycle operations |
 | **Provider Connection** | Durable upstream authentication profile, such as a ChatGPT subscription or OpenAI API key |
 | **Inference Route** | Revocable downstream endpoint and broker credential issued to one consumer |
 | **Broker backend** | Persistent data-plane process that holds upstream credentials, refreshes them, and forwards inference |
 
-The public subsystem is `dorf.provider_gateway`, exposed through `ProviderGateway`. CLIProxyAPI is
-the first concrete broker backend and remains an implementation detail. The subsystem lives beside,
-not inside, `dorf.runtime`.
+CLIProxyAPI is the first concrete broker backend and remains an implementation detail. The
+subsystem lives beside, not inside, the durable runtime. The retained Python connection setup is
+legacy operational evidence; the issue #40 Go path reads that same protected authority and
+reconciles only its consumer-specific route without starting Python.
 
 ## Boundary and data flow
 
@@ -54,10 +55,11 @@ Dorf controls Worker, Room, Job, Assignment, and native-turn lifecycle through i
 
 ## Chosen
 
-1. **One authority per deployment profile.** Connecting through the Dorf CLI or programmatic facade
+1. **One authority per deployment profile.** Connecting through the Dorf CLI or application facade
    reaches the same gateway state and broker. Upstream credentials are never cloned into Rooms.
-2. **Programmatic first, CLI as an adapter.** The typed Python facade is the composition boundary.
-   `dorf provider connect/list/status/disconnect` calls it rather than maintaining another store.
+2. **Programmatic first, CLI as an adapter.** Connection and route operations share one protected
+   broker authority rather than maintaining client-specific stores. The greenfield Go Job path
+   composes route operations directly; retained Python connection commands are not its runtime.
 3. **Connections and routes are distinct.** A Provider Connection owns upstream authentication.
    Each consumer receives a separate Inference Route so it can be revoked independently. A Room
    route ends with Room cleanup.

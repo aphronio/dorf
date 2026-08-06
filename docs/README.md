@@ -47,6 +47,7 @@ not a stable end-user contract.
 - [Core setup](implementation/core-setup.md)
 - [Incus image](implementation/incus-image.md)
 - [Buzz deployment](implementation/buzz.md)
+- [Go durable Job spine](implementation/go-spine.md)
 
 ### Research
 
