@@ -924,7 +924,7 @@ class CodingWorkflow:
             self.store.clear_coding_attention(self.job.job_name, attention.id)
         self.store.remove_metadata_keys(
             self.job.job_name,
-            {"afk_attention_id"},
+            {"afk_attention_id", "afk_stage", "afk_outcome"},
         )
         self._emit(f"Verify passed for {self.job.job_name}")
         return self._outcome()
@@ -937,7 +937,7 @@ class CodingWorkflow:
             self.store.clear_coding_attention(self.job.job_name, attention_id)
         self.store.remove_metadata_keys(
             self.job.job_name,
-            {"afk_attention_id"},
+            {"afk_attention_id", "afk_stage", "afk_outcome"},
         )
 
     def _raise_recorded_attention(self) -> None:
@@ -1246,8 +1246,15 @@ class CodingWorkflow:
         if self.store.get_acceptance_checklist(self.job.job_name) is not None:
             self.store.freeze_acceptance_checklist(self.job.job_name)
 
-        self._reconcile_reviewer_auth_attention(requested)
-        resumed_payload = self._resume_reviewer_attention(requested)
+        try:
+            self._reconcile_reviewer_auth_attention(requested)
+            resumed_payload = self._resume_reviewer_attention(requested)
+        except CommandInterrupted:
+            self._fail(
+                f"Verify interrupted for {self.job.job_name}.",
+                exit_code=130,
+                kind="interrupted",
+            )
         resumed_commit = None
         recovery_attention_id = None
         if resumed_payload is not None:
@@ -2020,9 +2027,10 @@ def reviewer_authentication_evidence(
             "provider connection authentication is unavailable",
             "provider connection authentication unavailable",
         ),
-        ("not logged in", "Codex session unavailable"),
-        ("401 unauthorized", "provider rejected authentication (HTTP 401)"),
-        ("403 forbidden", "provider rejected authentication (HTTP 403)"),
+        (
+            "not logged in. run 'codex login' to log in, then try again.",
+            "Codex session unavailable",
+        ),
     )
     matched = next((label for phrase, label in signatures if phrase in bounded), None)
     if matched is None:

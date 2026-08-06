@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from dorf.cli import run_repository_preparation_or_raise
-from dorf.command_runner import shell_command
+from dorf.command_runner import CommandInterrupted, shell_command
 from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.runtime import (
     AgentConversationInspection,
@@ -840,6 +840,33 @@ def test_reviewer_prose_about_authentication_is_not_authority_failure(tmp_path) 
     assert store.list_coding_attention(job.job_name) == []
 
 
+def test_failed_reviewer_incidental_login_prose_is_not_authority_failure(tmp_path) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[
+            (
+                1,
+                "Login fixtures cover not logged in, 401 Unauthorized, and 403 Forbidden.",
+            )
+        ],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+
+    with pytest.raises(WorkflowFailure) as raised:
+        workflow(store, environment, runtime, job, GitHubClient(), contract=contract).verify()
+
+    assert raised.value.kind == "needs-human"
+    assert store.list_coding_attention(job.job_name) == []
+
+
 def test_non_auth_reviewer_failure_does_not_skip_later_reviewers(tmp_path) -> None:
     store, environment, _agent, runtime, job, _binding = make_coding_job(
         tmp_path,
@@ -919,6 +946,10 @@ def test_approved_reviewer_auth_repair_retries_once_and_clears_attention(tmp_pat
     cleared = store.get_coding_attention(attention.id)
     assert cleared is not None and cleared.status == "cleared"
     assert store.get_active_coding_attention(job.job_name) is None
+    metadata = store.get_coding_job(job.job_name).metadata
+    assert "afk_attention_id" not in metadata
+    assert "afk_stage" not in metadata
+    assert "afk_outcome" not in metadata
     pulse = build_coding_job_pulse(store, runtime.inspect(job.job_name))
     assert pulse.attention.state == "quiet"
     current = store.get_job_binding(job.job_name)
@@ -1160,6 +1191,65 @@ def test_crash_after_approved_reviewer_run_reuses_retained_result(tmp_path) -> N
 
     assert len(environment.processes) == before
     assert store.get_coding_attention(attention.id).status == "cleared"
+
+
+def test_interrupted_approved_repair_is_reported_and_remains_retained(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store, environment, _agent, runtime, job, _binding = make_coding_job(
+        tmp_path,
+        review_outputs=[(1, "Codex authentication is unavailable: Not logged in")],
+    )
+    contract = RepoContract(
+        mode="configured",
+        commands={},
+        env={},
+        review=ReviewConfig(
+            max_rounds=1,
+            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
+        ),
+    )
+    github = GitHubClient()
+    with pytest.raises(WorkflowFailure):
+        workflow(store, environment, runtime, job, github, contract=contract).verify()
+    attention = store.get_active_coding_attention(job.job_name)
+    assert attention is not None
+    resuming = workflow(
+        store,
+        environment,
+        runtime,
+        store.get_coding_job(job.job_name),
+        github,
+        contract=contract,
+    )
+
+    def interrupt_recovery(spec, *, prepared_run=None):
+        assert prepared_run is not None
+        interrupted = store.finish_command_run(
+            prepared_run.id,
+            "interrupted",
+            130,
+        )
+        raise CommandInterrupted(interrupted)
+
+    monkeypatch.setattr(resuming, "_run_command", interrupt_recovery)
+
+    with pytest.raises(WorkflowFailure) as raised:
+        resuming.verify(repair_attention_id=attention.id)
+
+    assert raised.value.kind == "interrupted"
+    assert raised.value.exit_code == 130
+    retained = store.get_coding_attention(attention.id)
+    assert retained is not None
+    assert retained.status == "recovering"
+    assert retained.recovery_run_id is not None
+    recovery_run = store.get_command_run(retained.recovery_run_id)
+    assert recovery_run is not None
+    assert (recovery_run.status, recovery_run.exit_code) == ("interrupted", 130)
+    metadata = store.get_coding_job(job.job_name).metadata
+    assert metadata["afk_attention_id"] == attention.id
+    assert metadata["afk_stage"] == "blocked"
 
 
 def test_approved_repair_ignores_matching_reviewer_run_started_before_approval(
