@@ -62,6 +62,7 @@ type Job struct {
 	AgentRunID         string       `json:"agent_run_id,omitempty"`
 	NativeTurnID       string       `json:"native_turn_id,omitempty"`
 	NativeOutcome      string       `json:"native_outcome,omitempty"`
+	RunTerminalState   string       `json:"run_terminal_state,omitempty"`
 }
 
 type Action struct {

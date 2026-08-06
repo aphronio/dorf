@@ -7,6 +7,7 @@ import (
 
 type Store interface {
 	Job(context.Context, string) (Job, error)
+	WithJobFence(context.Context, string, func() error) error
 	StartRun(context.Context, string) error
 	BeginAction(context.Context, string, ActionKind) (Action, error)
 	CompleteAction(context.Context, string, Receipt) error
@@ -32,6 +33,12 @@ type Service struct {
 }
 
 func (s Service) Run(ctx context.Context, jobID string) error {
+	return s.Store.WithJobFence(ctx, jobID, func() error {
+		return s.runFenced(ctx, jobID)
+	})
+}
+
+func (s Service) runFenced(ctx context.Context, jobID string) error {
 	job, err := s.Store.Job(ctx, jobID)
 	if err != nil {
 		return err
@@ -109,6 +116,12 @@ func (s Service) reconcileAgentRun(ctx context.Context, job Job) (Receipt, Recei
 }
 
 func (s Service) Cleanup(ctx context.Context, jobID string) error {
+	return s.Store.WithJobFence(ctx, jobID, func() error {
+		return s.cleanupFenced(ctx, jobID)
+	})
+}
+
+func (s Service) cleanupFenced(ctx context.Context, jobID string) error {
 	job, err := s.Store.Job(ctx, jobID)
 	if err != nil {
 		return err

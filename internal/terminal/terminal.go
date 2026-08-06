@@ -34,7 +34,11 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	if err := requirePrivateRoute(baseURL); err != nil {
+	bridgeIPv4, err := e.Sandbox.BridgeIPv4(ctx)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
 		return spine.Receipt{}, err
 	}
 	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "sandbox:"+job.ID, action.ID)
@@ -67,14 +71,15 @@ func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, _ spine.Act
 	return spine.Receipt{ExternalID: name}, err
 }
 
-func requirePrivateRoute(baseURL string) error {
+func requireBridgeRoute(baseURL, bridgeIPv4 string) error {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return fmt.Errorf("provider route URL is invalid: %w", err)
 	}
 	address := net.ParseIP(parsed.Hostname())
-	if parsed.Scheme != "http" || address == nil || address.To4() == nil || !address.IsPrivate() || address.IsLoopback() {
-		return fmt.Errorf("provider route must use the private Incus bridge IPv4 address")
+	bridge := net.ParseIP(bridgeIPv4)
+	if parsed.Scheme != "http" || address == nil || address.To4() == nil || bridge == nil || bridge.To4() == nil || !bridge.IsPrivate() || bridge.IsLoopback() || !address.Equal(bridge) {
+		return fmt.Errorf("provider route must use configured Incus bridge IPv4 %s", bridgeIPv4)
 	}
 	return nil
 }

@@ -29,7 +29,7 @@ Use the existing [Incus image procedure](incus-image.md) to publish the `dorf-co
 image must contain `git`, `curl`, and `codex app-server`, and must not contain
 `/root/.codex/auth.json` or a provider route key. The Go worker checks that boundary before it
 installs a route. The default Incus bridge is `incusbr0`; the Provider Gateway broker must be bound
-to that private bridge address.
+to that exact bridge IPv4. A different RFC1918 address is rejected rather than treated as equivalent.
 
 One-time upstream provider connection remains an owner setup operation. After it exists, record its
 name and the gateway state location without exporting any upstream or downstream secret:
@@ -62,7 +62,9 @@ No check probes Docker.
 
 Run these commands from the repository root. Replace the public repository, starting Revision, and
 model only with values deliberately selected for the proof. Keep the admission key unchanged for
-the repeated call.
+the repeated call. `--revision` accepts only a canonical lowercase full commit OID (40 hexadecimal
+characters for SHA-1 or 64 for SHA-256); branch names, tags, and abbreviated hashes are rejected.
+After checkout, the worker observes the guest's `HEAD` and requires it to equal that OID exactly.
 
 ```bash
 git rev-parse HEAD
@@ -118,7 +120,28 @@ new external effect.
 Absurd checkpoints are sequencing evidence, not exactly-once effect authority. Task claims may
 briefly overlap after lease loss, so every clone, Sandbox, route, Session, turn, and cleanup effect
 first receives a stable Dorf Action ID. A retry inspects the external authority and reconciles that
-Action before deciding whether any effect is still required.
+Action before deciding whether any effect is still required. A PostgreSQL transaction-scoped
+advisory fence keyed by Job serializes all of those external effects across overlapping claims; a
+later claimant waits, then observes the first claimant's durable Action receipt instead of executing
+the pending clone, Session, or turn concurrently. Database or process loss releases the fence so
+normal Action reconciliation can resume.
+
+An observed Job means only that Dorf recorded the harness-native outcome. `completed`, `failed`, and
+`interrupted` remain distinct native outcomes; `state=observed` does not assert success and does not
+blindly resubmit a failed or interrupted turn.
+
+Cleanup may also be scheduled after the run task is terminal `failed` or `cancelled`. While holding
+the same Job fence, Dorf records that terminal failure fact in the Job row before scheduling the
+cleanup task, so a partial route or Sandbox is not stranded and cleanup cannot race an active effect.
+The image proof normally uses durable cleanup. If its worker has returned with a pending retry, its
+`finally` path uses the bounded Go-only fallback below: cancellation, route revocation, and deletion
+all reconcile the same stable Job and Action identities.
+
+```bash
+./bin/dorf cleanup --cancel-run --now "$JOB_ID"
+./bin/dorf worker --once
+./bin/dorf inspect "$JOB_ID"
+```
 
 The Job ID above is the deterministic SHA-256-derived identity for the literal admission key. If a
 different key is used, take `job_id` from the first admission JSON rather than guessing it.

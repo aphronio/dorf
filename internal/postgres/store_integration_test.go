@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestPostgresAdmissionSeparatesProductFactsAndSchedulesOnce(t *testing.T) {
 	defer client.Close()
 	workflow.Register(client, spine.Service{Store: store})
 	key := fmt.Sprintf("integration-%d", time.Now().UnixNano())
-	input := postgres.NewJob{AdmissionKey: key, Goal: "Complete goal", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fb", Branch: "dorf/integration", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"}
+	input := postgres.NewJob{AdmissionKey: key, Goal: "Complete goal", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/integration", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"}
 	first, created, err := workflow.Admit(ctx, store, client, input)
 	if err != nil {
 		t.Fatal(err)
@@ -119,5 +120,74 @@ func TestPostgresAdmissionSeparatesProductFactsAndSchedulesOnce(t *testing.T) {
 	}
 	if repeated.CleanupState != spine.CleanupComplete || repeated.CleanupTaskID != scheduled.CleanupTaskID {
 		t.Fatalf("repeat cleanup regressed its terminal: first=%#v repeated=%#v", scheduled, repeated)
+	}
+
+	failedInput := input
+	failedInput.AdmissionKey = key + "-cancelled"
+	failedInput.Branch = "dorf/integration-cancelled"
+	failed, _, err := workflow.Admit(ctx, store, client, failedInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskIDs = append(taskIDs, failed.TaskID)
+	if _, err := db.ExecContext(ctx, `select absurd.cancel_task($1,$2::uuid)`, config.QueueName, failed.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	failedCleanup, err := workflow.ScheduleCleanup(ctx, store, client, failed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskIDs = append(taskIDs, failedCleanup.CleanupTaskID)
+	if failedCleanup.State != spine.JobFailed || failedCleanup.RunTerminalState != "cancelled" || failedCleanup.CleanupState != spine.CleanupScheduled {
+		t.Fatalf("terminal run cleanup facts = %#v", failedCleanup)
+	}
+}
+
+func TestPostgresJobFenceSerializesOverlappingClaims(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close PostgreSQL connection: %v", err)
+		}
+	})
+	store := postgres.Store{DB: db}
+	ctx := context.Background()
+	firstEntered := make(chan struct{})
+	release := make(chan struct{})
+	secondEntered := make(chan struct{})
+	errors := make(chan error, 2)
+	var once sync.Once
+	go func() {
+		errors <- store.WithJobFence(ctx, "job-fence-integration", func() error {
+			once.Do(func() { close(firstEntered) })
+			<-release
+			return nil
+		})
+	}()
+	<-firstEntered
+	go func() {
+		errors <- store.WithJobFence(ctx, "job-fence-integration", func() error {
+			close(secondEntered)
+			return nil
+		})
+	}()
+	select {
+	case <-secondEntered:
+		close(release)
+		t.Fatal("second claim crossed the PostgreSQL Job execution fence")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -67,7 +67,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "inspect":
 		return inspect(ctx, store, args[1:], stdout, stderr)
 	case "cleanup":
-		return cleanup(ctx, store, client, args[1:], stdout, stderr)
+		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
 	default:
 		_ = service
 		return usage(stderr)
@@ -105,7 +105,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migration 001_dorf.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations 001_dorf.sql and 002_run_terminal.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -220,6 +220,12 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	}
 	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  cleanup: %s\n  goal: %s\n  repository: %s @ %s\n  sandbox: %s\n  route: %s\n  session: %s\n  agent run: %s\n  native turn: %s (%s)\n", job.ID, job.State, job.CleanupState, job.Goal, job.Repository, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID), empty(job.AgentRunID), empty(job.NativeTurnID), empty(job.NativeOutcome))
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints)
+	if job.RunTerminalState != "" {
+		fmt.Fprintf(stdout, "  durable run terminal: %s (recorded failure fact; cleanup remains independent)\n", job.RunTerminalState)
+	}
+	if job.State == spine.JobObserved {
+		fmt.Fprintln(stdout, "  observation: native outcome recorded neutrally; observed does not assert success")
+	}
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
 	}
@@ -230,20 +236,37 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	return nil
 }
 
-func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, service spine.Service, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	cancelRun := set.Bool("cancel-run", false, "cancel a non-terminal run after acquiring its Job execution fence")
+	now := set.Bool("now", false, "reconcile the exact route and Sandbox synchronously after durable scheduling")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 1 {
 		return fmt.Errorf("cleanup requires one Job ID")
 	}
-	job, err := workflow.ScheduleCleanup(ctx, store, client, set.Arg(0))
+	var job spine.Job
+	var err error
+	if *cancelRun {
+		job, err = workflow.CancelAndScheduleCleanup(ctx, store, client, set.Arg(0))
+	} else {
+		job, err = workflow.ScheduleCleanup(ctx, store, client, set.Arg(0))
+	}
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
+	if *now && job.CleanupState != spine.CleanupComplete {
+		if err := service.Cleanup(ctx, job.ID); err != nil {
+			return fmt.Errorf("synchronous exact cleanup: %w", err)
+		}
+		job, err = store.Job(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+	}
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled, "synchronous": *now})
 }
 
 func readGoal(path string) (string, error) {

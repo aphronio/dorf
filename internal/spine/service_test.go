@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestRunRecordsEveryStableActionBeforeItsEffect(t *testing.T) {
@@ -132,9 +134,58 @@ func TestCleanupIsIdempotentAndRecordsRevocationBeforeSandboxDeletion(t *testing
 	}
 }
 
+func TestOverlappingClaimsAreFencedBeforePendingActions(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryStore()
+	job := testJob()
+	store.jobs[job.ID] = job
+	externals := newOverlapExternals()
+	service := Service{Store: store, Externals: externals}
+	errors := make(chan error, 2)
+	go func() { errors <- service.Run(ctx, job.ID) }()
+	<-externals.firstStarted
+	go func() { errors <- service.Run(ctx, job.ID) }()
+
+	overlapped := false
+	select {
+	case <-externals.secondStarted:
+		overlapped = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(externals.release)
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if overlapped || externals.sandboxEffects != 1 {
+		t.Fatalf("overlapping pending Sandbox effects=%d overlapped=%v", externals.sandboxEffects, overlapped)
+	}
+}
+
+func TestFailedAndInterruptedNativeTurnsAreNeutralObservations(t *testing.T) {
+	for _, outcome := range []string{"failed", "interrupted"} {
+		t.Run(outcome, func(t *testing.T) {
+			store := newMemoryStore()
+			job := testJob()
+			store.jobs[job.ID] = job
+			service := Service{Store: store, Externals: &fakeExternals{outcome: outcome}}
+			if err := service.Run(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			observed := store.jobs[job.ID]
+			if observed.State != JobObserved || observed.NativeOutcome != outcome {
+				t.Fatalf("Job observation = state %q native %q", observed.State, observed.NativeOutcome)
+			}
+		})
+	}
+}
+
 var errInjectedCrash = errors.New("injected crash after external effect")
 
 type memoryStore struct {
+	mu      sync.Mutex
+	fence   sync.Mutex
 	jobs    map[string]Job
 	actions map[string]Action
 }
@@ -143,8 +194,19 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{jobs: map[string]Job{}, actions: map[string]Action{}}
 }
 
-func (s *memoryStore) Job(_ context.Context, id string) (Job, error) { return s.jobs[id], nil }
+func (s *memoryStore) Job(_ context.Context, id string) (Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.jobs[id], nil
+}
+func (s *memoryStore) WithJobFence(_ context.Context, _ string, fn func() error) error {
+	s.fence.Lock()
+	defer s.fence.Unlock()
+	return fn()
+}
 func (s *memoryStore) StartRun(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	job := s.jobs[id]
 	if job.State != JobObserved {
 		job.State = JobRunning
@@ -153,6 +215,8 @@ func (s *memoryStore) StartRun(_ context.Context, id string) error {
 	return nil
 }
 func (s *memoryStore) BeginAction(_ context.Context, jobID string, kind ActionKind) (Action, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	id := ActionID(jobID, kind)
 	if action, ok := s.actions[id]; ok {
 		return action, nil
@@ -162,6 +226,8 @@ func (s *memoryStore) BeginAction(_ context.Context, jobID string, kind ActionKi
 	return action, nil
 }
 func (s *memoryStore) CompleteAction(_ context.Context, id string, receipt Receipt) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	action := s.actions[id]
 	action.State, action.ExternalID = ActionSucceeded, receipt.ExternalID
 	action.Outcome = receipt.Outcome
@@ -169,18 +235,24 @@ func (s *memoryStore) CompleteAction(_ context.Context, id string, receipt Recei
 	return nil
 }
 func (s *memoryStore) UncertainAction(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	action := s.actions[id]
 	action.State = ActionUncertain
 	s.actions[id] = action
 	return nil
 }
 func (s *memoryStore) ObserveRun(_ context.Context, jobID string, observed Observation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	job := s.jobs[jobID]
 	job.State, job.SessionID, job.AgentRunID, job.NativeOutcome = JobObserved, observed.SessionID, observed.AgentRunID, observed.Outcome
 	s.jobs[jobID] = job
 	return nil
 }
 func (s *memoryStore) CompleteCleanup(_ context.Context, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	job := s.jobs[jobID]
 	job.CleanupState = CleanupComplete
 	s.jobs[jobID] = job
@@ -192,6 +264,7 @@ type fakeExternals struct {
 	crashAfter ActionKind
 	crashed    bool
 	created    map[ActionKind]int
+	outcome    string
 }
 
 func (f *fakeExternals) effect(action Action) (Receipt, error) {
@@ -208,7 +281,58 @@ func (f *fakeExternals) effect(action Action) (Receipt, error) {
 		f.crashed = true
 		return Receipt{ExternalID: "native-" + string(action.Kind)}, errInjectedCrash
 	}
-	return Receipt{ExternalID: "native-" + string(action.Kind), Outcome: "completed"}, nil
+	outcome := f.outcome
+	if outcome == "" {
+		outcome = "completed"
+	}
+	return Receipt{ExternalID: "native-" + string(action.Kind), Outcome: outcome}, nil
+}
+
+type overlapExternals struct {
+	mu             sync.Mutex
+	firstStarted   chan struct{}
+	secondStarted  chan struct{}
+	release        chan struct{}
+	sandboxEffects int
+}
+
+func newOverlapExternals() *overlapExternals {
+	return &overlapExternals{firstStarted: make(chan struct{}), secondStarted: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (f *overlapExternals) effect(action Action) Receipt {
+	if action.Kind == ActionSandboxCreate {
+		f.mu.Lock()
+		f.sandboxEffects++
+		count := f.sandboxEffects
+		f.mu.Unlock()
+		if count == 1 {
+			close(f.firstStarted)
+			<-f.release
+		} else if count == 2 {
+			close(f.secondStarted)
+		}
+	}
+	return Receipt{ExternalID: "native-" + string(action.Kind), Outcome: "completed"}
+}
+
+func (f *overlapExternals) SandboxCreate(_ context.Context, _ Job, action Action) (Receipt, error) {
+	return f.effect(action), nil
+}
+func (f *overlapExternals) RepositoryClone(_ context.Context, _ Job, action Action) (Receipt, error) {
+	return f.effect(action), nil
+}
+func (f *overlapExternals) RouteCreate(_ context.Context, _ Job, action Action) (Receipt, error) {
+	return f.effect(action), nil
+}
+func (f *overlapExternals) AgentRun(_ context.Context, _ Job, session, turn Action) (Receipt, Receipt, error) {
+	return f.effect(session), f.effect(turn), nil
+}
+func (f *overlapExternals) RouteRevoke(_ context.Context, _ Job, action Action) (Receipt, error) {
+	return f.effect(action), nil
+}
+func (f *overlapExternals) SandboxDelete(_ context.Context, _ Job, action Action) (Receipt, error) {
+	return f.effect(action), nil
 }
 
 func (f *fakeExternals) SandboxCreate(_ context.Context, _ Job, action Action) (Receipt, error) {
@@ -240,7 +364,7 @@ func testJob() Job {
 		ID:              "job-0123456789abcdef",
 		Goal:            "Make the smallest real change and report the outcome.",
 		Repository:      "https://github.com/aphronio/dorf.git",
-		Revision:        "2d2e0fb",
+		Revision:        "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
 		Branch:          "dorf/proof",
 		Model:           "gpt-5.6-sol",
 		ReasoningEffort: "high",

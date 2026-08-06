@@ -34,7 +34,8 @@ not execute a mutable network installer.
 5. completes one real Codex app-server turn through a scoped Provider Route;
 6. records the image fingerprint, native Session/turn identity, timings, and terminal state in a
    redacted local evidence directory;
-7. verifies Sandbox and Provider Route cleanup through the same durable Go path; and
+7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
+   path, with fenced Go cancellation and synchronous exact reconciliation as the failure fallback; and
 8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
    VMs and candidate alias.
 
@@ -43,6 +44,12 @@ Run that proof manually with an already connected Provider Gateway name:
 ```bash
 PROVIDER_CONNECTION=personal-chatgpt \
   scripts/incus/prepare-dorf-codex-release.sh
+```
+
+If provider preflight fails, run the available Go readiness command from the Dorf source checkout:
+
+```bash
+go run ./cmd/dorf doctor --provider "$PROVIDER_CONNECTION"
 ```
 
 `scripts/incus/publish-dorf-codex-release.sh` runs that proof and publication as one repo-owned

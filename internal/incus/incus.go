@@ -143,7 +143,33 @@ func (s Sandbox) ReconcileClone(ctx context.Context, name, repository, revision,
 	if checkout.ExitCode != 0 {
 		return failure("checkout admitted Revision", checkout)
 	}
+	head, err := s.Exec(ctx, name, nil, "git", "-C", s.Config.Workspace, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if head.ExitCode != 0 {
+		return failure("observe Sandbox HEAD", head)
+	}
+	if strings.TrimSpace(head.Stdout) != revision {
+		return fmt.Errorf("Sandbox HEAD %q does not match admitted Revision %q", strings.TrimSpace(head.Stdout), revision)
+	}
 	return nil
+}
+
+func (s Sandbox) BridgeIPv4(ctx context.Context) (string, error) {
+	result, err := s.run(ctx, nil, "network", "get", s.Config.Network, "ipv4.address")
+	if err != nil {
+		return "", err
+	}
+	if result.ExitCode != 0 {
+		return "", failure("resolve configured Incus bridge IPv4", result)
+	}
+	raw := strings.TrimSpace(result.Stdout)
+	address, _, err := net.ParseCIDR(raw)
+	if err != nil || address.To4() == nil || !address.IsPrivate() || address.IsLoopback() {
+		return "", fmt.Errorf("configured Incus network %s has invalid private ipv4.address %q", s.Config.Network, raw)
+	}
+	return address.String(), nil
 }
 
 func (s Sandbox) InstallRoute(ctx context.Context, name, baseURL, key string) error {

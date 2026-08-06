@@ -58,22 +58,62 @@ func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, inp
 }
 
 func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (spine.Job, error) {
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		return spine.Job{}, err
-	}
-	if job.State != spine.JobObserved {
-		return spine.Job{}, fmt.Errorf("Job %s has not recorded a native outcome; cleanup cannot race its durable run", jobID)
-	}
-	if job.CleanupState == spine.CleanupComplete {
-		return job, nil
-	}
-	spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:" + jobID})
-	if err != nil {
-		return spine.Job{}, fmt.Errorf("schedule cleanup in Absurd: %w", err)
-	}
-	if err := store.SetCleanupTaskID(ctx, jobID, spawned.TaskID); err != nil {
-		return spine.Job{}, err
-	}
-	return store.Job(ctx, jobID)
+	return scheduleCleanup(ctx, store, client, jobID, false)
+}
+
+// CancelAndScheduleCleanup is the bounded operational fallback for a proof
+// whose worker already returned without a terminal run. The same Job fence
+// ensures a claimed handler cannot execute effects while cancellation and
+// cleanup eligibility are reconciled.
+func CancelAndScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (spine.Job, error) {
+	return scheduleCleanup(ctx, store, client, jobID, true)
+}
+
+func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string, cancelRun bool) (spine.Job, error) {
+	var result spine.Job
+	err := store.WithJobFence(ctx, jobID, func() error {
+		job, err := store.Job(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if job.CleanupState == spine.CleanupComplete {
+			result = job
+			return nil
+		}
+		if cancelRun && job.State != spine.JobObserved {
+			if err := store.CancelRun(ctx, jobID); err != nil {
+				return err
+			}
+			job, err = store.Job(ctx, jobID)
+			if err != nil {
+				return err
+			}
+		}
+		evidence, err := store.TaskEvidence(ctx, job.TaskID)
+		if err != nil {
+			return err
+		}
+		if !cleanupEligible(job.State, evidence.State) {
+			return fmt.Errorf("Job %s has no observed outcome and Absurd run is %s; cleanup cannot race an active claim", jobID, evidence.State)
+		}
+		if job.State != spine.JobObserved {
+			if err := store.RecordRunTerminal(ctx, jobID, evidence.State); err != nil {
+				return err
+			}
+		}
+		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:" + jobID})
+		if err != nil {
+			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
+		}
+		if err := store.SetCleanupTaskID(ctx, jobID, spawned.TaskID); err != nil {
+			return err
+		}
+		result, err = store.Job(ctx, jobID)
+		return err
+	})
+	return result, err
+}
+
+func cleanupEligible(jobState spine.JobState, taskState string) bool {
+	return jobState == spine.JobObserved || taskState == "failed" || taskState == "cancelled"
 }

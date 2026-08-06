@@ -1,3 +1,5 @@
+import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -127,6 +129,9 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "dorf.sdk" not in workstation_validator
     assert "dorf.runtime" not in workstation_validator
     assert ".dorf.toml" not in workstation_validator
+    assert "finally:" in workstation_validator
+    assert '"--cancel-run"' in workstation_validator
+    assert '"--now"' in workstation_validator
     assert 'incus delete "$VALIDATION_VM" --force' in release_script
     cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
     assert '[[ "$EVIDENCE_POLICY" == "remove" ]]' in cleanup
@@ -203,6 +208,40 @@ def test_workstation_validator_checks_its_source_before_go_delivery(tmp_path) ->
     assert result.returncode != 0
     assert "source commit does not match the validation checkout" in result.stderr
     assert not list(tmp_path.iterdir())
+
+
+def test_candidate_preflight_names_an_available_go_remediation() -> None:
+    validator = (
+        PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-codex-image.py"
+    ).read_text()
+
+    assert "dorf provider status" not in validator
+    assert "go run ./cmd/dorf doctor --provider" in validator
+
+
+def test_workstation_cleanup_uses_exact_go_fallback_after_durable_failure(monkeypatch) -> None:
+    path = PROJECT_ROOT / "scripts" / "incus" / "validate-dorf-coding-workstation.py"
+    spec = importlib.util.spec_from_file_location("workstation_validator", path)
+    assert spec is not None and spec.loader is not None
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    calls: list[list[str]] = []
+
+    def fake_run(argv, *, cwd=None, env=None):
+        del cwd, env
+        calls.append(argv)
+        if argv[1:] == ["cleanup", "job-proof"]:
+            raise RuntimeError("durable cleanup unavailable")
+        stdout = ""
+        if argv[1:] == ["inspect", "--json", "job-proof"]:
+            stdout = json.dumps({"job": {"cleanup_state": "complete"}})
+        return subprocess.CompletedProcess(argv, 0, stdout, ""), 0.01
+
+    monkeypatch.setattr(validator, "_run", fake_run)
+    validator._cleanup_proof(Path("/tmp/dorf"), "job-proof", {})
+
+    assert ["/tmp/dorf", "cleanup", "--cancel-run", "--now", "job-proof"] in calls
+    assert calls[-1] == ["/tmp/dorf", "inspect", "--json", "job-proof"]
 
 
 def test_incus_bridge_address_is_resolved_from_the_selected_managed_network() -> None:

@@ -69,51 +69,47 @@ def main() -> None:
         )
         goal = temporary / "goal.txt"
         goal.write_text(GOAL)
-        admission, admission_elapsed = _run(
-            [
-                str(binary),
-                "admit",
-                "--key",
-                admission_key,
-                "--goal-file",
-                str(goal),
-                "--repo",
-                REPOSITORY,
-                "--revision",
-                args.source_commit,
-                "--branch",
-                f"dorf/image-proof-{args.proof_id}",
-                "--provider",
-                args.provider_connection,
-                "--model",
-                "gpt-5.6-sol",
-                "--reasoning",
-                "low",
-            ],
-            env=environment,
-        )
-        admitted = json.loads(admission.stdout)
-        if admitted.get("job_id") != job_id:
-            raise RuntimeError("Go admission returned an unexpected stable Job identity")
-        _, worker_elapsed = _run([str(binary), "worker", "--once"], env=environment)
-        inspection, _ = _run(
-            [str(binary), "inspect", "--json", job_id],
-            env=environment,
-        )
-        observed = json.loads(inspection.stdout)
-        job = observed.get("job", {})
-        if job.get("native_outcome") != "completed" or not job.get("native_turn_id"):
-            raise RuntimeError("candidate image did not complete one real Codex turn")
-
-        _run([str(binary), "cleanup", job_id], env=environment)
-        _, cleanup_elapsed = _run([str(binary), "worker", "--once"], env=environment)
-        terminal, _ = _run(
-            [str(binary), "inspect", "--json", job_id],
-            env=environment,
-        )
-        terminal_view = json.loads(terminal.stdout)
-        if terminal_view.get("job", {}).get("cleanup_state") != "complete":
-            raise RuntimeError("candidate image Job cleanup did not reconcile")
+        admitted = False
+        try:
+            admission, admission_elapsed = _run(
+                [
+                    str(binary),
+                    "admit",
+                    "--key",
+                    admission_key,
+                    "--goal-file",
+                    str(goal),
+                    "--repo",
+                    REPOSITORY,
+                    "--revision",
+                    args.source_commit,
+                    "--branch",
+                    f"dorf/image-proof-{args.proof_id}",
+                    "--provider",
+                    args.provider_connection,
+                    "--model",
+                    "gpt-5.6-sol",
+                    "--reasoning",
+                    "low",
+                ],
+                env=environment,
+            )
+            admitted_view = json.loads(admission.stdout)
+            if admitted_view.get("job_id") != job_id:
+                raise RuntimeError("Go admission returned an unexpected stable Job identity")
+            admitted = True
+            _, worker_elapsed = _run([str(binary), "worker", "--once"], env=environment)
+            inspection, _ = _run(
+                [str(binary), "inspect", "--json", job_id],
+                env=environment,
+            )
+            observed = json.loads(inspection.stdout)
+            job = observed.get("job", {})
+            if job.get("native_outcome") != "completed" or not job.get("native_turn_id"):
+                raise RuntimeError("candidate image did not complete one real Codex turn")
+        finally:
+            if admitted:
+                cleanup_elapsed = _cleanup_proof(binary, job_id, environment)
 
     evidence.update(
         {
@@ -130,6 +126,41 @@ def main() -> None:
     terminal_path = args.evidence_dir / "terminal.json"
     terminal_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     print(json.dumps({**evidence, "terminal": _artifact_record(terminal_path)}, sort_keys=True))
+
+
+def _cleanup_proof(binary: Path, job_id: str, environment: dict[str, str]) -> float:
+    started = monotonic()
+    try:
+        _run([str(binary), "cleanup", job_id], env=environment)
+        _run([str(binary), "worker", "--once"], env=environment)
+        _require_cleanup_complete(binary, job_id, environment)
+    except RuntimeError as durable_error:
+        # The worker command has returned, so the Job fence can safely cancel a
+        # pending retry. Go then reconciles the exact sandbox:<Job> route and
+        # hash-derived Incus name synchronously before its durable task replays.
+        _run(
+            [str(binary), "cleanup", "--cancel-run", "--now", job_id],
+            env=environment,
+        )
+        _run([str(binary), "worker", "--once"], env=environment)
+        try:
+            _require_cleanup_complete(binary, job_id, environment)
+        except RuntimeError as fallback_error:
+            raise RuntimeError(
+                f"exact Go cleanup fallback failed after durable cleanup error: "
+                f"{durable_error}; {fallback_error}"
+            ) from fallback_error
+    return round(monotonic() - started, 3)
+
+
+def _require_cleanup_complete(binary: Path, job_id: str, environment: dict[str, str]) -> None:
+    terminal, _ = _run(
+        [str(binary), "inspect", "--json", job_id],
+        env=environment,
+    )
+    terminal_view = json.loads(terminal.stdout)
+    if terminal_view.get("job", {}).get("cleanup_state") != "complete":
+        raise RuntimeError("candidate image Job cleanup did not reconcile")
 
 
 def _run(

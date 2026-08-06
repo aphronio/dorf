@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aphronio/dorf/internal/spine"
@@ -16,6 +17,8 @@ import (
 var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("Dorf Job not found")
+
+var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 const (
 	// AbsurdReleaseCommit is the commit behind the SDK's v0.5.0 module tag. The
@@ -85,25 +88,31 @@ func (s Store) Migrate(ctx context.Context) error {
 	if version != "0.5.0" {
 		return fmt.Errorf("Absurd schema version is %q; Dorf requires 0.5.0", version)
 	}
-	contents, err := migrationFiles.ReadFile("migrations/001_dorf.sql")
-	if err != nil {
-		return err
-	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
-		return fmt.Errorf("apply Dorf migration 001_dorf.sql: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.schema_migrations(name) values ('001_dorf.sql') on conflict do nothing`); err != nil {
-		return err
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql"} {
+		contents, err := migrationFiles.ReadFile("migrations/" + name)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
+			return fmt.Errorf("apply Dorf migration %s: %w", name, err)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into dorf.schema_migrations(name) values ($1) on conflict do nothing`, name); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `select absurd.create_queue('dorf_jobs')`); err != nil {
 		return fmt.Errorf("create Absurd queue dorf_jobs: %w", err)
 	}
 	return tx.Commit()
+}
+
+func ValidRevision(value string) bool {
+	return fullCommitOID.MatchString(value)
 }
 
 func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error) {
@@ -117,6 +126,9 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	if input.AdmissionKey == "" || input.Goal == "" || input.Repository == "" || input.Revision == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.ReasoningEffort == "" {
 		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, revision, branch, provider connection, model, and reasoning effort")
+	}
+	if !ValidRevision(input.Revision) {
+		return spine.Job{}, false, fmt.Errorf("admitted revision must be a lowercase full commit OID (40 hex for SHA-1 or 64 hex for SHA-256)")
 	}
 	id := spine.JobID(input.AdmissionKey)
 	result, err := s.DB.ExecContext(ctx, `
@@ -153,7 +165,8 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		       j.cleanup_state, coalesce(j.task_id,''), coalesce(j.cleanup_task_id,''),
 		       coalesce(sb.incus_name,''), coalesce(r.route_id,''),
 		       coalesce(se.native_session_id,''), coalesce(ar.id,''),
-		       coalesce(ar.native_turn_id,''), coalesce(j.native_outcome,'')
+		       coalesce(ar.native_turn_id,''), coalesce(j.native_outcome,''),
+		       coalesce(j.run_terminal_state,'')
 		from dorf.jobs j
 		left join dorf.sandboxes sb on sb.job_id=j.id
 		left join dorf.routes r on r.job_id=j.id
@@ -163,7 +176,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.Branch,
 		&job.ProviderConnection, &job.Model, &job.ReasoningEffort, &job.State,
 		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.RouteID,
-		&job.SessionID, &job.AgentRunID, &job.NativeTurnID, &job.NativeOutcome,
+		&job.SessionID, &job.AgentRunID, &job.NativeTurnID, &job.NativeOutcome, &job.RunTerminalState,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.Job{}, ErrNotFound
@@ -171,12 +184,51 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	return job, err
 }
 
+// WithJobFence serializes every external effect for one Job independently of
+// Absurd's expiring claim lease. The transaction owns only the advisory lock;
+// product writes use their ordinary short transactions and remain recoverable.
+func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, jobID); err != nil {
+		return fmt.Errorf("acquire Job execution fence: %w", err)
+	}
+	if err := fn(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and (task_id is null or task_id=$2)`, jobID, taskID))
 }
 
 func (s Store) StartRun(ctx context.Context, jobID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set state=case when state='observed' then state else 'running' end where id=$1`, jobID))
+	result, err := s.DB.ExecContext(ctx, `
+		update dorf.jobs
+		set state=case when state='observed' then state else 'running' end
+		where id=$1
+		  and cleanup_state='pending'
+		  and run_terminal_state is null
+		  and not exists (
+		      select 1 from absurd.t_dorf_jobs t
+		      where t.task_id=dorf.jobs.task_id::uuid
+		        and t.state in ('failed','cancelled')
+		  )`, jobID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("Job %s run is terminal or cleanup has started; refusing external effects", jobID)
+	}
+	return nil
 }
 
 func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
@@ -255,6 +307,60 @@ func (s Store) ObserveRun(ctx context.Context, jobID string, observed spine.Obse
 
 func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_state='complete',cleaned_at=clock_timestamp() where id=$1`, jobID))
+}
+
+func (s Store) RecordRunTerminal(ctx context.Context, jobID, state string) error {
+	if state != "failed" && state != "cancelled" {
+		return fmt.Errorf("Absurd run state %q is not terminal failure", state)
+	}
+	return expectOne(s.DB.ExecContext(ctx, `
+		update dorf.jobs
+		set state=case when state='observed' then state else 'failed' end,
+		    run_terminal_state=coalesce(run_terminal_state,$2),
+		    run_terminal_at=coalesce(run_terminal_at,clock_timestamp())
+		where id=$1 and (run_terminal_state is null or run_terminal_state=$2)`, jobID, state))
+}
+
+func (s Store) CancelRun(ctx context.Context, jobID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var taskID string
+	if err := tx.QueryRowContext(ctx, `select coalesce(task_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&taskID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if taskID == "" {
+		return fmt.Errorf("Job %s has no Absurd run task to cancel", jobID)
+	}
+	// Let Absurd acquire its run-before-task locks in the supported order. The
+	// function is idempotent for every terminal state.
+	if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {
+		return fmt.Errorf("cancel Absurd run task: %w", err)
+	}
+	var state string
+	if err := tx.QueryRowContext(ctx, `select state from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&state); err != nil {
+		return err
+	}
+	if state == "completed" {
+		return fmt.Errorf("Job %s Absurd run completed without an observed native outcome", jobID)
+	}
+	if state != "failed" && state != "cancelled" {
+		return fmt.Errorf("Absurd run cancellation returned non-terminal state %q", state)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		update dorf.jobs
+		set state=case when state='observed' then state else 'failed' end,
+		    run_terminal_state=coalesce(run_terminal_state,$2),
+		    run_terminal_at=coalesce(run_terminal_at,clock_timestamp())
+		where id=$1 and (run_terminal_state is null or run_terminal_state=$2)`, jobID, state); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) {

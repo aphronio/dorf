@@ -24,7 +24,8 @@ def main() -> None:
     except (ProviderGatewayError, RuntimeError) as error:
         raise SystemExit(
             f"Provider release preflight failed: {error}. "
-            f"Run: dorf provider status {args.provider_connection}"
+            "Run from the Dorf source checkout: "
+            f"go run ./cmd/dorf doctor --provider {args.provider_connection}"
         ) from None
     if not args.preflight_only:
         parser.error(
