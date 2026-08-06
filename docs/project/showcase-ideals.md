@@ -40,6 +40,66 @@ work.
 
 Runtime hook: claim/observed provenance on state and evidence.
 
+## Calibrated isolated verification roles
+
+Verification should not collapse every question into one generic reviewer. Acceptance/QA, diff
+correctness and security, simplification and architecture, and performance are distinct roles only
+when each has a concrete question, capability envelope, and evidence contract. A different prompt
+or model alone does not earn another role. The task's material risks select the smallest useful
+set; routine work may need only deterministic checks and one diff review.
+
+Example roles make the boundaries concrete:
+
+| Role | Question | Capability and evidence posture |
+| --- | --- | --- |
+| Acceptance/QA | Does the exact result fulfill the issue through real behavior? | Run the app, tests, browser, or API probes; retain observed outputs and artifacts |
+| Diff correctness and security | Did the patch introduce defects, regressions, unsafe authority, or missing tests? | Read the exact commit, diff, relevant code, and tests; return actionable findings |
+| Simplification and architecture | Can complexity be removed without losing proven behavior? | Read code and decisions; propose bounded deletions or restructuring; advisory by default |
+| Performance | Does the result satisfy a declared resource or latency target? | Run pinned benchmarks or profiles; block only on an accepted measurable threshold |
+
+A plausible first execution shape is not a mandatory order:
+
+```text
+                         ┌─ acceptance/QA Room ─────────────┐
+implementation commit ──┼─ diff correctness Room ──────────┼─ findings and evidence
+                         └─ simplification Room (optional) ─┘          │
+                                                                       ▼
+                                                         implementation Job FIFO
+```
+
+Give each selected role its own disposable Room by default. It receives a fresh clone at the exact
+implementation commit, a fresh agent session, only role-appropriate tools and a scoped provider
+route, bounded execution, and exact cleanup. This deliberately spends some Room startup time to
+remove per-task isolation decisions, prevent mutable verifier state from leaking between roles,
+and make parallel experiments comparable. Reconsider the default when repeated measurements show
+that Room cost dominates without improving independence, evidence quality, concurrency safety, or
+defect yield.
+
+The original coding Job, branch, and PR remain authoritative. A verifier Room is a bounded workflow
+run attached to that Job commit, not another coding Job, implementation branch, or PR. Its feedback
+returns through the implementation Job's input sequence. Agent conclusions remain claims;
+workflow-observed commands, interactions, measurements, and retained artifacts become facts.
+
+Promote a role through evidence rather than enthusiasm:
+
+1. blind historical evaluation against known failures and clean cases;
+2. live shadow execution that cannot affect readiness;
+3. opt-in advisory feedback;
+4. default advisory use for matching risk classes;
+5. blocking authority only after calibration; and
+6. demotion or removal when its marginal value disappears.
+
+Measure unique material findings or newly proven acceptance items, overlap, false positives,
+reviewer-induced regressions, repair churn, latency, provider and Room cost, cleanup, and escaped
+defects. Roles may run in parallel against one immutable commit when their environments and
+capabilities permit it. A repair creates a new commit and invalidates affected evidence; rerun only
+the roles whose evidence became stale. Ordering remains an empirical workflow choice rather than a
+generic graph scheduler built in advance.
+
+Runtime hooks: isolated Room lifecycle and capability boundaries, durable Job input, and
+commit-pinned claim/observed evidence. If bounded verifier Rooms cannot compose through those hooks,
+settle that runtime boundary before encoding role semantics into L1.
+
 ## Autonomy labels and roads
 
 Named autonomy levels (propose, act in room, act and publish, act and spend) are workflow labels
