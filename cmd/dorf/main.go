@@ -20,6 +20,7 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/proofbarrier"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -62,6 +63,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "admit":
 		return admit(ctx, store, client, args[1:], stdout, stderr)
+	case "message":
+		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
@@ -81,7 +84,12 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, 
 	}
 	sandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
 	agent := codex.Agent{Sandbox: sandbox, Port: cfg.AppServerPort, Timeout: cfg.TurnTimeout}
-	service := spine.Service{Store: postgres.Store{DB: db}, Externals: terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}}
+	barrier, err := proofbarrier.FromEnv()
+	if err != nil {
+		client.Close()
+		return nil, spine.Service{}, err
+	}
+	service := spine.Service{Store: postgres.Store{DB: db}, Externals: terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}, Barrier: barrier}
 	workflow.Register(client, service)
 	return client, service, nil
 }
@@ -105,7 +113,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations 001_dorf.sql and 002_run_terminal.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 003_exactly_once_messages.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -145,7 +153,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	goal, err := readGoal(*goalFile)
+	goal, err := readInput(*goalFile, "admit", "goal")
 	if err != nil {
 		return err
 	}
@@ -157,6 +165,26 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 		return err
 	}
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "created": created, "state": job.State, "task_id": job.TaskID, "scheduled": true})
+}
+
+func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("message", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	jobID := set.String("job", "", "existing Job ID")
+	callerID := set.String("id", "", "stable caller message identity")
+	inputFile := set.String("input-file", "", "path containing the complete message input")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	input, err := readInput(*inputFile, "message", "input")
+	if err != nil {
+		return err
+	}
+	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "created": created, "accepted": true})
 }
 
 func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -206,6 +234,10 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err != nil {
 		return err
 	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil {
+		return err
+	}
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -214,22 +246,30 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "actions": actions, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
+	view := map[string]any{"job": job, "messages": messages, "actions": actions, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  cleanup: %s\n  goal: %s\n  repository: %s @ %s\n  sandbox: %s\n  route: %s\n  session: %s\n  agent run: %s\n  native turn: %s (%s)\n", job.ID, job.State, job.CleanupState, job.Goal, job.Repository, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID), empty(job.AgentRunID), empty(job.NativeTurnID), empty(job.NativeOutcome))
+	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s @ %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints)
 	if job.RunTerminalState != "" {
-		fmt.Fprintf(stdout, "  durable run terminal: %s (recorded failure fact; cleanup remains independent)\n", job.RunTerminalState)
-	}
-	if job.State == spine.JobObserved {
-		fmt.Fprintln(stdout, "  observation: native outcome recorded neutrally; observed does not assert success")
+		if job.RunTerminalState == "cancelled" && !job.AdmissionOpen {
+			fmt.Fprintln(stdout, "  delivery task: cancelled after admission closed for cleanup")
+		} else {
+			fmt.Fprintf(stdout, "  durable run terminal: %s (delivery infrastructure stopped; cleanup remains independent)\n", job.RunTerminalState)
+		}
 	}
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
 	}
 	fmt.Fprintln(stdout, "  transcript: Codex-owned native context (not stored by Dorf)")
+	for _, message := range messages {
+		description := describeMessage(message, messages)
+		if !job.AdmissionOpen && message.State == spine.AgentRunPending {
+			description += "; delivery closed for cleanup before this native turn started"
+		}
+		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
+	}
 	for _, action := range actions {
 		fmt.Fprintf(stdout, "  action %s: %s attempts=%d external=%s\n", action.Kind, action.State, action.Attempts, empty(action.ExternalID))
 	}
@@ -239,7 +279,6 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, service spine.Service, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	cancelRun := set.Bool("cancel-run", false, "cancel a non-terminal run after acquiring its Job execution fence")
 	now := set.Bool("now", false, "reconcile the exact route and Sandbox synchronously after durable scheduling")
 	if err := set.Parse(args); err != nil {
 		return err
@@ -247,13 +286,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	if set.NArg() != 1 {
 		return fmt.Errorf("cleanup requires one Job ID")
 	}
-	var job spine.Job
-	var err error
-	if *cancelRun {
-		job, err = workflow.CancelAndScheduleCleanup(ctx, store, client, set.Arg(0))
-	} else {
-		job, err = workflow.ScheduleCleanup(ctx, store, client, set.Arg(0))
-	}
+	job, err := workflow.ScheduleCleanup(ctx, store, client, set.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -269,29 +302,29 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled, "synchronous": *now})
 }
 
-func readGoal(path string) (string, error) {
+func readInput(path, command, noun string) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return "", fmt.Errorf("admit requires --goal-file with a complete goal")
+		return "", fmt.Errorf("%s requires a file with complete %s", command, noun)
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("goal file must be a regular file")
+		return "", fmt.Errorf("%s file must be a regular file", noun)
 	}
 	if info.Size() > 1<<20 {
-		return "", fmt.Errorf("goal file exceeds 1 MiB")
+		return "", fmt.Errorf("%s file exceeds 1 MiB", noun)
 	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	goal := strings.TrimSpace(string(contents))
-	if goal == "" {
-		return "", fmt.Errorf("complete goal cannot be empty")
+	value := string(contents)
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("complete %s cannot be empty", noun)
 	}
-	return goal, nil
+	return value, nil
 }
 
 func writeJSON(output io.Writer, value any) error {
@@ -309,7 +342,66 @@ func empty(value string) string {
 	}
 	return value
 }
+func openClosed(open bool) string {
+	if open {
+		return "open"
+	}
+	return "closed"
+}
+func queuedState(state spine.AgentRunState) string {
+	if state == "" {
+		return "queued"
+	}
+	return string(state)
+}
+func describeMessage(message spine.MessageView, messages []spine.MessageView) string {
+	var detail string
+	switch message.State {
+	case "":
+		detail = "queued for serialized delivery"
+	case spine.AgentRunPending:
+		detail = "queued for serialized delivery"
+	case spine.AgentRunSubmitting:
+		detail = "queued; delivery reconciliation is in progress"
+	case spine.AgentRunActive:
+		detail = "active native turn"
+	case spine.AgentRunCompleted:
+		detail = "terminal: native turn completed"
+	case spine.AgentRunFailed:
+		if message.NativeTurnID == "" {
+			detail = "terminal locally: delivery ended before any native turn was submitted; later FIFO input is blocked"
+		} else {
+			detail = "terminal: native turn failed; later FIFO input is blocked"
+		}
+	case spine.AgentRunInterrupted:
+		detail = "terminal: native turn was interrupted; later FIFO input is blocked"
+	case spine.AgentRunUncertain:
+		detail = "genuinely uncertain; delivery stopped without resubmission"
+	default:
+		detail = string(message.State)
+	}
+	if message.NativeTurnID != "" {
+		detail += fmt.Sprintf("; native=%s outcome=%s", message.NativeTurnID, empty(message.NativeOutcome))
+	}
+	if message.Attention != "" {
+		detail += "; reason: " + message.Attention
+	}
+	if message.BlockingSeq > 0 {
+		return detail + fmt.Sprintf("; blocked by sequence %d (%s)", message.BlockingSeq, message.BlockingReason)
+	}
+	if message.State == "" || message.State == spine.AgentRunPending {
+		for _, earlier := range messages {
+			if earlier.Sequence >= message.Sequence {
+				break
+			}
+			if earlier.State != spine.AgentRunCompleted {
+				return detail + fmt.Sprintf("; waiting behind sequence %d (%s)", earlier.Sequence, queuedState(earlier.State))
+			}
+		}
+	}
+	return detail
+}
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|worker|inspect|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|worker|inspect|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

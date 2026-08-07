@@ -1,9 +1,10 @@
-# Go durable Job spine
+# Go durable Job messages and Session recovery
 
-This is the executable terminal for issue #40: a complete Job is admitted to Dorf-owned PostgreSQL
-facts, scheduled in Absurd, delivered by a Go worker to one credential-free Incus Sandbox, and
-observed through a real Codex app-server turn. Cleanup is a second durable task which revokes the
-Sandbox's inference route before deleting the VM.
+This is the executable terminal for issues #40 and #41. A complete Job and every later client
+message are admitted to Dorf-owned PostgreSQL facts, scheduled or woken through Absurd, delivered by
+a Go worker to one credential-free Incus Sandbox, and observed through one resumable Codex native
+Session. Cleanup closes admission, cancels the delivery task, revokes the Sandbox's inference route,
+and deletes the VM under the same Job mutation fence.
 
 The demonstrated commands use the compiled Go binary only. PostgreSQL and Incus are native host
 services; Dorf neither starts a container nor needs a cloud durability account or host Docker
@@ -58,7 +59,168 @@ private network, image availability, and provider-route authority. The worker se
 image containing an upstream credential or old route key. Each failed item includes a local repair.
 No check probes Docker.
 
+## Exactly-once two-message and SIGKILL terminal
+
+Build and migrate exactly as above, then use one long enough real implementation input that the
+native turn remains active while the second client call runs. The proof barriers are disabled by
+default. Enabling one requires an issue-specific phrase, an exact FIFO sequence, and an explicit
+directory. A barrier shortens only its current Absurd claim to ten seconds, writes one `.ready`
+marker, and fails after eight seconds if the outer orchestrator did not SIGKILL it. These hooks are
+deliberately unsuitable for production fault injection.
+
+Absurd 0.5.0 `WorkBatch` does not claim an expired task in the same invocation that rescues its
+expired claim. After each lease-expiry sleep below, the first unbarriered `worker --once` therefore
+prints `Absurd delivery reconciled` and returns; the following invocation claims the next attempt.
+Those rescue-only passes do not increment the task attempt count: the three killed barrier claims
+are attempts 1 through 3, and the terminal drain is attempt 4.
+
+```bash
+go build -o ./bin/dorf ./cmd/dorf
+./bin/dorf migrate
+mkdir -p .proof/issue-41/barriers
+printf '%s\n' 'Inspect this repository, implement the admitted issue completely, and run its focused checks. Keep working until the change is verified.' > .proof/issue-41/goal.txt
+printf '%s\n' 'Before finishing, re-check the exact diff and run the focused Go tests again. Report any remaining risk.' > .proof/issue-41/steer.txt
+
+./bin/dorf admit \
+  --key issue-41-exactly-once-final-v1 \
+  --goal-file .proof/issue-41/goal.txt \
+  --repo https://github.com/aphronio/dorf.git \
+  --revision "$(git rev-parse HEAD)" \
+  --branch dorf/issue-41-exactly-once-final-v1 \
+  --provider "$DORF_PROVIDER_CONNECTION" \
+  --model gpt-5.6-sol \
+  --reasoning high
+
+# Copy job_id from the admission receipt once; every command below uses that exact identity.
+export JOB_ID='job-REPLACE_FROM_RECEIPT'
+export DORF_PROOF_FAULT_BARRIER_ENABLE='issue-41-external-sigkill-only'
+export DORF_PROOF_FAULT_BARRIER_SEQUENCE='1'
+export DORF_PROOF_FAULT_BARRIER_DIR="$PWD/.proof/issue-41/barriers"
+
+# 1. The native baseline is committed, but turn/start has not been called.
+DORF_PROOF_FAULT_BARRIER='before-submit' ./bin/dorf worker --once &
+export WORKER_PID=$!
+while kill -0 "$WORKER_PID" 2>/dev/null && ! test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-before-submit.ready"; do sleep 0.1; done
+test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-before-submit.ready"
+kill -KILL "$WORKER_PID"
+wait "$WORKER_PID" || true
+sleep 11
+
+# Rescue expired attempt 1; this pass does not execute the Job task.
+time ./bin/dorf worker --once
+
+# 2. Codex accepted turn/start, but Dorf has bound neither the Session nor native turn ID.
+DORF_PROOF_FAULT_BARRIER='after-submit-before-bind' ./bin/dorf worker --once &
+export WORKER_PID=$!
+while kill -0 "$WORKER_PID" 2>/dev/null && ! test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-after-submit-before-bind.ready"; do sleep 0.1; done
+test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-after-submit-before-bind.ready"
+kill -KILL "$WORKER_PID"
+wait "$WORKER_PID" || true
+sleep 11
+
+# Rescue expired attempt 2; the next worker claims attempt 3.
+time ./bin/dorf worker --once
+
+# 3. Recovery matched the baseline suffix and durably bound the still-active native turn.
+DORF_PROOF_FAULT_BARRIER='native-active' ./bin/dorf worker --once &
+export WORKER_PID=$!
+while kill -0 "$WORKER_PID" 2>/dev/null && ! test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-native-active.ready"; do sleep 0.1; done
+test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-native-active.ready"
+
+# Admission does not wait for the long Job mutation fence held by sequence 1.
+time ./bin/dorf message --job "$JOB_ID" --id owner-steer-1 --input-file .proof/issue-41/steer.txt
+time ./bin/dorf message --job "$JOB_ID" --id owner-steer-1 --input-file .proof/issue-41/steer.txt
+kill -KILL "$WORKER_PID"
+wait "$WORKER_PID" || true
+sleep 11
+
+# Rescue expired attempt 3 before the terminal drain claims attempt 4.
+time ./bin/dorf worker --once
+
+# Recovery reconnects to the exact live authenticated app-server when possible, reads and reconciles
+# sequence 1 without loading the thread, resumes the exact bound thread, and then starts exactly one
+# serialized native turn for sequence 2 in the same Session.
+unset DORF_PROOF_FAULT_BARRIER
+time ./bin/dorf worker --once
+time ./bin/dorf inspect "$JOB_ID"
+
+psql "$DORF_DATABASE_URL" -c "select caller_id,sequence from dorf.job_messages where job_id='$JOB_ID' order by sequence"
+psql "$DORF_DATABASE_URL" -c "select m.sequence,r.message_id,r.state,r.baseline_native_turn_id,r.native_turn_id,r.native_outcome from dorf.agent_runs r join dorf.job_messages m on m.id=r.message_id where r.job_id='$JOB_ID' order by m.sequence"
+psql "$DORF_DATABASE_URL" -c "select message_id,kind,state,attempts,external_id from dorf.actions where job_id='$JOB_ID' order by created_at"
+
+time ./bin/dorf cleanup --now "$JOB_ID"
+time ./bin/dorf worker --once
+time ./bin/dorf inspect "$JOB_ID"
+incus list --format csv -c n,s | rg '^dorf-' || true
+```
+
+The terminal has exactly two immutable FIFO messages, two stable per-input Actions and AgentRuns,
+one native Session, and at most one native turn per accepted message. Sequence 2 is admitted while
+sequence 1 is active but starts only after sequence 1 completes. The repeated `owner-steer-1` call
+returns `created=false` with the same message and sequence. Inspection names queued, active,
+terminal, blocked, or genuinely uncertain delivery truth and identifies any blocking sequence and
+reason; it never prints or stores transcript items. Cleanup closes admission before cancellation and
+leaves the route revoked, the Sandbox deleted, and the cleanup task checkpointed.
+
+Cleanup recovery does not depend on the message task having another attempt. Scheduling first
+closes admission and cancels or observes the terminal ordinary run while holding the Job mutation
+fence, then creates the independent cleanup task. Under that same fence, cleanup may inspect only an
+already-`submitting` or `active` AgentRun from its recorded Session, baseline, and native turn ID. A
+proven no-submit delivery is terminalized locally with a cleanup reason; an accepted turn is bound
+and awaited to its exact native outcome. Cleanup never calls `turn/start` and never drains a later
+pending FIFO message. Missing or ambiguous history persists attention and retains the route and
+Sandbox. Once no native mutation blocker remains, route revocation and Sandbox deletion reconcile
+normally even when the ordinary Absurd task is terminal `failed` after exhausting its attempts.
+
+The detached app-server keeps only replaceable operational control facts in the Sandbox. Its exact
+PID is `/tmp/dorf/codex-app-server.pid`; the raw reconnect capability is retained separately at
+`/tmp/dorf/codex-app-server.control-token` in a root-only directory and file. App-server argv contains
+only `--ws-token-sha256 <digest>`, never the raw capability or the retained file path. Recovery reads
+the raw capability only after matching the tracked PID to the expected app-server endpoint and auth
+argv and matching its digest. A live process with a missing, mismatched, or rejected capability is
+attention and is not killed; once no app-server is live, stale PID and capability files may be
+atomically replaced. Neither file is native Session identity or PostgreSQL state, and proof output
+must not print the capability.
+
+Reconnect history inspection uses `thread/read`, which deliberately leaves a persisted thread
+unloaded. Only after PostgreSQL/native-history reconciliation proves the next input is safe to
+submit does Dorf call `thread/resume`; its response must return the exact bound native Session ID
+before `turn/start` is allowed. A rejection records only the safe protocol method category, never
+the app-server's arbitrary message or data.
+
+Codex 0.146.0 does not create a rollout for an empty `thread/start`; closing that WebSocket can
+discard the thread before another connection can read it. For FIFO sequence 1 only, Dorf therefore
+keeps `thread/start` and the first `turn/start` on one protocol connection and does not complete the
+Session Action until the native turn is accepted. If the connection dies before acceptance, the
+empty thread has no durable identity and recovery starts the still-unsettled initial delivery again.
+If acceptance may have happened, recovery lists the isolated Sandbox's Sessions and reads the one
+persisted turn before deciding; it adopts that exact Session/turn and does not query or trust
+`clientUserMessageId` deduplication. Multiple Sessions or turns persist attention instead of being
+guessed. Once sequence 1 is bound, all later FIFO inputs use the read/reconcile/resume flow above.
+
+Message admission and its Absurd wake hint do not commit atomically. The honest crash invariant is:
+PostgreSQL commits the immutable message and FIFO sequence first, then Dorf emits the deterministic
+event identity `dorf.job-message:<job>:<zero-padded-sequence>`. Absurd 0.5.0 events are immutable
+first-write-wins, so every sequence has a distinct wake identity. A crash in between leaves accepted
+input durable but may leave the task asleep; retrying the same caller ID and byte-identical input
+returns the same message and sequence and re-emits that same event identity. Changed input conflicts,
+and the worker treats every event only as a hint before rereading PostgreSQL delivery truth. The
+PostgreSQL integration test `TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO` exercises
+that crash window and two later admissions across separate Absurd wait/wake cycles.
+
+The long-lived message consumer uses versioned Absurd idempotency identity `run:v2:<job>`. When an
+open schema-001/002 Job still points at `dorf-job-spine-v1`, repeating its complete admission may
+replace `jobs.task_id` only after PostgreSQL verifies that the old task has the exact Job params,
+legacy idempotency key, expected task name, and a terminal Absurd state. The new task is likewise
+verified as the exact live `dorf-job-messages-v2` consumer before attachment. The v1 task row remains
+historical Absurd evidence; an active predecessor, unrelated task, or key collision stops without
+overwriting the current attachment. `TestMigration003PreservesCompletedGoJobFacts` runs that real
+upgrade, reattachment, retry, later-message wake, and v1-evidence proof.
+
 ## Exact terminal and redelivery proof
+
+The remainder of this section is the retained issue #40 one-turn proof record. Its task names and
+row counts describe that historical Revision; use the issue #41 terminal above for current code.
 
 Run these commands from the repository root. Replace the public repository, starting Revision, and
 model only with values deliberately selected for the proof. Keep the admission key unchanged for
@@ -138,7 +300,7 @@ The image proof normally uses durable cleanup. If its worker has returned with a
 all reconcile the same stable Job and Action identities.
 
 ```bash
-./bin/dorf cleanup --cancel-run --now "$JOB_ID"
+./bin/dorf cleanup --now "$JOB_ID"
 ./bin/dorf worker --once
 ./bin/dorf inspect "$JOB_ID"
 ```

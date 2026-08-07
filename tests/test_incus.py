@@ -130,7 +130,7 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "dorf.runtime" not in workstation_validator
     assert ".dorf.toml" not in workstation_validator
     assert "finally:" in workstation_validator
-    assert '"--cancel-run"' in workstation_validator
+    assert '"cleanup", "--now"' in workstation_validator
     assert '"--now"' in workstation_validator
     assert 'incus delete "$VALIDATION_VM" --force' in release_script
     cleanup = release_script.split("cleanup() {", 1)[1].split("}\ntrap cleanup EXIT", 1)[0]
@@ -240,7 +240,7 @@ def test_workstation_cleanup_uses_exact_go_fallback_after_durable_failure(monkey
     monkeypatch.setattr(validator, "_run", fake_run)
     validator._cleanup_proof(Path("/tmp/dorf"), "job-proof", {})
 
-    assert ["/tmp/dorf", "cleanup", "--cancel-run", "--now", "job-proof"] in calls
+    assert ["/tmp/dorf", "cleanup", "--now", "job-proof"] in calls
     assert calls[-1] == ["/tmp/dorf", "inspect", "--json", "job-proof"]
 
 

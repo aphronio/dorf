@@ -70,6 +70,8 @@ def main() -> None:
         goal = temporary / "goal.txt"
         goal.write_text(GOAL)
         admitted = False
+        job: dict[str, object] = {}
+        initial: dict[str, object] = {}
         try:
             admission, admission_elapsed = _run(
                 [
@@ -105,7 +107,14 @@ def main() -> None:
             )
             observed = json.loads(inspection.stdout)
             job = observed.get("job", {})
-            if job.get("native_outcome") != "completed" or not job.get("native_turn_id"):
+            messages = observed.get("messages", [])
+            initial = next(
+                (message for message in messages if message.get("sequence") == 1),
+                {},
+            )
+            if initial.get("native_outcome") != "completed" or not initial.get(
+                "native_turn_id"
+            ):
                 raise RuntimeError("candidate image did not complete one real Codex turn")
         finally:
             if admitted:
@@ -114,8 +123,8 @@ def main() -> None:
     evidence.update(
         {
             "native_session": job.get("session_id"),
-            "native_turn": job.get("native_turn_id"),
-            "native_outcome": job.get("native_outcome"),
+            "native_turn": initial.get("native_turn_id"),
+            "native_outcome": initial.get("native_outcome"),
             "admission_elapsed_seconds": admission_elapsed,
             "worker_elapsed_seconds": worker_elapsed,
             "cleanup_elapsed_seconds": cleanup_elapsed,
@@ -139,7 +148,7 @@ def _cleanup_proof(binary: Path, job_id: str, environment: dict[str, str]) -> fl
         # pending retry. Go then reconciles the exact sandbox:<Job> route and
         # hash-derived Incus name synchronously before its durable task replays.
         _run(
-            [str(binary), "cleanup", "--cancel-run", "--now", job_id],
+            [str(binary), "cleanup", "--now", job_id],
             env=environment,
         )
         _run([str(binary), "worker", "--once"], env=environment)
