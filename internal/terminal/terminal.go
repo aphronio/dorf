@@ -51,9 +51,21 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	return spine.Receipt{ExternalID: route.ID}, nil
 }
 
-func (e Externals) AgentRun(ctx context.Context, job spine.Job, _ spine.Action, turn spine.Action) (spine.Receipt, spine.Receipt, error) {
-	sessionID, outcome, err := e.Agent.ReconcileRun(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, job.SessionID, turn.ID, job.Goal, job.Model, job.ReasoningEffort)
-	return spine.Receipt{ExternalID: sessionID}, spine.Receipt{ExternalID: outcome.ID, Outcome: outcome.Status}, err
+func (e Externals) AgentSession(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
+	sessionID, err := e.Agent.EnsureSession(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, job.SessionID, job.Model)
+	return spine.Receipt{ExternalID: sessionID}, err
+}
+
+func (e Externals) AgentTurns(ctx context.Context, job spine.Job, sessionID string) ([]spine.NativeTurn, error) {
+	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID)
+}
+
+func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.NativeTurn, error) {
+	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.SessionID, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
+}
+
+func (e Externals) AgentWait(ctx context.Context, job spine.Job, sessionID, turnID string) (spine.NativeTurn, error) {
+	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID, turnID)
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {

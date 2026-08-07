@@ -12,39 +12,31 @@ import (
 	"github.com/coder/websocket"
 )
 
-type capturingRunner struct {
-	command string
-	args    []string
+type probeRunner struct{ result incus.Result }
+
+func (r probeRunner) Run(_ context.Context, _ string, _ []byte, _ ...string) (incus.Result, error) {
+	return r.result, nil
 }
 
-func (r *capturingRunner) Run(_ context.Context, command string, _ []byte, args ...string) (incus.Result, error) {
-	r.command = command
-	r.args = append([]string(nil), args...)
-	return incus.Result{}, nil
-}
-
-func TestAppServerLifecycleTracksAndStopsTheNativeGuestProcess(t *testing.T) {
+func TestAppServerLifecycleDetachesAndTracksTheNativeGuestProcess(t *testing.T) {
 	launch := appServerScript("ws://10.0.0.2:4500")
-	if !strings.Contains(launch, `printf '%s\n' "$$" > `+serverPIDPath) {
+	if !strings.Contains(launch, `printf '%s\n' "$!" > `+serverPIDPath) {
 		t.Fatalf("launch does not retain the native PID: %s", launch)
 	}
-	if !strings.Contains(launch, "; exec codex app-server ") {
-		t.Fatalf("native PID would not survive exec: %s", launch)
+	if !strings.Contains(launch, "nohup codex app-server ") {
+		t.Fatalf("app-server is not detached from the executor: %s", launch)
 	}
 
-	runner := &capturingRunner{}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
-	if err := agent.stopServer(context.Background(), "sandbox-1"); err != nil {
+}
+
+func TestLiveServerProbeRetainsItsAuthenticatedCapability(t *testing.T) {
+	agent := Agent{Sandbox: incus.Sandbox{Runner: probeRunner{result: incus.Result{Stdout: "1\nprivate-capability\n"}}}}
+	probe, err := agent.probeServer(context.Background(), "sandbox-1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.command != "incus" || len(runner.args) < 6 {
-		t.Fatalf("unexpected stop command: %s %v", runner.command, runner.args)
-	}
-	script := runner.args[len(runner.args)-1]
-	for _, required := range []string{serverPIDPath, "/proc/$pid/cmdline", `kill "$pid"`, "[c]odex app-server"} {
-		if !strings.Contains(script, required) {
-			t.Fatalf("stop script is missing %q: %s", required, script)
-		}
+	if !probe.running || probe.token != "private-capability" {
+		t.Fatalf("probe=%#v", probe)
 	}
 }
 
@@ -113,7 +105,7 @@ func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyNativeOutcome(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != (TurnOutcome{ID: "turn-native-1", Status: "completed"}) {
+	if outcome != (TurnOutcome{ID: "turn-native-1", Status: "running"}) {
 		t.Fatalf("outcome=%#v", outcome)
 	}
 	<-requests // initialize

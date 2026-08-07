@@ -1,19 +1,18 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
 
@@ -30,18 +29,18 @@ type Agent struct {
 	Timeout time.Duration
 }
 
-type TurnOutcome struct {
-	ID     string
-	Status string
-}
+type TurnOutcome = spine.NativeTurn
 
-func (a Agent) ReconcileRun(ctx context.Context, sandboxName, workspace, boundSessionID, agentRunID, goal, model, effort string) (string, TurnOutcome, error) {
+type RejectedError struct{ Method string }
+
+func (e *RejectedError) Error() string          { return "Codex app-server rejected " + e.Method }
+func (e *RejectedError) DefiniteNoSubmit() bool { return true }
+
+func (a Agent) EnsureSession(ctx context.Context, sandboxName, workspace, boundSessionID, model string) (string, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	sessionID := boundSessionID
-	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
-		newSession := false
 		if sessionID == "" {
 			threads, err := protocol.listThreads(ctx, workspace)
 			if err != nil {
@@ -54,33 +53,47 @@ func (a Agent) ReconcileRun(ctx context.Context, sandboxName, workspace, boundSe
 				sessionID = threads[0]
 			} else {
 				sessionID, err = protocol.startThread(ctx, workspace, model)
-				if err != nil {
-					return err
-				}
-				newSession = true
-			}
-		}
-		if !newSession {
-			turns, err := protocol.readTurns(ctx, sessionID)
-			if err != nil {
 				return err
 			}
-			if len(turns) > 1 {
-				return fmt.Errorf("Codex reconciliation is ambiguous: demonstrated Session contains %d native turns", len(turns))
-			}
-			if len(turns) == 1 {
-				outcome = turns[0]
-				if terminal(outcome.Status) {
-					return nil
-				}
-				return protocol.pollTurn(ctx, sessionID, outcome.ID, &outcome)
-			}
 		}
-		var err error
-		outcome, err = protocol.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+		_, err := protocol.readTurns(ctx, sessionID)
 		return err
 	})
-	return sessionID, outcome, err
+	return sessionID, err
+}
+
+func (a Agent) ReadTurns(ctx context.Context, sandboxName, workspace, sessionID string) ([]TurnOutcome, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	var turns []TurnOutcome
+	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+		var err error
+		turns, err = protocol.readTurns(ctx, sessionID)
+		return err
+	})
+	return turns, err
+}
+
+func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID, agentRunID, input, model, effort string) (TurnOutcome, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	var outcome TurnOutcome
+	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+		var err error
+		outcome, err = protocol.startTurn(ctx, sessionID, workspace, agentRunID, input, model, effort)
+		return err
+	})
+	return outcome, err
+}
+
+func (a Agent) WaitTurn(ctx context.Context, sandboxName, workspace, sessionID, turnID string) (TurnOutcome, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	outcome := TurnOutcome{ID: turnID, Status: "running"}
+	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+		return protocol.pollTurn(ctx, sessionID, turnID, &outcome)
+	})
+	return outcome, err
 }
 
 func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -95,8 +108,25 @@ func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn
 	if err != nil {
 		return err
 	}
-	if err := a.stopServer(ctx, sandboxName); err != nil {
+	probe, err := a.probeServer(ctx, sandboxName)
+	if err != nil {
 		return err
+	}
+	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
+	// Prefer the exact authenticated process left by a dead executor. A live
+	// process that cannot be inspected is attention, never permission to kill it.
+	if probe.token != "" {
+		protocol, dialErr := dialProtocol(ctx, endpoint, probe.token)
+		if dialErr == nil {
+			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
+			return fn(protocol)
+		}
+		if probe.running {
+			return fmt.Errorf("exact live Codex app-server could not be authenticated or inspected: %w", dialErr)
+		}
+	}
+	if probe.running {
+		return fmt.Errorf("exact live Codex app-server has no recoverable scoped capability; refusing to kill it before inspection")
 	}
 	token, err := randomToken()
 	if err != nil {
@@ -109,61 +139,23 @@ func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn
 	if write.ExitCode != 0 {
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
-	defer a.Sandbox.Exec(context.WithoutCancel(ctx), sandboxName, nil, "rm", "-f", tokenPath)
-
-	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
-	script := appServerScript(endpoint)
-	serverCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	command := exec.CommandContext(serverCtx, "incus", "exec", sandboxName, "--cwd", workspace, "--", "bash", "-lc", script)
-	var diagnostic boundedBuffer
-	command.Stdout, command.Stderr = &diagnostic, &diagnostic
-	if err := command.Start(); err != nil {
-		return fmt.Errorf("launch Codex app-server: %w", err)
+	launch := appServerScript(endpoint)
+	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", launch)
+	if err != nil {
+		return err
 	}
-	exited := make(chan struct{})
-	var serverErr error
-	go func() {
-		serverErr = command.Wait()
-		close(exited)
-	}()
-	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		_ = a.stopServer(stopCtx, sandboxName)
-		stopCancel()
-		cancel()
-		<-exited
-	}()
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	defer transport.CloseIdleConnections()
-	httpClient := &http.Client{Transport: transport}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("launch Codex app-server: %s", strings.TrimSpace(result.Stderr))
+	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		requestCtx, requestCancel := context.WithTimeout(ctx, 2*time.Second)
-		headers := http.Header{"Authorization": []string{"Bearer " + token}}
-		conn, response, dialErr := websocket.Dial(requestCtx, endpoint, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: headers})
-		requestCancel()
+		protocol, dialErr := dialProtocol(ctx, endpoint, token)
 		if dialErr == nil {
-			conn.SetReadLimit(maxMessageBytes)
-			defer conn.Close(websocket.StatusNormalClosure, "done")
-			p := &protocol{connection: conn}
-			if err := p.initialize(ctx); err != nil {
-				return err
-			}
-			return fn(p)
-		}
-		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
-			return fmt.Errorf("Codex app-server rejected its scoped control capability")
-		}
-		select {
-		case <-exited:
-			return fmt.Errorf("Codex app-server exited before readiness (%v): %s", serverErr, diagnostic.String())
-		default:
+			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
+			return fn(protocol)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("Codex app-server did not become ready: %s", diagnostic.String())
+			return fmt.Errorf("Codex app-server did not become ready: %w", dialErr)
 		}
 		select {
 		case <-ctx.Done():
@@ -174,19 +166,53 @@ func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn
 }
 
 func appServerScript(endpoint string) string {
-	return "umask 077; mkdir -p /tmp/dorf; printf '%s\\n' \"$$\" > " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; exec codex app-server --listen " + endpoint + " --ws-auth capability-token --ws-token-file " + tokenPath
+	return "umask 077; mkdir -p /tmp/dorf; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server --listen " + endpoint + " --ws-auth capability-token --ws-token-file " + tokenPath + " </dev/null >/tmp/dorf/codex-app-server.log 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
 }
 
-func (a Agent) stopServer(ctx context.Context, sandboxName string) error {
-	script := "if test -f " + serverPIDPath + "; then IFS= read -r pid < " + serverPIDPath + "; case \"$pid\" in ''|*[!0-9]*) exit 1;; esac; if test -r /proc/$pid/cmdline && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq 'codex app-server'; then kill \"$pid\" 2>/dev/null || true; fi; else pkill -TERM -f '[c]odex app-server --listen ws://' 2>/dev/null || true; fi; rm -f " + serverPIDPath + " " + tokenPath
+type serverProbe struct {
+	running bool
+	token   string
+}
+
+func (a Agent) probeServer(ctx context.Context, sandboxName string) (serverProbe, error) {
+	script := "running=0; if test -f " + serverPIDPath + "; then IFS= read -r pid < " + serverPIDPath + "; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && test -r /proc/$pid/cmdline && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq 'codex app-server'; then running=1; fi; elif pgrep -f '[c]odex app-server --listen ws://' >/dev/null; then running=1; fi; printf '%s\\n' \"$running\"; if test -r " + tokenPath + "; then cat " + tokenPath + "; fi"
 	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script)
 	if err != nil {
-		return err
+		return serverProbe{}, err
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("stop prior Codex app-server: %s", strings.TrimSpace(result.Stderr))
+		return serverProbe{}, fmt.Errorf("inspect exact Codex app-server: %s", strings.TrimSpace(result.Stderr))
 	}
-	return nil
+	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
+	probe := serverProbe{running: len(lines) > 0 && lines[0] == "1"}
+	if len(lines) > 1 {
+		probe.token = strings.TrimSpace(lines[1])
+	}
+	return probe, nil
+}
+
+func dialProtocol(ctx context.Context, endpoint, token string) (*protocol, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: transport}
+	requestCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	headers := http.Header{"Authorization": []string{"Bearer " + token}}
+	conn, response, err := websocket.Dial(requestCtx, endpoint, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: headers})
+	if err != nil {
+		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
+			return nil, fmt.Errorf("Codex app-server rejected its scoped control capability")
+		}
+		return nil, err
+	}
+	conn.SetReadLimit(maxMessageBytes)
+	p := &protocol{connection: conn}
+	if err := p.initialize(ctx); err != nil {
+		conn.CloseNow()
+		return nil, err
+	}
+	return p, nil
 }
 
 type protocol struct {
@@ -277,37 +303,7 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 		return TurnOutcome{}, fmt.Errorf("turn/start response is missing result.turn.id")
 	}
 	outcome := TurnOutcome{ID: id, Status: "running"}
-	if err := p.waitForTurn(ctx, sessionID, id, &outcome); err != nil {
-		return TurnOutcome{}, err
-	}
 	return outcome, nil
-}
-
-func (p *protocol) waitForTurn(ctx context.Context, sessionID, turnID string, outcome *TurnOutcome) error {
-	for {
-		message, err := p.receive(ctx)
-		if err != nil {
-			return err
-		}
-		method, _ := message["method"].(string)
-		if method != "turn/completed" {
-			continue
-		}
-		params, _ := message["params"].(map[string]any)
-		if params == nil || params["threadId"] != sessionID {
-			continue
-		}
-		turn, _ := params["turn"].(map[string]any)
-		if turn == nil || turn["id"] != turnID {
-			continue
-		}
-		status, _ := turn["status"].(string)
-		if !terminal(status) {
-			return fmt.Errorf("turn/completed has unsupported native outcome %q", status)
-		}
-		outcome.ID, outcome.Status = turnID, status
-		return nil
-	}
 }
 
 func (p *protocol) pollTurn(ctx context.Context, sessionID, turnID string, outcome *TurnOutcome) error {
@@ -350,7 +346,7 @@ func (p *protocol) call(ctx context.Context, method string, params any) (map[str
 			return nil, fmt.Errorf("unexpected app-server response id %d while waiting for %d", responseID, id)
 		}
 		if nativeError := message["error"]; nativeError != nil {
-			return nil, fmt.Errorf("Codex app-server rejected %s", method)
+			return nil, &RejectedError{Method: method}
 		}
 		result, ok := message["result"].(map[string]any)
 		if !ok {
@@ -417,14 +413,3 @@ func randomToken() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
-
-type boundedBuffer struct{ bytes.Buffer }
-
-func (b *boundedBuffer) Write(value []byte) (int, error) {
-	if b.Len() < 16<<10 {
-		remaining := (16 << 10) - b.Len()
-		_, _ = b.Buffer.Write(value[:min(len(value), remaining)])
-	}
-	return len(value), nil
-}
-func (b *boundedBuffer) String() string { return strings.TrimSpace(b.Buffer.String()) }
