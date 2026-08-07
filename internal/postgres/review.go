@@ -430,41 +430,23 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 	return views, rows.Err()
 }
 
+// AllReviewRuns is the cleanup authority: it returns only AgentRuns with a
+// persisted reviewer resource row, including rows whose lifecycle is partial.
 func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
-	var currentRevision string
-	if err := s.DB.QueryRowContext(ctx, `select revision from dorf.jobs where id=$1`, jobID).Scan(&currentRevision); err != nil {
-		return nil, err
-	}
-	rows, err := s.DB.QueryContext(ctx, `select distinct revision from dorf.agent_runs where job_id=$1 and revision is not null order by revision`, jobID)
+	rows, err := s.DB.QueryContext(ctx, reviewRunSelect+` where rr.job_id=$1 order by rr.revision,ar.role`, jobID)
 	if err != nil {
 		return nil, err
 	}
-	var revisions []string
-	for rows.Next() {
-		var revision string
-		if err := rows.Scan(&revision); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		revisions = append(revisions, revision)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
+	defer rows.Close()
 	var result []spine.ReviewRunView
-	for _, revision := range revisions {
-		runs, err := s.ReviewRuns(ctx, jobID, revision)
+	for rows.Next() {
+		run, err := scanReviewRun(rows)
 		if err != nil {
 			return nil, err
 		}
-		for i := range runs {
-			if runs[i].Revision != currentRevision {
-				runs[i].Stale = true
-			}
-		}
-		result = append(result, runs...)
+		result = append(result, spine.ReviewRunView{AgentRun: run})
 	}
-	return result, nil
+	return result, rows.Err()
 }
 
 func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.ActionKind) (spine.Action, error) {

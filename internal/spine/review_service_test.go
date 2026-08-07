@@ -321,15 +321,20 @@ func (e *reviewDispatchExternals) ReviewSandboxDelete(context.Context, Job, Agen
 	return Receipt{}, nil
 }
 
-func TestUncertainReviewerResourceCleanupIsOrderedRecordedAndRetrySafe(t *testing.T) {
+func TestReviewerResourceCleanupIgnoresHistoricalRunsRetainsEvidenceAndIsRetrySafe(t *testing.T) {
 	base := newMemoryStore()
 	job := testJob()
 	job.AdmissionOpen = false
 	job.CleanupState = CleanupScheduled
 	base.jobs[job.ID] = job
 	runID := ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary))
-	run := AgentRun{ID: runID, JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunUncertain, Attention: "strict native identity mismatch", Workspace: "/workspace/job", ReviewerSandboxID: ReviewSandboxName(runID), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"}
+	run := AgentRun{ID: runID, JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunUncertain, Attention: "strict native identity mismatch", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", ReviewerSandboxID: ReviewSandboxName(runID), ReviewerOwnerNonce: strings.Repeat("a", 64), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"}
 	store := newReviewDecisionStore(base)
+	historicalID := ReviewAgentRunID(job.ID, strings.Repeat("a", 40), string(policy.RoleBrowserUI))
+	historicalEvidenceID := EvidenceID(historicalID, "review-finding")
+	historical := AgentRun{ID: historicalID, JobID: job.ID, Revision: strings.Repeat("a", 40), Role: string(policy.RoleBrowserUI), State: AgentRunCompleted, ClaimEvidenceID: historicalEvidenceID}
+	base.runs[historicalID] = historical
+	store.evidence[historicalEvidenceID] = Evidence{ID: historicalEvidenceID, Revision: historical.Revision, Provenance: "claim", Kind: "review-finding"}
 	store.reviewRuns = []ReviewRunView{{AgentRun: run}}
 	for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
 		id := ScopedActionID(job.ID, kind, runID)
@@ -357,6 +362,31 @@ func TestUncertainReviewerResourceCleanupIsOrderedRecordedAndRetrySafe(t *testin
 	}
 	if got := store.reviewRuns[0]; got.State != AgentRunInterrupted || !strings.Contains(got.Attention, "resources are being reclaimed") {
 		t.Fatalf("cleanup did not durably settle isolated reviewer run: %#v", got.AgentRun)
+	}
+	if got := base.runs[historicalID]; got != historical {
+		t.Fatalf("cleanup mutated resource-less historical review AgentRun: got=%#v want=%#v", got, historical)
+	}
+	if got := store.evidence[historicalEvidenceID]; got.ID != historicalEvidenceID || got.Revision != historical.Revision {
+		t.Fatalf("cleanup lost historical review Evidence: %#v", got)
+	}
+}
+
+func TestMalformedPersistedReviewerResourceBlocksCleanupBeforeEffects(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	job.AdmissionOpen = false
+	job.CleanupState = CleanupScheduled
+	base.jobs[job.ID] = job
+	store := newReviewDecisionStore(base)
+	store.reviewRuns = []ReviewRunView{{AgentRun: AgentRun{ID: "agent-run-malformed-review", JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted}}}
+	externals := &reviewDispatchExternals{fakeExternals: newFakeExternals()}
+
+	err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID)
+	if err == nil || !strings.Contains(err.Error(), "malformed reviewer resource") {
+		t.Fatalf("malformed recorded reviewer resource error=%v", err)
+	}
+	if len(externals.cleanupEffects) != 0 || len(externals.effects) != 0 || base.jobs[job.ID].CleanupState != CleanupScheduled {
+		t.Fatalf("malformed resource crossed cleanup boundary: review=%v original=%v Job=%#v", externals.cleanupEffects, externals.effects, base.jobs[job.ID])
 	}
 }
 func (e *reviewDispatchExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
