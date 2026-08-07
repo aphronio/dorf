@@ -467,6 +467,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 		return "", TurnOutcome{}, err
 	}
 	var sessionID string
+	fresh := false
 	if len(threads) == 0 {
 		if !allowStart || expectedSession != "" {
 			return "", TurnOutcome{}, reviewAttention("strict review bound native Session is missing")
@@ -475,24 +476,27 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 		if err != nil {
 			return "", TurnOutcome{}, err
 		}
+		fresh = true
 	} else {
 		sessionID = stringValue(threads[0]["id"])
 		if expectedSession != "" && sessionID != expectedSession {
 			return "", TurnOutcome{}, reviewAttention("strict review recovery found the wrong native Session")
 		}
 	}
-	observedSession, turns, err := p.strictReviewSnapshot(ctx, workspace, sessionID, model, effort)
-	if err != nil {
-		return sessionID, TurnOutcome{}, err
-	}
-	if len(turns) > 1 {
-		return sessionID, TurnOutcome{}, reviewAttention("strict review native Session contains extra turns")
-	}
-	if len(turns) == 1 {
-		if err := attestReviewTurn(turns[0], submissionNonce, input); err != nil {
+	if !fresh {
+		observedSession, turns, err := p.strictReviewSnapshot(ctx, workspace, sessionID, model, effort)
+		if err != nil {
 			return sessionID, TurnOutcome{}, err
 		}
-		return observedSession, parseTurn(turns[0]), nil
+		if len(turns) > 1 {
+			return sessionID, TurnOutcome{}, reviewAttention("strict review native Session contains extra turns")
+		}
+		if len(turns) == 1 {
+			if err := attestReviewTurn(turns[0], submissionNonce, input); err != nil {
+				return sessionID, TurnOutcome{}, err
+			}
+			return observedSession, parseTurn(turns[0]), nil
+		}
 	}
 	turn, err := p.startTurn(ctx, sessionID, workspace, submissionNonce, input, model, effort, "read-only")
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -718,7 +719,7 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 	sessionID, turnID := "session-review", "turn-review"
 	var sessionCreated, turnCreated bool
 	var turnStarts atomic.Int32
-	server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 		switch method {
 		case "initialize":
 			return map[string]any{}, false
@@ -736,15 +737,11 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 			result["reasoningEffort"] = nil
 			return result, false
 		case "thread/resume":
-			turns := []any{}
-			if turnCreated {
-				turns = []any{strictReviewTestTurn(turnID, nonce, input)}
-			}
-			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": turns})
 			if !turnCreated {
-				result["reasoningEffort"] = nil
+				t.Error("thread/resume attempted before the fresh review turn was submitted")
+				return nil, true
 			}
-			return result, false
+			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
 		case "turn/start":
 			if params["clientUserMessageId"] != nonce || params["threadId"] != sessionID {
 				return nil, true
@@ -763,11 +760,98 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
 		t.Fatalf("first strict binding session=%s turn=%#v err=%v", gotSession, gotTurn, err)
 	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start", "thread/list", "thread/resume"}) {
+		t.Fatalf("fresh strict review methods=%v", methods)
+	}
 	_ = first.connection.CloseNow()
 	second := dialTestProtocol(t, server)
 	gotSession, gotTurn, err = second.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
 	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
 		t.Fatalf("recovered strict binding session=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
+	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
+		t.Fatalf("persisted strict review methods=%v", methods)
+	}
+}
+
+func TestStrictReviewLostAfterTrustedSubmissionAdoptsPersistedTurnWithoutDuplicate(t *testing.T) {
+	nonce := strings.Repeat("d", 64)
+	input := "exact retry input"
+	sessionID, turnID := "session-lost-response", "turn-lost-response"
+	var sessionCreated, turnCreated bool
+	var turnStarts atomic.Int32
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			if !turnCreated {
+				return map[string]any{"data": []any{}, "nextCursor": nil}, false
+			}
+			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
+		case "thread/start":
+			sessionCreated = true
+			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
+			result["reasoningEffort"] = nil
+			return result, false
+		case "turn/start":
+			if !sessionCreated || params["clientUserMessageId"] != nonce || params["threadId"] != sessionID {
+				return nil, true
+			}
+			turnStarts.Add(1)
+			turnCreated = true
+			return map[string]any{"turn": map[string]any{"id": turnID}}, false
+		case "thread/resume":
+			if !turnCreated {
+				t.Error("retry resumed an empty strict review thread")
+				return nil, true
+			}
+			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	first := dialTestProtocol(t, server)
+	threads, err := first.listStrictReviewThreads(context.Background(), "/workspace/job")
+	if err != nil || len(threads) != 0 {
+		t.Fatalf("initial discovery=%v err=%v", threads, err)
+	}
+	startedSession, err := first.startStrictReviewThread(context.Background(), "/workspace/job", "gpt-5.6-sol", "high")
+	if err != nil || startedSession != sessionID {
+		t.Fatalf("fresh Session=%s err=%v", startedSession, err)
+	}
+	if _, err := first.startTurn(context.Background(), sessionID, "/workspace/job", nonce, input, "gpt-5.6-sol", "high", "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	_ = first.connection.CloseNow() // controller response is lost before strict readback/binding
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
+		t.Fatalf("pre-loss methods=%v", methods)
+	}
+
+	retry := dialTestProtocol(t, server)
+	gotSession, gotTurn, err := retry.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
+	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
+		t.Fatalf("retry binding session=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
+	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
+		t.Fatalf("retry methods=%v", methods)
+	}
+}
+
+func reviewProtocolMethods(requests <-chan map[string]any) []string {
+	var methods []string
+	for {
+		select {
+		case request := <-requests:
+			method, _ := request["method"].(string)
+			if method != "initialize" && method != "initialized" {
+				methods = append(methods, method)
+			}
+		default:
+			return methods
+		}
 	}
 }
 
