@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -18,6 +19,31 @@ type probeRunner struct {
 	result incus.Result
 	calls  [][]string
 	inputs [][]byte
+}
+
+type reviewIsolationRunner struct{ calls [][]string }
+
+func (r *reviewIsolationRunner) Run(_ context.Context, command string, _ []byte, args ...string) (incus.Result, error) {
+	r.calls = append(r.calls, append([]string{command}, args...))
+	if strings.Contains(strings.Join(args, " "), "ip -4 route get") {
+		return incus.Result{Stdout: "1.1.1.1 via 10.42.0.1 dev eth0 src 10.42.0.9\n"}, nil
+	}
+	return incus.Result{}, errors.New("stop after reviewer Sandbox selection")
+}
+
+func TestStrictReviewNeverDiscoversImplementationSandboxNativeState(t *testing.T) {
+	runner := &reviewIsolationRunner{}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}, Port: 4500}
+	_, err := agent.StartStrictReviewTurn(context.Background(), "dorf-review-owned", "/workspace/job", strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
+	if err == nil {
+		t.Fatal("strict review unexpectedly passed the forced reviewer probe failure")
+	}
+	for _, call := range runner.calls {
+		joined := strings.Join(call, " ")
+		if !strings.Contains(joined, "exec dorf-review-owned --") || strings.Contains(joined, "dorf-implementation-forged") {
+			t.Fatalf("strict review escaped its reviewer Sandbox: %v", runner.calls)
+		}
+	}
 }
 
 func (r *probeRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
@@ -526,4 +552,135 @@ func TestParseTurnRetainsBoundedFinalClaimAndAvailableUsage(t *testing.T) {
 	if turn.ID != "turn-review" || turn.Output != `{"material":false}` || !turn.UsageAvailable || turn.InputTokens != 12 || turn.CachedInputTokens != 4 || turn.OutputTokens != 3 || turn.CostMicrousd != 9 {
 		t.Fatalf("parsed review turn=%#v", turn)
 	}
+}
+
+func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
+	nonce := strings.Repeat("a", 64)
+	input := "bounded exact review contract"
+	validTurn := strictReviewTestTurn("turn-review", nonce, input)
+	for _, test := range []struct {
+		name    string
+		threads []any
+		turns   []any
+		mutate  func(map[string]any)
+		cursor  any
+		want    string
+	}{
+		{name: "missing client identity", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", "", input)}, want: "missing or wrong client message identity"},
+		{name: "wrong client identity", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", strings.Repeat("b", 64), input)}, want: "missing or wrong client message identity"},
+		{name: "wrong prompt", threads: strictReviewTestThreads("session-review"), turns: []any{strictReviewTestTurn("turn-review", nonce, "forged prompt")}, want: "prompt differs"},
+		{name: "extra turn", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn, strictReviewTestTurn("turn-extra", nonce, input)}, want: "contains 2 turns"},
+		{name: "competing Session", threads: append(strictReviewTestThreads("session-review"), strictReviewTestThreads("session-forged")...), turns: []any{validTurn}, want: "competing native Sessions"},
+		{name: "unbounded discovery", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, cursor: "more", want: "exceeded its bound"},
+		{name: "wrong model", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["model"] = "forged-model" }, want: "model, effort, cwd, approval, or read-only policy"},
+		{name: "wrong approval", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["approvalPolicy"] = "on-request" }, want: "model, effort, cwd, approval, or read-only policy"},
+		{name: "wrong sandbox", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["sandbox"] = map[string]any{"type": "dangerFullAccess"} }, want: "model, effort, cwd, approval, or read-only policy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+				switch method {
+				case "initialize":
+					return map[string]any{}, false
+				case "thread/list":
+					return map[string]any{"data": test.threads, "nextCursor": test.cursor}, false
+				case "thread/resume":
+					result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": test.turns})
+					if test.mutate != nil {
+						test.mutate(result)
+					}
+					return result, false
+				default:
+					return nil, true
+				}
+			})
+			defer server.Close()
+			p := dialTestProtocol(t, server)
+			_, _, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("strict review error=%v want %q", err, test.want)
+			}
+			if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
+				t.Fatalf("strict review mismatch was not attention: %T %v", err, err)
+			}
+		})
+	}
+}
+
+func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T) {
+	nonce := strings.Repeat("c", 64)
+	input := "exact trusted review input"
+	sessionID, turnID := "session-review", "turn-review"
+	var sessionCreated, turnCreated bool
+	var turnStarts atomic.Int32
+	server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			if !sessionCreated {
+				return map[string]any{"data": []any{}, "nextCursor": nil}, false
+			}
+			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
+		case "thread/start":
+			sessionCreated = true
+			if _, sent := params["effort"]; sent {
+				t.Errorf("thread/start sent unsupported turn effort: %v", params["effort"])
+			}
+			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
+			result["reasoningEffort"] = nil
+			return result, false
+		case "thread/resume":
+			turns := []any{}
+			if turnCreated {
+				turns = []any{strictReviewTestTurn(turnID, nonce, input)}
+			}
+			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": turns})
+			if !turnCreated {
+				result["reasoningEffort"] = nil
+			}
+			return result, false
+		case "turn/start":
+			if params["clientUserMessageId"] != nonce || params["threadId"] != sessionID {
+				return nil, true
+			}
+			turnStarts.Add(1)
+			turnCreated = true
+			return map[string]any{"turn": map[string]any{"id": turnID}}, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	first := dialTestProtocol(t, server)
+	gotSession, gotTurn, err := first.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
+	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
+		t.Fatalf("first strict binding session=%s turn=%#v err=%v", gotSession, gotTurn, err)
+	}
+	_ = first.connection.CloseNow()
+	second := dialTestProtocol(t, server)
+	gotSession, gotTurn, err = second.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
+	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
+		t.Fatalf("recovered strict binding session=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
+	}
+}
+
+func strictReviewTestThreads(ids ...string) []any {
+	threads := make([]any, 0, len(ids))
+	for _, id := range ids {
+		threads = append(threads, map[string]any{"id": id, "cwd": "/workspace/job"})
+	}
+	return threads
+}
+
+func strictReviewTestSettings(thread map[string]any) map[string]any {
+	return map[string]any{
+		"thread": thread, "cwd": "/workspace/job", "model": "gpt-5.6-sol", "reasoningEffort": "high",
+		"approvalPolicy": "never", "sandbox": map[string]any{"type": "readOnly", "networkAccess": false},
+	}
+}
+
+func strictReviewTestTurn(id, nonce, input string) map[string]any {
+	item := map[string]any{"type": "userMessage", "clientId": nonce, "content": []any{map[string]any{"type": "text", "text": input}}}
+	return map[string]any{"id": id, "status": "completed", "items": []any{item, map[string]any{"type": "agentMessage", "text": `{"material":false}`}}}
 }

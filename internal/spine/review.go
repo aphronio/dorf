@@ -57,6 +57,18 @@ type ReviewRunView struct {
 	Stale           bool           `json:"stale"`
 }
 
+type ReviewNativeBinding struct {
+	AppServerID string
+	SessionID   string
+	Turn        NativeTurn
+}
+
+type ReviewNativeHistory struct {
+	AppServerID string
+	SessionID   string
+	Turns       []NativeTurn
+}
+
 type reviewObservationArtifact struct {
 	AgentRunID        string `json:"agent_run_id"`
 	Revision          string `json:"revision"`
@@ -71,6 +83,11 @@ type reviewObservationArtifact struct {
 	OutputTokens      int64  `json:"output_tokens"`
 	CostMicrousd      int64  `json:"cost_microusd"`
 	UsageAvailable    bool   `json:"usage_available"`
+	ReviewerSandboxID string `json:"reviewer_sandbox_id"`
+	ReviewerRouteID   string `json:"reviewer_route_id"`
+	ReviewerAppServer string `json:"reviewer_app_server_id"`
+	InputDigest       string `json:"input_digest"`
+	RevisionTree      string `json:"revision_tree"`
 }
 
 type ReviewStore interface {
@@ -80,6 +97,8 @@ type ReviewStore interface {
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
 	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
+	BeginReviewSandbox(context.Context, string) (Action, error)
+	BeginReviewRoute(context.Context, string) (Action, error)
 	BeginReviewWorkspace(context.Context, string) (Action, error)
 	BeginReviewSession(context.Context, string) (Action, error)
 	ReviewRun(context.Context, string) (AgentRun, error)
@@ -88,17 +107,26 @@ type ReviewStore interface {
 	AdmitReviewRepair(context.Context, string, string) (Message, bool, error)
 	MarkReviewReady(context.Context, string, string) error
 	BeginReviewWorkspaceCleanup(context.Context, string) (Action, error)
+	BeginReviewRouteCleanup(context.Context, string) (Action, error)
+	BeginReviewSandboxCleanup(context.Context, string) (Action, error)
+	InterruptReviewRun(context.Context, string, string) error
+	RecordReviewPostState(context.Context, string, Receipt) error
 	ReviewRepairTargets(context.Context, string) ([]policy.Role, error)
 	RejectReviewFinding(context.Context, string, string) error
 }
 
 type ReviewExternals interface {
 	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
+	ReviewSandboxCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
+	ReviewRouteCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
+	ReviewWorkspaceVerify(context.Context, Job, AgentRun) (Receipt, error)
 	ReviewWorkspaceDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewInitialTurn(context.Context, Job, AgentRun) (string, NativeTurn, error)
-	ReviewTurns(context.Context, Job, AgentRun) ([]NativeTurn, error)
-	ReviewWait(context.Context, Job, AgentRun, string) (NativeTurn, error)
+	ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error)
+	ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
+	ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error)
+	ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error)
+	ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error)
 }
 
 type ReviewAdjudicationExternals interface {

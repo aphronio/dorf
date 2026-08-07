@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -56,9 +57,200 @@ type Sandbox struct {
 	Sleep  func(time.Duration)
 }
 
+type ReviewMetadata struct {
+	JobID          string
+	AgentRunID     string
+	Revision       string
+	OwnershipNonce string
+}
+
+type OwnershipError struct{ Reason string }
+
+func (e *OwnershipError) Error() string         { return e.Reason }
+func (e *OwnershipError) AttentionNeeded() bool { return true }
+
+func ownershipErrorf(format string, args ...any) error {
+	return &OwnershipError{Reason: fmt.Sprintf(format, args...)}
+}
+
 func (s Sandbox) Name(jobID string) string {
 	sum := sha256.Sum256([]byte(jobID))
 	return "dorf-" + hex.EncodeToString(sum[:])[:20]
+}
+
+func (s Sandbox) ReconcileReviewCreate(ctx context.Context, name string, metadata ReviewMetadata) (string, error) {
+	if name == "" || metadata.JobID == "" || metadata.AgentRunID == "" || metadata.Revision == "" || len(metadata.OwnershipNonce) != 64 {
+		return "", fmt.Errorf("review Sandbox requires complete host-owned identity metadata")
+	}
+	matches, err := s.reviewMatches(ctx, metadata.AgentRunID)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) > 1 || len(matches) == 1 && matches[0].Name != name {
+		return "", ownershipErrorf("review Sandbox ownership is ambiguous for AgentRun %s", metadata.AgentRunID)
+	}
+	info, err := s.run(ctx, nil, "info", name)
+	if err != nil {
+		return "", err
+	}
+	if info.ExitCode != 0 {
+		if !absent(info) {
+			return "", failure("inspect review Sandbox", info)
+		}
+		created, err := s.run(ctx, nil, "init", s.Config.Image, name, "--vm", "--network", s.Config.Network, "-d", "root,size="+s.Config.DiskSize,
+			"-c", "user.dorf.owner=review", "-c", "user.dorf.job="+metadata.JobID, "-c", "user.dorf.agent_run="+metadata.AgentRunID,
+			"-c", "user.dorf.revision="+metadata.Revision, "-c", "user.dorf.ownership_nonce="+metadata.OwnershipNonce)
+		if err != nil {
+			return "", err
+		}
+		if created.ExitCode != 0 {
+			return "", failure("create review Sandbox", created)
+		}
+	}
+	if err := s.AttestReview(ctx, name, metadata); err != nil {
+		return "", err
+	}
+	start, err := s.run(ctx, nil, "start", name)
+	if err != nil {
+		return "", err
+	}
+	if start.ExitCode != 0 && !strings.Contains(strings.ToLower(start.Stderr+start.Stdout), "already running") {
+		return "", failure("start review Sandbox", start)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		ready, readyErr := s.Exec(ctx, name, nil, "true")
+		if readyErr == nil && ready.ExitCode == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("Incus guest agent did not become ready for review Sandbox %s", name)
+		}
+		s.sleep(250 * time.Millisecond)
+	}
+	credentialCheck, err := s.Exec(ctx, name, nil, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml")
+	if err != nil {
+		return "", err
+	}
+	if credentialCheck.ExitCode != 0 {
+		return "", fmt.Errorf("review Sandbox is not credential-free before its scoped route")
+	}
+	return name, nil
+}
+
+func (s Sandbox) AttestReview(ctx context.Context, name string, metadata ReviewMetadata) error {
+	matches, err := s.reviewMatches(ctx, metadata.AgentRunID)
+	if err != nil {
+		return err
+	}
+	if len(matches) != 1 || matches[0].Name != name {
+		return ownershipErrorf("review Sandbox metadata is missing, foreign, stale, or ambiguous")
+	}
+	want := map[string]string{
+		"user.dorf.owner":           "review",
+		"user.dorf.job":             metadata.JobID,
+		"user.dorf.agent_run":       metadata.AgentRunID,
+		"user.dorf.revision":        metadata.Revision,
+		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
+	}
+	for key, value := range want {
+		if matches[0].Config[key] != value {
+			return ownershipErrorf("review Sandbox metadata %s does not match its durable owner", key)
+		}
+	}
+	return nil
+}
+
+type reviewInstance struct {
+	Name   string            `json:"name"`
+	Config map[string]string `json:"config"`
+}
+
+func (s Sandbox) reviewMatches(ctx context.Context, runID string) ([]reviewInstance, error) {
+	result, err := s.run(ctx, nil, "list", "--format=json")
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		return nil, failure("discover bounded review Sandboxes", result)
+	}
+	var instances []reviewInstance
+	if err := json.Unmarshal([]byte(result.Stdout), &instances); err != nil {
+		return nil, fmt.Errorf("decode Incus review Sandbox inventory: %w", err)
+	}
+	if len(instances) > 1000 {
+		return nil, ownershipErrorf("Incus review Sandbox discovery exceeded its bounded inventory")
+	}
+	var matches []reviewInstance
+	for _, instance := range instances {
+		if instance.Config["user.dorf.agent_run"] == runID {
+			matches = append(matches, instance)
+		}
+	}
+	return matches, nil
+}
+
+func (s Sandbox) ReviewPresent(ctx context.Context, name string, metadata ReviewMetadata) (bool, error) {
+	result, err := s.run(ctx, nil, "list", "--format=json")
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, failure("discover bounded review Sandboxes", result)
+	}
+	var instances []reviewInstance
+	if err := json.Unmarshal([]byte(result.Stdout), &instances); err != nil {
+		return false, fmt.Errorf("decode Incus review Sandbox inventory: %w", err)
+	}
+	if len(instances) > 1000 {
+		return false, ownershipErrorf("Incus review Sandbox discovery exceeded its bounded inventory")
+	}
+	present := false
+	for _, instance := range instances {
+		if instance.Name == name {
+			present = true
+		}
+	}
+	if !present {
+		matches := 0
+		for _, instance := range instances {
+			if instance.Config["user.dorf.agent_run"] == metadata.AgentRunID {
+				matches++
+			}
+		}
+		if matches != 0 {
+			return false, ownershipErrorf("expected review Sandbox is absent but another owned resource remains")
+		}
+		return false, nil
+	}
+	if err := s.AttestReview(ctx, name, metadata); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s Sandbox) DeleteReview(ctx context.Context, name string, metadata ReviewMetadata) error {
+	info, err := s.run(ctx, nil, "info", name)
+	if err != nil {
+		return err
+	}
+	if info.ExitCode != 0 {
+		if absent(info) {
+			matches, matchErr := s.reviewMatches(ctx, metadata.AgentRunID)
+			if matchErr != nil {
+				return matchErr
+			}
+			if len(matches) != 0 {
+				return ownershipErrorf("expected review Sandbox is absent but another owned resource remains")
+			}
+			return nil
+		}
+		return failure("inspect review Sandbox for deletion", info)
+	}
+	if err := s.AttestReview(ctx, name, metadata); err != nil {
+		return err
+	}
+	return s.Delete(ctx, name)
 }
 
 func (s Sandbox) ReconcileCreate(ctx context.Context, jobID string) (string, error) {

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -318,7 +319,7 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 
 func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role string, facts policy.ChangeFacts) (string, error) {
 	runID := spine.ReviewAgentRunID(jobID, revision, role)
-	workspace := "/tmp/dorf/review-workspaces/" + runID
+	workspace := "/workspace/job"
 	var declaredChecks []string
 	rows, err := tx.QueryContext(ctx, `select name from dorf.repository_commands where job_id=$1 and name in ('check','smoke') order by name`, jobID)
 	if err != nil {
@@ -341,12 +342,16 @@ func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role st
 	}
 	turnAction := spine.ScopedActionID(jobID, spine.ActionTurnStart, runID)
 	sessionAction := spine.ScopedActionID(jobID, spine.ActionSessionStart, runID)
+	sandboxCreateAction := spine.ScopedActionID(jobID, spine.ActionSandboxCreate, runID)
+	routeCreateAction := spine.ScopedActionID(jobID, spine.ActionRouteCreate, runID)
 	createAction := spine.ScopedActionID(jobID, spine.ActionReviewWorkspaceCreate, runID)
 	deleteAction := spine.ScopedActionID(jobID, spine.ActionReviewWorkspaceDelete, runID)
+	routeRevokeAction := spine.ScopedActionID(jobID, spine.ActionRouteRevoke, runID)
+	sandboxDeleteAction := spine.ScopedActionID(jobID, spine.ActionSandboxDelete, runID)
 	for _, action := range []struct {
 		id   string
 		kind spine.ActionKind
-	}{{turnAction, spine.ActionTurnStart}, {sessionAction, spine.ActionSessionStart}, {createAction, spine.ActionReviewWorkspaceCreate}, {deleteAction, spine.ActionReviewWorkspaceDelete}} {
+	}{{turnAction, spine.ActionTurnStart}, {sessionAction, spine.ActionSessionStart}, {sandboxCreateAction, spine.ActionSandboxCreate}, {routeCreateAction, spine.ActionRouteCreate}, {createAction, spine.ActionReviewWorkspaceCreate}, {deleteAction, spine.ActionReviewWorkspaceDelete}, {routeRevokeAction, spine.ActionRouteRevoke}, {sandboxDeleteAction, spine.ActionSandboxDelete}} {
 		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, action.id, jobID, action.kind, runID); err != nil {
 			return "", err
 		}
@@ -357,19 +362,39 @@ func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role st
 	if _, err := tx.ExecContext(ctx, `insert into dorf.review_workspaces(run_id,job_id,revision,path,create_action_id,delete_action_id) values($1,$2,$3,$4,$5,$6) on conflict do nothing`, runID, jobID, revision, workspace, createAction, deleteAction); err != nil {
 		return "", err
 	}
+	ownerNonce, err := reviewNonce()
+	if err != nil {
+		return "", err
+	}
+	submissionNonce, err := reviewNonce()
+	if err != nil {
+		return "", err
+	}
+	inputSum := sha256.Sum256([]byte(input))
+	if _, err := tx.ExecContext(ctx, `insert into dorf.review_resources(run_id,job_id,revision,sandbox_name,ownership_nonce,submission_nonce,input_digest,sandbox_create_action_id,route_create_action_id,materialize_action_id,route_revoke_action_id,sandbox_delete_action_id) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict do nothing`, runID, jobID, revision, spine.ReviewSandboxName(runID), ownerNonce, submissionNonce, hex.EncodeToString(inputSum[:]), sandboxCreateAction, routeCreateAction, createAction, routeRevokeAction, sandboxDeleteAction); err != nil {
+		return "", err
+	}
 	return runID, nil
+}
+
+func reviewNonce() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate review ownership nonce: %w", err)
+	}
+	return hex.EncodeToString(value), nil
 }
 
 func (s Store) ReviewRun(ctx context.Context, runID string) (spine.AgentRun, error) {
 	return scanReviewRun(s.DB.QueryRowContext(ctx, reviewRunSelect+` where ar.id=$1`, runID))
 }
 
-const reviewRunSelect = `select ar.id,ar.job_id,coalesce(ar.message_id,''),ar.action_id,coalesce(ar.session_id,''),ar.state,ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role,coalesce(ar.revision,''),coalesce(ar.capability,''),coalesce(ar.workspace,''),coalesce(ar.input_contract,''),coalesce(ar.output_contract,''),coalesce(ar.claim_evidence_id,''),coalesce(ar.observed_evidence_id,''),ar.started_at,ar.finished_at,ar.input_tokens,ar.cached_input_tokens,ar.output_tokens,ar.cost_microusd,ar.usage_available,ar.yield_count from dorf.agent_runs ar`
+const reviewRunSelect = `select ar.id,ar.job_id,coalesce(ar.message_id,''),ar.action_id,coalesce(ar.session_id,''),ar.state,ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role,coalesce(ar.revision,''),coalesce(ar.capability,''),coalesce(ar.workspace,''),coalesce(ar.input_contract,''),coalesce(ar.output_contract,''),coalesce(ar.claim_evidence_id,''),coalesce(ar.observed_evidence_id,''),ar.started_at,ar.finished_at,ar.input_tokens,ar.cached_input_tokens,ar.output_tokens,ar.cost_microusd,ar.usage_available,ar.yield_count,coalesce(rr.sandbox_name,''),coalesce(rr.route_id,''),coalesce(rr.app_server_id,''),coalesce(rr.ownership_nonce,''),coalesce(rr.submission_nonce,''),coalesce(rr.input_digest,''),coalesce(rr.revision_tree,''),coalesce(rr.sandbox_state,''),coalesce(rr.route_state,''),coalesce(rr.checkout_state,''),coalesce(rr.post_review_state,'') from dorf.agent_runs ar left join dorf.review_resources rr on rr.run_id=ar.id`
 
-func scanReviewRun(row *sql.Row) (spine.AgentRun, error) {
+func scanReviewRun(row rowScanner) (spine.AgentRun, error) {
 	var run spine.AgentRun
 	var started, finished sql.NullTime
-	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State, &run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role, &run.Revision, &run.Capability, &run.Workspace, &run.InputContract, &run.OutputContract, &run.ClaimEvidenceID, &run.ObservedEvidenceID, &started, &finished, &run.InputTokens, &run.CachedInputTokens, &run.OutputTokens, &run.CostMicrousd, &run.UsageAvailable, &run.YieldCount)
+	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State, &run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role, &run.Revision, &run.Capability, &run.Workspace, &run.InputContract, &run.OutputContract, &run.ClaimEvidenceID, &run.ObservedEvidenceID, &started, &finished, &run.InputTokens, &run.CachedInputTokens, &run.OutputTokens, &run.CostMicrousd, &run.UsageAvailable, &run.YieldCount, &run.ReviewerSandboxID, &run.ReviewerRouteID, &run.ReviewerAppServer, &run.ReviewerOwnerNonce, &run.SubmissionNonce, &run.InputDigest, &run.RevisionTree, &run.ReviewerSandboxState, &run.ReviewerRouteState, &run.CheckoutState, &run.PostReviewState)
 	if started.Valid {
 		run.StartedAt = started.Time
 	}
@@ -387,22 +412,15 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 	defer rows.Close()
 	var views []spine.ReviewRunView
 	for rows.Next() {
-		var run spine.AgentRun
-		var started, finished sql.NullTime
-		if err := rows.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State, &run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role, &run.Revision, &run.Capability, &run.Workspace, &run.InputContract, &run.OutputContract, &run.ClaimEvidenceID, &run.ObservedEvidenceID, &started, &finished, &run.InputTokens, &run.CachedInputTokens, &run.OutputTokens, &run.CostMicrousd, &run.UsageAvailable, &run.YieldCount); err != nil {
+		run, err := scanReviewRun(rows)
+		if err != nil {
 			return nil, err
-		}
-		if started.Valid {
-			run.StartedAt = started.Time
-		}
-		if finished.Valid {
-			run.FinishedAt = finished.Time
 		}
 		view := spine.ReviewRunView{AgentRun: run}
 		var material, stale bool
 		var summary, rationale, evidenceID, adjudication string
 		var affectedRoles, affectedChecks []byte
-		err := s.DB.QueryRowContext(ctx, `select material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication,stale from dorf.review_findings where run_id=$1`, run.ID).Scan(&material, &summary, &rationale, &affectedRoles, &affectedChecks, &evidenceID, &adjudication, &stale)
+		err = s.DB.QueryRowContext(ctx, `select material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication,stale from dorf.review_findings where run_id=$1`, run.ID).Scan(&material, &summary, &rationale, &affectedRoles, &affectedChecks, &evidenceID, &adjudication, &stale)
 		if err == nil {
 			finding := &spine.ReviewFinding{RunID: run.ID, Revision: run.Revision, Role: policy.Role(run.Role), Material: material, Summary: summary, Rationale: rationale, EvidenceID: evidenceID, Adjudication: adjudication, Stale: stale}
 			_ = json.Unmarshal(affectedRoles, &finding.AffectedRoles)
@@ -464,6 +482,10 @@ func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.A
 	defer tx.Rollback()
 	var actionID string
 	switch kind {
+	case spine.ActionSandboxCreate:
+		err = tx.QueryRowContext(ctx, `select sandbox_create_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
+	case spine.ActionRouteCreate:
+		err = tx.QueryRowContext(ctx, `select route_create_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
 	case spine.ActionReviewWorkspaceCreate:
 		err = tx.QueryRowContext(ctx, `select create_action_id from dorf.review_workspaces where run_id=$1`, runID).Scan(&actionID)
 	case spine.ActionReviewWorkspaceDelete:
@@ -471,6 +493,10 @@ func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.A
 	case spine.ActionSessionStart:
 		actionID = spine.ScopedActionID("", kind, runID)
 		err = tx.QueryRowContext(ctx, `select id from dorf.actions where kind=$2 and scope_key=$1`, runID, kind).Scan(&actionID)
+	case spine.ActionRouteRevoke:
+		err = tx.QueryRowContext(ctx, `select route_revoke_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
+	case spine.ActionSandboxDelete:
+		err = tx.QueryRowContext(ctx, `select sandbox_delete_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
 	default:
 		err = fmt.Errorf("unsupported review Action %q", kind)
 	}
@@ -488,6 +514,12 @@ func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.A
 	return action, nil
 }
 
+func (s Store) BeginReviewSandbox(ctx context.Context, runID string) (spine.Action, error) {
+	return s.beginReviewAction(ctx, runID, spine.ActionSandboxCreate)
+}
+func (s Store) BeginReviewRoute(ctx context.Context, runID string) (spine.Action, error) {
+	return s.beginReviewAction(ctx, runID, spine.ActionRouteCreate)
+}
 func (s Store) BeginReviewWorkspace(ctx context.Context, runID string) (spine.Action, error) {
 	return s.beginReviewAction(ctx, runID, spine.ActionReviewWorkspaceCreate)
 }
@@ -496,6 +528,51 @@ func (s Store) BeginReviewSession(ctx context.Context, runID string) (spine.Acti
 }
 func (s Store) BeginReviewWorkspaceCleanup(ctx context.Context, runID string) (spine.Action, error) {
 	return s.beginReviewAction(ctx, runID, spine.ActionReviewWorkspaceDelete)
+}
+func (s Store) BeginReviewRouteCleanup(ctx context.Context, runID string) (spine.Action, error) {
+	return s.beginReviewAction(ctx, runID, spine.ActionRouteRevoke)
+}
+func (s Store) BeginReviewSandboxCleanup(ctx context.Context, runID string) (spine.Action, error) {
+	return s.beginReviewAction(ctx, runID, spine.ActionSandboxDelete)
+}
+
+func (s Store) InterruptReviewRun(ctx context.Context, runID, reason string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var state string
+	if err := tx.QueryRowContext(ctx, `select ar.state from dorf.agent_runs ar join dorf.review_resources rr on rr.run_id=ar.id where ar.id=$1 and ar.capability=$2 for update of ar`, runID, spine.ReviewReadOnlyCapability).Scan(&state); err != nil {
+		return err
+	}
+	if state == string(spine.AgentRunCompleted) || state == string(spine.AgentRunFailed) || state == string(spine.AgentRunInterrupted) {
+		return tx.Commit()
+	}
+	var actionID string
+	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='interrupted',native_outcome=case when native_turn_id is null then null else 'interrupted' end,attention=$2,finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end,updated_at=clock_timestamp() where id=$1 and state in ('pending','submitting','active','uncertain') returning action_id`, runID, reason).Scan(&actionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='failed',external_outcome=$2,updated_at=clock_timestamp() where id=$1 and state in ('pending','uncertain')`, actionID, reason); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) RecordReviewPostState(ctx context.Context, runID string, receipt spine.Receipt) error {
+	revision, tree, err := parseReviewStateOutcome(receipt.Outcome)
+	if err != nil {
+		return err
+	}
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.review_resources rr set post_review_state='verified',post_review_verified_at=coalesce(post_review_verified_at,clock_timestamp()) from dorf.agent_runs ar where rr.run_id=$1 and ar.id=rr.run_id and rr.sandbox_state='created' and rr.route_state='active' and rr.checkout_state='verified' and rr.revision=$2 and rr.revision_tree=$3 and ar.workspace=$4`, runID, revision, tree, receipt.ExternalID))
+}
+
+func parseReviewStateOutcome(outcome string) (string, string, error) {
+	parts := strings.Fields(outcome)
+	if len(parts) != 3 || parts[2] != "clean" || !ValidRevision(parts[0]) || !ValidRevision(parts[1]) {
+		return "", "", fmt.Errorf("review checkout observation is not exact Revision/tree/clean state")
+	}
+	return parts[0], parts[1], nil
 }
 
 func (s Store) RecordTriageResult(ctx context.Context, runID string, outcome spine.NativeTurn, claim, observed spine.Evidence, final policy.ReviewPlan, rationale string) error {
@@ -510,6 +587,10 @@ func (s Store) RecordTriageResult(ctx context.Context, runID string, outcome spi
 	}
 	if role != spine.ReviewTriageRole || runState != "completed" || outcome.Status != "completed" || claim.Revision != revision || observed.Revision != revision {
 		return fmt.Errorf("triage result conflicts with its AgentRun or Revision")
+	}
+	var boundaryReady bool
+	if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and post_review_state='verified' and app_server_id is not null and revision_tree is not null)`, runID).Scan(&boundaryReady); err != nil || !boundaryReady {
+		return fmt.Errorf("triage result lacks an attested isolated reviewer boundary")
 	}
 	plan, err := reviewPlanTx(ctx, tx, jobID, revision)
 	if err != nil {
@@ -558,6 +639,10 @@ func (s Store) RecordReviewResult(ctx context.Context, runID string, outcome spi
 	}
 	if role == spine.ReviewTriageRole || outcome.Status != "completed" || state != "completed" || finding.RunID != runID || finding.Revision != revision || string(finding.Role) != role || claim.Revision != revision || observed.Revision != revision {
 		return fmt.Errorf("review result conflicts with its terminal AgentRun or Revision")
+	}
+	var boundaryReady bool
+	if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and post_review_state='verified' and app_server_id is not null and revision_tree is not null)`, runID).Scan(&boundaryReady); err != nil || !boundaryReady {
+		return fmt.Errorf("review result lacks an attested isolated reviewer boundary")
 	}
 	if err := insertEvidence(ctx, tx, jobID, claim); err != nil {
 		return err
@@ -667,7 +752,7 @@ func (s Store) MarkReviewReady(ctx context.Context, jobID, revision string) erro
 		var state string
 		var material bool
 		var adjudication string
-		err := tx.QueryRowContext(ctx, `select ar.state,rf.material,rf.adjudication from dorf.agent_runs ar join dorf.review_findings rf on rf.run_id=ar.id where ar.job_id=$1 and ar.revision=$2 and ar.role=$3`, jobID, revision, role).Scan(&state, &material, &adjudication)
+		err := tx.QueryRowContext(ctx, `select ar.state,rf.material,rf.adjudication from dorf.agent_runs ar join dorf.review_findings rf on rf.run_id=ar.id join dorf.review_resources rr on rr.run_id=ar.id where ar.job_id=$1 and ar.revision=$2 and ar.role=$3 and rr.checkout_state='verified' and rr.post_review_state='verified'`, jobID, revision, role).Scan(&state, &material, &adjudication)
 		if err != nil || state != "completed" || material && adjudication != "rejected" {
 			return fmt.Errorf("selected review Role %s is not settled", role)
 		}

@@ -2,6 +2,7 @@ package spine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,11 @@ const (
 	BarrierReviewResultReady    = "review-result-ready-before-record"
 	reviewEvidenceProducer      = "dorf-codex-review"
 )
+
+type reviewBoundaryError string
+
+func (e reviewBoundaryError) Error() string         { return string(e) }
+func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 
 func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bool, error) {
 	store, ok := s.Store.(ReviewStore)
@@ -79,6 +85,9 @@ func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bo
 		if outcome.Status != "completed" {
 			return s.blockReview(ctx, job.ID, fmt.Sprintf("review triage AgentRun settled as %s", outcome.Status))
 		}
+		if err := s.verifyReviewPostState(ctx, job, run, store, externals); err != nil {
+			return s.blockReview(ctx, job.ID, err.Error())
+		}
 		run, err = store.ReviewRun(ctx, run.ID)
 		if err != nil {
 			return RunIdle, false, err
@@ -140,17 +149,29 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 		pending = append(pending, view.AgentRun)
 	}
 	if len(pending) > 0 {
-		// Git worktree registration mutates one shared repository registry, so it
-		// is reconciled serially before any independently read-only native turns.
-		for _, run := range pending {
+		// Reviewer Sandbox, immutable checkout, and scoped route reconciliation
+		// are serialized before independently read-only native turns overlap.
+		for i, run := range pending {
 			if err := s.ensureReviewWorkspace(ctx, job, run, store, externals); err != nil {
+				if attentionNeeded(err) {
+					_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+					return s.blockReview(ctx, job.ID, err.Error())
+				}
 				return RunIdle, false, err
 			}
+			refreshed, err := store.ReviewRun(ctx, run.ID)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			pending[i] = refreshed
 		}
 		if err := validateIndependentReviewBatch(pending); err != nil {
 			// A future non-read-only capability is deliberately serialized.
 			for _, run := range pending {
 				if _, oneErr := s.executeAndRecordReview(ctx, job, run, store, externals); oneErr != nil {
+					if attentionNeeded(oneErr) {
+						return s.blockReview(ctx, job.ID, oneErr.Error())
+					}
 					return RunIdle, false, oneErr
 				}
 			}
@@ -170,6 +191,9 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 			close(errs)
 			for err := range errs {
 				if err != nil {
+					if attentionNeeded(err) {
+						return s.blockReview(ctx, job.ID, err.Error())
+					}
 					return RunIdle, false, err
 				}
 			}
@@ -208,12 +232,14 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 type spineFindingRun struct{ runID, role string }
 
 func validateIndependentReviewBatch(runs []AgentRun) error {
-	workspaces := map[string]bool{}
+	sandboxes := map[string]bool{}
+	routes := map[string]bool{}
 	for _, run := range runs {
-		if run.Capability != ReviewReadOnlyCapability || run.Revision == "" || run.Workspace == "" || workspaces[run.Workspace] || run.SessionID != "" && run.State == AgentRunPending {
+		if run.Capability != ReviewReadOnlyCapability || run.Revision == "" || run.Workspace == "" || run.ReviewerSandboxID == "" || run.ReviewerRouteID == "" || sandboxes[run.ReviewerSandboxID] || routes[run.ReviewerRouteID] || run.ReviewerSandboxState != "created" || run.ReviewerRouteState != "active" || run.CheckoutState != "verified" || run.SessionID != "" && run.State == AgentRunPending {
 			return fmt.Errorf("review AgentRuns are not proven independent immutable read-only inputs")
 		}
-		workspaces[run.Workspace] = true
+		sandboxes[run.ReviewerSandboxID] = true
+		routes[run.ReviewerRouteID] = true
 	}
 	return nil
 }
@@ -225,6 +251,9 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run AgentR
 	}
 	if outcome.Status != "completed" {
 		return outcome, fmt.Errorf("review Role %s settled as %s", run.Role, outcome.Status)
+	}
+	if err := s.verifyReviewPostState(ctx, job, run, store, externals); err != nil {
+		return outcome, err
 	}
 	run, err = store.ReviewRun(ctx, run.ID)
 	if err != nil {
@@ -257,8 +286,34 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run AgentR
 	return outcome, nil
 }
 
+func (s Service) verifyReviewPostState(ctx context.Context, job Job, run AgentRun, store ReviewStore, externals ReviewExternals) error {
+	post, err := externals.ReviewWorkspaceVerify(ctx, job, run)
+	if err != nil {
+		reason := "reviewer checkout post-turn attestation failed: " + err.Error()
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+		return reviewBoundaryError(reason)
+	}
+	if err := store.RecordReviewPostState(ctx, run.ID, post); err != nil {
+		reason := "reviewer checkout post-turn state conflicts with durable input: " + err.Error()
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+		return reviewBoundaryError(reason)
+	}
+	return nil
+}
+
 func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRun, externals ReviewExternals, store ReviewStore) (NativeTurn, error) {
+	if original.ReviewerSandboxID != "" {
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(original.InputContract)))
+		if original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 || original.InputDigest != digest {
+			reason := "review AgentRun durable Sandbox ownership or exact submission contract is invalid"
+			_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
+			return NativeTurn{}, reviewBoundaryError(reason)
+		}
+	}
 	if err := s.ensureReviewWorkspace(ctx, job, original, store, externals); err != nil {
+		if attentionNeeded(err) {
+			_ = s.Store.UncertainAgentRun(ctx, original.ID, err.Error())
+		}
 		return NativeTurn{}, err
 	}
 	run, err := store.ReviewRun(ctx, original.ID)
@@ -266,11 +321,18 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		return NativeTurn{}, err
 	}
 	if run.State == AgentRunCompleted {
-		turns, err := externals.ReviewTurns(ctx, job, run)
+		history, err := externals.ReviewTurns(ctx, job, run)
 		if err != nil {
+			if attentionNeeded(err) {
+				_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+			}
 			return NativeTurn{}, err
 		}
-		for _, turn := range turns {
+		if err := validateReviewNativeOwner(run, history.AppServerID, history.SessionID); err != nil {
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+			return NativeTurn{}, err
+		}
+		for _, turn := range history.Turns {
 			if turn.ID == run.NativeTurnID {
 				return turn, nil
 			}
@@ -298,13 +360,13 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		if err := s.Store.BeginTurnSubmission(ctx, run.ID); err != nil {
 			return NativeTurn{}, err
 		}
-		sessionID, turn, err := externals.ReviewInitialTurn(ctx, job, run)
+		binding, err := externals.ReviewInitialTurn(ctx, job, run)
 		if err != nil {
 			_ = s.Store.UncertainAction(ctx, session.ID)
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if sessionID != "" {
-					if bindErr := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID}); bindErr != nil {
+				if binding.SessionID != "" {
+					if bindErr := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.AppServerID}); bindErr != nil {
 						return NativeTurn{}, bindErr
 					}
 				}
@@ -320,37 +382,48 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 			}
 			return NativeTurn{}, err
 		}
-		if sessionID == "" || turn.ID == "" {
+		if binding.AppServerID == "" || binding.SessionID == "" || binding.Turn.ID == "" {
 			return NativeTurn{}, fmt.Errorf("review native submission returned incomplete Session or turn binding")
 		}
 		if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 			return NativeTurn{}, err
 		}
-		if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID}); err != nil {
+		if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.AppServerID}); err != nil {
 			return NativeTurn{}, err
 		}
-		if err := s.Store.BindNativeTurn(ctx, run.ID, turn.ID, turn.Status); err != nil {
+		if err := s.Store.BindNativeTurn(ctx, run.ID, binding.Turn.ID, binding.Turn.Status); err != nil {
 			return NativeTurn{}, err
 		}
-		run.SessionID, run.NativeTurnID = sessionID, turn.ID
-		if terminalNative(turn.Status) {
-			return turn, nil
+		run.SessionID, run.NativeTurnID, run.ReviewerAppServer = binding.SessionID, binding.Turn.ID, binding.AppServerID
+		if terminalNative(binding.Turn.Status) {
+			return binding.Turn, nil
 		}
-		outcome, err := externals.ReviewWait(ctx, job, run, turn.ID)
+		waited, err := externals.ReviewWait(ctx, job, run, binding.Turn.ID)
 		if err != nil {
 			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted review native turn outcome is currently unavailable: "+err.Error())
 			return NativeTurn{}, err
 		}
-		if err := s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status); err != nil {
+		if err := validateReviewNativeOwner(run, waited.AppServerID, waited.SessionID); err != nil {
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
 			return NativeTurn{}, err
 		}
-		return outcome, nil
+		if err := s.Store.BindNativeTurn(ctx, run.ID, waited.Turn.ID, waited.Turn.Status); err != nil {
+			return NativeTurn{}, err
+		}
+		return waited.Turn, nil
 	}
-	turns, err := externals.ReviewTurns(ctx, job, run)
+	history, err := externals.ReviewTurns(ctx, job, run)
 	if err != nil {
+		if attentionNeeded(err) {
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		}
 		return NativeTurn{}, err
 	}
-	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
+	if err := validateReviewNativeOwner(run, history.AppServerID, history.SessionID); err != nil {
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		return NativeTurn{}, err
+	}
+	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, history.Turns)
 	if reconciliation.Classification == "uncertain" {
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 		return NativeTurn{}, fmt.Errorf("review native reconciliation is uncertain: %s", reconciliation.Reason)
@@ -362,20 +435,40 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		return NativeTurn{}, err
 	}
 	if reconciliation.Classification == "active" {
-		outcome, err := externals.ReviewWait(ctx, job, run, reconciliation.Turn.ID)
+		waited, err := externals.ReviewWait(ctx, job, run, reconciliation.Turn.ID)
 		if err != nil {
 			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted review native turn outcome is currently unavailable: "+err.Error())
 			return NativeTurn{}, err
 		}
-		if err := s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status); err != nil {
+		if err := validateReviewNativeOwner(run, waited.AppServerID, waited.SessionID); err != nil {
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
 			return NativeTurn{}, err
 		}
-		return outcome, nil
+		if err := s.Store.BindNativeTurn(ctx, run.ID, waited.Turn.ID, waited.Turn.Status); err != nil {
+			return NativeTurn{}, err
+		}
+		return waited.Turn, nil
 	}
 	return reconciliation.Turn, nil
 }
 
 func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original AgentRun, store ReviewStore, externals ReviewExternals) error {
+	if original.ReviewerSandboxID != "" {
+		sandbox, err := store.BeginReviewSandbox(ctx, original.ID)
+		if err != nil {
+			return err
+		}
+		if sandbox.State != ActionSucceeded {
+			receipt, err := externals.ReviewSandboxCreate(ctx, job, original, sandbox)
+			if err != nil {
+				_ = s.Store.UncertainAction(ctx, sandbox.ID)
+				return err
+			}
+			if err := s.Store.CompleteAction(ctx, sandbox.ID, receipt); err != nil {
+				return err
+			}
+		}
+	}
 	workspace, err := store.BeginReviewWorkspace(ctx, original.ID)
 	if err != nil {
 		return err
@@ -392,6 +485,29 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Ag
 		if err := s.Store.CompleteAction(ctx, workspace.ID, receipt); err != nil {
 			return err
 		}
+	}
+	if original.ReviewerSandboxID != "" {
+		route, err := store.BeginReviewRoute(ctx, original.ID)
+		if err != nil {
+			return err
+		}
+		if route.State != ActionSucceeded {
+			receipt, err := externals.ReviewRouteCreate(ctx, job, original, route)
+			if err != nil {
+				_ = s.Store.UncertainAction(ctx, route.ID)
+				return err
+			}
+			if err := s.Store.CompleteAction(ctx, route.ID, receipt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateReviewNativeOwner(run AgentRun, appServerID, sessionID string) error {
+	if appServerID == "" || sessionID == "" || run.ReviewerAppServer != appServerID || run.SessionID != sessionID {
+		return reviewBoundaryError("review native recovery conflicts with the exact reviewer app-server or Session")
 	}
 	return nil
 }
@@ -410,7 +526,13 @@ func (s Service) reviewEvidence(run AgentRun, outcome NativeTurn, claimKind stri
 		return Evidence{}, Evidence{}, err
 	}
 	claim := Evidence{ID: EvidenceID(run.ID, claimKind), Digest: claimBlob.Digest, ByteSize: claimBlob.ByteSize, MediaType: "application/vnd.dorf.agent-claim+json", Producer: reviewEvidenceProducer, Provenance: "claim", Kind: claimKind, ActionID: run.ActionID, Revision: run.Revision, StartedAt: started, FinishedAt: finished}
-	artifact, err := json.Marshal(reviewObservationArtifact{run.ID, run.Revision, run.Role, run.Capability, run.Workspace, run.SessionID, outcome.ID, outcome.Status, outcome.InputTokens, outcome.CachedInputTokens, outcome.OutputTokens, outcome.CostMicrousd, outcome.UsageAvailable})
+	artifact, err := json.Marshal(reviewObservationArtifact{
+		AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Workspace: run.Workspace,
+		SessionID: run.SessionID, NativeTurnID: outcome.ID, NativeOutcome: outcome.Status, InputTokens: outcome.InputTokens,
+		CachedInputTokens: outcome.CachedInputTokens, OutputTokens: outcome.OutputTokens, CostMicrousd: outcome.CostMicrousd,
+		UsageAvailable: outcome.UsageAvailable, ReviewerSandboxID: run.ReviewerSandboxID, ReviewerRouteID: run.ReviewerRouteID,
+		ReviewerAppServer: run.ReviewerAppServer, InputDigest: run.InputDigest, RevisionTree: run.RevisionTree,
+	})
 	if err != nil {
 		return Evidence{}, Evidence{}, err
 	}

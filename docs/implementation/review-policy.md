@@ -25,15 +25,29 @@ final persisted plan, not the absence of review rows.
 ## Native and Evidence boundaries
 
 Each triage or review AgentRun has a stable identity derived from Job, Revision, and Role. It owns a
-detached worktree, a distinct Codex native Session discovered through that exact worktree path, a
-stable Session Action, and a stable turn Action. Codex receives `approvalPolicy=never` and a
-read-only sandbox policy. The implementation and repair turns alone use the original writable
-workspace and implementation Session.
+fresh Incus reviewer Sandbox that is distinct from the implementation Sandbox and every other Role.
+Host-owned Incus metadata and durable facts bind that VM to the Job, AgentRun, exact Revision, and an
+unpredictable ownership nonce. A foreign, stale, duplicated, or ambiguously owned VM is never
+adopted. The implementation and repair turns alone use the original writable workspace and
+implementation Session.
 
-Git worktree registration is serialized because it mutates shared repository metadata. After every
-selected run has a distinct worktree, Revision, Action, and native binding, immutable read-only
-review turns may overlap. Any other capability class is serialized. The native accept/before-bind
-retry reads the exact worktree's thread history and converges on the existing turn.
+Before installing a provider route, Dorf exports only the Git objects reachable from the admitted
+clean implementation HEAD and materializes them in a detached reviewer checkout. It removes remote
+and ref reachability, prunes unreachable objects, and observes exact HEAD, tree, and clean state.
+The reviewer VM never runs repository setup, Check, or smoke commands. Each VM receives its own
+scoped provider route and independently controlled Codex app-server. Exact HEAD/tree/clean state is
+observed again after the native turn and before any claim Evidence can be recorded.
+
+Before native submission, Dorf durably records a random stable submission nonce and the exact input
+digest. Review-only recovery performs bounded Session discovery and accepts exactly one turn only
+when its persisted user message has that nonce and byte-exact input. It also attests the bound
+Session, app-server control identity, model, reasoning effort, `approvalPolicy=never`, and read-only
+policy. Missing or mismatched identity, prompt, policy, extra turns, or competing Sessions stop with
+attention and cannot produce review Evidence. This strict path does not change legitimate recovery
+for the original implementation Session.
+
+After every selected run has a distinct reviewer Sandbox, route, immutable checkout, Action set,
+and native binding, read-only review turns may overlap. Any other capability class is serialized.
 
 A terminal JSON finding is retained as `claim` Evidence. A separate `observed` artifact records the
 native Session, turn, outcome, capability, bounded timing, and token/cost fields when the harness
@@ -50,9 +64,12 @@ plus any mandatory deterministic floor, is selected on the repaired Revision. Th
 review loop, and a second material result or a failed Check after that bounded review repair blocks.
 
 Historical Checks and review claims remain inspectable and are marked historical/stale rather than
-deleted. Cleanup refuses to finish while a review AgentRun is unsettled, removes each exact detached
-worktree through its cleanup Action, revokes the route, and deletes the Sandbox. Plans, claims,
-observations, latency, usage availability, yield, adjudication, and cleanup facts remain retained.
+deleted. Cleanup refuses unsafe mutation recovery, but an isolated read-only reviewer run stopped
+with attention can still have its exact resources reclaimed. Cleanup revokes each reviewer route,
+removes its exact checkout, and deletes its metadata-attested reviewer Sandbox through stable scoped
+Actions. Original implementation route/Sandbox cleanup remains separate. Plans, claims,
+observations, latency, usage availability, yield, adjudication, resource ownership, and cleanup
+facts remain retained.
 
 ## Existing-Job dogfood activation
 
@@ -61,7 +78,7 @@ exact-Revision Checks. It verifies the current Check Evidence blobs before chang
 persists the implementation request once, and runs the existing Job synchronously under its Job
 fence. It does not create a Job, branch, Sandbox, or implementation Session.
 
-After rebuilding and applying migrations through 008, use the exact identifiers printed by
+After rebuilding and applying migrations through 009, use the exact identifiers printed by
 `dorf inspect --json JOB_ID`:
 
 ```bash

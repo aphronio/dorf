@@ -2,6 +2,7 @@ package spine
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -264,6 +265,10 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 	if run.State != AgentRunCompleted || run.NativeOutcome != "completed" || run.NativeTurnID == "" || run.SessionID == "" || run.Revision == "" || run.Capability != ReviewReadOnlyCapability || run.Workspace == "" {
 		fail("terminal native binding, exact Revision, or least-capability envelope is incomplete")
 	}
+	inputDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(run.InputContract)))
+	if run.ReviewerSandboxID != ReviewSandboxName(run.ID) || run.ReviewerRouteID == "" || run.ReviewerAppServer == "" || len(run.SubmissionNonce) != 64 || run.InputDigest != inputDigest || run.RevisionTree == "" || run.CheckoutState != "verified" || run.PostReviewState != "verified" || run.ReviewerSandboxState != "created" && run.ReviewerSandboxState != "deleted" || run.ReviewerRouteState != "active" && run.ReviewerRouteState != "revoked" {
+		fail("isolated reviewer Sandbox, route, strict submission, or pre/post Git attestation is incomplete")
+	}
 	recordsByID := make(map[string]Evidence, len(records))
 	for _, record := range records {
 		recordsByID[record.ID] = record
@@ -321,7 +326,13 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 		} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			fail("observed artifact has trailing content")
 		}
-		expected := reviewObservationArtifact{run.ID, run.Revision, run.Role, run.Capability, run.Workspace, run.SessionID, run.NativeTurnID, run.NativeOutcome, run.InputTokens, run.CachedInputTokens, run.OutputTokens, run.CostMicrousd, run.UsageAvailable}
+		expected := reviewObservationArtifact{
+			AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Workspace: run.Workspace,
+			SessionID: run.SessionID, NativeTurnID: run.NativeTurnID, NativeOutcome: run.NativeOutcome, InputTokens: run.InputTokens,
+			CachedInputTokens: run.CachedInputTokens, OutputTokens: run.OutputTokens, CostMicrousd: run.CostMicrousd,
+			UsageAvailable: run.UsageAvailable, ReviewerSandboxID: run.ReviewerSandboxID, ReviewerRouteID: run.ReviewerRouteID,
+			ReviewerAppServer: run.ReviewerAppServer, InputDigest: run.InputDigest, RevisionTree: run.RevisionTree,
+		}
 		if artifact != expected {
 			fail("observed artifact differs from native AgentRun facts")
 		}

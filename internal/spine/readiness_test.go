@@ -1,6 +1,8 @@
 package spine
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,7 +108,9 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	run := ReviewRunView{AgentRun: AgentRun{ID: ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary)), JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/tmp/review", StartedAt: now, FinishedAt: now.Add(time.Second)}, Finding: &ReviewFinding{Material: false, Summary: "clear", Rationale: "no issue", AffectedRoles: []policy.Role{}, AffectedChecks: []string{}}}
+	input := "bounded review input"
+	runID := ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary))
+	run := ReviewRunView{AgentRun: AgentRun{ID: runID, JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: input, StartedAt: now, FinishedAt: now.Add(time.Second), ReviewerSandboxID: ReviewSandboxName(runID), ReviewerRouteID: "route-review", ReviewerAppServer: "app-server-review", SubmissionNonce: strings.Repeat("b", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(input))), RevisionTree: strings.Repeat("c", 40), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", PostReviewState: "verified"}, Finding: &ReviewFinding{Material: false, Summary: "clear", Rationale: "no issue", AffectedRoles: []policy.Role{}, AffectedChecks: []string{}}}
 	outcome := NativeTurn{ID: run.NativeTurnID, Status: "completed", Output: `{"material":false,"summary":"clear","rationale":"no issue","affected_roles":[],"affected_checks":[]}`}
 	claim, observed, err := (Service{Evidence: store}).reviewEvidence(run.AgentRun, outcome, "review-finding")
 	if err != nil {

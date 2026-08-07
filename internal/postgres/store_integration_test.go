@@ -439,8 +439,13 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 					t.Fatalf("selected runs=%#v err=%v", runs, err)
 				}
 				for i, role := range test.roles {
-					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision {
+					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision || runs[i].ReviewerSandboxID != spine.ReviewSandboxName(runs[i].ID) || len(runs[i].ReviewerOwnerNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || len(runs[i].InputDigest) != 64 || runs[i].ReviewerSandboxState != "pending" || runs[i].ReviewerRouteState != "pending" || runs[i].CheckoutState != "pending" {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
+					}
+					for prior := 0; prior < i; prior++ {
+						if runs[prior].ReviewerSandboxID == runs[i].ReviewerSandboxID || runs[prior].ReviewerOwnerNonce == runs[i].ReviewerOwnerNonce || runs[prior].SubmissionNonce == runs[i].SubmissionNonce {
+							t.Fatalf("review Roles share an isolated resource identity: %#v", runs)
+						}
 					}
 				}
 			}
@@ -481,15 +486,7 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 		t.Fatalf("review runs=%#v err=%v", runs, err)
 	}
 	run := runs[0].AgentRun
-	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "completed"); err != nil {
-		t.Fatal(err)
-	}
+	prepareReviewBoundaryIntegration(t, store, run)
 	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
 	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
 	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleCriticalBoundary, Material: true, Summary: "claim", Rationale: "requires adjudication", AffectedRoles: []policy.Role{policy.RoleCriticalBoundary}, AffectedChecks: []string{"check"}}
@@ -510,6 +507,159 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
 	if err != nil || runsErr != nil || ready.WorkflowPhase != "ready" || len(runs) != 1 || runs[0].Finding == nil || !runs[0].Finding.Material || runs[0].Finding.Adjudication != "rejected" || runs[0].Finding.EvidenceID != claim.ID {
 		t.Fatalf("ready=%#v runs=%#v err=%v runsErr=%v", ready, runs, err, runsErr)
+	}
+}
+
+func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "review-resource-cleanup")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	run := runs[0].AgentRun
+	sandbox, err := store.BeginReviewSandbox(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: "foreign-review-sandbox"}); err == nil {
+		t.Fatal("mismatched reviewer Sandbox receipt was accepted")
+	}
+	prepareReviewBoundaryIntegration(t, store, run)
+	workspaceDelete, err := store.BeginReviewWorkspaceCleanup(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, workspaceDelete.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}); err != nil {
+		t.Fatal(err)
+	}
+	routeDelete, err := store.BeginReviewRouteCleanup(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, routeDelete.ID, spine.Receipt{ExternalID: "route-" + run.ID, Outcome: "revoked"}); err != nil {
+		t.Fatal(err)
+	}
+	sandboxDelete, err := store.BeginReviewSandboxCleanup(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, begin := range []func(context.Context, string) (spine.Action, error){store.BeginReviewWorkspaceCleanup, store.BeginReviewRouteCleanup, store.BeginReviewSandboxCleanup} {
+		action, err := begin(ctx, run.ID)
+		if err != nil || action.State != spine.ActionSucceeded {
+			t.Fatalf("cleanup retry action=%#v err=%v", action, err)
+		}
+	}
+	settled, err := store.ReviewRun(ctx, run.ID)
+	if err != nil || settled.ReviewerRouteState != "revoked" || settled.ReviewerSandboxState != "deleted" || settled.PostReviewState != "verified" {
+		t.Fatalf("settled review resource=%#v err=%v", settled, err)
+	}
+}
+
+func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "review-interrupt-cleanup")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	runID := runs[0].ID
+	if err := store.UncertainAgentRun(ctx, runID, "strict identity mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := store.InterruptReviewRun(ctx, runID, "admission closed; exact isolated reviewer resources are being reclaimed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settled, err := store.ReviewRun(ctx, runID)
+	if err != nil || settled.State != spine.AgentRunInterrupted || settled.ClaimEvidenceID != "" || settled.ObservedEvidenceID != "" || !strings.Contains(settled.Attention, "resources are being reclaimed") {
+		t.Fatalf("interrupted isolated reviewer=%#v err=%v", settled, err)
+	}
+}
+
+func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run spine.AgentRun) {
+	t.Helper()
+	ctx := context.Background()
+	sandbox, err := store.BeginReviewSandbox(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sandbox.State != spine.ActionSucceeded {
+		if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: run.Revision}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tree := strings.Repeat("d", 40)
+	workspace, err := store.BeginReviewWorkspace(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.State != spine.ActionSucceeded {
+		if err := store.CompleteAction(ctx, workspace.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route, err := store.BeginReviewRoute(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.State != spine.ActionSucceeded {
+		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: "route-" + run.ID, Outcome: run.ReviewerSandboxID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session, err := store.BeginReviewSession(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.State != spine.ActionSucceeded {
+		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: "app-server-" + run.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPostState(ctx, run.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+		t.Fatal(err)
 	}
 }
 

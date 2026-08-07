@@ -67,28 +67,153 @@ func (e Externals) RepositoryHasChanges(ctx context.Context, job spine.Job) (boo
 }
 
 func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	if run.ReviewerSandboxID == "" {
+		return e.legacyReviewWorkspaceCreate(ctx, job, run)
+	}
+	if run.Revision != job.Revision || run.Workspace != e.Sandbox.Config.Workspace {
+		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
+	}
+	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
+		return spine.Receipt{}, err
+	}
+	sourceScript := `set -eu
+main=$1; workspace=$2; revision=$3
+	test "$(git -C "$main" rev-parse HEAD)" = "$revision"
+	test -z "$(git -C "$main" status --porcelain=v1 --untracked-files=all)"
+	git -C "$main" cat-file -e "$revision^{commit}"
+	git -C "$main" bundle create - HEAD`
+	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", e.Sandbox.Config.Workspace, run.Workspace, run.Revision)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if bundle.ExitCode != 0 || bundle.Stdout == "" {
+		return spine.Receipt{}, fmt.Errorf("export admitted Git objects for review: %s", strings.TrimSpace(bundle.Stderr))
+	}
+	targetScript := `set -eu
+workspace=$1; revision=$2; bundle=/tmp/dorf-review.bundle
+umask 077
+cat > "$bundle"
+if test ! -e "$workspace/.git"; then
+  mkdir -p "$(dirname "$workspace")"
+  git clone --no-checkout "$bundle" "$workspace" >/dev/null
+  git -C "$workspace" remote remove origin
+fi
+git -C "$workspace" bundle verify "$bundle" >/dev/null
+git -C "$workspace" checkout --detach "$revision" >/dev/null
+git -C "$workspace" for-each-ref --format='delete %(refname)' | git -C "$workspace" update-ref --stdin
+git -C "$workspace" reflog expire --expire=now --all
+git -C "$workspace" gc --prune=now
+test -z "$(git -C "$workspace" fsck --strict --unreachable)"
+head=$(git -C "$workspace" rev-parse HEAD)
+tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
+test "$head" = "$revision"
+test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
+rm -f -- "$bundle"
+printf '%s %s clean\n' "$head" "$tree"`
+	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", run.Workspace, run.Revision)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if result.ExitCode != 0 {
+		return spine.Receipt{}, fmt.Errorf("materialize exact review checkout: %s", strings.TrimSpace(result.Stderr))
+	}
+	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
+}
+
+func (e Externals) legacyReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.Receipt, error) {
 	if run.Revision != job.Revision || !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
 		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
 	}
 	script := `set -eu
 main=$1; workspace=$2; revision=$3
 mkdir -p "$(dirname "$workspace")"
-if test ! -e "$workspace/.git"; then
-  git -C "$main" worktree add --detach "$workspace" "$revision"
-fi
+if test ! -e "$workspace/.git"; then git -C "$main" worktree add --detach "$workspace" "$revision"; fi
 test "$(git -C "$workspace" rev-parse HEAD)" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"`
 	result, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", script, "dorf-review-workspace", e.Sandbox.Config.Workspace, run.Workspace, run.Revision)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	if result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("prepare exact review workspace: %s", strings.TrimSpace(result.Stderr))
+	if err != nil || result.ExitCode != 0 {
+		return spine.Receipt{}, fmt.Errorf("prepare exact legacy review workspace: %s", strings.TrimSpace(result.Stderr))
 	}
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision}, nil
 }
 
+func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	if run.ReviewerSandboxID != spine.ReviewSandboxName(run.ID) || run.ReviewerSandboxID == e.Sandbox.Name(job.ID) {
+		return spine.Receipt{}, fmt.Errorf("reviewer Sandbox identity is not isolated from the implementation Sandbox")
+	}
+	id, err := e.Sandbox.ReconcileReviewCreate(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
+	return spine.Receipt{ExternalID: id, Outcome: run.Revision}, err
+}
+
+func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spine.AgentRun, action spine.Action) (spine.Receipt, error) {
+	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
+		return spine.Receipt{}, err
+	}
+	baseURL, err := e.Gateway.BaseURL()
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	bridgeIPv4, err := e.Sandbox.BridgeIPv4(ctx)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
+		return spine.Receipt{}, err
+	}
+	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "review:"+run.ID, action.ID)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if err := e.Sandbox.InstallRoute(ctx, run.ReviewerSandboxID, route.BaseURL, route.APIKey); err != nil {
+		return spine.Receipt{}, err
+	}
+	return spine.Receipt{ExternalID: route.ID, Outcome: run.ReviewerSandboxID}, nil
+}
+
+func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.Receipt, error) {
+	if run.ReviewerSandboxID == "" {
+		return spine.Receipt{}, fmt.Errorf("legacy implementation-Sandbox review cannot produce isolated post-turn attestation")
+	}
+	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
+		return spine.Receipt{}, err
+	}
+	script := `set -eu
+workspace=$1; revision=$2
+head=$(git -C "$workspace" rev-parse HEAD)
+tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
+test "$head" = "$revision"
+test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
+printf '%s %s clean\n' "$head" "$tree"`
+	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-verify", run.Workspace, run.Revision)
+	if err != nil || result.ExitCode != 0 {
+		return spine.Receipt{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
+	}
+	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
+}
+
 func (e Externals) ReviewWorkspaceDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	if run.ReviewerSandboxID != "" {
+		present, err := e.Sandbox.ReviewPresent(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
+		if err != nil {
+			return spine.Receipt{}, err
+		}
+		if !present {
+			return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
+		}
+		if run.Workspace != e.Sandbox.Config.Workspace {
+			return spine.Receipt{}, fmt.Errorf("refusing reviewer workspace cleanup outside the exact path")
+		}
+		script := `set -eu
+workspace=$1
+test "$workspace" = /workspace/job
+rm -rf -- "$workspace"
+test ! -e "$workspace"`
+		result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-cleanup", run.Workspace)
+		if err != nil || result.ExitCode != 0 {
+			return spine.Receipt{}, fmt.Errorf("remove exact reviewer workspace: %s", strings.TrimSpace(result.Stderr))
+		}
+		return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
+	}
 	if !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
 		return spine.Receipt{}, fmt.Errorf("refusing review workspace cleanup outside the bounded root")
 	}
@@ -107,16 +232,42 @@ test ! -e "$workspace"`
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.AgentRun) (string, spine.NativeTurn, error) {
-	return e.Agent.StartReviewInitialTurn(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.ID, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	present, err := e.Sandbox.ReviewPresent(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	id, err := e.Gateway.Revoke(ctx, "review:"+run.ID)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if present {
+		if err := e.Sandbox.RemoveRoute(ctx, run.ReviewerSandboxID); err != nil {
+			return spine.Receipt{}, err
+		}
+	}
+	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.AgentRun) ([]spine.NativeTurn, error) {
-	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.SessionID)
+func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	err := e.Sandbox.DeleteReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
+	return spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}, err
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.AgentRun, turnID string) (spine.NativeTurn, error) {
-	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.SessionID, turnID)
+func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeBinding, error) {
+	return e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+}
+
+func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeHistory, error) {
+	return e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, run.Workspace, run.SessionID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+}
+
+func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.AgentRun, turnID string) (spine.ReviewNativeBinding, error) {
+	return e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, run.SessionID, turnID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+}
+
+func reviewMetadata(job spine.Job, run spine.AgentRun) incus.ReviewMetadata {
+	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.Revision, OwnershipNonce: run.ReviewerOwnerNonce}
 }
 
 func reviewEffort(role, implementationEffort string) string {

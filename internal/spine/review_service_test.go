@@ -2,6 +2,7 @@ package spine
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"
@@ -15,14 +16,14 @@ import (
 func TestReviewConcurrencyRequiresDistinctImmutableReadOnlyInputs(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	independent := []AgentRun{
-		{ID: "run-a", Revision: revision, Capability: ReviewReadOnlyCapability, Workspace: "/tmp/review-a"},
-		{ID: "run-b", Revision: revision, Capability: ReviewReadOnlyCapability, Workspace: "/tmp/review-b"},
+		{ID: "run-a", Revision: revision, Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", ReviewerSandboxID: "review-a", ReviewerRouteID: "route-a", ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"},
+		{ID: "run-b", Revision: revision, Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", ReviewerSandboxID: "review-b", ReviewerRouteID: "route-b", ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"},
 	}
 	if err := validateIndependentReviewBatch(independent); err != nil {
 		t.Fatal(err)
 	}
 	shared := append([]AgentRun(nil), independent...)
-	shared[1].Workspace = shared[0].Workspace
+	shared[1].ReviewerSandboxID = shared[0].ReviewerSandboxID
 	if err := validateIndependentReviewBatch(shared); err == nil {
 		t.Fatal("shared mutable workspace was considered independent")
 	}
@@ -186,6 +187,12 @@ func (s *reviewDecisionStore) ReviewRuns(context.Context, string, string) ([]Rev
 func (s *reviewDecisionStore) AllReviewRuns(context.Context, string) ([]ReviewRunView, error) {
 	return append([]ReviewRunView(nil), s.reviewRuns...), nil
 }
+func (s *reviewDecisionStore) BeginReviewSandbox(context.Context, string) (Action, error) {
+	return Action{}, fmt.Errorf("unexpected review Sandbox")
+}
+func (s *reviewDecisionStore) BeginReviewRoute(context.Context, string) (Action, error) {
+	return Action{}, fmt.Errorf("unexpected review route")
+}
 func (s *reviewDecisionStore) BeginReviewWorkspace(context.Context, string) (Action, error) {
 	return Action{}, fmt.Errorf("unexpected review workspace")
 }
@@ -210,35 +217,120 @@ func (s *reviewDecisionStore) MarkReviewReady(context.Context, string, string) e
 	return nil
 }
 func (s *reviewDecisionStore) BeginReviewWorkspaceCleanup(context.Context, string) (Action, error) {
-	return Action{}, nil
+	return s.reviewCleanupAction(ActionReviewWorkspaceDelete), nil
+}
+func (s *reviewDecisionStore) BeginReviewRouteCleanup(context.Context, string) (Action, error) {
+	return s.reviewCleanupAction(ActionRouteRevoke), nil
+}
+func (s *reviewDecisionStore) BeginReviewSandboxCleanup(context.Context, string) (Action, error) {
+	return s.reviewCleanupAction(ActionSandboxDelete), nil
+}
+func (s *reviewDecisionStore) InterruptReviewRun(_ context.Context, runID, reason string) error {
+	for i := range s.reviewRuns {
+		if s.reviewRuns[i].ID == runID {
+			s.reviewRuns[i].State = AgentRunInterrupted
+			s.reviewRuns[i].Attention = reason
+		}
+	}
+	return nil
+}
+func (s *reviewDecisionStore) RecordReviewPostState(context.Context, string, Receipt) error {
+	return nil
 }
 func (s *reviewDecisionStore) ReviewRepairTargets(context.Context, string) ([]policy.Role, error) {
 	return append([]policy.Role(nil), s.repairTargets...), nil
 }
 func (s *reviewDecisionStore) RejectReviewFinding(context.Context, string, string) error { return nil }
 
+func (s *reviewDecisionStore) reviewCleanupAction(kind ActionKind) Action {
+	for _, action := range s.actions {
+		if action.Kind == kind && action.Scope != "" {
+			return action
+		}
+	}
+	return Action{}
+}
+
 type reviewDispatchExternals struct {
 	*fakeExternals
-	facts policy.ChangeFacts
+	facts          policy.ChangeFacts
+	cleanupEffects []ActionKind
 }
 
 func (e *reviewDispatchExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
 	return e.facts, nil
 }
+func (e *reviewDispatchExternals) ReviewSandboxCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, nil
+}
+func (e *reviewDispatchExternals) ReviewRouteCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, nil
+}
 func (e *reviewDispatchExternals) ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
 	return Receipt{}, nil
 }
 func (e *reviewDispatchExternals) ReviewWorkspaceDelete(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	e.cleanupEffects = append(e.cleanupEffects, ActionReviewWorkspaceDelete)
 	return Receipt{}, nil
 }
-func (e *reviewDispatchExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (string, NativeTurn, error) {
-	return "", NativeTurn{}, nil
+func (e *reviewDispatchExternals) ReviewWorkspaceVerify(context.Context, Job, AgentRun) (Receipt, error) {
+	return Receipt{}, nil
 }
-func (e *reviewDispatchExternals) ReviewTurns(context.Context, Job, AgentRun) ([]NativeTurn, error) {
-	return nil, nil
+func (e *reviewDispatchExternals) ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	e.cleanupEffects = append(e.cleanupEffects, ActionRouteRevoke)
+	return Receipt{}, nil
 }
-func (e *reviewDispatchExternals) ReviewWait(context.Context, Job, AgentRun, string) (NativeTurn, error) {
-	return NativeTurn{}, nil
+func (e *reviewDispatchExternals) ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	e.cleanupEffects = append(e.cleanupEffects, ActionSandboxDelete)
+	return Receipt{}, nil
+}
+
+func TestUncertainReviewerResourceCleanupIsOrderedRecordedAndRetrySafe(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	job.AdmissionOpen = false
+	job.CleanupState = CleanupScheduled
+	base.jobs[job.ID] = job
+	runID := ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary))
+	run := AgentRun{ID: runID, JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunUncertain, Attention: "strict native identity mismatch", Workspace: "/workspace/job", ReviewerSandboxID: ReviewSandboxName(runID), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"}
+	store := newReviewDecisionStore(base)
+	store.reviewRuns = []ReviewRunView{{AgentRun: run, WorkspaceState: "created"}}
+	for _, kind := range []ActionKind{ActionReviewWorkspaceDelete, ActionRouteRevoke, ActionSandboxDelete} {
+		id := ScopedActionID(job.ID, kind, runID)
+		base.actions[id] = Action{ID: id, JobID: job.ID, Kind: kind, Scope: runID, State: ActionPending}
+	}
+	externals := &reviewDispatchExternals{fakeExternals: newFakeExternals()}
+	service := Service{Store: store, Externals: externals}
+	if err := service.Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantReview := []ActionKind{ActionRouteRevoke, ActionReviewWorkspaceDelete, ActionSandboxDelete}
+	if !reflect.DeepEqual(externals.cleanupEffects, wantReview) {
+		t.Fatalf("review cleanup effects=%v want=%v", externals.cleanupEffects, wantReview)
+	}
+	if wantGlobal := []ActionKind{ActionRouteRevoke, ActionSandboxDelete}; !reflect.DeepEqual(externals.effects, wantGlobal) {
+		t.Fatalf("implementation cleanup effects=%v want=%v", externals.effects, wantGlobal)
+	}
+	for _, kind := range wantReview {
+		if action := store.reviewCleanupAction(kind); action.State != ActionSucceeded {
+			t.Fatalf("review cleanup Action %s=%#v", kind, action)
+		}
+	}
+	if got := store.reviewRuns[0]; got.State != AgentRunInterrupted || !strings.Contains(got.Attention, "resources are being reclaimed") {
+		t.Fatalf("cleanup did not durably settle isolated reviewer run: %#v", got.AgentRun)
+	}
+}
+func (e *reviewDispatchExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
+	return ReviewNativeBinding{}, nil
+}
+func (e *reviewDispatchExternals) ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error) {
+	return ReviewNativeHistory{}, nil
+}
+func (e *reviewDispatchExternals) ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error) {
+	return ReviewNativeBinding{}, nil
 }
 
 func TestReviewLostResponseReusesDistinctNativeSessionAndTurn(t *testing.T) {
@@ -246,14 +338,17 @@ func TestReviewLostResponseReusesDistinctNativeSessionAndTurn(t *testing.T) {
 	job := testJob()
 	job.SessionID = "implementation-session"
 	base.jobs[job.ID] = job
-	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/tmp/dorf/review-workspaces/run", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending}
+	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
+	run.ReviewerSandboxID = ReviewSandboxName(run.ID)
 	run.ActionID = ScopedActionID(job.ID, ActionTurnStart, run.ID)
+	sandboxAction := Action{ID: ScopedActionID(job.ID, ActionSandboxCreate, run.ID), JobID: job.ID, Kind: ActionSandboxCreate, Scope: run.ID, State: ActionSucceeded}
+	routeAction := Action{ID: ScopedActionID(job.ID, ActionRouteCreate, run.ID), JobID: job.ID, Kind: ActionRouteCreate, Scope: run.ID, State: ActionSucceeded}
 	workspaceAction := Action{ID: ScopedActionID(job.ID, ActionReviewWorkspaceCreate, run.ID), JobID: job.ID, Kind: ActionReviewWorkspaceCreate, Scope: run.ID, State: ActionSucceeded}
 	sessionAction := Action{ID: ScopedActionID(job.ID, ActionSessionStart, run.ID), JobID: job.ID, Kind: ActionSessionStart, Scope: run.ID, State: ActionPending}
 	base.runs[run.ID] = run
 	base.actions[run.ActionID] = Action{ID: run.ActionID, JobID: job.ID, Kind: ActionTurnStart, Scope: run.ID, State: ActionPending}
-	base.actions[workspaceAction.ID], base.actions[sessionAction.ID] = workspaceAction, sessionAction
-	store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, workspaceActionID: workspaceAction.ID, sessionActionID: sessionAction.ID}
+	base.actions[sandboxAction.ID], base.actions[routeAction.ID], base.actions[workspaceAction.ID], base.actions[sessionAction.ID] = sandboxAction, routeAction, workspaceAction, sessionAction
+	store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, sandboxActionID: sandboxAction.ID, routeActionID: routeAction.ID, workspaceActionID: workspaceAction.ID, sessionActionID: sessionAction.ID}
 	externals := &reviewRecoveryExternals{}
 	service := Service{Store: store, Barrier: &failBarrier{point: BarrierAfterSubmitBeforeBind}}
 	if _, err := service.executeReviewRun(context.Background(), job, run, externals, store); !errors.Is(err, errBarrier) {
@@ -274,9 +369,46 @@ func TestReviewLostResponseReusesDistinctNativeSessionAndTurn(t *testing.T) {
 	}
 }
 
+type reviewAttentionTestError string
+
+func (e reviewAttentionTestError) Error() string         { return string(e) }
+func (e reviewAttentionTestError) AttentionNeeded() bool { return true }
+
+func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) {
+	for _, reason := range []string{"missing client message identity", "wrong prompt", "extra turn", "competing Session", "mismatched read-only policy", "mismatched reviewer-Sandbox metadata"} {
+		t.Run(reason, func(t *testing.T) {
+			base := newMemoryStore()
+			job := testJob()
+			base.jobs[job.ID] = job
+			run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
+			run.ReviewerSandboxID = ReviewSandboxName(run.ID)
+			run.ActionID = ScopedActionID(job.ID, ActionTurnStart, run.ID)
+			actions := map[ActionKind]Action{
+				ActionSandboxCreate:         {ID: ScopedActionID(job.ID, ActionSandboxCreate, run.ID), JobID: job.ID, Kind: ActionSandboxCreate, Scope: run.ID, State: ActionSucceeded},
+				ActionRouteCreate:           {ID: ScopedActionID(job.ID, ActionRouteCreate, run.ID), JobID: job.ID, Kind: ActionRouteCreate, Scope: run.ID, State: ActionSucceeded},
+				ActionReviewWorkspaceCreate: {ID: ScopedActionID(job.ID, ActionReviewWorkspaceCreate, run.ID), JobID: job.ID, Kind: ActionReviewWorkspaceCreate, Scope: run.ID, State: ActionSucceeded},
+				ActionSessionStart:          {ID: ScopedActionID(job.ID, ActionSessionStart, run.ID), JobID: job.ID, Kind: ActionSessionStart, Scope: run.ID, State: ActionPending},
+				ActionTurnStart:             {ID: run.ActionID, JobID: job.ID, Kind: ActionTurnStart, Scope: run.ID, State: ActionPending},
+			}
+			base.runs[run.ID] = run
+			for _, action := range actions {
+				base.actions[action.ID] = action
+			}
+			store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, sandboxActionID: actions[ActionSandboxCreate].ID, routeActionID: actions[ActionRouteCreate].ID, workspaceActionID: actions[ActionReviewWorkspaceCreate].ID, sessionActionID: actions[ActionSessionStart].ID}
+			externals := &reviewRecoveryExternals{initialErr: reviewAttentionTestError(reason)}
+			_, err := (Service{Store: store}).executeAndRecordReview(context.Background(), job, run, store, externals)
+			settled := store.runs[run.ID]
+			if err == nil || settled.State != AgentRunUncertain || !strings.Contains(settled.Attention, reason) || store.recordedResults != 0 || settled.ClaimEvidenceID != "" || settled.ObservedEvidenceID != "" {
+				t.Fatalf("error=%v run=%#v recorded=%d", err, settled, store.recordedResults)
+			}
+		})
+	}
+}
+
 type reviewRecoveryStore struct {
 	*memoryStore
-	runID, workspaceActionID, sessionActionID string
+	runID, sandboxActionID, routeActionID, workspaceActionID, sessionActionID string
+	recordedResults                                                           int
 }
 
 func (s *reviewRecoveryStore) CompleteAction(_ context.Context, id string, receipt Receipt) error {
@@ -288,6 +420,7 @@ func (s *reviewRecoveryStore) CompleteAction(_ context.Context, id string, recei
 	if id == s.sessionActionID {
 		run := s.runs[s.runID]
 		run.SessionID = receipt.ExternalID
+		run.ReviewerAppServer = receipt.Outcome
 		s.runs[s.runID] = run
 	}
 	return nil
@@ -309,6 +442,12 @@ func (s *reviewRecoveryStore) ReviewRuns(context.Context, string, string) ([]Rev
 func (s *reviewRecoveryStore) AllReviewRuns(context.Context, string) ([]ReviewRunView, error) {
 	return nil, nil
 }
+func (s *reviewRecoveryStore) BeginReviewSandbox(_ context.Context, _ string) (Action, error) {
+	return s.actions[s.sandboxActionID], nil
+}
+func (s *reviewRecoveryStore) BeginReviewRoute(_ context.Context, _ string) (Action, error) {
+	return s.actions[s.routeActionID], nil
+}
 func (s *reviewRecoveryStore) BeginReviewWorkspace(_ context.Context, _ string) (Action, error) {
 	return s.actions[s.workspaceActionID], nil
 }
@@ -319,6 +458,7 @@ func (s *reviewRecoveryStore) ReviewRun(_ context.Context, _ string) (AgentRun, 
 	return s.runs[s.runID], nil
 }
 func (s *reviewRecoveryStore) RecordReviewResult(context.Context, string, NativeTurn, Evidence, Evidence, ReviewFinding) error {
+	s.recordedResults++
 	return nil
 }
 func (s *reviewRecoveryStore) RecordTriageResult(context.Context, string, NativeTurn, Evidence, Evidence, policy.ReviewPlan, string) error {
@@ -331,6 +471,16 @@ func (s *reviewRecoveryStore) MarkReviewReady(context.Context, string, string) e
 func (s *reviewRecoveryStore) BeginReviewWorkspaceCleanup(context.Context, string) (Action, error) {
 	return Action{}, nil
 }
+func (s *reviewRecoveryStore) BeginReviewRouteCleanup(context.Context, string) (Action, error) {
+	return Action{}, nil
+}
+func (s *reviewRecoveryStore) BeginReviewSandboxCleanup(context.Context, string) (Action, error) {
+	return Action{}, nil
+}
+func (s *reviewRecoveryStore) InterruptReviewRun(context.Context, string, string) error { return nil }
+func (s *reviewRecoveryStore) RecordReviewPostState(context.Context, string, Receipt) error {
+	return nil
+}
 func (s *reviewRecoveryStore) ReviewRepairTargets(context.Context, string) ([]policy.Role, error) {
 	return nil, nil
 }
@@ -340,10 +490,17 @@ type reviewRecoveryExternals struct {
 	mu          sync.Mutex
 	submissions int
 	turn        NativeTurn
+	initialErr  error
 }
 
 func (e *reviewRecoveryExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
 	return policy.ChangeFacts{}, nil
+}
+func (e *reviewRecoveryExternals) ReviewSandboxCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, errors.New("Sandbox should already be ready")
+}
+func (e *reviewRecoveryExternals) ReviewRouteCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, errors.New("route should already be ready")
 }
 func (e *reviewRecoveryExternals) ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
 	return Receipt{}, errors.New("workspace should already be ready")
@@ -351,24 +508,36 @@ func (e *reviewRecoveryExternals) ReviewWorkspaceCreate(context.Context, Job, Ag
 func (e *reviewRecoveryExternals) ReviewWorkspaceDelete(context.Context, Job, AgentRun, Action) (Receipt, error) {
 	return Receipt{}, nil
 }
-func (e *reviewRecoveryExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (string, NativeTurn, error) {
+func (e *reviewRecoveryExternals) ReviewWorkspaceVerify(context.Context, Job, AgentRun) (Receipt, error) {
+	return Receipt{ExternalID: "/workspace/job", Outcome: strings.Repeat("a", 40) + " " + strings.Repeat("b", 40) + " clean"}, nil
+}
+func (e *reviewRecoveryExternals) ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, nil
+}
+func (e *reviewRecoveryExternals) ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error) {
+	return Receipt{}, nil
+}
+func (e *reviewRecoveryExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.initialErr != nil {
+		return ReviewNativeBinding{}, e.initialErr
+	}
 	if e.turn.ID == "" {
 		e.submissions++
 		e.turn = NativeTurn{ID: "review-turn", Status: "running"}
 	}
-	return "review-session", e.turn, nil
+	return ReviewNativeBinding{AppServerID: "review-app-server", SessionID: "review-session", Turn: e.turn}, nil
 }
-func (e *reviewRecoveryExternals) ReviewTurns(context.Context, Job, AgentRun) ([]NativeTurn, error) {
+func (e *reviewRecoveryExternals) ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return []NativeTurn{e.turn}, nil
+	return ReviewNativeHistory{AppServerID: "review-app-server", SessionID: "review-session", Turns: []NativeTurn{e.turn}}, nil
 }
-func (e *reviewRecoveryExternals) ReviewWait(context.Context, Job, AgentRun, string) (NativeTurn, error) {
+func (e *reviewRecoveryExternals) ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.turn.Status = "completed"
 	e.turn.Output = `{"material":false,"summary":"clear","rationale":"clear","affected_roles":[],"affected_checks":[]}`
-	return e.turn, nil
+	return ReviewNativeBinding{AppServerID: "review-app-server", SessionID: "review-session", Turn: e.turn}, nil
 }

@@ -107,7 +107,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_review_activation.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_review_activation.sql", "009_review_sandbox_boundary.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -974,13 +974,35 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 	}
 	switch kind {
 	case spine.ActionSandboxCreate:
+		if scope != "" {
+			var expected, revision string
+			if err = tx.QueryRowContext(ctx, `select sandbox_name,revision from dorf.review_resources where run_id=$1 and sandbox_create_action_id=$2`, scope, id).Scan(&expected, &revision); err == nil && (receipt.ExternalID != expected || receipt.Outcome != revision) {
+				err = fmt.Errorf("review Sandbox receipt conflicts with its host-owned identity")
+			}
+			if err == nil {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set sandbox_state='created' where run_id=$1 and sandbox_state in ('pending','created')`, scope))
+			}
+			break
+		}
 		_, err = tx.ExecContext(ctx, `insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'created') on conflict(job_id) do update set incus_name=excluded.incus_name,state='created',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
 	case spine.ActionRouteCreate:
+		if scope != "" {
+			var expectedSandbox string
+			if err = tx.QueryRowContext(ctx, `select sandbox_name from dorf.review_resources where run_id=$1 and route_create_action_id=$2`, scope, id).Scan(&expectedSandbox); err != nil {
+				break
+			}
+			if strings.TrimSpace(receipt.ExternalID) == "" || receipt.Outcome != expectedSandbox {
+				err = fmt.Errorf("review provider route receipt is empty")
+			} else {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set route_id=coalesce(route_id,$2),route_state='active' where run_id=$1 and sandbox_state='created' and route_state in ('pending','active') and (route_id is null or route_id=$2)`, scope, receipt.ExternalID))
+			}
+			break
+		}
 		_, err = tx.ExecContext(ctx, `insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'active') on conflict(job_id) do update set route_id=excluded.route_id,state='active',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
 	case spine.ActionSessionStart:
 		if scope != "" {
-			if strings.TrimSpace(receipt.ExternalID) == "" {
-				err = fmt.Errorf("review Session receipt is empty")
+			if strings.TrimSpace(receipt.ExternalID) == "" || strings.TrimSpace(receipt.Outcome) == "" {
+				err = fmt.Errorf("review app-server or Session receipt is empty")
 				break
 			}
 			var inherited bool
@@ -990,7 +1012,9 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			if err != nil {
 				break
 			}
-			err = expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where id=$1 and (session_id is null or session_id=$2)`, scope, receipt.ExternalID))
+			if err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set app_server_id=coalesce(app_server_id,$2) where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and (app_server_id is null or app_server_id=$2)`, scope, receipt.Outcome)); err == nil {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where id=$1 and (session_id is null or session_id=$2)`, scope, receipt.ExternalID))
+			}
 			break
 		}
 		var result sql.Result
@@ -1006,13 +1030,53 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			_, err = tx.ExecContext(ctx, `update dorf.agent_runs set session_id=$2,updated_at=clock_timestamp() where job_id=$1 and role in ('implement','repair') and (session_id is null or session_id=$2)`, jobID, receipt.ExternalID)
 		}
 	case spine.ActionRouteRevoke:
+		if scope != "" {
+			var routeID sql.NullString
+			if err = tx.QueryRowContext(ctx, `select route_id from dorf.review_resources where run_id=$1 and route_revoke_action_id=$2`, scope, id).Scan(&routeID); err == nil && receipt.Outcome != "revoked" {
+				err = fmt.Errorf("review route cleanup receipt is invalid")
+			}
+			if err == nil && receipt.ExternalID != "absent" && (!routeID.Valid || receipt.ExternalID != routeID.String) {
+				err = fmt.Errorf("review route cleanup receipt conflicts with its exact route")
+			}
+			if err == nil {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set route_state='revoked',route_revoked_at=coalesce(route_revoked_at,clock_timestamp()) where run_id=$1 and route_state in ('pending','active','revoked')`, scope))
+			}
+			break
+		}
 		_, err = tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1`, jobID)
 	case spine.ActionSandboxDelete:
+		if scope != "" {
+			var expected string
+			if err = tx.QueryRowContext(ctx, `select sandbox_name from dorf.review_resources where run_id=$1 and sandbox_delete_action_id=$2`, scope, id).Scan(&expected); err == nil && (receipt.ExternalID != expected || receipt.Outcome != "deleted") {
+				err = fmt.Errorf("review Sandbox cleanup receipt conflicts with its host-owned identity")
+			}
+			if err == nil {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set sandbox_state='deleted',sandbox_deleted_at=coalesce(sandbox_deleted_at,clock_timestamp()) where run_id=$1 and route_state='revoked' and sandbox_state in ('pending','created','deleted')`, scope))
+			}
+			break
+		}
 		_, err = tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1`, jobID)
 	case spine.ActionReviewWorkspaceCreate:
 		var path, revision string
-		if err = tx.QueryRowContext(ctx, `select path,revision from dorf.review_workspaces where create_action_id=$1`, id).Scan(&path, &revision); err == nil && (receipt.ExternalID != path || receipt.Outcome != revision) {
-			err = fmt.Errorf("review workspace receipt conflicts with its exact path or Revision")
+		if err = tx.QueryRowContext(ctx, `select path,revision from dorf.review_workspaces where create_action_id=$1`, id).Scan(&path, &revision); err == nil && receipt.ExternalID != path {
+			err = fmt.Errorf("review workspace receipt conflicts with its exact path")
+		}
+		var isolated bool
+		if err == nil {
+			err = tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1)`, scope).Scan(&isolated)
+		}
+		if err == nil && isolated {
+			var tree string
+			var observedRevision string
+			observedRevision, tree, err = parseReviewStateOutcome(receipt.Outcome)
+			if err == nil && observedRevision != revision {
+				err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
+			}
+			if err == nil {
+				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set checkout_state='verified',revision_tree=coalesce(revision_tree,$2),checkout_verified_at=coalesce(checkout_verified_at,clock_timestamp()) where run_id=$1 and sandbox_state='created' and checkout_state in ('pending','verified') and (revision_tree is null or revision_tree=$2)`, scope, tree))
+			}
+		} else if err == nil && receipt.Outcome != revision {
+			err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `update dorf.review_workspaces set state='created',created_at=coalesce(created_at,clock_timestamp()) where create_action_id=$1`, id)
