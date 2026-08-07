@@ -430,9 +430,46 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 	return views, rows.Err()
 }
 
-// AllReviewRuns is the cleanup authority: it returns only AgentRuns with a
-// persisted reviewer resource row, including rows whose lifecycle is partial.
 func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
+	var currentRevision string
+	if err := s.DB.QueryRowContext(ctx, `select revision from dorf.jobs where id=$1`, jobID).Scan(&currentRevision); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `select distinct revision from dorf.agent_runs where job_id=$1 and revision is not null order by revision`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	var revisions []string
+	for rows.Next() {
+		var revision string
+		if err := rows.Scan(&revision); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		revisions = append(revisions, revision)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var result []spine.ReviewRunView
+	for _, revision := range revisions {
+		runs, err := s.ReviewRuns(ctx, jobID, revision)
+		if err != nil {
+			return nil, err
+		}
+		for i := range runs {
+			if runs[i].Revision != currentRevision {
+				runs[i].Stale = true
+			}
+		}
+		result = append(result, runs...)
+	}
+	return result, nil
+}
+
+// CleanupReviewRuns returns only AgentRuns backed by persisted reviewer
+// resources, including partial rows that cleanup must validate or reject.
+func (s Store) CleanupReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
 	rows, err := s.DB.QueryContext(ctx, reviewRunSelect+` where rr.job_id=$1 order by rr.revision,ar.role`, jobID)
 	if err != nil {
 		return nil, err

@@ -612,8 +612,21 @@ func TestCleanupReviewEnumerationUsesPersistedResourcesAndRetainsHistoricalEvide
 	if _, err := db.ExecContext(ctx, `update dorf.agent_runs set claim_evidence_id=$2 where id=$1`, historicalRunID, historicalEvidence.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.review_findings(run_id,job_id,revision,role,material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication,stale) values($1,$2,$3,$4,true,'historical claim','retained rejected finding','["browser-ui"]'::jsonb,'[]'::jsonb,$5,'rejected',true)`, historicalRunID, job.ID, historicalRevision, policy.RoleBrowserUI, historicalEvidence.ID); err != nil {
+		t.Fatal(err)
+	}
 
-	cleanupRuns, err := store.AllReviewRuns(ctx, job.ID)
+	allRuns, err := store.AllReviewRuns(ctx, job.ID)
+	historicalIndex := slices.IndexFunc(allRuns, func(run spine.ReviewRunView) bool { return run.ID == historicalRunID })
+	if err != nil || len(allRuns) != 2 || historicalIndex < 0 {
+		t.Fatalf("aggregate review runs=%#v err=%v", allRuns, err)
+	}
+	historicalView := allRuns[historicalIndex]
+	if !historicalView.Stale || historicalView.Finding == nil || historicalView.Finding.EvidenceID != historicalEvidence.ID || historicalView.Finding.Adjudication != "rejected" || !historicalView.Finding.Stale {
+		t.Fatalf("historical aggregate hydration=%#v", historicalView)
+	}
+
+	cleanupRuns, err := store.CleanupReviewRuns(ctx, job.ID)
 	if err != nil || len(cleanupRuns) != 1 || cleanupRuns[0].ID != recorded[0].ID || cleanupRuns[0].ReviewerSandboxID == "" || cleanupRuns[0].ReviewerSandboxState != "pending" || cleanupRuns[0].ReviewerRouteState != "pending" {
 		t.Fatalf("cleanup resource authority runs=%#v err=%v", cleanupRuns, err)
 	}

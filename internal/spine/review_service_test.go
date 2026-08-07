@@ -230,6 +230,9 @@ func (s *reviewDecisionStore) ReviewRuns(context.Context, string, string) ([]Rev
 func (s *reviewDecisionStore) AllReviewRuns(context.Context, string) ([]ReviewRunView, error) {
 	return append([]ReviewRunView(nil), s.reviewRuns...), nil
 }
+func (s *reviewDecisionStore) CleanupReviewRuns(context.Context, string) ([]ReviewRunView, error) {
+	return append([]ReviewRunView(nil), s.reviewRuns...), nil
+}
 func (s *reviewDecisionStore) BeginReviewSandbox(context.Context, string) (Action, error) {
 	return Action{}, fmt.Errorf("unexpected review Sandbox")
 }
@@ -826,6 +829,9 @@ func (s *reviewRecoveryStore) ReviewRuns(context.Context, string, string) ([]Rev
 	return nil, nil
 }
 func (s *reviewRecoveryStore) AllReviewRuns(context.Context, string) ([]ReviewRunView, error) {
+	return nil, nil
+}
+func (s *reviewRecoveryStore) CleanupReviewRuns(context.Context, string) ([]ReviewRunView, error) {
 	return nil, nil
 }
 func (s *reviewRecoveryStore) BeginReviewSandbox(_ context.Context, _ string) (Action, error) {

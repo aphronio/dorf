@@ -97,6 +97,7 @@ type ReviewStore interface {
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
 	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
+	CleanupReviewRuns(context.Context, string) ([]ReviewRunView, error)
 	BeginReviewSandbox(context.Context, string) (Action, error)
 	BeginReviewRoute(context.Context, string) (Action, error)
 	BeginReviewWorkspace(context.Context, string) (Action, error)

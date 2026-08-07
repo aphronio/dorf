@@ -646,7 +646,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 			return err
 		}
 		if reviewStore, ok := s.Store.(ReviewStore); ok {
-			runs, err := reviewStore.AllReviewRuns(ctx, job.ID)
+			runs, err := reviewStore.CleanupReviewRuns(ctx, job.ID)
 			if err != nil {
 				return err
 			}
