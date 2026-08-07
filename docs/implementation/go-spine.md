@@ -122,8 +122,9 @@ kill -KILL "$WORKER_PID"
 wait "$WORKER_PID" || true
 sleep 11
 
-# Recovery reconnects to the exact live authenticated app-server when possible, observes sequence 1,
-# and then starts exactly one serialized native turn for sequence 2 in the same Session.
+# Recovery reconnects to the exact live authenticated app-server when possible, reads and reconciles
+# sequence 1 without loading the thread, resumes the exact bound thread, and then starts exactly one
+# serialized native turn for sequence 2 in the same Session.
 unset DORF_PROOF_FAULT_BARRIER
 time ./bin/dorf worker --once
 time ./bin/dorf inspect "$JOB_ID"
@@ -155,6 +156,12 @@ argv and matching its digest. A live process with a missing, mismatched, or reje
 attention and is not killed; once no app-server is live, stale PID and capability files may be
 atomically replaced. Neither file is native Session identity or PostgreSQL state, and proof output
 must not print the capability.
+
+Reconnect history inspection uses `thread/read`, which deliberately leaves a persisted thread
+unloaded. Only after PostgreSQL/native-history reconciliation proves the next input is safe to
+submit does Dorf call `thread/resume`; its response must return the exact bound native Session ID
+before `turn/start` is allowed. A rejection records only the safe protocol method category, never
+the app-server's arbitrary message or data.
 
 Message admission and its Absurd wake hint do not commit atomically. The honest crash invariant is:
 PostgreSQL commits the immutable message and FIFO sequence first, then Dorf emits the deterministic

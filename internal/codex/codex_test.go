@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
@@ -160,6 +161,197 @@ func testAppServer(t *testing.T, token string, reject bool) *httptest.Server {
 			}
 		}
 	}))
+}
+
+func testProtocolServer(t *testing.T, respond func(string, map[string]any) (map[string]any, bool)) (*httptest.Server, <-chan map[string]any) {
+	t.Helper()
+	requests := make(chan map[string]any, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.CloseNow()
+		ctx := r.Context()
+		for {
+			kind, payload, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if kind != websocket.MessageText {
+				t.Error("non-text request")
+				return
+			}
+			var request map[string]any
+			if err := json.Unmarshal(payload, &request); err != nil {
+				t.Error(err)
+				return
+			}
+			requests <- request
+			id, hasID := request["id"]
+			if !hasID {
+				continue
+			}
+			method, _ := request["method"].(string)
+			params, _ := request["params"].(map[string]any)
+			result, reject := respond(method, params)
+			response := map[string]any{"id": id, "result": result}
+			if reject {
+				delete(response, "result")
+				response["error"] = map[string]any{"code": -32000, "message": "test-only native detail must remain private"}
+			}
+			encoded, _ := json.Marshal(response)
+			if err := conn.Write(ctx, websocket.MessageText, encoded); err != nil {
+				return
+			}
+		}
+	}))
+	return server, requests
+}
+
+func dialTestProtocol(t *testing.T, server *httptest.Server) *protocol {
+	t.Helper()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.Dial(context.Background(), endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.CloseNow() })
+	p := &protocol{connection: conn}
+	if err := p.initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestPersistedThreadRejectsTurnStartUntilResumeWithoutLeakingNativeDetail(t *testing.T) {
+	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+		if method == "initialize" {
+			return map[string]any{}, false
+		}
+		return nil, method == "turn/start"
+	})
+	defer server.Close()
+	p := dialTestProtocol(t, server)
+
+	_, err := p.startTurn(context.Background(), "session-persisted", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high")
+	if err == nil || err.Error() != "Codex app-server rejected turn/start" {
+		t.Fatalf("safe rejection=%v", err)
+	}
+	if strings.Contains(err.Error(), "test-only") {
+		t.Fatalf("native rejection detail escaped: %v", err)
+	}
+	for _, want := range []string{"initialize", "initialized", "turn/start"} {
+		if got := (<-requests)["method"]; got != want {
+			t.Fatalf("method=%v, want %s", got, want)
+		}
+	}
+}
+
+func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) {
+	const sessionID = "session-persisted-1"
+	var loaded atomic.Bool
+	var acceptedStarts atomic.Int32
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			return map[string]any{"data": []any{map[string]any{"id": sessionID, "status": map[string]any{"type": "notLoaded"}}}}, false
+		case "thread/read":
+			return map[string]any{"thread": map[string]any{"id": sessionID, "status": map[string]any{"type": "notLoaded"}, "turns": []any{map[string]any{"id": "turn-prior", "status": "completed"}}}}, false
+		case "thread/resume":
+			if params["threadId"] != sessionID {
+				return nil, true
+			}
+			loaded.Store(true)
+			return map[string]any{"thread": map[string]any{"id": sessionID}}, false
+		case "turn/start":
+			if !loaded.Load() {
+				return nil, true
+			}
+			acceptedStarts.Add(1)
+			return map[string]any{"turn": map[string]any{"id": "turn-native-2"}}, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+	p := dialTestProtocol(t, server)
+
+	threads, err := p.listThreads(context.Background(), "/workspace/job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0] != sessionID {
+		t.Fatalf("threads=%v", threads)
+	}
+	turns, err := p.readTurns(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0] != (TurnOutcome{ID: "turn-prior", Status: "completed"}) {
+		t.Fatalf("turns=%#v", turns)
+	}
+	outcome, err := p.resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", "agent-run-stable-2", "next input", "gpt-5.6-sol", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != (TurnOutcome{ID: "turn-native-2", Status: "running"}) || acceptedStarts.Load() != 1 {
+		t.Fatalf("outcome=%#v accepted starts=%d", outcome, acceptedStarts.Load())
+	}
+
+	wantMethods := []string{"initialize", "initialized", "thread/list", "thread/read", "thread/resume", "turn/start"}
+	for index, want := range wantMethods {
+		request := <-requests
+		if got := request["method"]; got != want {
+			t.Fatalf("request %d method=%v, want %s", index, got, want)
+		}
+		if want == "thread/resume" || want == "turn/start" {
+			params := request["params"].(map[string]any)
+			if params["threadId"] != sessionID {
+				t.Fatalf("%s threadId=%v", want, params["threadId"])
+			}
+		}
+	}
+}
+
+func TestResumeRefusesSubstituteThreadBeforeTurnStart(t *testing.T) {
+	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/resume":
+			return map[string]any{"thread": map[string]any{"id": "session-substitute"}}, false
+		case "turn/start":
+			t.Error("turn/start followed a mismatched thread/resume")
+			return nil, true
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+	p := dialTestProtocol(t, server)
+
+	_, err := p.resumeAndStartTurn(context.Background(), "session-bound", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high")
+	if err == nil || err.Error() != "thread/resume did not return the exact bound native Session" {
+		t.Fatalf("resume error=%v", err)
+	}
+	definite, ok := err.(interface{ DefiniteNoSubmit() bool })
+	if !ok || !definite.DefiniteNoSubmit() {
+		t.Fatalf("mismatched resume was not classified before-submit: %T %v", err, err)
+	}
+	for _, want := range []string{"initialize", "initialized", "thread/resume"} {
+		if got := (<-requests)["method"]; got != want {
+			t.Fatalf("method=%v, want %s", got, want)
+		}
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("unexpected request after mismatched resume: %v", request["method"])
+	default:
+	}
 }
 
 func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyNativeOutcome(t *testing.T) {

@@ -41,6 +41,13 @@ type RejectedError struct{ Method string }
 func (e *RejectedError) Error() string          { return "Codex app-server rejected " + e.Method }
 func (e *RejectedError) DefiniteNoSubmit() bool { return true }
 
+type resumeBindingError struct{}
+
+func (e *resumeBindingError) Error() string {
+	return "thread/resume did not return the exact bound native Session"
+}
+func (e *resumeBindingError) DefiniteNoSubmit() bool { return true }
+
 func (a Agent) EnsureSession(ctx context.Context, sandboxName, workspace, boundSessionID, model string) (string, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
@@ -85,7 +92,7 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID,
 	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		outcome, err = protocol.startTurn(ctx, sessionID, workspace, agentRunID, input, model, effort)
+		outcome, err = protocol.resumeAndStartTurn(ctx, sessionID, workspace, agentRunID, input, model, effort)
 		return err
 	})
 	return outcome, err
@@ -316,6 +323,25 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 		}
 	}
 	return turns, nil
+}
+
+func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
+	result, err := p.call(ctx, "thread/resume", map[string]any{"threadId": sessionID})
+	if err != nil {
+		return err
+	}
+	thread, _ := result["thread"].(map[string]any)
+	if thread == nil || thread["id"] != sessionID {
+		return &resumeBindingError{}
+	}
+	return nil
+}
+
+func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort string) (TurnOutcome, error) {
+	if err := p.resumeThread(ctx, sessionID); err != nil {
+		return TurnOutcome{}, err
+	}
+	return p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
 }
 
 func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort string) (TurnOutcome, error) {
