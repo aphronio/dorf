@@ -107,7 +107,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_review_activation.sql", "009_review_sandbox_boundary.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -1065,14 +1065,10 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 		_, err = tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1`, jobID)
 	case spine.ActionReviewWorkspaceCreate:
 		var path, revision string
-		if err = tx.QueryRowContext(ctx, `select path,revision from dorf.review_workspaces where create_action_id=$1`, id).Scan(&path, &revision); err == nil && receipt.ExternalID != path {
+		if err = tx.QueryRowContext(ctx, `select ar.workspace,rr.revision from dorf.review_resources rr join dorf.agent_runs ar on ar.id=rr.run_id where rr.materialize_action_id=$1 and rr.run_id=$2`, id, scope).Scan(&path, &revision); err == nil && receipt.ExternalID != path {
 			err = fmt.Errorf("review workspace receipt conflicts with its exact path")
 		}
-		var isolated bool
 		if err == nil {
-			err = tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1)`, scope).Scan(&isolated)
-		}
-		if err == nil && isolated {
 			var tree string
 			var observedRevision string
 			observedRevision, tree, err = parseReviewStateOutcome(receipt.Outcome)
@@ -1082,19 +1078,6 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			if err == nil {
 				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set checkout_state='verified',revision_tree=coalesce(revision_tree,$2),checkout_verified_at=coalesce(checkout_verified_at,clock_timestamp()) where run_id=$1 and sandbox_state='created' and checkout_state in ('pending','verified') and (revision_tree is null or revision_tree=$2)`, scope, tree))
 			}
-		} else if err == nil && receipt.Outcome != revision {
-			err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
-		}
-		if err == nil {
-			_, err = tx.ExecContext(ctx, `update dorf.review_workspaces set state='created',created_at=coalesce(created_at,clock_timestamp()) where create_action_id=$1`, id)
-		}
-	case spine.ActionReviewWorkspaceDelete:
-		var path string
-		if err = tx.QueryRowContext(ctx, `select path from dorf.review_workspaces where delete_action_id=$1`, id).Scan(&path); err == nil && (receipt.ExternalID != path || receipt.Outcome != "deleted") {
-			err = fmt.Errorf("review workspace cleanup receipt conflicts with its exact path")
-		}
-		if err == nil {
-			_, err = tx.ExecContext(ctx, `update dorf.review_workspaces set state='deleted',deleted_at=coalesce(deleted_at,clock_timestamp()) where delete_action_id=$1`, id)
 		}
 	}
 	if err != nil {
@@ -1338,11 +1321,11 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	}
 	defer tx.Rollback()
 	var unsettled int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_workspaces where job_id=$1 and state<>'deleted'`, jobID).Scan(&unsettled); err != nil {
+	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_resources where job_id=$1 and (route_state<>'revoked' or sandbox_state<>'deleted')`, jobID).Scan(&unsettled); err != nil {
 		return err
 	}
 	if unsettled != 0 {
-		return fmt.Errorf("cleanup cannot complete with %d retained review workspaces", unsettled)
+		return fmt.Errorf("cleanup cannot complete with %d retained reviewer resource sets", unsettled)
 	}
 	var sandboxState, routeState string
 	if err := tx.QueryRowContext(ctx, `select coalesce((select state from dorf.sandboxes where job_id=$1),''),coalesce((select state from dorf.routes where job_id=$1),'')`, jobID).Scan(&sandboxState, &routeState); err != nil {

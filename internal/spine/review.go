@@ -51,10 +51,8 @@ type ReviewFinding struct {
 
 type ReviewRunView struct {
 	AgentRun
-	Finding         *ReviewFinding `json:"finding,omitempty"`
-	WorkspaceState  string         `json:"workspace_state,omitempty"`
-	CleanupActionID string         `json:"cleanup_action_id,omitempty"`
-	Stale           bool           `json:"stale"`
+	Finding *ReviewFinding `json:"finding,omitempty"`
+	Stale   bool           `json:"stale"`
 }
 
 type ReviewNativeBinding struct {
@@ -109,7 +107,6 @@ type ReviewStore interface {
 	RecordTriageResult(context.Context, string, NativeTurn, Evidence, Evidence, policy.ReviewPlan, string) error
 	AdmitReviewRepair(context.Context, string, string) (Message, bool, error)
 	MarkReviewReady(context.Context, string, string) error
-	BeginReviewWorkspaceCleanup(context.Context, string) (Action, error)
 	BeginReviewRouteCleanup(context.Context, string) (Action, error)
 	BeginReviewSandboxCleanup(context.Context, string) (Action, error)
 	InterruptReviewRun(context.Context, string, string) error
@@ -124,7 +121,6 @@ type ReviewExternals interface {
 	ReviewRouteCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewWorkspaceVerify(context.Context, Job, AgentRun) (Receipt, error)
-	ReviewWorkspaceDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error)

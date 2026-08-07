@@ -165,6 +165,11 @@ func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testin
 		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.ReviewerOwnerNonce,
 	}}
 	externals := Externals{Sandbox: incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}, Runner: runner}}
+	withoutSandbox := run
+	withoutSandbox.ReviewerSandboxID = ""
+	if _, err := externals.ReviewWorkspaceCreate(context.Background(), job, withoutSandbox, spine.Action{}); err == nil {
+		t.Fatal("review materialization accepted the implementation Sandbox")
+	}
 	receipt, err := externals.ReviewWorkspaceCreate(context.Background(), job, run, spine.Action{})
 	if err != nil || receipt.ExternalID != run.Workspace || receipt.Outcome != revision+" "+tree+" clean" {
 		t.Fatalf("review materialization receipt=%#v err=%v", receipt, err)

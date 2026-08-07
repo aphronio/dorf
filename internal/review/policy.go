@@ -37,10 +37,9 @@ type Reason struct {
 }
 
 type ReviewPlan struct {
-	Decision    string   `json:"decision"`
-	Roles       []Role   `json:"roles"`
-	Reasons     []Reason `json:"reasons"`
-	NeedsTriage bool     `json:"needs_triage"`
+	Decision string   `json:"decision"`
+	Roles    []Role   `json:"roles"`
+	Reasons  []Reason `json:"reasons"`
 }
 
 // FactsFromPaths classifies only facts that are mechanically apparent from an
@@ -136,11 +135,11 @@ func ReviewPolicy(facts ChangeFacts, requested []Role) (ReviewPlan, error) {
 	} else if len(roles) == 0 {
 		decision = "no-review"
 	}
-	return ReviewPlan{Decision: decision, Roles: roles, Reasons: reasons, NeedsTriage: facts.Unknown}, nil
+	return ReviewPlan{Decision: decision, Roles: roles, Reasons: reasons}, nil
 }
 
 func AddTriage(plan ReviewPlan, roles []Role, rationale string) (ReviewPlan, error) {
-	if !plan.NeedsTriage || plan.Decision != "triage" {
+	if plan.Decision != "triage" {
 		return ReviewPlan{}, fmt.Errorf("triage result is not admissible for policy decision %q", plan.Decision)
 	}
 	if strings.TrimSpace(rationale) == "" || len(rationale) > 4096 {
@@ -170,7 +169,6 @@ func AddTriage(plan ReviewPlan, roles []Role, rationale string) (ReviewPlan, err
 		}
 		return plan.Reasons[i].Role < plan.Reasons[j].Role
 	})
-	plan.NeedsTriage = false
 	if len(plan.Roles) == 0 {
 		plan.Decision = "no-review"
 	} else {
@@ -221,7 +219,7 @@ func TargetedReverification(plan ReviewPlan, affected []Role) (ReviewPlan, error
 		return reasons[i].Role < reasons[j].Role
 	})
 	plan.Reasons = reasons
-	plan.Decision, plan.NeedsTriage = "selected", false
+	plan.Decision = "selected"
 	return plan, nil
 }
 
@@ -233,8 +231,6 @@ func Allowed(role Role) bool {
 	}
 	return false
 }
-
-func AllowedRoles() []Role { return append([]Role(nil), allowedRoles...) }
 
 func documentationPath(path string) bool {
 	lower := strings.ToLower(path)

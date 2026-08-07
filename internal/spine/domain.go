@@ -31,7 +31,6 @@ const (
 	ActionRepositorySetup       ActionKind = "repository-setup"
 	ActionRepositoryCommit      ActionKind = "repository-commit"
 	ActionReviewWorkspaceCreate ActionKind = "review-workspace-create"
-	ActionReviewWorkspaceDelete ActionKind = "review-workspace-delete"
 	ActionRouteCreate           ActionKind = "provider-route-create"
 	ActionSessionStart          ActionKind = "codex-session-start"
 	ActionTurnStart             ActionKind = "codex-turn-start"

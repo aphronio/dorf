@@ -655,52 +655,29 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 				return err
 			}
 			for _, run := range runs {
-				settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
-				if !settled && run.ReviewerSandboxID == "" {
-					return fmt.Errorf("cleanup retained Sandbox and route: review AgentRun %s (%s) is not safely settled", run.ID, run.State)
+				if run.ReviewerSandboxID == "" {
+					return fmt.Errorf("cleanup cannot reconcile review AgentRun %s without its dedicated reviewer Sandbox", run.ID)
 				}
+				settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 				if !settled {
 					if err := reviewStore.InterruptReviewRun(ctx, run.ID, "admission closed; exact isolated reviewer resources are being reclaimed"); err != nil {
 						return err
 					}
 					run.State = AgentRunInterrupted
 				}
-				if run.ReviewerSandboxID != "" {
-					routeAction, err := reviewStore.BeginReviewRouteCleanup(ctx, run.ID)
+				routeAction, err := reviewStore.BeginReviewRouteCleanup(ctx, run.ID)
+				if err != nil {
+					return err
+				}
+				if routeAction.State != ActionSucceeded {
+					receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run.AgentRun, routeAction)
 					if err != nil {
+						_ = s.Store.UncertainAction(ctx, routeAction.ID)
+						return fmt.Errorf("reconcile exact reviewer route for %s: %w", run.ID, err)
+					}
+					if err := s.Store.CompleteAction(ctx, routeAction.ID, receipt); err != nil {
 						return err
 					}
-					if routeAction.State != ActionSucceeded {
-						receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run.AgentRun, routeAction)
-						if err != nil {
-							_ = s.Store.UncertainAction(ctx, routeAction.ID)
-							return fmt.Errorf("reconcile exact reviewer route for %s: %w", run.ID, err)
-						}
-						if err := s.Store.CompleteAction(ctx, routeAction.ID, receipt); err != nil {
-							return err
-						}
-					}
-				}
-				if run.WorkspaceState == "deleted" {
-					// Continue below for isolated reviewer route and Sandbox cleanup.
-				} else {
-					action, err := reviewStore.BeginReviewWorkspaceCleanup(ctx, run.ID)
-					if err != nil {
-						return err
-					}
-					if action.State != ActionSucceeded {
-						receipt, err := reviewExternals.ReviewWorkspaceDelete(ctx, job, run.AgentRun, action)
-						if err != nil {
-							_ = s.Store.UncertainAction(ctx, action.ID)
-							return fmt.Errorf("reconcile exact review workspace %s: %w", run.Workspace, err)
-						}
-						if err := s.Store.CompleteAction(ctx, action.ID, receipt); err != nil {
-							return err
-						}
-					}
-				}
-				if run.ReviewerSandboxID == "" {
-					continue
 				}
 				sandboxAction, err := reviewStore.BeginReviewSandboxCleanup(ctx, run.ID)
 				if err != nil {

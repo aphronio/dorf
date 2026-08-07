@@ -167,36 +167,27 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 			pending[i] = refreshed
 		}
 		if err := validateIndependentReviewBatch(pending); err != nil {
-			// A future non-read-only capability is deliberately serialized.
-			for _, run := range pending {
-				if _, oneErr := s.executeAndRecordReview(ctx, job, run, store, externals); oneErr != nil {
-					if attentionNeeded(oneErr) {
-						return s.blockReview(ctx, job.ID, oneErr.Error())
-					}
-					return RunIdle, false, oneErr
+			return s.blockReview(ctx, job.ID, err.Error())
+		}
+		var wg sync.WaitGroup
+		errs := make(chan error, len(pending))
+		for _, run := range pending {
+			run := run
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := s.executeAndRecordReview(ctx, job, run, store, externals)
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				if attentionNeeded(err) {
+					return s.blockReview(ctx, job.ID, err.Error())
 				}
-			}
-		} else {
-			var wg sync.WaitGroup
-			errs := make(chan error, len(pending))
-			for _, run := range pending {
-				run := run
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					_, err := s.executeAndRecordReview(ctx, job, run, store, externals)
-					errs <- err
-				}()
-			}
-			wg.Wait()
-			close(errs)
-			for err := range errs {
-				if err != nil {
-					if attentionNeeded(err) {
-						return s.blockReview(ctx, job.ID, err.Error())
-					}
-					return RunIdle, false, err
-				}
+				return RunIdle, false, err
 			}
 		}
 		return RunIdle, true, nil
@@ -303,13 +294,11 @@ func (s Service) verifyReviewPostState(ctx context.Context, job Job, run AgentRu
 }
 
 func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRun, externals ReviewExternals, store ReviewStore) (NativeTurn, error) {
-	if original.ReviewerSandboxID != "" {
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(original.InputContract)))
-		if original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 || original.InputDigest != digest {
-			reason := "review AgentRun durable Sandbox ownership or exact submission contract is invalid"
-			_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
-			return NativeTurn{}, reviewBoundaryError(reason)
-		}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(original.InputContract)))
+	if original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 || original.InputDigest != digest {
+		reason := "review AgentRun durable Sandbox ownership or exact submission contract is invalid"
+		_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
+		return NativeTurn{}, reviewBoundaryError(reason)
 	}
 	if err := s.ensureReviewWorkspace(ctx, job, original, store, externals); err != nil {
 		if attentionNeeded(err) {
@@ -527,20 +516,21 @@ func (s Service) recordReviewReadError(ctx context.Context, runID string, err er
 }
 
 func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original AgentRun, store ReviewStore, externals ReviewExternals) error {
-	if original.ReviewerSandboxID != "" {
-		sandbox, err := store.BeginReviewSandbox(ctx, original.ID)
+	if original.ReviewerSandboxID != ReviewSandboxName(original.ID) {
+		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
+	}
+	sandbox, err := store.BeginReviewSandbox(ctx, original.ID)
+	if err != nil {
+		return err
+	}
+	if sandbox.State != ActionSucceeded {
+		receipt, err := externals.ReviewSandboxCreate(ctx, job, original, sandbox)
 		if err != nil {
+			_ = s.Store.UncertainAction(ctx, sandbox.ID)
 			return err
 		}
-		if sandbox.State != ActionSucceeded {
-			receipt, err := externals.ReviewSandboxCreate(ctx, job, original, sandbox)
-			if err != nil {
-				_ = s.Store.UncertainAction(ctx, sandbox.ID)
-				return err
-			}
-			if err := s.Store.CompleteAction(ctx, sandbox.ID, receipt); err != nil {
-				return err
-			}
+		if err := s.Store.CompleteAction(ctx, sandbox.ID, receipt); err != nil {
+			return err
 		}
 	}
 	workspace, err := store.BeginReviewWorkspace(ctx, original.ID)
@@ -560,20 +550,18 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Ag
 			return err
 		}
 	}
-	if original.ReviewerSandboxID != "" {
-		route, err := store.BeginReviewRoute(ctx, original.ID)
+	route, err := store.BeginReviewRoute(ctx, original.ID)
+	if err != nil {
+		return err
+	}
+	if route.State != ActionSucceeded {
+		receipt, err := externals.ReviewRouteCreate(ctx, job, original, route)
 		if err != nil {
+			_ = s.Store.UncertainAction(ctx, route.ID)
 			return err
 		}
-		if route.State != ActionSucceeded {
-			receipt, err := externals.ReviewRouteCreate(ctx, job, original, route)
-			if err != nil {
-				_ = s.Store.UncertainAction(ctx, route.ID)
-				return err
-			}
-			if err := s.Store.CompleteAction(ctx, route.ID, receipt); err != nil {
-				return err
-			}
+		if err := s.Store.CompleteAction(ctx, route.ID, receipt); err != nil {
+			return err
 		}
 	}
 	return nil

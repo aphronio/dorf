@@ -9,7 +9,7 @@ alter table dorf.jobs drop constraint if exists jobs_workflow_phase_check;
 alter table dorf.jobs add constraint jobs_workflow_phase_check check (
     workflow_phase in (
         'setup','implementing','committing','checking','repairing',
-        'review-planning','review-triage','reviewing','review-repairing',
+        'review-activation','review-planning','review-triage','reviewing','review-repairing',
         'ready','blocked'
     )
 );
@@ -17,7 +17,7 @@ alter table dorf.jobs add constraint jobs_workflow_phase_check check (
 alter table dorf.actions drop constraint if exists actions_kind_check;
 alter table dorf.actions add constraint actions_kind_check check (kind in (
     'sandbox-create','repository-clone','repository-setup','repository-commit',
-    'review-workspace-create','review-workspace-delete',
+    'review-workspace-create',
     'provider-route-create','codex-session-start','codex-turn-start',
     'provider-route-revoke','sandbox-delete'
 ));
@@ -91,19 +91,33 @@ create table if not exists dorf.review_plans (
 comment on table dorf.review_plans is
     'Atomic deterministic review selection for one immutable Revision; no-review is an explicit final decision';
 
-create table if not exists dorf.review_workspaces (
+create table if not exists dorf.review_resources (
     run_id text primary key references dorf.agent_runs(id),
     job_id text not null references dorf.jobs(id),
-    revision text not null,
-    path text not null unique,
-    create_action_id text not null unique references dorf.actions(id),
-    delete_action_id text not null unique references dorf.actions(id),
-    state text not null default 'pending' check (state in ('pending','created','deleted')),
-    created_at timestamptz,
-    deleted_at timestamptz
+    revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
+    sandbox_name text not null unique,
+    ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
+    submission_nonce text not null unique check (submission_nonce ~ '^[0-9a-f]{64}$'),
+    input_digest text not null check (input_digest ~ '^[0-9a-f]{64}$'),
+    sandbox_create_action_id text not null unique references dorf.actions(id),
+    route_create_action_id text not null unique references dorf.actions(id),
+    materialize_action_id text not null unique references dorf.actions(id),
+    route_revoke_action_id text not null unique references dorf.actions(id),
+    sandbox_delete_action_id text not null unique references dorf.actions(id),
+    sandbox_state text not null default 'pending' check (sandbox_state in ('pending','created','deleted')),
+    route_state text not null default 'pending' check (route_state in ('pending','active','revoked')),
+    checkout_state text not null default 'pending' check (checkout_state in ('pending','verified')),
+    post_review_state text not null default 'pending' check (post_review_state in ('pending','verified')),
+    route_id text unique,
+    app_server_id text unique,
+    revision_tree text check (revision_tree is null or revision_tree ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
+    checkout_verified_at timestamptz,
+    post_review_verified_at timestamptz,
+    route_revoked_at timestamptz,
+    sandbox_deleted_at timestamptz
 );
-comment on table dorf.review_workspaces is
-    'Exact detached immutable inputs and independently retryable cleanup for review AgentRuns';
+comment on table dorf.review_resources is
+    'Host-owned per-AgentRun Incus Sandbox, provider route, strict native submission, immutable checkout, and exact cleanup facts';
 
 create table if not exists dorf.review_findings (
     run_id text primary key references dorf.agent_runs(id),
@@ -136,3 +150,6 @@ alter table dorf.jobs add constraint jobs_review_repair_source_run_id_fkey
 alter table dorf.review_plans drop constraint if exists review_plans_triage_run_id_fkey;
 alter table dorf.review_plans add constraint review_plans_triage_run_id_fkey
     foreign key(triage_run_id) references dorf.agent_runs(id);
+
+comment on column dorf.jobs.workflow_phase is
+    'review-activation is the durable post-Checks boundary where requested Roles are atomically bound before policy evaluation';

@@ -63,10 +63,6 @@ func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, age
 	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
 }
 
-func (a Agent) StartReviewInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
-	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "read-only")
-}
-
 func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()

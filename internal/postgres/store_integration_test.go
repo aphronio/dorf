@@ -540,13 +540,6 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 		t.Fatal("mismatched reviewer Sandbox receipt was accepted")
 	}
 	prepareReviewBoundaryIntegration(t, store, run)
-	workspaceDelete, err := store.BeginReviewWorkspaceCleanup(ctx, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CompleteAction(ctx, workspaceDelete.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}); err != nil {
-		t.Fatal(err)
-	}
 	routeDelete, err := store.BeginReviewRouteCleanup(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -561,7 +554,7 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, begin := range []func(context.Context, string) (spine.Action, error){store.BeginReviewWorkspaceCleanup, store.BeginReviewRouteCleanup, store.BeginReviewSandboxCleanup} {
+	for _, begin := range []func(context.Context, string) (spine.Action, error){store.BeginReviewRouteCleanup, store.BeginReviewSandboxCleanup} {
 		action, err := begin(ctx, run.ID)
 		if err != nil || action.State != spine.ActionSucceeded {
 			t.Fatalf("cleanup retry action=%#v err=%v", action, err)
@@ -766,7 +759,7 @@ func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T
 	persisted, err := store.ReviewPlan(ctx, job.ID, revision)
 	updated, jobErr := store.Job(ctx, job.ID)
 	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || jobErr != nil || runsErr != nil || persisted.State != "triage-pending" || persisted.Initial.Decision != "triage" || !persisted.Initial.NeedsTriage || !slices.Equal(persisted.Initial.Roles, []policy.Role{policy.RolePerformance}) || updated.WorkflowPhase != "review-triage" || len(runs) != 1 || runs[0].Role != spine.ReviewTriageRole {
+	if err != nil || jobErr != nil || runsErr != nil || persisted.State != "triage-pending" || persisted.Initial.Decision != "triage" || !slices.Equal(persisted.Initial.Roles, []policy.Role{policy.RolePerformance}) || updated.WorkflowPhase != "review-triage" || len(runs) != 1 || runs[0].Role != spine.ReviewTriageRole {
 		t.Fatalf("plan=%#v Job=%#v runs=%#v err=%v jobErr=%v runsErr=%v", persisted, updated, runs, err, jobErr, runsErr)
 	}
 }
@@ -819,7 +812,7 @@ func TestRepairedActivationRejectsOptionalRolesAndPersistsTargetedFloor(t *testi
 		{Role: policy.RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
 		{Role: policy.RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
 	}
-	if err != nil || runsErr != nil || !slices.Equal(persisted.Initial.Roles, wantRoles) || !slices.Equal(persisted.Initial.Reasons, wantReasons) || persisted.Initial.NeedsTriage || len(runs) != len(wantRoles) {
+	if err != nil || runsErr != nil || !slices.Equal(persisted.Initial.Roles, wantRoles) || !slices.Equal(persisted.Initial.Reasons, wantReasons) || len(runs) != len(wantRoles) {
 		t.Fatalf("targeted plan=%#v runs=%#v err=%v runsErr=%v", persisted, runs, err, runsErr)
 	}
 	for _, reason := range persisted.Initial.Reasons {

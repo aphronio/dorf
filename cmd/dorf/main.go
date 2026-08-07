@@ -123,7 +123,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 009_review_sandbox_boundary.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 007_review_policy.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -360,7 +360,7 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
 			latency = run.FinishedAt.Sub(run.StartedAt)
 		}
-		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s controller=%s cleanup=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), empty(run.ReviewerAppServer), empty(run.WorkspaceState), run.Stale)
+		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s controller=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), empty(run.ReviewerAppServer), run.Stale)
 		if run.Finding != nil {
 			fmt.Fprintf(stdout, "    claim material=%t adjudication=%s evidence=%s summary=%s\n", run.Finding.Material, run.Finding.Adjudication, run.Finding.EvidenceID, run.Finding.Summary)
 		}

@@ -66,7 +66,7 @@ func TestTriageCanOnlyAddAllowlistedRolesOnce(t *testing.T) {
 	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/spine/service.go"}, true, false)
 	plan, _ := ReviewPolicy(facts, nil)
 	resolved, err := AddTriage(plan, []Role{RoleCriticalBoundary}, "durable state transition needs boundary review")
-	if err != nil || resolved.Decision != "selected" || resolved.NeedsTriage || !reflect.DeepEqual(resolved.Roles, []Role{RoleCriticalBoundary}) {
+	if err != nil || resolved.Decision != "selected" || !reflect.DeepEqual(resolved.Roles, []Role{RoleCriticalBoundary}) {
 		t.Fatalf("resolved=%#v err=%v", resolved, err)
 	}
 	if _, err := AddTriage(resolved, nil, "again"); err == nil {
@@ -80,7 +80,7 @@ func TestTriageCanOnlyAddAllowlistedRolesOnce(t *testing.T) {
 func TestTargetedReverificationKeepsMandatoryFloorWithoutBroadTriage(t *testing.T) {
 	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/auth/session.go"}, true, false)
 	plan, _ := ReviewPolicy(facts, []Role{RoleBrowserUI, RolePerformance, RoleCriticalBoundary})
-	if plan.NeedsTriage || !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RolePerformance}) {
+	if !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RolePerformance}) {
 		t.Fatalf("initial requested plan=%#v", plan)
 	}
 	originalRoles := append([]Role(nil), plan.Roles...)
@@ -90,7 +90,7 @@ func TestTargetedReverificationKeepsMandatoryFloorWithoutBroadTriage(t *testing.
 		{Role: RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
 		{Role: RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
 	}
-	if err != nil || targeted.NeedsTriage || !reflect.DeepEqual(targeted.Roles, []Role{RoleAuthAuthority, RoleCriticalBoundary}) || !reflect.DeepEqual(targeted.Reasons, wantReasons) {
+	if err != nil || !reflect.DeepEqual(targeted.Roles, []Role{RoleAuthAuthority, RoleCriticalBoundary}) || !reflect.DeepEqual(targeted.Reasons, wantReasons) {
 		t.Fatalf("targeted plan=%#v err=%v", targeted, err)
 	}
 	if !reflect.DeepEqual(plan.Roles, originalRoles) || !reflect.DeepEqual(plan.Reasons, originalReasons) {

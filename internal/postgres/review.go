@@ -261,7 +261,7 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	if err != nil {
 		return err
 	}
-	if proposed.Facts.Revision != proposed.Revision || proposed.Initial.NeedsTriage != (proposed.Initial.Decision == "triage") {
+	if proposed.Facts.Revision != proposed.Revision {
 		return fmt.Errorf("review policy does not match its immutable Revision or decision")
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -345,21 +345,17 @@ func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role st
 	sandboxCreateAction := spine.ScopedActionID(jobID, spine.ActionSandboxCreate, runID)
 	routeCreateAction := spine.ScopedActionID(jobID, spine.ActionRouteCreate, runID)
 	createAction := spine.ScopedActionID(jobID, spine.ActionReviewWorkspaceCreate, runID)
-	deleteAction := spine.ScopedActionID(jobID, spine.ActionReviewWorkspaceDelete, runID)
 	routeRevokeAction := spine.ScopedActionID(jobID, spine.ActionRouteRevoke, runID)
 	sandboxDeleteAction := spine.ScopedActionID(jobID, spine.ActionSandboxDelete, runID)
 	for _, action := range []struct {
 		id   string
 		kind spine.ActionKind
-	}{{turnAction, spine.ActionTurnStart}, {sessionAction, spine.ActionSessionStart}, {sandboxCreateAction, spine.ActionSandboxCreate}, {routeCreateAction, spine.ActionRouteCreate}, {createAction, spine.ActionReviewWorkspaceCreate}, {deleteAction, spine.ActionReviewWorkspaceDelete}, {routeRevokeAction, spine.ActionRouteRevoke}, {sandboxDeleteAction, spine.ActionSandboxDelete}} {
+	}{{turnAction, spine.ActionTurnStart}, {sessionAction, spine.ActionSessionStart}, {sandboxCreateAction, spine.ActionSandboxCreate}, {routeCreateAction, spine.ActionRouteCreate}, {createAction, spine.ActionReviewWorkspaceCreate}, {routeRevokeAction, spine.ActionRouteRevoke}, {sandboxDeleteAction, spine.ActionSandboxDelete}} {
 		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, action.id, jobID, action.kind, runID); err != nil {
 			return "", err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,role,state,revision,capability,workspace,input_contract,output_contract) values($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9) on conflict do nothing`, runID, jobID, turnAction, role, revision, spine.ReviewReadOnlyCapability, workspace, input, output); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.review_workspaces(run_id,job_id,revision,path,create_action_id,delete_action_id) values($1,$2,$3,$4,$5,$6) on conflict do nothing`, runID, jobID, revision, workspace, createAction, deleteAction); err != nil {
 		return "", err
 	}
 	ownerNonce, err := reviewNonce()
@@ -429,9 +425,6 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		if err := s.DB.QueryRowContext(ctx, `select state,delete_action_id from dorf.review_workspaces where run_id=$1`, run.ID).Scan(&view.WorkspaceState, &view.CleanupActionID); err != nil {
-			return nil, err
-		}
 		views = append(views, view)
 	}
 	return views, rows.Err()
@@ -487,9 +480,7 @@ func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.A
 	case spine.ActionRouteCreate:
 		err = tx.QueryRowContext(ctx, `select route_create_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
 	case spine.ActionReviewWorkspaceCreate:
-		err = tx.QueryRowContext(ctx, `select create_action_id from dorf.review_workspaces where run_id=$1`, runID).Scan(&actionID)
-	case spine.ActionReviewWorkspaceDelete:
-		err = tx.QueryRowContext(ctx, `select delete_action_id from dorf.review_workspaces where run_id=$1`, runID).Scan(&actionID)
+		err = tx.QueryRowContext(ctx, `select materialize_action_id from dorf.review_resources where run_id=$1`, runID).Scan(&actionID)
 	case spine.ActionSessionStart:
 		actionID = spine.ScopedActionID("", kind, runID)
 		err = tx.QueryRowContext(ctx, `select id from dorf.actions where kind=$2 and scope_key=$1`, runID, kind).Scan(&actionID)
@@ -551,9 +542,6 @@ func (s Store) UncertainReviewSubmission(ctx context.Context, runID, sessionActi
 		return err
 	}
 	return tx.Commit()
-}
-func (s Store) BeginReviewWorkspaceCleanup(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionReviewWorkspaceDelete)
 }
 func (s Store) BeginReviewRouteCleanup(ctx context.Context, runID string) (spine.Action, error) {
 	return s.beginReviewAction(ctx, runID, spine.ActionRouteRevoke)

@@ -68,7 +68,7 @@ func (e Externals) RepositoryHasChanges(ctx context.Context, job spine.Job) (boo
 
 func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
 	if run.ReviewerSandboxID == "" {
-		return e.legacyReviewWorkspaceCreate(ctx, job, run)
+		return spine.Receipt{}, fmt.Errorf("review materialization requires a dedicated reviewer Sandbox")
 	}
 	if run.Revision != job.Revision || run.Workspace != e.Sandbox.Config.Workspace {
 		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
@@ -118,23 +118,6 @@ printf '%s %s clean\n' "$head" "$tree"`
 		return spine.Receipt{}, fmt.Errorf("materialize exact review checkout: %s", strings.TrimSpace(result.Stderr))
 	}
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
-}
-
-func (e Externals) legacyReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.Receipt, error) {
-	if run.Revision != job.Revision || !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
-		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
-	}
-	script := `set -eu
-main=$1; workspace=$2; revision=$3
-mkdir -p "$(dirname "$workspace")"
-if test ! -e "$workspace/.git"; then git -C "$main" worktree add --detach "$workspace" "$revision"; fi
-test "$(git -C "$workspace" rev-parse HEAD)" = "$revision"
-test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"`
-	result, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", script, "dorf-review-workspace", e.Sandbox.Config.Workspace, run.Workspace, run.Revision)
-	if err != nil || result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("prepare exact legacy review workspace: %s", strings.TrimSpace(result.Stderr))
-	}
-	return spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision}, nil
 }
 
 func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
@@ -189,47 +172,6 @@ printf '%s %s clean\n' "$head" "$tree"`
 		return spine.Receipt{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
-}
-
-func (e Externals) ReviewWorkspaceDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
-	if run.ReviewerSandboxID != "" {
-		present, err := e.Sandbox.ReviewPresent(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
-		if err != nil {
-			return spine.Receipt{}, err
-		}
-		if !present {
-			return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
-		}
-		if run.Workspace != e.Sandbox.Config.Workspace {
-			return spine.Receipt{}, fmt.Errorf("refusing reviewer workspace cleanup outside the exact path")
-		}
-		script := `set -eu
-workspace=$1
-test "$workspace" = /workspace/job
-rm -rf -- "$workspace"
-test ! -e "$workspace"`
-		result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-cleanup", run.Workspace)
-		if err != nil || result.ExitCode != 0 {
-			return spine.Receipt{}, fmt.Errorf("remove exact reviewer workspace: %s", strings.TrimSpace(result.Stderr))
-		}
-		return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
-	}
-	if !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
-		return spine.Receipt{}, fmt.Errorf("refusing review workspace cleanup outside the bounded root")
-	}
-	script := `set -eu
-main=$1; workspace=$2
-if test -e "$workspace"; then git -C "$main" worktree remove --force "$workspace"; fi
-git -C "$main" worktree prune
-test ! -e "$workspace"`
-	result, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", script, "dorf-review-cleanup", e.Sandbox.Config.Workspace, run.Workspace)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	if result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("remove exact review workspace: %s", strings.TrimSpace(result.Stderr))
-	}
-	return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
 }
 
 func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
