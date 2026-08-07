@@ -34,8 +34,10 @@ metadata = distribution("dorf")
 assert metadata.metadata["Name"] == "dorf"
 assert metadata.version == dorf.__version__
 '
-  "$environment/bin/dorf" --version
-  "$environment/bin/dorf" --help >/dev/null
+  if [[ -e "$environment/bin/dorf" ]]; then
+    echo "Python artifact unexpectedly installed the removed dorf console script." >&2
+    exit 1
+  fi
 }
 
 verify_install "${wheels[0]}" "$scratch_root/wheel"
