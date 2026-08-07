@@ -2,8 +2,12 @@ package spine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/aphronio/dorf/internal/evidence"
 )
 
 type Store interface {
@@ -37,6 +41,24 @@ type Externals interface {
 	SandboxDelete(context.Context, Job, Action) (Receipt, error)
 }
 
+type CodingStore interface {
+	BeginScopedAction(context.Context, string, ActionKind, string) (Action, error)
+	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
+	RecordRevision(context.Context, string, CommitObservation, Evidence) error
+	BeginCheck(context.Context, string, string, string, string) (Check, error)
+	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
+	AdmitRepair(context.Context, Check) (Message, bool, error)
+	MarkReady(context.Context, string, string) error
+	BlockWorkflow(context.Context, string, string) error
+	DeclaredChecks(context.Context, string) ([]DeclaredCheck, error)
+}
+
+type RepositoryExternals interface {
+	RepositorySetup(context.Context, Job, Action) (CommandObservation, []DeclaredCheck, error)
+	RepositoryCommit(context.Context, Job, Action) (CommitObservation, []byte, error)
+	RepositoryCheck(context.Context, Job, Check) (CommandObservation, error)
+}
+
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
 }
@@ -45,6 +67,9 @@ const (
 	BarrierBeforeSubmit          = "before-submit"
 	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
 	BarrierNativeActive          = "native-active"
+	BarrierSetupComplete         = "setup-complete-before-record"
+	BarrierCommitCreated         = "commit-created-before-record"
+	BarrierCheckExited           = "check-exited-before-record"
 )
 
 type RunDisposition string
@@ -56,9 +81,11 @@ const (
 )
 
 type Service struct {
-	Store     Store
-	Externals Externals
-	Barrier   FaultBarrier
+	Store      Store
+	Externals  Externals
+	Barrier    FaultBarrier
+	Repository RepositoryExternals
+	Evidence   evidence.Store
 }
 
 func (s Service) RunUntilIdle(ctx context.Context, jobID string) (RunDisposition, error) {
@@ -88,6 +115,16 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		return RunIdle, err
 	}
 	for _, kind := range []ActionKind{ActionSandboxCreate, ActionRepositoryClone, ActionRouteCreate} {
+		if kind == ActionRouteCreate && s.Repository != nil {
+			job, err = s.Store.Job(ctx, jobID)
+			if err != nil {
+				return RunIdle, err
+			}
+			disposition, err := s.setup(ctx, job)
+			if err != nil || disposition == RunBlocked {
+				return disposition, err
+			}
+		}
 		job, err = s.Store.Job(ctx, jobID)
 		if err != nil {
 			return RunIdle, err
@@ -135,7 +172,14 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 			return RunIdle, err
 		}
 		if delivery == nil {
-			return RunIdle, nil
+			if s.Repository == nil {
+				return RunIdle, nil
+			}
+			disposition, progressed, err := s.advanceCoding(ctx, job)
+			if err != nil || disposition == RunBlocked || !progressed {
+				return disposition, err
+			}
+			continue
 		}
 		switch delivery.AgentRun.State {
 		case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
@@ -145,6 +189,191 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 			return RunIdle, err
 		}
 	}
+}
+
+func (s Service) setup(ctx context.Context, job Job) (RunDisposition, error) {
+	store := s.Store.(CodingStore)
+	action, err := s.Store.BeginAction(ctx, job.ID, ActionRepositorySetup)
+	if err != nil {
+		return RunIdle, err
+	}
+	if action.State == ActionSucceeded {
+		return RunIdle, nil
+	}
+	if action.State == ActionFailed {
+		return RunBlocked, nil
+	}
+	observation, declared, err := s.Repository.RepositorySetup(ctx, job, action)
+	if err != nil {
+		_ = s.Store.UncertainAction(ctx, action.ID)
+		if attentionNeeded(err) {
+			_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+			return RunBlocked, nil
+		}
+		return RunIdle, err
+	}
+	artifact, err := commandArtifact(observation)
+	if err != nil {
+		return RunIdle, err
+	}
+	evidenceRecord, err := s.retainEvidence(action.ID, "repository-setup", action.ID, "", job.StartingRevision, observation.StartedAt, observation.FinishedAt, artifact)
+	if err != nil {
+		return RunIdle, err
+	}
+	if err := s.reachWorkflow(ctx, BarrierSetupComplete, job.ID, action.ID); err != nil {
+		return RunIdle, err
+	}
+	if err := store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
+		return RunIdle, err
+	}
+	if observation.ExitCode != 0 {
+		return RunBlocked, nil
+	}
+	return RunIdle, nil
+}
+
+func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bool, error) {
+	store := s.Store.(CodingStore)
+	switch job.WorkflowPhase {
+	case "ready":
+		return RunIdle, false, nil
+	case "blocked":
+		return RunBlocked, false, nil
+	case "implementing", "repairing":
+		parent := job.Revision
+		action, err := store.BeginScopedAction(ctx, job.ID, ActionRepositoryCommit, parent)
+		if err != nil {
+			return RunIdle, false, err
+		}
+		if action.State != ActionSucceeded {
+			observation, artifact, err := s.Repository.RepositoryCommit(ctx, job, action)
+			if err != nil {
+				_ = s.Store.UncertainAction(ctx, action.ID)
+				if attentionNeeded(err) {
+					_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+					return RunBlocked, false, nil
+				}
+				return RunIdle, false, err
+			}
+			evidenceRecord, err := s.retainEvidence(action.ID, "git-revision", action.ID, "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if err := s.reachWorkflow(ctx, BarrierCommitCreated, job.ID, action.ID); err != nil {
+				return RunIdle, false, err
+			}
+			if err := store.RecordRevision(ctx, action.ID, observation, evidenceRecord); err != nil {
+				return RunIdle, false, err
+			}
+		}
+		return RunIdle, true, nil
+	case "checking":
+		declared, err := store.DeclaredChecks(ctx, job.ID)
+		if err != nil {
+			if attentionNeeded(err) {
+				_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+				return RunBlocked, false, nil
+			}
+			return RunIdle, false, err
+		}
+		for _, declaration := range declared {
+			check, err := store.BeginCheck(ctx, job.ID, job.Revision, declaration.Name, declaration.Command)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if check.State == "passed" {
+				continue
+			}
+			if check.State == "failed" {
+				return s.handleFailedCheck(ctx, job, check)
+			}
+			observation, err := s.Repository.RepositoryCheck(ctx, job, check)
+			if err != nil {
+				if attentionNeeded(err) {
+					_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+					return RunBlocked, false, nil
+				}
+				return RunIdle, false, err
+			}
+			artifact, err := commandArtifact(observation)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			evidenceRecord, err := s.retainEvidence(check.ID, "check-output", "", check.ID, job.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if err := s.reachWorkflow(ctx, BarrierCheckExited, job.ID, check.ID); err != nil {
+				return RunIdle, false, err
+			}
+			if err := store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
+				return RunIdle, false, err
+			}
+			check.State, check.ExitCode, check.EvidenceID, check.EvidenceDigest = "passed", observation.ExitCode, evidenceRecord.ID, evidenceRecord.Digest
+			if observation.ExitCode != 0 {
+				check.State = "failed"
+				return s.handleFailedCheck(ctx, job, check)
+			}
+		}
+		if err := store.MarkReady(ctx, job.ID, job.Revision); err != nil {
+			return RunIdle, false, err
+		}
+		return RunIdle, true, nil
+	default:
+		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
+	}
+}
+
+func attentionNeeded(err error) bool {
+	var attention interface{ AttentionNeeded() bool }
+	return errors.As(err, &attention) && attention.AttentionNeeded()
+}
+
+func (s Service) handleFailedCheck(ctx context.Context, job Job, check Check) (RunDisposition, bool, error) {
+	store := s.Store.(CodingStore)
+	if job.RepairCount == 0 {
+		if _, _, err := store.AdmitRepair(ctx, check); err != nil {
+			return RunIdle, false, err
+		}
+		return RunIdle, true, nil
+	}
+	reason := fmt.Sprintf("Check %s still failed at Revision %s with exit %d", check.Name, check.Revision, check.ExitCode)
+	if err := store.BlockWorkflow(ctx, job.ID, reason); err != nil {
+		return RunIdle, false, err
+	}
+	return RunBlocked, false, nil
+}
+
+func commandArtifact(observation CommandObservation) ([]byte, error) {
+	return json.Marshal(struct {
+		Command         string    `json:"command"`
+		ExitCode        int       `json:"exit_code"`
+		StartedAt       time.Time `json:"started_at"`
+		FinishedAt      time.Time `json:"finished_at"`
+		Stdout          string    `json:"stdout"`
+		Stderr          string    `json:"stderr"`
+		StdoutTruncated bool      `json:"stdout_truncated"`
+		StderrTruncated bool      `json:"stderr_truncated"`
+		Redactions      []string  `json:"redactions"`
+	}{observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
+}
+
+func (s Service) retainEvidence(ownerID, kind, actionID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
+	blob, err := s.Evidence.Put(contents)
+	if err != nil {
+		return Evidence{}, err
+	}
+	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: "dorf-go-worker", Provenance: "observed", Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Round(time.Microsecond), FinishedAt: finishedAt.UTC().Round(time.Microsecond)}, nil
+}
+
+func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
+	barrier, ok := s.Barrier.(interface {
+		ReachWorkflow(context.Context, string, string, string) error
+	})
+	if !ok {
+		return nil
+	}
+	return barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
 func (s Service) deliverInitial(ctx context.Context, job Job, session Action, delivery Delivery) (string, error) {

@@ -3,6 +3,7 @@ package spine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"time"
 )
 
 type JobState string
@@ -25,13 +26,15 @@ const (
 type ActionKind string
 
 const (
-	ActionSandboxCreate   ActionKind = "sandbox-create"
-	ActionRepositoryClone ActionKind = "repository-clone"
-	ActionRouteCreate     ActionKind = "provider-route-create"
-	ActionSessionStart    ActionKind = "codex-session-start"
-	ActionTurnStart       ActionKind = "codex-turn-start"
-	ActionRouteRevoke     ActionKind = "provider-route-revoke"
-	ActionSandboxDelete   ActionKind = "sandbox-delete"
+	ActionSandboxCreate    ActionKind = "sandbox-create"
+	ActionRepositoryClone  ActionKind = "repository-clone"
+	ActionRepositorySetup  ActionKind = "repository-setup"
+	ActionRepositoryCommit ActionKind = "repository-commit"
+	ActionRouteCreate      ActionKind = "provider-route-create"
+	ActionSessionStart     ActionKind = "codex-session-start"
+	ActionTurnStart        ActionKind = "codex-turn-start"
+	ActionRouteRevoke      ActionKind = "provider-route-revoke"
+	ActionSandboxDelete    ActionKind = "sandbox-delete"
 )
 
 type ActionState string
@@ -61,6 +64,7 @@ type Job struct {
 	Goal               string       `json:"goal"`
 	Repository         string       `json:"repository"`
 	Revision           string       `json:"revision"`
+	StartingRevision   string       `json:"starting_revision"`
 	Branch             string       `json:"branch"`
 	ProviderConnection string       `json:"provider_connection"`
 	Model              string       `json:"model"`
@@ -74,6 +78,9 @@ type Job struct {
 	RouteID            string       `json:"route_id,omitempty"`
 	SessionID          string       `json:"session_id,omitempty"`
 	RunTerminalState   string       `json:"run_terminal_state,omitempty"`
+	WorkflowPhase      string       `json:"workflow_phase"`
+	RepairCount        int          `json:"repair_count"`
+	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
 }
 
 type Message struct {
@@ -96,6 +103,7 @@ type AgentRun struct {
 	NativeTurnID     string        `json:"native_turn_id,omitempty"`
 	NativeOutcome    string        `json:"native_outcome,omitempty"`
 	Attention        string        `json:"attention,omitempty"`
+	Role             string        `json:"role"`
 }
 
 type Delivery struct {
@@ -122,6 +130,62 @@ type Action struct {
 	State      ActionState
 	ExternalID string
 	Outcome    string
+	Scope      string
+}
+
+type CommandObservation struct {
+	Command    string
+	ExitCode   int
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Stdout     []byte
+	Stderr     []byte
+	StdoutCut  bool
+	StderrCut  bool
+	Redactions []string
+}
+
+type CommitObservation struct {
+	Parent     string    `json:"parent"`
+	Revision   string    `json:"revision"`
+	Tree       string    `json:"tree"`
+	Branch     string    `json:"branch"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type Check struct {
+	ID             string    `json:"id"`
+	JobID          string    `json:"job_id"`
+	Name           string    `json:"name"`
+	Command        string    `json:"command"`
+	Revision       string    `json:"revision"`
+	State          string    `json:"state"`
+	ExitCode       int       `json:"exit_code"`
+	EvidenceID     string    `json:"evidence_id,omitempty"`
+	EvidenceDigest string    `json:"evidence_digest,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	FinishedAt     time.Time `json:"finished_at,omitempty"`
+}
+
+type DeclaredCheck struct {
+	Name    string
+	Command string
+}
+
+type Evidence struct {
+	ID         string    `json:"id"`
+	Digest     string    `json:"digest"`
+	ByteSize   int64     `json:"byte_size"`
+	MediaType  string    `json:"media_type"`
+	Producer   string    `json:"producer"`
+	Provenance string    `json:"provenance"`
+	Kind       string    `json:"kind"`
+	ActionID   string    `json:"action_id,omitempty"`
+	CheckID    string    `json:"check_id,omitempty"`
+	Revision   string    `json:"revision,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
 type Receipt struct {
@@ -154,6 +218,18 @@ func AgentRunID(messageID string) string {
 
 func ActionID(jobID string, kind ActionKind) string {
 	return "action-" + digest(jobID+"\x00"+string(kind), 24)
+}
+
+func ScopedActionID(jobID string, kind ActionKind, scope string) string {
+	return "action-" + digest(jobID+"\x00"+string(kind)+"\x00"+scope, 24)
+}
+
+func CheckID(jobID, revision, name string) string {
+	return "check-" + digest(jobID+"\x00"+revision+"\x00"+name, 24)
+}
+
+func EvidenceID(ownerID, kind string) string {
+	return "evidence-" + digest(ownerID+"\x00"+kind, 24)
 }
 
 func TurnActionID(messageID string) string {

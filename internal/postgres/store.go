@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -50,12 +51,14 @@ type NewMessage struct {
 }
 
 type ActionView struct {
-	ID         string            `json:"id"`
-	MessageID  string            `json:"message_id,omitempty"`
-	Kind       spine.ActionKind  `json:"kind"`
-	State      spine.ActionState `json:"state"`
-	ExternalID string            `json:"external_id,omitempty"`
-	Attempts   int               `json:"attempts"`
+	ID             string            `json:"id"`
+	MessageID      string            `json:"message_id,omitempty"`
+	Kind           spine.ActionKind  `json:"kind"`
+	State          spine.ActionState `json:"state"`
+	ExternalID     string            `json:"external_id,omitempty"`
+	Attempts       int               `json:"attempts"`
+	Scope          string            `json:"scope,omitempty"`
+	EvidenceDigest string            `json:"evidence_digest,omitempty"`
 }
 
 type TaskEvidence struct {
@@ -102,7 +105,20 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql"} {
+		var migrationsTable bool
+		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
+			return err
+		}
+		if migrationsTable {
+			var applied bool
+			if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name=$1)`, name).Scan(&applied); err != nil {
+				return err
+			}
+			if applied {
+				continue
+			}
+		}
 		contents, err := migrationFiles.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
@@ -146,8 +162,8 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
-		insert into dorf.jobs(id,admission_key,goal,repository,revision,branch,provider_connection,model,reasoning_effort)
-		values($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict(admission_key) do nothing`,
+		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort)
+		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9) on conflict(admission_key) do nothing`,
 		id, input.AdmissionKey, input.Goal, input.Repository, input.Revision, input.Branch,
 		input.ProviderConnection, input.Model, input.ReasoningEffort)
 	if err != nil {
@@ -190,6 +206,9 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending') on conflict do nothing`, runID, id, existingID, actionID); err != nil {
 		return spine.Job{}, false, err
 	}
+	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,branch,generation) values($1,$2,$3,0) on conflict do nothing`, id, input.Revision, input.Branch); err != nil {
+		return spine.Job{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return spine.Job{}, false, err
 	}
@@ -215,7 +234,8 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 	}
 	defer tx.Rollback()
 	var admissionOpen bool
-	if err := tx.QueryRowContext(ctx, `select admission_open from dorf.jobs where id=$1 for update`, input.JobID).Scan(&admissionOpen); err != nil {
+	var workflowPhase string
+	if err := tx.QueryRowContext(ctx, `select admission_open,workflow_phase from dorf.jobs where id=$1 for update`, input.JobID).Scan(&admissionOpen, &workflowPhase); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return spine.Message{}, false, ErrNotFound
 		}
@@ -237,6 +257,9 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 	}
 	if !admissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
+	}
+	if workflowPhase == "checking" || workflowPhase == "repairing" || workflowPhase == "ready" || workflowPhase == "blocked" {
+		return spine.Message{}, false, fmt.Errorf("Job %s no longer accepts implementation steering after its first Revision; deterministic Check repair is workflow-owned", input.JobID)
 	}
 	if err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, input.JobID).Scan(&message.Sequence); err != nil {
 		return spine.Message{}, false, err
@@ -262,20 +285,20 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	var job spine.Job
 	err := s.DB.QueryRowContext(ctx, `
-		select j.id,j.admission_key,j.goal,j.repository,j.revision,j.branch,
+		select j.id,j.admission_key,j.goal,j.repository,j.revision,j.starting_revision,j.branch,
 		       j.provider_connection,j.model,j.reasoning_effort,j.state,j.admission_open,
 		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
 		       coalesce(sb.incus_name,''),coalesce(r.route_id,''),coalesce(se.native_session_id,''),
-		       coalesce(j.run_terminal_state,'')
+		       coalesce(j.run_terminal_state,''),j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,'')
 		from dorf.jobs j
 		left join dorf.sandboxes sb on sb.job_id=j.id
 		left join dorf.routes r on r.job_id=j.id
 		left join dorf.sessions se on se.job_id=j.id
 		where j.id=$1`, id).Scan(
-		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.Branch,
+		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.StartingRevision, &job.Branch,
 		&job.ProviderConnection, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
 		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.RouteID,
-		&job.SessionID, &job.RunTerminalState)
+		&job.SessionID, &job.RunTerminalState, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.Job{}, ErrNotFound
 	}
@@ -431,13 +454,298 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 		return spine.Action{}, err
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state='succeeded' then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,'')`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome); err != nil {
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null and scope_key='' returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
 		return spine.Action{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
 	return action, nil
+}
+
+func (s Store) BeginScopedAction(ctx context.Context, jobID string, kind spine.ActionKind, scope string) (spine.Action, error) {
+	desiredID := spine.ScopedActionID(jobID, kind, scope)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return spine.Action{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, kind, scope); err != nil {
+		return spine.Action{}, err
+	}
+	var action spine.Action
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and scope_key=$3 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind, scope).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+		return spine.Action{}, err
+	}
+	if action.ID != desiredID {
+		return spine.Action{}, fmt.Errorf("scoped Action identity conflicts for %s", scope)
+	}
+	if err := tx.Commit(); err != nil {
+		return spine.Action{}, err
+	}
+	return action, nil
+}
+
+func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spine.Evidence) error {
+	_, err := tx.ExecContext(ctx, `
+		insert into dorf.evidence(id,job_id,digest,byte_size,media_type,producer,provenance,kind,action_id,check_id,revision,started_at,finished_at)
+		values($1,$2,$3,$4,$5,$6,$7,$8,nullif($9,''),nullif($10,''),nullif($11,''),$12,$13)
+		on conflict(id) do nothing`, evidence.ID, jobID, evidence.Digest, evidence.ByteSize, evidence.MediaType,
+		evidence.Producer, evidence.Provenance, evidence.Kind, evidence.ActionID, evidence.CheckID,
+		evidence.Revision, nullableTime(evidence.StartedAt), nullableTime(evidence.FinishedAt))
+	if err != nil {
+		return err
+	}
+	var storedJobID, digest, mediaType, producer, provenance, kind, actionID, checkID, revision string
+	var size int64
+	var startedAt, finishedAt time.Time
+	if err := tx.QueryRowContext(ctx, `select job_id,digest,byte_size,media_type,producer,provenance,kind,coalesce(action_id,''),coalesce(check_id,''),coalesce(revision,''),started_at,finished_at from dorf.evidence where id=$1`, evidence.ID).Scan(&storedJobID, &digest, &size, &mediaType, &producer, &provenance, &kind, &actionID, &checkID, &revision, &startedAt, &finishedAt); err != nil {
+		return err
+	}
+	if storedJobID != jobID || digest != evidence.Digest || size != evidence.ByteSize || mediaType != evidence.MediaType || producer != evidence.Producer || provenance != evidence.Provenance || kind != evidence.Kind || actionID != evidence.ActionID || checkID != evidence.CheckID || revision != evidence.Revision || !startedAt.Equal(evidence.StartedAt) || !finishedAt.Equal(evidence.FinishedAt) {
+		return fmt.Errorf("Evidence identity %s conflicts with immutable retained metadata or content", evidence.ID)
+	}
+	return nil
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.Evidence, observation spine.CommandObservation, checks []spine.DeclaredCheck) error {
+	if len(checks) == 0 {
+		return fmt.Errorf("repository setup requires at least one pinned Check")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var jobID string
+	var kind spine.ActionKind
+	if err := tx.QueryRowContext(ctx, `select job_id,kind from dorf.actions where id=$1 for update`, actionID).Scan(&jobID, &kind); err != nil {
+		return err
+	}
+	if kind != spine.ActionRepositorySetup || evidence.ActionID != actionID {
+		return fmt.Errorf("setup Evidence does not match its Action")
+	}
+	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
+		return err
+	}
+	var startingRevision string
+	if err := tx.QueryRowContext(ctx, `select starting_revision from dorf.jobs where id=$1`, jobID).Scan(&startingRevision); err != nil {
+		return err
+	}
+	commands := append([]spine.DeclaredCheck{{Name: "prepare", Command: observation.Command}}, checks...)
+	for _, command := range commands {
+		if command.Name != "prepare" && command.Name != "check" && command.Name != "smoke" || strings.TrimSpace(command.Command) == "" {
+			return fmt.Errorf("invalid pinned repository command %q", command.Name)
+		}
+		if _, err := tx.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command,starting_revision) values($1,$2,$3,$4) on conflict do nothing`, jobID, command.Name, command.Command, startingRevision); err != nil {
+			return err
+		}
+		var storedCommand, storedRevision string
+		if err := tx.QueryRowContext(ctx, `select command,starting_revision from dorf.repository_commands where job_id=$1 and name=$2`, jobID, command.Name).Scan(&storedCommand, &storedRevision); err != nil {
+			return err
+		}
+		if storedCommand != command.Command || storedRevision != startingRevision {
+			return fmt.Errorf("repository command %s conflicts with its pinned starting Revision", command.Name)
+		}
+	}
+	state, phase, attention := "succeeded", "implementing", ""
+	if observation.ExitCode != 0 {
+		state, phase = "failed", "blocked"
+		attention = fmt.Sprintf("repository setup failed with exit %d; Evidence %s", observation.ExitCode, evidence.Digest)
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=$2,external_id=$3,external_outcome=$4,updated_at=clock_timestamp() where id=$1`, actionID, state, evidence.Digest, fmt.Sprintf("exit=%d", observation.ExitCode)); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,workflow_attention=nullif($3,'') where id=$1 and workflow_phase in ('setup','blocked')`, jobID, phase, attention)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) DeclaredChecks(ctx context.Context, jobID string) ([]spine.DeclaredCheck, error) {
+	rows, err := s.DB.QueryContext(ctx, `select name,command from dorf.repository_commands where job_id=$1 and name in ('check','smoke') order by case name when 'check' then 1 else 2 end`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var checks []spine.DeclaredCheck
+	for rows.Next() {
+		var check spine.DeclaredCheck
+		if err := rows.Scan(&check.Name, &check.Command); err != nil {
+			return nil, err
+		}
+		checks = append(checks, check)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(checks) == 0 {
+		return nil, fmt.Errorf("pinned repository contract has no Checks")
+	}
+	return checks, nil
+}
+
+func (s Store) RecordRevision(ctx context.Context, actionID string, observation spine.CommitObservation, evidence spine.Evidence) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var jobID, scope, currentRevision, branch string
+	var kind spine.ActionKind
+	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,a.scope_key,j.revision,j.branch from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &scope, &currentRevision, &branch); err != nil {
+		return err
+	}
+	if kind != spine.ActionRepositoryCommit || scope != observation.Parent || currentRevision != observation.Parent || branch != observation.Branch || evidence.ActionID != actionID || evidence.Revision != observation.Revision {
+		return fmt.Errorf("Git Revision observation conflicts with durable parent, branch, or Action")
+	}
+	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
+		return err
+	}
+	var generation int
+	if err := tx.QueryRowContext(ctx, `select coalesce(max(generation),0)+1 from dorf.revisions where job_id=$1`, jobID).Scan(&generation); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,parent_oid,tree_oid,branch,generation,action_id) values($1,$2,$3,$4,$5,$6,$7) on conflict(job_id,oid) do nothing`, jobID, observation.Revision, observation.Parent, observation.Tree, observation.Branch, generation, actionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3,updated_at=clock_timestamp() where id=$1`, actionID, observation.Revision, observation.Tree); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set revision=$2,workflow_phase='checking',workflow_attention=null where id=$1 and revision=$3`, jobID, observation.Revision, observation.Parent)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command string) (spine.Check, error) {
+	id := spine.CheckID(jobID, revision, name)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return spine.Check{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `insert into dorf.checks(id,job_id,name,command,revision,state) values($1,$2,$3,$4,$5,'running') on conflict do nothing`, id, jobID, name, command, revision); err != nil {
+		return spine.Check{}, err
+	}
+	var check spine.Check
+	if err := tx.QueryRowContext(ctx, `update dorf.checks set attempts=attempts+case when state in ('passed','failed') then 0 else 1 end where id=$1 returning id,job_id,name,command,revision,state,coalesce(exit_code,0),coalesce(evidence_id,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch')`, id).Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.StartedAt, &check.FinishedAt); err != nil {
+		return spine.Check{}, err
+	}
+	if check.Command != command {
+		return spine.Check{}, fmt.Errorf("Check %s command conflicts at Revision %s", name, revision)
+	}
+	if check.EvidenceID != "" {
+		if err := tx.QueryRowContext(ctx, `select digest from dorf.evidence where id=$1`, check.EvidenceID).Scan(&check.EvidenceDigest); err != nil {
+			return spine.Check{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return spine.Check{}, err
+	}
+	return check, nil
+}
+
+func (s Store) RecordCheck(ctx context.Context, check spine.Check, evidence spine.Evidence, observation spine.CommandObservation) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var jobID, revision, command string
+	if err := tx.QueryRowContext(ctx, `select job_id,revision,command from dorf.checks where id=$1 for update`, check.ID).Scan(&jobID, &revision, &command); err != nil {
+		return err
+	}
+	if jobID != check.JobID || revision != check.Revision || command != observation.Command || evidence.CheckID != check.ID || evidence.Revision != revision {
+		return fmt.Errorf("Check observation conflicts with its exact Revision or command")
+	}
+	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
+		return err
+	}
+	state := "passed"
+	if observation.ExitCode != 0 {
+		state = "failed"
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.checks set state=$2,exit_code=$3,evidence_id=$4,started_at=$5,finished_at=$6,attention=null where id=$1`, check.ID, state, observation.ExitCode, evidence.ID, observation.StartedAt, observation.FinishedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s Store) AdmitRepair(ctx context.Context, check spine.Check) (spine.Message, bool, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return spine.Message{}, false, err
+	}
+	defer tx.Rollback()
+	var revision, phase string
+	var repairCount int
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,repair_count from dorf.jobs where id=$1 for update`, check.JobID).Scan(&revision, &phase, &repairCount); err != nil {
+		return spine.Message{}, false, err
+	}
+	callerID := "dorf:repair:1"
+	var existing spine.Message
+	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, check.JobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input)
+	if err == nil {
+		if err := tx.Commit(); err != nil {
+			return spine.Message{}, false, err
+		}
+		return existing, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return spine.Message{}, false, err
+	}
+	if repairCount != 0 || phase != "checking" || revision != check.Revision || check.State != "failed" {
+		return spine.Message{}, false, fmt.Errorf("focused repair is not admissible for the current failed Check")
+	}
+	var sequence int64
+	if err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, check.JobID).Scan(&sequence); err != nil {
+		return spine.Message{}, false, err
+	}
+	input := fmt.Sprintf("Focused repair: the deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Repair only that failure, keep the bounded change intact, do not create a commit, and return control so Dorf can commit and rerun affected verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
+	message := spine.Message{ID: spine.MessageID(check.JobID, callerID), JobID: check.JobID, CallerID: callerID, Sequence: sequence, Input: input}
+	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, message.JobID, message.CallerID, message.Sequence, message.Input); err != nil {
+		return spine.Message{}, false, err
+	}
+	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
+	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, message.JobID, message.ID, spine.ActionTurnStart); err != nil {
+		return spine.Message{}, false, err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) select $1,$2,$3,$4,native_session_id,'repair','pending' from dorf.sessions where job_id=$2`, runID, message.JobID, message.ID, actionID)); err != nil {
+		return spine.Message{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.jobs set repair_count=1,workflow_phase='repairing',workflow_attention=null where id=$1`, check.JobID); err != nil {
+		return spine.Message{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return spine.Message{}, false, err
+	}
+	return message, true, nil
+}
+
+func (s Store) MarkReady(ctx context.Context, jobID, revision string) error {
+	var declared, passing int
+	if err := s.DB.QueryRowContext(ctx, `select count(*) from dorf.repository_commands where job_id=$1 and name in ('check','smoke')`, jobID).Scan(&declared); err != nil {
+		return err
+	}
+	if err := s.DB.QueryRowContext(ctx, `select count(*) from dorf.checks c join dorf.repository_commands r on r.job_id=c.job_id and r.name=c.name and r.command=c.command where c.job_id=$1 and c.revision=$2 and c.state='passed'`, jobID, revision).Scan(&passing); err != nil {
+		return err
+	}
+	if declared == 0 || passing != declared {
+		return fmt.Errorf("Revision %s is not ready: %d of %d pinned deterministic Checks pass", revision, passing, declared)
+	}
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2`, jobID, revision))
+}
+
+func (s Store) BlockWorkflow(ctx context.Context, jobID, reason string) error {
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1`, jobID, reason))
 }
 
 func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Receipt) error {
@@ -517,7 +825,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 			return nil, err
 		}
 	}
-	run, err := scanAgentRun(tx.QueryRowContext(ctx, `select id,job_id,message_id,action_id,coalesce(session_id,''),state,baseline_native_turn_id is not null,coalesce(baseline_native_turn_id,''),coalesce(native_turn_id,''),coalesce(native_outcome,''),coalesce(attention,'') from dorf.agent_runs where message_id=$1`, message.ID))
+	run, err := scanAgentRun(tx.QueryRowContext(ctx, `select id,job_id,message_id,action_id,coalesce(session_id,''),state,baseline_native_turn_id is not null,coalesce(baseline_native_turn_id,''),coalesce(native_turn_id,''),coalesce(native_outcome,''),coalesce(attention,''),role from dorf.agent_runs where message_id=$1`, message.ID))
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +841,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 func scanAgentRun(row *sql.Row) (spine.AgentRun, error) {
 	var run spine.AgentRun
 	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State,
-		&run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention)
+		&run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role)
 	return run, err
 }
 
@@ -675,7 +983,7 @@ func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine
 		select m.id,m.job_id,m.caller_id,m.sequence,m.input,
 		       ar.id,ar.job_id,ar.message_id,ar.action_id,coalesce(ar.session_id,''),ar.state,
 		       ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),
-		       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,'')
+		       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role
 		from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
 		where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
 		order by m.sequence limit 1`, jobID).Scan(
@@ -683,7 +991,7 @@ func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine
 		&delivery.AgentRun.ID, &delivery.AgentRun.JobID, &delivery.AgentRun.MessageID, &delivery.AgentRun.ActionID,
 		&delivery.AgentRun.SessionID, &delivery.AgentRun.State, &delivery.AgentRun.BaselineRecorded,
 		&delivery.AgentRun.BaselineTurnID, &delivery.AgentRun.NativeTurnID, &delivery.AgentRun.NativeOutcome,
-		&delivery.AgentRun.Attention)
+		&delivery.AgentRun.Attention, &delivery.AgentRun.Role)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -730,7 +1038,7 @@ func (s Store) CancelRun(ctx context.Context, jobID string) (string, error) {
 }
 
 func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) {
-	rows, err := s.DB.QueryContext(ctx, `select id,coalesce(message_id,''),kind,state,coalesce(external_id,''),attempts from dorf.actions where job_id=$1 order by created_at,id`, jobID)
+	rows, err := s.DB.QueryContext(ctx, `select a.id,coalesce(a.message_id,''),a.kind,a.state,coalesce(a.external_id,''),a.attempts,a.scope_key,coalesce(e.digest,'') from dorf.actions a left join dorf.evidence e on e.action_id=a.id where a.job_id=$1 order by a.created_at,a.id`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -738,12 +1046,52 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) 
 	var actions []ActionView
 	for rows.Next() {
 		var action ActionView
-		if err := rows.Scan(&action.ID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Attempts); err != nil {
+		if err := rows.Scan(&action.ID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Attempts, &action.Scope, &action.EvidenceDigest); err != nil {
 			return nil, err
 		}
 		actions = append(actions, action)
 	}
 	return actions, rows.Err()
+}
+
+func (s Store) Checks(ctx context.Context, jobID string) ([]spine.Check, error) {
+	rows, err := s.DB.QueryContext(ctx, `select c.id,c.job_id,c.name,c.command,c.revision,c.state,coalesce(c.exit_code,0),coalesce(c.evidence_id,''),coalesce(e.digest,''),coalesce(c.started_at,'epoch'),coalesce(c.finished_at,'epoch') from dorf.checks c left join dorf.evidence e on e.id=c.evidence_id where c.job_id=$1 order by c.started_at nulls last,c.id`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var checks []spine.Check
+	for rows.Next() {
+		var check spine.Check
+		if err := rows.Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.EvidenceDigest, &check.StartedAt, &check.FinishedAt); err != nil {
+			return nil, err
+		}
+		checks = append(checks, check)
+	}
+	return checks, rows.Err()
+}
+
+func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, error) {
+	rows, err := s.DB.QueryContext(ctx, `select id,digest,byte_size,media_type,producer,provenance,kind,coalesce(action_id,''),coalesce(check_id,''),coalesce(revision,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch') from dorf.evidence where job_id=$1 order by created_at,id`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []spine.Evidence
+	for rows.Next() {
+		var record spine.Evidence
+		if err := rows.Scan(&record.ID, &record.Digest, &record.ByteSize, &record.MediaType, &record.Producer, &record.Provenance, &record.Kind, &record.ActionID, &record.CheckID, &record.Revision, &record.StartedAt, &record.FinishedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {
+	var sequence int64
+	err := s.DB.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, jobID).Scan(&sequence)
+	return sequence, err
 }
 
 func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, error) {

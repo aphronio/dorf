@@ -31,17 +31,21 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service) {
+func Register(client *absurd.Client, service spine.Service, store postgres.Store) {
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
-		for sequence := int64(2); ; sequence++ {
+		for {
 			disposition, err := service.RunUntilIdle(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
 			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
+			}
+			sequence, err := store.NextWakeSequence(ctx, params.JobID)
+			if err != nil {
+				return Result{}, err
 			}
 			_, err = absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), absurd.AwaitEventOptions{StepName: fmt.Sprintf("message-wake-%020d", sequence)})
 			if err != nil {

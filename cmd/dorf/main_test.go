@@ -32,3 +32,19 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 		})
 	}
 }
+
+func TestReadinessUsesOnlyObservedChecksForExactCurrentRevision(t *testing.T) {
+	job := spine.Job{Revision: strings.Repeat("b", 40), WorkflowPhase: "ready"}
+	historical := spine.Check{Revision: strings.Repeat("a", 40), State: "passed"}
+	if got := readiness(job, []spine.Check{historical}); !strings.Contains(got, "no observed Check") {
+		t.Fatalf("historical Evidence proved readiness: %q", got)
+	}
+	current := spine.Check{Revision: job.Revision, State: "passed"}
+	if got := readiness(job, []spine.Check{historical, current}); !strings.HasPrefix(got, "ready") || !strings.Contains(got, "exact current Revision") {
+		t.Fatalf("current readiness=%q", got)
+	}
+	job.WorkflowPhase = "blocked"
+	if got := readiness(job, []spine.Check{current}); !strings.HasPrefix(got, "blocked") {
+		t.Fatalf("blocked readiness=%q", got)
+	}
+}

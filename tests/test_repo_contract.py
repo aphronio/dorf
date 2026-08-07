@@ -14,8 +14,10 @@ def test_dorf_repo_declares_contract() -> None:
     assert isinstance(contract.commands.get("check"), str)
     assert isinstance(contract.commands.get("smoke"), str)
     assert contract.commands.get("prepare") == (
-        "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups"
+        "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups && go mod download"
     )
+    assert contract.commands.get("check", "").startswith("go test ./... && go vet ./...")
+    assert "go build -o .dorf/bin/dorf ./cmd/dorf" in contract.commands.get("smoke", "")
     assert "review" not in contract.commands
     assert contract.review is not None
     assert contract.review.timeout_seconds == 1800

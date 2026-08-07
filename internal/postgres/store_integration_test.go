@@ -40,7 +40,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	workflow.Register(client, spine.Service{Store: store})
+	workflow.Register(client, spine.Service{Store: store}, store)
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -237,6 +237,132 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 }
 
+func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	key := fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano())
+	start := strings.Repeat("1", 40)
+	first := strings.Repeat("2", 40)
+	second := strings.Repeat("3", 40)
+	input := postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-evidence", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"}
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Round(time.Microsecond)
+	setup, err := store.BeginAction(ctx, job.ID, spine.ActionRepositorySetup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupEvidence := integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "a")
+	if err := store.RecordSetup(ctx, setup.ID, setupEvidence, spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-implementation-"+job.ID)
+	commit, err := store.BeginScopedAction(ctx, job.ID, spine.ActionRepositoryCommit, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRevisionEvidence := integrationEvidence(commit.ID, "git-revision", commit.ID, "", first, "b")
+	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.BeginCheck(ctx, job.ID, first, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := integrationEvidence(failed.ID, "check-output", "", failed.ID, first, "c")
+	if err := store.RecordCheck(ctx, failed, failedEvidence, spine.CommandObservation{Command: failed.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	failed.State, failed.ExitCode, failed.EvidenceDigest = "failed", 1, failedEvidence.Digest
+	repair, created, err := store.AdmitRepair(ctx, failed)
+	if err != nil || !created || repair.Sequence != 2 {
+		t.Fatalf("repair=%#v created=%v err=%v", repair, created, err)
+	}
+	repeated, created, err := store.AdmitRepair(ctx, failed)
+	if err != nil || created || repeated != repair {
+		t.Fatalf("repeated repair=%#v created=%v err=%v", repeated, created, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-repair-"+job.ID)
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCommit, err := store.BeginScopedAction(ctx, job.ID, spine.ActionRepositoryCommit, job.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRevisionEvidence := integrationEvidence(secondCommit.ID, "git-revision", secondCommit.ID, "", second, "d")
+	if err := store.RecordRevision(ctx, secondCommit.ID, spine.CommitObservation{Parent: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil {
+		t.Fatal(err)
+	}
+	passing, err := store.BeginCheck(ctx, job.ID, second, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	passingEvidence := integrationEvidence(passing.ID, "check-output", "", passing.ID, second, "e")
+	if err := store.RecordCheck(ctx, passing, passingEvidence, spine.CommandObservation{Command: passing.Command, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkReady(ctx, job.ID, second); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "ready" || job.Revision != second || job.StartingRevision != start || job.RepairCount != 1 {
+		t.Fatalf("ready job=%#v err=%v", job, err)
+	}
+	checks, err := store.Checks(ctx, job.ID)
+	byRevision := map[string]spine.Check{}
+	for _, check := range checks {
+		byRevision[check.Revision] = check
+	}
+	if err != nil || len(checks) != 2 || byRevision[first].State != "failed" || byRevision[second].State != "passed" {
+		t.Fatalf("historical/current Checks=%#v err=%v", checks, err)
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil || len(records) != 5 {
+		t.Fatalf("Evidence=%#v err=%v", records, err)
+	}
+	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	retainedChecks, _ := store.Checks(ctx, job.ID)
+	retainedEvidence, _ := store.Evidence(ctx, job.ID)
+	if len(retainedChecks) != len(checks) || len(retainedEvidence) != len(records) {
+		t.Fatalf("cleanup lost audit facts Checks=%d Evidence=%d", len(retainedChecks), len(retainedEvidence))
+	}
+}
+
+func integrationEvidence(owner, kind, actionID, checkID, revision, digestByte string) spine.Evidence {
+	now := time.Now().UTC().Round(time.Microsecond)
+	return spine.Evidence{ID: spine.EvidenceID(owner, kind), Digest: strings.Repeat(digestByte, 64), ByteSize: 10, MediaType: "application/vnd.dorf.observation+json", Producer: "integration-test", Provenance: "observed", Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: now, FinishedAt: now}
+}
+
+func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, sessionID, turnID string) {
+	t.Helper()
+	delivery, err := store.NextDelivery(context.Background(), jobID, sessionID)
+	if err != nil || delivery == nil {
+		t.Fatalf("next delivery=%#v err=%v", delivery, err)
+	}
+	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, delivery.AgentRun.BaselineTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(context.Background(), delivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(context.Background(), delivery.AgentRun.ID, turnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) {
 	db, store, unusedClient := testDatabase(t)
 	unusedClient.Close()
@@ -246,7 +372,7 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	workflow.Register(client, spine.Service{Store: store, Externals: externals})
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: "wake-cycles-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/wake-cycles", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
@@ -647,7 +773,7 @@ func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {
 		t.Fatalf("upgrade changed durable observation outcome/timestamps: %q %s %s", jobOutcome, jobObservedAt, runObservedAt)
 	}
 	externals := &integrationExternals{}
-	workflow.Register(client, spine.Service{Store: store, Externals: externals})
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
 	reattached, created, err := workflow.Admit(ctx, store, client, input)
 	if err != nil || created || reattached.ID != jobID || reattached.TaskID == legacyTask.TaskID {
 		t.Fatalf("upgraded v2 reattachment=%#v created=%v err=%v", reattached, created, err)
