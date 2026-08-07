@@ -81,7 +81,7 @@ exact-Revision Checks. It verifies the current Check Evidence blobs before chang
 persists the implementation request once, and runs the existing Job synchronously under its Job
 fence. It does not create a Job, branch, Sandbox, or implementation Session.
 
-After rebuilding and applying migrations through 009, use the exact identifiers printed by
+After rebuilding and applying the final review-policy schema through `007_review_policy.sql` (migration 007), use the exact identifiers printed by
 `dorf inspect --json JOB_ID`:
 
 ```bash
