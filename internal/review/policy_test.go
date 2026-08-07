@@ -17,9 +17,13 @@ func TestReviewPolicyTable(t *testing.T) {
 		roles     []Role
 	}{
 		{"green docs only", []string{"README.md", "docs/review.md"}, false, nil, "no-review", nil},
+		{"docs web marker stays documentation", []string{"docs/web/guide.md"}, false, nil, "no-review", nil},
+		{"docs auth marker stays documentation", []string{"docs/auth/README.md"}, false, nil, "no-review", nil},
 		{"browser UI", []string{"web/app.tsx"}, false, nil, "selected", []Role{RoleBrowserUI}},
 		{"authentication authority", []string{"internal/auth/policy.go"}, false, nil, "selected", []Role{RoleAuthAuthority}},
-		{"declared performance", []string{"internal/cache/cache.go"}, true, nil, "selected", []Role{RolePerformance}},
+		{"declared performance retains unknown triage", []string{"internal/cache/cache.go"}, true, nil, "triage", []Role{RolePerformance}},
+		{"covered UI plus declared performance", []string{"web/app.tsx"}, true, nil, "selected", []Role{RoleBrowserUI, RolePerformance}},
+		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, false, nil, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
 		{"mandatory plus implementation request", []string{"web/app.tsx"}, false, []Role{RoleCriticalBoundary}, "selected", []Role{RoleBrowserUI, RoleCriticalBoundary}},
 		{"unknown", []string{"internal/spine/service.go"}, false, nil, "triage", nil},
 	}

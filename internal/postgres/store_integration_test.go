@@ -512,6 +512,37 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 	}
 }
 
+func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "unknown-performance-triage")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision})
+	if err != nil || !created {
+		t.Fatalf("activation=%#v created=%t err=%v", record, created, err)
+	}
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/cache/cache.go"}, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.ReviewPlan(ctx, job.ID, revision)
+	updated, jobErr := store.Job(ctx, job.ID)
+	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || jobErr != nil || runsErr != nil || persisted.State != "triage-pending" || persisted.Initial.Decision != "triage" || !persisted.Initial.NeedsTriage || !slices.Equal(persisted.Initial.Roles, []policy.Role{policy.RolePerformance}) || updated.WorkflowPhase != "review-triage" || len(runs) != 1 || runs[0].Role != spine.ReviewTriageRole {
+		t.Fatalf("plan=%#v Job=%#v runs=%#v err=%v jobErr=%v runsErr=%v", persisted, updated, runs, err, jobErr, runsErr)
+	}
+}
+
 func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, string) {
 	t.Helper()
 	ctx := context.Background()

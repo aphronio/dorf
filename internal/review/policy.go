@@ -71,8 +71,8 @@ func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, 
 		seen[path] = true
 		clean = append(clean, path)
 		doc := documentationPath(path)
-		ui := browserUIPath(path)
-		auth := authenticationPath(path)
+		ui := !doc && browserUIPath(path)
+		auth := !doc && authenticationPath(path)
 		docsOnly = docsOnly && doc
 		browserUI = browserUI || ui
 		authentication = authentication || auth
@@ -83,7 +83,7 @@ func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, 
 		Revision: revision, BaseRevision: baseRevision, Paths: clean, ChecksGreen: true,
 		DocumentationOnly: docsOnly, BrowserUI: browserUI, Authentication: authentication,
 		DeclaredPerformance: declaredPerformance,
-		Unknown:             !docsOnly && !covered && !declaredPerformance,
+		Unknown:             !docsOnly && !covered,
 	}, nil
 }
 
