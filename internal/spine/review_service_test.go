@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -101,6 +102,42 @@ func TestReviewPhasesAdvanceBeforeImplementationFIFO(t *testing.T) {
 	}
 }
 
+func TestRepairPlanningUsesMandatoryFloorAndAffectedTargetsOnly(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	job.WorkflowPhase = "review-planning"
+	job.ReviewRepairCount = 1
+	base.jobs[job.ID] = job
+	store := newReviewDecisionStore(base)
+	store.plan = ReviewPlanRecord{
+		JobID: job.ID, Revision: job.Revision, State: "pending",
+		RequestedRoles: []policy.Role{policy.RoleBrowserUI, policy.RolePerformance, policy.RoleCriticalBoundary},
+	}
+	store.repairTargets = []policy.Role{policy.RoleCriticalBoundary}
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), job.Revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externals := &reviewDispatchExternals{fakeExternals: newFakeExternals(), facts: facts}
+	disposition, progressed, err := (Service{Store: store, Externals: externals}).advanceReview(context.Background(), job)
+	if err != nil || disposition != RunIdle || !progressed {
+		t.Fatalf("disposition=%s progressed=%t err=%v", disposition, progressed, err)
+	}
+	wantRoles := []policy.Role{policy.RoleAuthAuthority, policy.RoleCriticalBoundary}
+	wantReasons := []policy.Reason{
+		{Role: policy.RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
+		{Role: policy.RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
+	}
+	if !reflect.DeepEqual(store.recordedPolicy.Initial.Roles, wantRoles) || !reflect.DeepEqual(store.recordedPolicy.Initial.Reasons, wantReasons) || store.recordedPolicy.Initial.NeedsTriage {
+		t.Fatalf("repair policy=%#v want Roles=%v Reasons=%v without triage", store.recordedPolicy.Initial, wantRoles, wantReasons)
+	}
+	for _, reason := range store.recordedPolicy.Initial.Reasons {
+		if reason.Source == "implementation-request" {
+			t.Fatalf("repair retained optional provenance: %#v", store.recordedPolicy.Initial.Reasons)
+		}
+	}
+}
+
 var errReviewPhaseAdvanced = errors.New("review phase reached before FIFO")
 
 func boolInt(value bool) int {
@@ -115,6 +152,8 @@ type reviewDecisionStore struct {
 	plan              ReviewPlanRecord
 	reviewRuns        []ReviewRunView
 	planErr           error
+	recordedPolicy    ReviewPlanRecord
+	repairTargets     []policy.Role
 	nextDeliveryCalls int
 	repairs           int
 	ready             bool
@@ -137,7 +176,10 @@ func (s *reviewDecisionStore) ActivateReview(context.Context, ReviewActivation) 
 func (s *reviewDecisionStore) ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error) {
 	return s.plan, s.planErr
 }
-func (s *reviewDecisionStore) RecordReviewPolicy(context.Context, ReviewPlanRecord) error { return nil }
+func (s *reviewDecisionStore) RecordReviewPolicy(_ context.Context, record ReviewPlanRecord) error {
+	s.recordedPolicy = record
+	return nil
+}
 func (s *reviewDecisionStore) ReviewRuns(context.Context, string, string) ([]ReviewRunView, error) {
 	return append([]ReviewRunView(nil), s.reviewRuns...), nil
 }
@@ -171,14 +213,17 @@ func (s *reviewDecisionStore) BeginReviewWorkspaceCleanup(context.Context, strin
 	return Action{}, nil
 }
 func (s *reviewDecisionStore) ReviewRepairTargets(context.Context, string) ([]policy.Role, error) {
-	return nil, nil
+	return append([]policy.Role(nil), s.repairTargets...), nil
 }
 func (s *reviewDecisionStore) RejectReviewFinding(context.Context, string, string) error { return nil }
 
-type reviewDispatchExternals struct{ *fakeExternals }
+type reviewDispatchExternals struct {
+	*fakeExternals
+	facts policy.ChangeFacts
+}
 
 func (e *reviewDispatchExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
-	return policy.ChangeFacts{}, nil
+	return e.facts, nil
 }
 func (e *reviewDispatchExternals) ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error) {
 	return Receipt{}, nil

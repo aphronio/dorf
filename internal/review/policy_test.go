@@ -78,13 +78,26 @@ func TestTriageCanOnlyAddAllowlistedRolesOnce(t *testing.T) {
 }
 
 func TestTargetedReverificationKeepsMandatoryFloorWithoutBroadTriage(t *testing.T) {
-	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/auth/session.go", "internal/spine/service.go"}, true, false)
-	plan, _ := ReviewPolicy(facts, nil)
-	if !plan.NeedsTriage || !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority}) {
-		t.Fatalf("initial mixed plan=%#v", plan)
+	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/auth/session.go"}, true, false)
+	plan, _ := ReviewPolicy(facts, []Role{RoleBrowserUI, RolePerformance, RoleCriticalBoundary})
+	if plan.NeedsTriage || !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RolePerformance}) {
+		t.Fatalf("initial requested plan=%#v", plan)
 	}
+	originalRoles := append([]Role(nil), plan.Roles...)
+	originalReasons := append([]Reason(nil), plan.Reasons...)
 	targeted, err := TargetedReverification(plan, []Role{RoleCriticalBoundary})
-	if err != nil || targeted.NeedsTriage || !reflect.DeepEqual(targeted.Roles, []Role{RoleAuthAuthority, RoleCriticalBoundary}) {
+	wantReasons := []Reason{
+		{Role: RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
+		{Role: RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
+	}
+	if err != nil || targeted.NeedsTriage || !reflect.DeepEqual(targeted.Roles, []Role{RoleAuthAuthority, RoleCriticalBoundary}) || !reflect.DeepEqual(targeted.Reasons, wantReasons) {
 		t.Fatalf("targeted plan=%#v err=%v", targeted, err)
+	}
+	if !reflect.DeepEqual(plan.Roles, originalRoles) || !reflect.DeepEqual(plan.Reasons, originalReasons) {
+		t.Fatalf("targeted policy mutated original plan: %#v", plan)
+	}
+	overlap, err := TargetedReverification(plan, []Role{RoleAuthAuthority})
+	if err != nil || !reflect.DeepEqual(overlap.Roles, []Role{RoleAuthAuthority}) || len(overlap.Reasons) != 2 || overlap.Reasons[0].Source != "accepted-finding" || overlap.Reasons[1].Source != "mandatory" {
+		t.Fatalf("overlapping mandatory target=%#v err=%v", overlap, err)
 	}
 }

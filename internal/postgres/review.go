@@ -115,8 +115,9 @@ func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActiva
 	}
 	defer tx.Rollback()
 	var revision, phase, cleanupState string
+	var reviewRepairCount int
 	var admissionOpen bool
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,admission_open,cleanup_state from dorf.jobs where id=$1 for update`, activation.JobID).Scan(&revision, &phase, &admissionOpen, &cleanupState); err != nil {
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,admission_open,cleanup_state,review_repair_count from dorf.jobs where id=$1 for update`, activation.JobID).Scan(&revision, &phase, &admissionOpen, &cleanupState, &reviewRepairCount); err != nil {
 		return spine.ReviewPlanRecord{}, false, err
 	}
 	if !admissionOpen || cleanupState != string(spine.CleanupPending) {
@@ -124,6 +125,9 @@ func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActiva
 	}
 	if revision != activation.Revision {
 		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation Revision %s conflicts with current Revision %s", activation.Revision, revision)
+	}
+	if reviewRepairCount == 1 && len(roles) > 0 {
+		return spine.ReviewPlanRecord{}, false, fmt.Errorf("repaired Revision review activation cannot replay optional requested Roles")
 	}
 	requestedBy := strings.TrimSpace(activation.RequestedByRunID)
 	if len(roles) > 0 {

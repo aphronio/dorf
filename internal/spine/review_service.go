@@ -37,7 +37,11 @@ func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bo
 		if err != nil {
 			return s.blockReview(ctx, job.ID, "deterministic ChangeFacts failed: "+err.Error())
 		}
-		plan, err := policy.ReviewPolicy(facts, activation.RequestedRoles)
+		requested := activation.RequestedRoles
+		if job.ReviewRepairCount == 1 {
+			requested = nil
+		}
+		plan, err := policy.ReviewPolicy(facts, requested)
 		if err != nil {
 			return s.blockReview(ctx, job.ID, "mandatory ReviewPolicy rejected input: "+err.Error())
 		}

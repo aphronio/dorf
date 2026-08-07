@@ -3,6 +3,7 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -386,7 +387,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}{
 		{name: "explicit no review", paths: []string{"docs/review.md"}, phase: "ready"},
 		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, roles: []policy.Role{policy.RoleAuthAuthority}, phase: "reviewing"},
-		{name: "implementation request is bound before policy", paths: []string{"internal/auth/session.go"}, requested: []policy.Role{policy.RoleCriticalBoundary}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleCriticalBoundary}, phase: "reviewing"},
+		{name: "implementation request is bound before policy", paths: []string{"internal/auth/session.go"}, requested: []policy.Role{policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}, phase: "reviewing"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			job, revision, verifiedID := prepareReviewIntegrationJob(t, store, test.name)
@@ -540,6 +541,64 @@ func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T
 	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
 	if err != nil || jobErr != nil || runsErr != nil || persisted.State != "triage-pending" || persisted.Initial.Decision != "triage" || !persisted.Initial.NeedsTriage || !slices.Equal(persisted.Initial.Roles, []policy.Role{policy.RolePerformance}) || updated.WorkflowPhase != "review-triage" || len(runs) != 1 || runs[0].Role != spine.ReviewTriageRole {
 		t.Fatalf("plan=%#v Job=%#v runs=%#v err=%v jobErr=%v runsErr=%v", persisted, updated, runs, err, jobErr, runsErr)
+	}
+}
+
+func TestRepairedActivationRejectsOptionalRolesAndPersistsTargetedFloor(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "repaired-targeted-floor")
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set review_repair_count=1 where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	requested := []policy.Role{policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}
+	if _, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: requested}); err == nil || !strings.Contains(err.Error(), "cannot replay optional requested Roles") {
+		t.Fatalf("repaired optional activation error=%v", err)
+	}
+	if _, err := store.ReviewPlan(ctx, job.ID, revision); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rejected activation persisted a plan: %v", err)
+	}
+	waiting, err := store.Job(ctx, job.ID)
+	if err != nil || waiting.WorkflowPhase != "review-activation" {
+		t.Fatalf("rejected activation mutated Job=%#v err=%v", waiting, err)
+	}
+	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision})
+	if err != nil || !created || len(record.RequestedRoles) != 0 || record.RequestedByRunID != "" {
+		t.Fatalf("empty repaired activation=%#v created=%t err=%v", record, created, err)
+	}
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floor, err := policy.ReviewPolicy(facts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targeted, err := policy.TargetedReverification(floor, []policy.Role{policy.RoleCriticalBoundary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Facts, record.Initial, record.Final = facts, targeted, targeted
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := store.ReviewPlan(ctx, job.ID, revision)
+	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
+	wantRoles := []policy.Role{policy.RoleAuthAuthority, policy.RoleCriticalBoundary}
+	wantReasons := []policy.Reason{
+		{Role: policy.RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
+		{Role: policy.RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
+	}
+	if err != nil || runsErr != nil || !slices.Equal(persisted.Initial.Roles, wantRoles) || !slices.Equal(persisted.Initial.Reasons, wantReasons) || persisted.Initial.NeedsTriage || len(runs) != len(wantRoles) {
+		t.Fatalf("targeted plan=%#v runs=%#v err=%v runsErr=%v", persisted, runs, err, runsErr)
+	}
+	for _, reason := range persisted.Initial.Reasons {
+		if reason.Source == "implementation-request" {
+			t.Fatalf("targeted plan retained optional provenance: %#v", persisted.Initial.Reasons)
+		}
 	}
 }
 

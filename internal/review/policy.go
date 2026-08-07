@@ -187,23 +187,40 @@ func TargetedReverification(plan ReviewPlan, affected []Role) (ReviewPlan, error
 		return ReviewPlan{}, fmt.Errorf("targeted re-verification requires at least one affected Role")
 	}
 	selected := map[Role]bool{}
-	for _, role := range plan.Roles {
-		selected[role] = true
+	reasons := make([]Reason, 0, len(plan.Reasons)+len(affected))
+	for _, reason := range plan.Reasons {
+		if reason.Source != "mandatory" {
+			continue
+		}
+		if !Allowed(reason.Role) {
+			return ReviewPlan{}, fmt.Errorf("targeted re-verification contains invalid mandatory Role %q", reason.Role)
+		}
+		if !selected[reason.Role] {
+			selected[reason.Role] = true
+			reasons = append(reasons, reason)
+		}
 	}
+	affectedSeen := map[Role]bool{}
 	for _, role := range affected {
-		if !Allowed(role) {
-			return ReviewPlan{}, fmt.Errorf("targeted re-verification contains invalid Role %q", role)
+		if !Allowed(role) || affectedSeen[role] {
+			return ReviewPlan{}, fmt.Errorf("targeted re-verification contains invalid or duplicate Role %q", role)
 		}
-		if !selected[role] {
-			plan.Reasons = append(plan.Reasons, Reason{Role: role, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"})
-			selected[role] = true
-		}
+		affectedSeen[role] = true
+		selected[role] = true
+		reasons = append(reasons, Reason{Role: role, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"})
 	}
-	plan.Roles = plan.Roles[:0]
+	plan.Roles = make([]Role, 0, len(selected))
 	for role := range selected {
 		plan.Roles = append(plan.Roles, role)
 	}
 	sort.Slice(plan.Roles, func(i, j int) bool { return plan.Roles[i] < plan.Roles[j] })
+	sort.Slice(reasons, func(i, j int) bool {
+		if reasons[i].Role == reasons[j].Role {
+			return reasons[i].Source < reasons[j].Source
+		}
+		return reasons[i].Role < reasons[j].Role
+	})
+	plan.Reasons = reasons
 	plan.Decision, plan.NeedsTriage = "selected", false
 	return plan, nil
 }
