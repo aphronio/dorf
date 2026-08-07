@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	RunTaskName     = "dorf-job-messages-v2"
+	RunTaskName     = postgres.MessageTaskName
 	CleanupTaskName = "dorf-job-cleanup-v2"
 )
 
@@ -62,12 +62,23 @@ func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, inp
 	if err != nil {
 		return spine.Job{}, false, err
 	}
-	spawned, err := client.Spawn(ctx, RunTaskName, Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: "run:" + job.ID})
+	if !job.AdmissionOpen {
+		return job, created, nil
+	}
+	if err := store.CheckMessageTaskAttachment(ctx, job.ID); err != nil {
+		return spine.Job{}, false, fmt.Errorf("validate Job run task before scheduling: %w", err)
+	}
+	spawned, err := client.Spawn(ctx, RunTaskName, Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
 	if err != nil {
 		return spine.Job{}, false, fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 	}
-	if err := store.SetTaskID(ctx, job.ID, spawned.TaskID); err != nil {
-		return spine.Job{}, false, err
+	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err != nil {
+		if spawned.Created {
+			if cancelErr := client.CancelTask(ctx, config.QueueName, spawned.TaskID); cancelErr != nil {
+				return spine.Job{}, false, fmt.Errorf("attach Job message task: %w; cancel unattached task %s: %v", err, spawned.TaskID, cancelErr)
+			}
+		}
+		return spine.Job{}, false, fmt.Errorf("attach Job message task: %w", err)
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err

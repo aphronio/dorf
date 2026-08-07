@@ -23,8 +23,12 @@ const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
 	AbsurdSchemaURL     = "https://raw.githubusercontent.com/earendil-works/absurd/" + AbsurdReleaseCommit + "/sql/absurd.sql"
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
+	MessageTaskName     = "dorf-job-messages-v2"
 	initialCallerID     = "dorf:initial"
+	legacyRunTaskName   = "dorf-job-spine-v1"
 )
+
+func MessageTaskKey(jobID string) string { return "run:v2:" + jobID }
 
 type Store struct{ DB *sql.DB }
 
@@ -300,6 +304,110 @@ func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and (task_id is null or task_id=$2)`, jobID, taskID))
 }
 
+// CheckMessageTaskAttachment prevents spawning a v2 consumer while an active
+// or unrelated task is still authoritative for the Job.
+func (s Store) CheckMessageTaskAttachment(ctx context.Context, jobID string) error {
+	var taskID string
+	var admissionOpen bool
+	if err := s.DB.QueryRowContext(ctx, `select coalesce(task_id,''),admission_open from dorf.jobs where id=$1`, jobID).Scan(&taskID, &admissionOpen); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if !admissionOpen {
+		return fmt.Errorf("Job %s admission is closed; refusing to attach a message consumer", jobID)
+	}
+	if taskID == "" {
+		return nil
+	}
+	task, err := s.runTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("inspect current Absurd run task %s: %w", taskID, err)
+	}
+	return validateReplaceableRunTask(jobID, task, true)
+}
+
+// AttachMessageTask replaces only an exact terminal v1 predecessor. The old
+// Absurd task remains untouched as historical execution evidence.
+func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var currentTaskID string
+	var admissionOpen bool
+	if err := tx.QueryRowContext(ctx, `select coalesce(task_id,''),admission_open from dorf.jobs where id=$1 for update`, jobID).Scan(&currentTaskID, &admissionOpen); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if !admissionOpen {
+		return fmt.Errorf("Job %s admission closed before its message task could be attached", jobID)
+	}
+	proposed, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, proposedTaskID))
+	if err != nil {
+		return fmt.Errorf("inspect proposed Absurd message task %s: %w", proposedTaskID, err)
+	}
+	if err := validateCurrentMessageTask(jobID, proposed); err != nil {
+		return err
+	}
+	if currentTaskID != "" && currentTaskID != proposedTaskID {
+		current, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, currentTaskID))
+		if err != nil {
+			return fmt.Errorf("inspect current Absurd run task %s: %w", currentTaskID, err)
+		}
+		if err := validateReplaceableRunTask(jobID, current, false); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.jobs set task_id=$2 where id=$1`, jobID, proposedTaskID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type runTaskRecord struct {
+	ID, Name, State, JobID, IdempotencyKey string
+}
+
+func (s Store) runTask(ctx context.Context, taskID string) (runTaskRecord, error) {
+	return scanRunTask(s.DB.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID))
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanRunTask(row rowScanner) (runTaskRecord, error) {
+	var task runTaskRecord
+	err := row.Scan(&task.ID, &task.Name, &task.State, &task.JobID, &task.IdempotencyKey)
+	return task, err
+}
+
+func validateCurrentMessageTask(jobID string, task runTaskRecord) error {
+	if task.Name != MessageTaskName || task.JobID != jobID || task.IdempotencyKey != MessageTaskKey(jobID) {
+		return fmt.Errorf("Absurd task %s is not the expected %s consumer for Job %s", task.ID, MessageTaskName, jobID)
+	}
+	if task.State != "pending" && task.State != "running" && task.State != "sleeping" {
+		return fmt.Errorf("Absurd message task %s is %s, not an active consumer for open Job %s", task.ID, task.State, jobID)
+	}
+	return nil
+}
+
+func validateReplaceableRunTask(jobID string, task runTaskRecord, allowCurrentV2 bool) error {
+	if allowCurrentV2 && task.Name == MessageTaskName && task.JobID == jobID && task.IdempotencyKey == MessageTaskKey(jobID) {
+		return validateCurrentMessageTask(jobID, task)
+	}
+	if task.Name != legacyRunTaskName || task.JobID != jobID || task.IdempotencyKey != "run:"+jobID {
+		return fmt.Errorf("current Absurd task %s does not belong to Job %s as the expected %s predecessor", task.ID, jobID, legacyRunTaskName)
+	}
+	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
+		return fmt.Errorf("current predecessor task %s is %s; refusing to replace a nonterminal run", task.ID, task.State)
+	}
+	return nil
+}
+
 func (s Store) StartRun(ctx context.Context, jobID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set state='running' where id=$1 and admission_open and cleanup_state='pending'`, jobID))
 }
@@ -313,17 +421,17 @@ func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error
 }
 
 func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
-	id := spine.ActionID(jobID, kind)
+	desiredID := spine.ActionID(jobID, kind)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return spine.Action{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, id, jobID, kind); err != nil {
+	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, kind); err != nil {
 		return spine.Action{}, err
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state='succeeded' then 0 else 1 end,updated_at=clock_timestamp() where id=$1 returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,'')`, id).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome); err != nil {
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state='succeeded' then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,'')`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome); err != nil {
 		return spine.Action{}, err
 	}
 	if err := tx.Commit(); err != nil {

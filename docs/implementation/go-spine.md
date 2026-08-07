@@ -156,6 +156,15 @@ and the worker treats every event only as a hint before rereading PostgreSQL del
 PostgreSQL integration test `TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO` exercises
 that crash window and two later admissions across separate Absurd wait/wake cycles.
 
+The long-lived message consumer uses versioned Absurd idempotency identity `run:v2:<job>`. When an
+open schema-001/002 Job still points at `dorf-job-spine-v1`, repeating its complete admission may
+replace `jobs.task_id` only after PostgreSQL verifies that the old task has the exact Job params,
+legacy idempotency key, expected task name, and a terminal Absurd state. The new task is likewise
+verified as the exact live `dorf-job-messages-v2` consumer before attachment. The v1 task row remains
+historical Absurd evidence; an active predecessor, unrelated task, or key collision stops without
+overwriting the current attachment. `TestMigration003PreservesCompletedGoJobFacts` runs that real
+upgrade, reattachment, retry, later-message wake, and v1-evidence proof.
+
 ## Exact terminal and redelivery proof
 
 The remainder of this section is the retained issue #40 one-turn proof record. Its task names and
