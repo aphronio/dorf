@@ -26,6 +26,19 @@ type FindingOutput struct {
 	AffectedChecks []string `json:"affected_checks"`
 }
 
+type triageOutputWire struct {
+	Roles     *[]Role `json:"roles"`
+	Rationale string  `json:"rationale"`
+}
+
+type findingOutputWire struct {
+	Material       *bool     `json:"material"`
+	Summary        string    `json:"summary"`
+	Rationale      string    `json:"rationale"`
+	AffectedRoles  *[]Role   `json:"affected_roles"`
+	AffectedChecks *[]string `json:"affected_checks"`
+}
+
 func TriagePrompt(facts ChangeFacts) string {
 	encoded, _ := json.Marshal(facts)
 	return "You are the bounded Dorf review-triage AgentRun. Read only the immutable Revision and classify only genuinely unknown change paths. You have no coordination, write, check, readiness, or cleanup authority. You may add zero or more Roles from this exact allowlist: " + roleList() + ". Return exactly one JSON object matching " + TriageOutputContract + ". ChangeFacts: " + string(encoded)
@@ -38,10 +51,14 @@ func RolePrompt(role Role, facts ChangeFacts, declaredChecks []string) string {
 }
 
 func ParseTriageOutput(raw string) (TriageOutput, error) {
-	var output TriageOutput
-	if err := strictJSON(raw, &output); err != nil {
+	var wire triageOutputWire
+	if err := strictJSON(raw, &wire); err != nil {
 		return TriageOutput{}, fmt.Errorf("invalid bounded triage output: %w", err)
 	}
+	if wire.Roles == nil {
+		return TriageOutput{}, fmt.Errorf("invalid bounded triage output: roles is required and cannot be null")
+	}
+	output := TriageOutput{Roles: *wire.Roles, Rationale: wire.Rationale}
 	if strings.TrimSpace(output.Rationale) == "" || len(output.Rationale) > 4096 || len(output.Roles) > len(allowedRoles) {
 		return TriageOutput{}, fmt.Errorf("invalid bounded triage rationale or Role count")
 	}
@@ -56,10 +73,14 @@ func ParseTriageOutput(raw string) (TriageOutput, error) {
 }
 
 func ParseFindingOutput(raw string, role Role, declaredChecks []string) (FindingOutput, error) {
-	var output FindingOutput
-	if err := strictJSON(raw, &output); err != nil {
+	var wire findingOutputWire
+	if err := strictJSON(raw, &wire); err != nil {
 		return FindingOutput{}, fmt.Errorf("invalid bounded review output: %w", err)
 	}
+	if wire.Material == nil || wire.AffectedRoles == nil || wire.AffectedChecks == nil {
+		return FindingOutput{}, fmt.Errorf("invalid bounded review output: material, affected_roles, and affected_checks are required and cannot be null")
+	}
+	output := FindingOutput{Material: *wire.Material, Summary: wire.Summary, Rationale: wire.Rationale, AffectedRoles: *wire.AffectedRoles, AffectedChecks: *wire.AffectedChecks}
 	if strings.TrimSpace(output.Summary) == "" || strings.TrimSpace(output.Rationale) == "" || len(output.Summary) > 4096 || len(output.Rationale) > 16384 {
 		return FindingOutput{}, fmt.Errorf("review summary or rationale is empty or exceeds its bound")
 	}

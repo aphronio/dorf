@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/aphronio/dorf/internal/evidence"
 	policy "github.com/aphronio/dorf/internal/review"
 )
 
@@ -369,7 +371,7 @@ func TestReviewLostResponseReusesDistinctNativeSessionAndTurn(t *testing.T) {
 	base.runs[run.ID] = run
 	base.actions[run.ActionID] = Action{ID: run.ActionID, JobID: job.ID, Kind: ActionTurnStart, Scope: run.ID, State: ActionPending}
 	base.actions[sandboxAction.ID], base.actions[routeAction.ID], base.actions[workspaceAction.ID], base.actions[sessionAction.ID] = sandboxAction, routeAction, workspaceAction, sessionAction
-	store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, sandboxActionID: sandboxAction.ID, routeActionID: routeAction.ID, workspaceActionID: workspaceAction.ID, sessionActionID: sessionAction.ID}
+	store := &reviewRecoveryStore{codingMemoryStore: newCodingMemoryStore(base), runID: run.ID, sandboxActionID: sandboxAction.ID, routeActionID: routeAction.ID, workspaceActionID: workspaceAction.ID, sessionActionID: sessionAction.ID}
 	externals := &reviewRecoveryExternals{}
 	service := Service{Store: store, Barrier: &failBarrier{point: BarrierAfterSubmitBeforeBind}}
 	if _, err := service.executeReviewRun(context.Background(), job, run, externals, store); !errors.Is(err, errBarrier) {
@@ -580,9 +582,89 @@ func TestBoundUncertainReviewRequiresSucceededSessionAction(t *testing.T) {
 	}
 }
 
+func TestMalformedCompletedFindingBlocksWithoutPersistenceOrReadiness(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	job.WorkflowPhase = "reviewing"
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	now := time.Now().UTC()
+	run.StartedAt, run.FinishedAt = now.Add(-time.Second), now
+	base.runs[run.ID] = run
+	recoveryStore := reviewRecoveryStoreFor(base, run)
+	store := &reviewPhaseRecoveryStore{
+		reviewRecoveryStore: recoveryStore,
+		plan:                ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, State: "final", Final: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}},
+	}
+	externals := &reviewRecoveryExternals{output: `{"summary":"clear","rationale":"no issue"}`}
+	service := Service{Store: store, Externals: externals, Evidence: evidence.Store{Root: t.TempDir()}}
+
+	_, _, err := service.advanceReview(context.Background(), job)
+	settled := base.jobs[job.ID]
+	if err == nil || settled.WorkflowPhase != "blocked" || recoveryStore.recordedResults != 0 || recoveryStore.readyCalls != 0 {
+		t.Fatalf("malformed finding job=%#v recorded=%d ready=%d err=%v", settled, recoveryStore.recordedResults, recoveryStore.readyCalls, err)
+	}
+}
+
+func TestTriageRequiredRolesGatePersistenceAndExplicitEmptyMeansNoReview(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		output       string
+		wantBlocked  bool
+		wantRecorded int
+		wantNoReview bool
+	}{
+		{name: "omitted roles blocks", output: `{"rationale":"no specialized review needed"}`, wantBlocked: true},
+		{name: "null roles blocks", output: `{"roles":null,"rationale":"no specialized review needed"}`, wantBlocked: true},
+		{name: "explicit empty roles is intentional no review", output: `{"roles":[],"rationale":"no specialized review needed"}`, wantRecorded: 1, wantNoReview: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := newMemoryStore()
+			job := testJob()
+			job.WorkflowPhase = "review-triage"
+			base.jobs[job.ID] = job
+			run := preparedReviewRecoveryRunWithRole(t, base, job, ReviewTriageRole)
+			now := time.Now().UTC()
+			run.StartedAt, run.FinishedAt = now.Add(-time.Second), now
+			base.runs[run.ID] = run
+			recoveryStore := reviewRecoveryStoreFor(base, run)
+			store := &reviewPhaseRecoveryStore{
+				reviewRecoveryStore: recoveryStore,
+				plan: ReviewPlanRecord{
+					JobID: job.ID, Revision: job.Revision, State: "triage-pending", TriageRunID: run.ID,
+					Initial: policy.ReviewPlan{Decision: "triage", NeedsTriage: true},
+				},
+			}
+			externals := &reviewRecoveryExternals{output: test.output}
+			service := Service{Store: store, Externals: externals, Evidence: evidence.Store{Root: t.TempDir()}}
+
+			disposition, progressed, err := service.advanceReview(context.Background(), job)
+			settled := base.jobs[job.ID]
+			blocked := settled.WorkflowPhase == "blocked"
+			if err != nil || blocked != test.wantBlocked || recoveryStore.recordedTriage != test.wantRecorded || recoveryStore.readyCalls != 0 {
+				t.Fatalf("disposition=%s progressed=%t job=%#v recorded=%d ready=%d plan=%#v err=%v", disposition, progressed, settled, recoveryStore.recordedTriage, recoveryStore.readyCalls, recoveryStore.triagePlan, err)
+			}
+			if test.wantBlocked && (disposition != RunBlocked || progressed) {
+				t.Fatalf("malformed triage disposition=%s progressed=%t", disposition, progressed)
+			}
+			if test.wantNoReview && (!progressed || recoveryStore.triagePlan.Decision != "no-review" || recoveryStore.triagePlan.NeedsTriage || len(recoveryStore.triagePlan.Roles) != 0 || settled.WorkflowPhase != "ready") {
+				t.Fatalf("explicit empty triage did not settle no-review: disposition=%s progressed=%t plan=%#v job=%#v", disposition, progressed, recoveryStore.triagePlan, settled)
+			}
+		})
+	}
+}
+
 func preparedReviewRecoveryRun(t *testing.T, base *memoryStore, job Job) AgentRun {
+	return preparedReviewRecoveryRunWithRole(t, base, job, string(policy.RoleCriticalBoundary))
+}
+
+func preparedReviewRecoveryRunWithRole(t *testing.T, base *memoryStore, job Job, role string) AgentRun {
 	t.Helper()
-	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
+	outputContract := policy.FindingOutputContract
+	if role == ReviewTriageRole {
+		outputContract = policy.TriageOutputContract
+	}
+	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, role), JobID: job.ID, Revision: job.Revision, Role: role, Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: outputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
 	run.ReviewerSandboxID = ReviewSandboxName(run.ID)
 	run.ActionID = ScopedActionID(job.ID, ActionTurnStart, run.ID)
 	base.runs[run.ID] = run
@@ -599,7 +681,7 @@ func preparedReviewRecoveryRun(t *testing.T, base *memoryStore, job Job) AgentRu
 
 func reviewRecoveryStoreFor(base *memoryStore, run AgentRun) *reviewRecoveryStore {
 	return &reviewRecoveryStore{
-		memoryStore:       base,
+		codingMemoryStore: newCodingMemoryStore(base),
 		runID:             run.ID,
 		sandboxActionID:   ScopedActionID(run.JobID, ActionSandboxCreate, run.ID),
 		routeActionID:     ScopedActionID(run.JobID, ActionRouteCreate, run.ID),
@@ -628,7 +710,7 @@ func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) 
 			for _, action := range actions {
 				base.actions[action.ID] = action
 			}
-			store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, sandboxActionID: actions[ActionSandboxCreate].ID, routeActionID: actions[ActionRouteCreate].ID, workspaceActionID: actions[ActionReviewWorkspaceCreate].ID, sessionActionID: actions[ActionSessionStart].ID}
+			store := &reviewRecoveryStore{codingMemoryStore: newCodingMemoryStore(base), runID: run.ID, sandboxActionID: actions[ActionSandboxCreate].ID, routeActionID: actions[ActionRouteCreate].ID, workspaceActionID: actions[ActionReviewWorkspaceCreate].ID, sessionActionID: actions[ActionSessionStart].ID}
 			externals := &reviewRecoveryExternals{initialErr: reviewAttentionTestError(reason)}
 			if reason == "foreign logical controller identity" {
 				externals.initialErr = nil
@@ -644,9 +726,14 @@ func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) 
 }
 
 type reviewRecoveryStore struct {
-	*memoryStore
+	*codingMemoryStore
 	runID, sandboxActionID, routeActionID, workspaceActionID, sessionActionID string
-	recordedResults                                                           int
+	recordedResults, recordedTriage, readyCalls                               int
+	triagePlan                                                                policy.ReviewPlan
+}
+
+func newCodingMemoryStore(base *memoryStore) *codingMemoryStore {
+	return &codingMemoryStore{memoryStore: base, checks: map[string]Check{}, evidence: map[string]Evidence{}}
 }
 
 type reviewPhaseRecoveryStore struct {
@@ -712,13 +799,26 @@ func (s *reviewRecoveryStore) RecordReviewResult(context.Context, string, Native
 	s.recordedResults++
 	return nil
 }
-func (s *reviewRecoveryStore) RecordTriageResult(context.Context, string, NativeTurn, Evidence, Evidence, policy.ReviewPlan, string) error {
+func (s *reviewRecoveryStore) RecordTriageResult(_ context.Context, runID string, _ NativeTurn, _, _ Evidence, final policy.ReviewPlan, _ string) error {
+	s.recordedTriage++
+	s.triagePlan = final
+	if final.Decision == "no-review" {
+		s.mu.Lock()
+		run := s.runs[runID]
+		job := s.jobs[run.JobID]
+		job.WorkflowPhase = "ready"
+		s.jobs[run.JobID] = job
+		s.mu.Unlock()
+	}
 	return nil
 }
 func (s *reviewRecoveryStore) AdmitReviewRepair(context.Context, string, string) (Message, bool, error) {
 	return Message{}, false, nil
 }
-func (s *reviewRecoveryStore) MarkReviewReady(context.Context, string, string) error { return nil }
+func (s *reviewRecoveryStore) MarkReviewReady(context.Context, string, string) error {
+	s.readyCalls++
+	return nil
+}
 func (s *reviewRecoveryStore) BeginReviewWorkspaceCleanup(context.Context, string) (Action, error) {
 	return Action{}, nil
 }
@@ -738,6 +838,7 @@ func (s *reviewRecoveryStore) ReviewRepairTargets(context.Context, string) ([]po
 func (s *reviewRecoveryStore) RejectReviewFinding(context.Context, string, string) error { return nil }
 
 type reviewRecoveryExternals struct {
+	*fakeExternals
 	mu               sync.Mutex
 	submissions      int
 	turn             NativeTurn
@@ -750,6 +851,7 @@ type reviewRecoveryExternals struct {
 	controllerID     string
 	store            *reviewRecoveryStore
 	boundBeforeWait  bool
+	output           string
 }
 
 func (e *reviewRecoveryExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
@@ -832,6 +934,9 @@ func (e *reviewRecoveryExternals) ReviewWait(_ context.Context, _ Job, run Agent
 		e.boundBeforeWait = persisted.SessionID == "review-session" && persisted.NativeTurnID == "review-turn" && persisted.State == AgentRunActive
 	}
 	e.turn.Status = "completed"
-	e.turn.Output = `{"material":false,"summary":"clear","rationale":"clear","affected_roles":[],"affected_checks":[]}`
+	e.turn.Output = e.output
+	if e.turn.Output == "" {
+		e.turn.Output = `{"material":false,"summary":"clear","rationale":"clear","affected_roles":[],"affected_checks":[]}`
+	}
 	return e.reviewBinding(run), nil
 }
