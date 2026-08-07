@@ -1,5 +1,9 @@
 # Go durable Job messages and Session recovery
 
+Issue #37 extends this spine with repository setup, programmatic commits, Checks, repair, and
+content-addressed Evidence. See
+[Revision-pinned repository Checks and Evidence](revision-evidence.md) for its exact terminal.
+
 This is the executable terminal for issues #40 and #41. A complete Job and every later client
 message are admitted to Dorf-owned PostgreSQL facts, scheduled or woken through Absurd, delivered by
 a Go worker to one credential-free Incus Sandbox, and observed through one resumable Codex native
@@ -322,7 +326,8 @@ The parent #36 ledger should receive the captured output from the exact block ab
 
 Repo-owned Incus image and host-provisioning assets remain as operational evidence. Python
 Checks/review/PR policy also remains for later replacement slices, but the package no longer
-publishes a Python `dorf` CLI or `Dorf` facade and the Go path does not preserve `.dorf.toml`,
+publishes a Python `dorf` CLI or `Dorf` facade. Issue #37 deliberately adopts the readable
+`.dorf.toml` commands as the Go coding-workflow contract without preserving Python runtime,
 Worker, Room, or Assignment compatibility.
 
 Do not post `routes.json`, gateway authority, route keys, environment dumps, or Codex transcript

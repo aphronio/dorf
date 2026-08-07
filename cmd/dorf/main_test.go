@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -30,5 +31,18 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestInspectionReadinessDoesNotTrustPersistedReadyPhaseWithoutEvidence(t *testing.T) {
+	job := spine.Job{ID: "job-inspect", Revision: strings.Repeat("b", 40), WorkflowPhase: "ready"}
+	assessment := spine.AssessReadiness(job, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}, nil, nil, evidence.Store{Root: t.TempDir()})
+	if assessment.Ready || assessment.Status != "not_ready" || !strings.Contains(assessment.Reason, "Evidence") {
+		t.Fatalf("row-only readiness=%#v", assessment)
+	}
+	job.WorkflowPhase = "blocked"
+	assessment = spine.AssessReadiness(job, nil, nil, nil, evidence.Store{Root: t.TempDir()})
+	if assessment.Status != "blocked" {
+		t.Fatalf("blocked readiness=%#v", assessment)
 	}
 }

@@ -40,7 +40,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	workflow.Register(client, spine.Service{Store: store})
+	workflow.Register(client, spine.Service{Store: store}, store)
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -237,6 +237,283 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 }
 
+func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	key := fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano())
+	start := strings.Repeat("1", 40)
+	first := strings.Repeat("2", 40)
+	second := strings.Repeat("3", 40)
+	input := postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-evidence", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"}
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Round(time.Microsecond)
+	setup, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupEvidence := integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "a")
+	if err := store.RecordSetup(ctx, setup.ID, setupEvidence, spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-implementation-"+job.ID)
+	commit, started, err := store.BeginCommit(ctx, job.ID, start)
+	if err != nil || !started {
+		t.Fatalf("first commit started=%v err=%v", started, err)
+	}
+	firstRevisionEvidence := integrationEvidence(commit.ID, "git-revision", commit.ID, "", first, "b")
+	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.BeginCheck(ctx, job.ID, first, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := integrationEvidence(failed.ID, "check-output", "", failed.ID, first, "c")
+	if err := store.RecordCheck(ctx, failed, failedEvidence, spine.CommandObservation{Command: failed.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	failed.State, failed.ExitCode, failed.EvidenceDigest = "failed", 1, failedEvidence.Digest
+	repair, created, err := store.AdmitRepair(ctx, failed)
+	if err != nil || !created || repair.Sequence != 2 {
+		t.Fatalf("repair=%#v created=%v err=%v", repair, created, err)
+	}
+	repeated, created, err := store.AdmitRepair(ctx, failed)
+	if err != nil || created || repeated != repair {
+		t.Fatalf("repeated repair=%#v created=%v err=%v", repeated, created, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-repair-"+job.ID)
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCommit, started, err := store.BeginCommit(ctx, job.ID, job.Revision)
+	if err != nil || !started {
+		t.Fatalf("second commit started=%v err=%v", started, err)
+	}
+	secondRevisionEvidence := integrationEvidence(secondCommit.ID, "git-revision", secondCommit.ID, "", second, "d")
+	if err := store.RecordRevision(ctx, secondCommit.ID, spine.CommitObservation{Parent: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil {
+		t.Fatal(err)
+	}
+	passing, err := store.BeginCheck(ctx, job.ID, second, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	passingEvidence := integrationEvidence(passing.ID, "check-output", "", passing.ID, second, "e")
+	if err := store.RecordCheck(ctx, passing, passingEvidence, spine.CommandObservation{Command: passing.Command, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkReady(ctx, job.ID, second, nil); err == nil || !strings.Contains(err.Error(), "verified Evidence") {
+		t.Fatalf("row-only readiness error=%v", err)
+	}
+	if err := store.MarkReady(ctx, job.ID, second, []string{passingEvidence.ID}); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "ready" || job.Revision != second || job.StartingRevision != start || job.RepairCount != 1 {
+		t.Fatalf("ready job=%#v err=%v", job, err)
+	}
+	checks, err := store.Checks(ctx, job.ID)
+	byRevision := map[string]spine.Check{}
+	for _, check := range checks {
+		byRevision[check.Revision] = check
+	}
+	if err != nil || len(checks) != 2 || byRevision[first].State != "failed" || byRevision[second].State != "passed" {
+		t.Fatalf("historical/current Checks=%#v err=%v", checks, err)
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil || len(records) != 5 {
+		t.Fatalf("Evidence=%#v err=%v", records, err)
+	}
+	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	retainedChecks, _ := store.Checks(ctx, job.ID)
+	retainedEvidence, _ := store.Evidence(ctx, job.ID)
+	if len(retainedChecks) != len(checks) || len(retainedEvidence) != len(records) {
+		t.Fatalf("cleanup lost audit facts Checks=%d Evidence=%d", len(retainedChecks), len(retainedEvidence))
+	}
+}
+
+func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	start := strings.Repeat("7", 40)
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: fmt.Sprintf("setup-retry-%d", time.Now().UnixNano()), Goal: "bounded setup retry", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/setup-retry", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Round(time.Microsecond)
+	failed, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := integrationEvidence(failed.ID, "repository-setup", failed.ID, "", start, "8")
+	observation := spine.CommandObservation{Command: "go mod download", ExitCode: 127, StartedAt: now, FinishedAt: now}
+	declared := []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}
+	collidingPublic, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "setup-retry:toolchain-repair-1", Input: "ordinary caller input"})
+	if err != nil || !created || collidingPublic.Sequence != 2 {
+		t.Fatalf("public collision setup=%#v created=%v err=%v", collidingPublic, created, err)
+	}
+	if err := store.RecordSetup(ctx, failed.ID, failedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.RetrySetup(ctx, job.ID, "invalid-no-wake", " "); err == nil {
+		t.Fatal("setup retry admitted an Action without a valid durable wake")
+	}
+	job, err = store.Job(ctx, job.ID)
+	actions, actionsErr := store.Actions(ctx, job.ID)
+	invalidActionID := spine.ScopedActionID(job.ID, spine.ActionRepositorySetup, "invalid-no-wake")
+	invalidActionPresent := false
+	for _, action := range actions {
+		invalidActionPresent = invalidActionPresent || action.ID == invalidActionID
+	}
+	if err != nil || actionsErr != nil || job.WorkflowPhase != "blocked" || invalidActionPresent {
+		t.Fatalf("invalid retry mutated Job=%#v Actions=%#v err=%v actionsErr=%v", job, actions, err, actionsErr)
+	}
+
+	retry, wake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || !retryCreated || retry.ID == failed.ID || retry.Scope != "toolchain-repair-1" || wake.Sequence != 3 {
+		t.Fatalf("retry=%#v wake=%#v created=%v err=%v", retry, wake, retryCreated, err)
+	}
+	nextWake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || nextWake != wake.Sequence {
+		t.Fatalf("setup retry race selected wake sequence %d, want retry sequence %d: %v", nextWake, wake.Sequence, err)
+	}
+	repeated, repeatedWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, " toolchain-repair-1 ", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || repeated != retry || repeatedWake != wake {
+		t.Fatalf("idempotent retry=%#v wake=%#v created=%v err=%v", repeated, repeatedWake, retryCreated, err)
+	}
+	if err := store.RecordSetup(ctx, failed.ID, failedEvidence, observation, declared); err == nil {
+		t.Fatal("superseded failed setup Action was allowed to mutate the current workflow")
+	}
+	current, err := store.BeginSetup(ctx, job.ID)
+	if err != nil || current.ID != retry.ID {
+		t.Fatalf("current setup=%#v err=%v", current, err)
+	}
+	retryFailedEvidence := integrationEvidence(retry.ID, "repository-setup", retry.ID, "", start, "9")
+	if err := store.RecordSetup(ctx, retry.ID, retryFailedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	terminalRetry, terminalWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || terminalRetry.ID != retry.ID || terminalRetry.State != spine.ActionFailed || terminalWake != wake {
+		t.Fatalf("terminal exact retry=%#v wake=%#v created=%v err=%v", terminalRetry, terminalWake, retryCreated, err)
+	}
+	secondRetry, secondWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-2", "operator repaired the declared toolchain again")
+	if err != nil || !retryCreated || secondRetry.ID == retry.ID {
+		t.Fatalf("second retry=%#v created=%v err=%v", secondRetry, retryCreated, err)
+	}
+	supersededRetry, supersededWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || supersededRetry.ID != retry.ID || supersededRetry.State != spine.ActionFailed || supersededWake != wake {
+		t.Fatalf("superseded exact retry=%#v wake=%#v created=%v err=%v", supersededRetry, supersededWake, retryCreated, err)
+	}
+	passedEvidence := integrationEvidence(secondRetry.ID, "repository-setup", secondRetry.ID, "", start, "a")
+	observation.ExitCode = 0
+	if err := store.RecordSetup(ctx, secondRetry.ID, passedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "implementing" {
+		t.Fatalf("recovered Job=%#v err=%v", job, err)
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil || len(records) != 3 || records[0].ID != failedEvidence.ID || records[1].ID != retryFailedEvidence.ID || records[2].ID != passedEvidence.ID {
+		t.Fatalf("retained setup Evidence=%#v err=%v", records, err)
+	}
+	if _, _, _, err := store.RetrySetup(ctx, job.ID, "unjustified-second-retry", "not justified after success"); err == nil {
+		t.Fatal("successful setup admitted another retry generation")
+	}
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	closedRetry, closedWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-2", "operator repaired the declared toolchain again")
+	if err != nil || retryCreated || closedRetry.ID != secondRetry.ID || closedRetry.State != spine.ActionSucceeded || closedWake != secondWake {
+		t.Fatalf("closed exact retry=%#v wake=%#v created=%v err=%v", closedRetry, closedWake, retryCreated, err)
+	}
+}
+
+func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	start := strings.Repeat("6", 40)
+	key := fmt.Sprintf("commit-admission-boundary-%d", time.Now().UnixNano())
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/commit-boundary", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	setup, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSetup(ctx, setup.ID, integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "f"), spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session-" + job.ID
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-initial-"+job.ID)
+	if delivery, err := store.NextDelivery(ctx, job.ID, sessionID); err != nil || delivery != nil {
+		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
+	}
+
+	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-before-commit", Input: "include this bounded steering"})
+	if err != nil || !created {
+		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
+	}
+	if action, started, err := store.BeginCommit(ctx, job.ID, start); err != nil || started || action.ID != "" {
+		t.Fatalf("commit crossed admitted FIFO action=%#v started=%v err=%v", action, started, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-late-"+job.ID)
+	action, started, err := store.BeginCommit(ctx, job.ID, start)
+	if err != nil || !started || action.ID == "" {
+		t.Fatalf("commit reservation action=%#v started=%v err=%v", action, started, err)
+	}
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-commit", Input: "must not run"}); err == nil || !strings.Contains(err.Error(), "no longer accepts implementation steering") {
+		t.Fatalf("post-boundary admission error=%v", err)
+	}
+	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: late.CallerID, Input: late.Input})
+	if err != nil || created || retry != late {
+		t.Fatalf("idempotent admitted retry=%#v created=%v err=%v", retry, created, err)
+	}
+}
+
+func integrationEvidence(owner, kind, actionID, checkID, revision, digestByte string) spine.Evidence {
+	now := time.Now().UTC().Round(time.Microsecond)
+	return spine.Evidence{ID: spine.EvidenceID(owner, kind), Digest: strings.Repeat(digestByte, 64), ByteSize: 10, MediaType: "application/vnd.dorf.observation+json", Producer: "integration-test", Provenance: "observed", Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: now, FinishedAt: now}
+}
+
+func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, sessionID, turnID string) {
+	t.Helper()
+	delivery, err := store.NextDelivery(context.Background(), jobID, sessionID)
+	if err != nil || delivery == nil {
+		t.Fatalf("next delivery=%#v err=%v", delivery, err)
+	}
+	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, delivery.AgentRun.BaselineTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(context.Background(), delivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(context.Background(), delivery.AgentRun.ID, turnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) {
 	db, store, unusedClient := testDatabase(t)
 	unusedClient.Close()
@@ -246,7 +523,7 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
-	workflow.Register(client, spine.Service{Store: store, Externals: externals})
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: "wake-cycles-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/wake-cycles", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
@@ -274,6 +551,10 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second", Input: "second"})
 	if err != nil || !created || second.Sequence != 2 {
 		t.Fatalf("crash-window admission=%#v created=%v err=%v", second, created, err)
+	}
+	nextWake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || nextWake != second.Sequence {
+		t.Fatalf("idle/admission race selected wake sequence %d, want pending sequence %d: %v", nextWake, second.Sequence, err)
 	}
 	retried, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: job.ID, CallerID: "second", Input: "second"})
 	if err != nil || created || retried != second {
@@ -647,7 +928,7 @@ func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {
 		t.Fatalf("upgrade changed durable observation outcome/timestamps: %q %s %s", jobOutcome, jobObservedAt, runObservedAt)
 	}
 	externals := &integrationExternals{}
-	workflow.Register(client, spine.Service{Store: store, Externals: externals})
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
 	reattached, created, err := workflow.Admit(ctx, store, client, input)
 	if err != nil || created || reattached.ID != jobID || reattached.TaskID == legacyTask.TaskID {
 		t.Fatalf("upgraded v2 reattachment=%#v created=%v err=%v", reattached, created, err)

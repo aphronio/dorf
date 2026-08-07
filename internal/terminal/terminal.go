@@ -9,6 +9,7 @@ import (
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -16,6 +17,10 @@ type Externals struct {
 	Sandbox incus.Sandbox
 	Gateway gateway.Gateway
 	Agent   codex.Agent
+}
+
+func (e Externals) repository() repository.Manager {
+	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
 }
 
 func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
@@ -27,6 +32,28 @@ func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, _ spine.A
 	name := e.Sandbox.Name(job.ID)
 	err := e.Sandbox.ReconcileClone(ctx, name, job.Repository, job.Revision, job.Branch)
 	return spine.Receipt{ExternalID: name + ":" + e.Sandbox.Config.Workspace}, err
+}
+
+func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
+	manager := e.repository()
+	contract, err := manager.LoadContract(ctx, e.Sandbox.Name(job.ID))
+	if err != nil {
+		return spine.CommandObservation{}, nil, err
+	}
+	observation, err := manager.RunCommand(ctx, e.Sandbox.Name(job.ID), action.ID, job.StartingRevision, contract.Prepare)
+	checks := make([]spine.DeclaredCheck, 0, len(contract.Checks))
+	for _, check := range contract.Checks {
+		checks = append(checks, spine.DeclaredCheck{Name: check.Name, Command: check.Command})
+	}
+	return observation, checks, err
+}
+
+func (e Externals) RepositoryCommit(ctx context.Context, job spine.Job, action spine.Action) (spine.CommitObservation, []byte, error) {
+	return e.repository().Commit(ctx, e.Sandbox.Name(job.ID), action.ID, job.ID, job.Branch, job.Revision, job.RepairCount+1)
+}
+
+func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spine.Check) (spine.CommandObservation, error) {
+	return e.repository().RunCommand(ctx, e.Sandbox.Name(job.ID), check.ID, job.Revision, check.Command)
 }
 
 func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {

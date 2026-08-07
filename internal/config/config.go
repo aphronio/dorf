@@ -23,6 +23,7 @@ type Config struct {
 	Workspace        string
 	AppServerPort    int
 	TurnTimeout      time.Duration
+	EvidenceRoot     string
 }
 
 func Load() (Config, error) {
@@ -39,9 +40,13 @@ func Load() (Config, error) {
 		Workspace:        "/workspace/job",
 		AppServerPort:    4500,
 		TurnTimeout:      45 * time.Minute,
+		EvidenceRoot:     value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DORF_DATABASE_URL is required (use a local PostgreSQL DSN; Dorf does not start Docker or use a cloud account)")
+	}
+	if !filepath.IsAbs(cfg.EvidenceRoot) {
+		return Config{}, fmt.Errorf("DORF_EVIDENCE_ROOT must be an absolute deployment-owned path")
 	}
 	if raw := strings.TrimSpace(os.Getenv("DORF_CODEX_TURN_TIMEOUT")); raw != "" {
 		duration, err := time.ParseDuration(raw)

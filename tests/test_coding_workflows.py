@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from dorf.command_runner import CommandInterrupted, shell_command
-from dorf.repo_contract import RepoContract, ReviewAgent, ReviewConfig
 from dorf.runtime import (
     AgentConversationInspection,
     ArtifactInput,
@@ -17,15 +15,12 @@ from dorf.runtime import (
     WorkerTurnOutcome,
 )
 from dorf.workflows import (
-    AcceptanceItem,
     CodingStore,
     CodingWorkflow,
     WorkflowFailure,
     build_coding_job_pulse,
-    run_coding_job_command,
 )
-from dorf.workflows.coding import verify_job_readiness
-from dorf.workflows.coding_commands import prepare_coding_repository
+from dorf.workflows.coding import CommandInterrupted
 
 
 class Agent:
@@ -275,7 +270,6 @@ def workflow(
     job,
     github,
     *,
-    contract=None,
     reviewer=None,
 ):
     binding = store.get_job_binding(job.job_name)
@@ -283,7 +277,6 @@ def workflow(
     return CodingWorkflow(
         store=store,
         job=job,
-        contract=contract or RepoContract(mode="generic", commands={}, env={}),
         execution=JobExecution(binding, runtime, environment, Agent(), lambda job: "token"),
         deepseek_diff_review=reviewer or DiffReviewer(store),
         github_client=lambda: github,
@@ -331,169 +324,6 @@ def test_coding_store_has_no_superseded_session_or_duplicate_turn_tables(tmp_pat
     }
     assert not {"worker_name", "room_id", "assignment_id", "conversation_id"} & coding_columns
 
-def test_coding_command_runs_in_assignment_workspace_and_records_fact_evidence(
-    tmp_path,
-) -> None:
-    store, environment, agent, runtime, job, binding = make_coding_job(tmp_path)
-    execution = JobExecution(binding, runtime, environment, agent, lambda job: "token")
-
-    run = run_coding_job_command(
-        store,
-        execution,
-        job,
-        binding,
-        RepoContract(mode="generic", commands={}, env={}),
-        shell_command("check", "true"),
-    )
-
-    assert run.status == "succeeded"
-    assert run.git_commit_before == run.git_commit_after == "b" * 40
-    process_binding, _argv, options = environment.processes[-1]
-    assert process_binding == binding
-    assert options["cwd"] == "/workspace/jobs/checkout-perf"
-    assert options["env"]["DORF_JOB_NAME"] == "checkout-perf"
-    assert options["env"]["DORF_ASSIGNMENT_ID"] == binding.assignment.id
-    event = store.documents.list_events("checkout-perf")[-1]
-    assert (event.source, event.provenance, event.kind) == (
-        "workflow",
-        "fact",
-        "command-result",
-    )
-    assert event.related["assignment"] == binding.assignment.id
-    assert event.artifacts[0].name == "check-output.log"
-
-
-def test_repository_preparation_is_a_recorded_repo_owned_command(tmp_path) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
-    contract = RepoContract(
-        mode="configured",
-        commands={"prepare": "uv sync --frozen"},
-        env={},
-    )
-
-    run = prepare_coding_repository(store, environment, job, binding, contract)
-
-    assert run is not None
-    assert (run.kind, run.command, run.status) == (
-        "prepare",
-        "uv sync --frozen",
-        "succeeded",
-    )
-    assert environment.processes[-1][2]["cwd"] == binding.workspace
-
-
-def test_repository_preparation_is_optional_for_generic_repositories(tmp_path) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
-
-    run = prepare_coding_repository(
-        store,
-        environment,
-        job,
-        binding,
-        RepoContract(mode="generic", commands={}, env={}),
-    )
-
-    assert run is None
-    assert environment.processes == []
-
-
-def test_failed_repository_preparation_stops_before_an_agent_turn(tmp_path) -> None:
-    store, environment, agent, _runtime, _job, binding = make_coding_job(tmp_path)
-    contract = RepoContract(
-        mode="configured",
-        commands={"prepare": "false"},
-        env={},
-    )
-
-    run = prepare_coding_repository(
-        store,
-        environment,
-        store.get_coding_job(binding.job.name),
-        binding,
-        contract,
-    )
-
-    assert run is not None
-    assert run.exit_code == 1
-    assert agent.turns == []
-
-
-def test_readiness_uses_current_assignment_and_passing_command_at_head(tmp_path) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
-    store.record_command_run(
-        job.job_name,
-        "check",
-        "check-command",
-        "succeeded",
-        0,
-        git_commit_before="b" * 40,
-        git_commit_after="b" * 40,
-    )
-
-    readiness = verify_job_readiness(
-        store,
-        environment,
-        job,
-        RepoContract(mode="configured", commands={"check": "check-command"}, env={}),
-        github_client=lambda: GitHubClient(),
-    )
-
-    assert readiness.failures == []
-    assert store.get_job_binding(job.job_name) == binding
-
-
-def test_readiness_refreshes_credentials_on_current_assignment_and_retries_push(
-    tmp_path,
-) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
-    pushes = 0
-    original_execute = environment.execute
-
-    def execute(actual_binding, argv=None, **kwargs):
-        nonlocal pushes
-        if argv is None:
-            argv = actual_binding
-            actual_binding = None
-        else:
-            assert actual_binding == binding
-        if argv[:2] == ["git", "push"]:
-            pushes += 1
-            if pushes == 1:
-                return subprocess.CompletedProcess(argv, 1, "", "Authentication failed")
-        return original_execute(actual_binding, argv, **kwargs)
-
-    environment.execute = execute
-    class BehindGitHub(GitHubClient):
-        def get_branch_sha(self, repo, branch):
-            return "c" * 40
-
-    readiness = verify_job_readiness(
-        store,
-        environment,
-        job,
-        RepoContract(mode="generic", commands={}, env={}),
-        github_client=lambda: BehindGitHub(),
-    )
-
-    assert readiness.failures == []
-    assert environment.refreshed == [True]
-    assert pushes == 2
-
-
-def test_check_command_does_not_receive_provider_route_credential(tmp_path) -> None:
-    store, environment, _agent, _runtime, job, binding = make_coding_job(tmp_path)
-
-    run_coding_job_command(
-        store,
-        environment,
-        job,
-        binding,
-        RepoContract(mode="configured", commands={"check": "env"}, env={}),
-        shell_command("check", "env"),
-    )
-
-    assert environment.processes[-1][2]["provider_route"] is False
-
 
 def test_followup_without_new_feedback_reads_current_assignment_and_keeps_job_open(
     tmp_path,
@@ -514,17 +344,8 @@ def test_followup_without_new_feedback_reads_current_assignment_and_keeps_job_op
 def test_verify_publishes_ready_pr_without_ending_job_or_worker(tmp_path) -> None:
     store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
     github = GitHubClient()
-    contract = RepoContract(
-        mode="configured",
-        commands={},
-        env={},
-        review=ReviewConfig(
-            max_rounds=1,
-            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
-        ),
-    )
 
-    outcome = workflow(store, environment, runtime, job, github, contract=contract).verify()
+    outcome = workflow(store, environment, runtime, job, github).verify()
 
     assert outcome.messages[-1].text == "Verify passed for checkout-perf"
     assert store.get_coding_job("checkout-perf").status == "ready"
@@ -534,91 +355,12 @@ def test_verify_publishes_ready_pr_without_ending_job_or_worker(tmp_path) -> Non
     assert not any("codex exec" in item[1][-1] for item in environment.processes)
 
 
-def test_verify_freezes_and_requires_commit_pinned_acceptance_before_ready(tmp_path) -> None:
-    store, environment, _agent, runtime, job, binding = make_coding_job(tmp_path)
-    contract = RepoContract(
-        mode="configured",
-        commands={"check": "true", "smoke": "true"},
-        env={},
-    )
-    store.record_acceptance_checklist(
-        job.job_name,
-        goal=binding.job.goal,
-        items=(
-            AcceptanceItem(
-                "issue-1",
-                "Behavior is correct",
-                "issue",
-                "command",
-                "check",
-                "true",
-            ),
-            AcceptanceItem(
-                "repo-check", "Checks pass", "contract", "command", "check", "true"
-            ),
-            AcceptanceItem(
-                "repo-smoke", "Smoke passes", "contract", "command", "smoke", "true"
-            ),
-        ),
-    )
-    github = GitHubClient()
-
-    workflow(store, environment, runtime, job, github, contract=contract).verify()
-
-    accepted = store.get_acceptance_checklist(job.job_name)
-    ready = store.get_coding_job(job.job_name)
-    assert accepted.state == "governing"
-    assert ready.status == "ready"
-    assert ready.metadata["proof_commit"] == "b" * 40
-    assert {run.kind for run in store.list_command_runs(job.job_name)} >= {
-        "check",
-        "smoke",
-        "verify-role:diff",
-    }
-    assert "# Dorf proof dossier · checkout-perf" in github.comments[0]
-    assert "## Acceptance status" in github.comments[0]
-    assert "`bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`" in github.comments[0]
-
-
-def test_mark_ready_freezes_acceptance_before_a_failed_readiness_attempt(tmp_path) -> None:
-    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
-    store.record_acceptance_checklist(
-        job.job_name,
-        goal="Pinned goal",
-        items=(AcceptanceItem("manual", "Human check", "human", "manual", ""),),
-    )
-    original_execute = environment.execute
-
-    def execute(binding, argv, **kwargs):
-        if argv == ["git", "status", "--porcelain"]:
-            return subprocess.CompletedProcess(argv, 0, "dirty.txt\n", "")
-        return original_execute(binding, argv, **kwargs)
-
-    environment.execute = execute
-
-    with pytest.raises(WorkflowFailure):
-        workflow(store, environment, runtime, job, GitHubClient()).mark_ready()
-
-    assert store.get_acceptance_checklist(job.job_name).state == "governing"
-
-
-def test_afk_takeover_interrupts_an_abandoned_smoke_run(tmp_path) -> None:
-    store, _environment, _agent, _runtime, job, _binding = make_coding_job(tmp_path)
-    run = store.create_command_run(job.job_name, "smoke", "smoke-command", "")
-
-    interrupted = store.interrupt_abandoned_afk_runs(job.job_name)
-
-    assert [item.id for item in interrupted] == [run.id]
-    assert store.get_command_run(run.id).status == "interrupted"
-
-
 def test_verify_reports_unrecovered_job_turn_without_accessing_session_fields(tmp_path) -> None:
     store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
     add_recovery_required_job_turn(store, runtime, job.job_name)
-    contract = RepoContract(mode="generic", commands={}, env={})
 
     with pytest.raises(WorkflowFailure) as raised:
-        workflow(store, environment, runtime, job, GitHubClient(), contract=contract).verify()
+        workflow(store, environment, runtime, job, GitHubClient()).verify()
 
     assert raised.value.kind == "needs-human"
     assert "unrecovered Job turn" in raised.value.messages[-1].text
@@ -643,14 +385,13 @@ def test_followup_reports_unrecovered_job_turn_as_controlled_outcome(tmp_path) -
     assert store.get_job(job.job_name).status == "open"
 
 
-def test_review_finding_repairs_through_same_job_fifo_then_rechecks(tmp_path) -> None:
+def test_review_finding_repairs_through_same_job_fifo_then_rereviews(tmp_path) -> None:
     finding = "- [P1] Cover the regression"
     clean = "DORF_REVIEW_NO_FINDINGS"
     store, environment, agent, runtime, job, _binding = make_coding_job(tmp_path)
     initial = store.list_job_inputs(job.job_name)[0]
     assert runtime.deliver_input(job.job_name, initial.id).status == "succeeded"
     github = GitHubClient()
-    contract = RepoContract(mode="configured", commands={"check": "true"}, env={})
     reviewer = DiffReviewer(store, [finding, clean])
 
     def commit_decision():
@@ -665,7 +406,6 @@ def test_review_finding_repairs_through_same_job_fifo_then_rechecks(tmp_path) ->
         runtime,
         job,
         github,
-        contract=contract,
         reviewer=reviewer,
     ).verify()
 
@@ -675,7 +415,6 @@ def test_review_finding_repairs_through_same_job_fifo_then_rechecks(tmp_path) ->
     assert "DeepSeek diff advisory findings" in inputs[1].text
     assert len(agent.turns) == 2
     assert reviewer.commits == ["b" * 40, "c" * 40]
-    assert sum(item[1][-1] == "true" for item in environment.processes) == 2
     assert store.get_job(job.job_name).status == "open"
 
 
@@ -824,6 +563,8 @@ def test_interrupted_deepseek_run_stays_interrupted_without_consuming_attention(
         ).verify()
 
     assert raised.value.kind == "interrupted"
+    assert raised.value.exit_code == 130
+    assert raised.value.messages[-1].text == "Verify interrupted for checkout-perf."
     current = store.get_coding_job(job.job_name)
     assert "diff_verifier_attention" not in current.metadata
 
@@ -939,15 +680,6 @@ def test_afk_composes_the_same_job_assignment_through_ready_pr(tmp_path) -> None
     assert runtime.deliver_input(job.job_name, initial.id).status == "succeeded"
     store.claim_afk_coordinator("example/repo", 139, "owner")
     store.link_afk_job("example/repo", 139, "owner", job.job_name)
-    contract = RepoContract(
-        mode="configured",
-        commands={},
-        env={},
-        review=ReviewConfig(
-            max_rounds=1,
-            agents={"codex": ReviewAgent("codex", "codex exec {dorf_review_prompt}")},
-        ),
-    )
     reviewer = DiffReviewer(store)
 
     outcome = workflow(
@@ -956,7 +688,6 @@ def test_afk_composes_the_same_job_assignment_through_ready_pr(tmp_path) -> None
         runtime,
         job,
         GitHubClient(),
-        contract=contract,
         reviewer=reviewer,
     ).coordinate_afk(issue_number=139, target_repo="example/repo", owner_token="owner")
 
@@ -1142,32 +873,3 @@ def test_afk_pulse_ended_runtime_job_overrides_stale_active_workflow_state(tmp_p
     assert pulse.latest_delta.updated_at == pulse.lifecycle.updated_at
     assert pulse.observed_activity.status == "settled"
     assert pulse.attention.state == "none"
-
-
-def test_verify_bounds_repeated_gate_failures_as_needs_human(tmp_path) -> None:
-    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
-    initial = store.list_job_inputs(job.job_name)[0]
-    assert runtime.deliver_input(job.job_name, initial.id).status == "succeeded"
-
-    with pytest.raises(WorkflowFailure) as raised:
-        workflow(
-            store,
-            environment,
-            runtime,
-            job,
-            GitHubClient(),
-            contract=RepoContract(
-                mode="configured",
-                commands={"check": "false"},
-                env={},
-                review=ReviewConfig(
-                    max_rounds=1,
-                    agents={
-                        "droid": ReviewAgent(name="droid", command="reviewer {dorf_review_prompt}")
-                    },
-                ),
-            ),
-        ).verify()
-
-    assert raised.value.kind == "needs-human"
-    assert store.get_job("checkout-perf").status == "open"

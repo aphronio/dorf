@@ -6,7 +6,6 @@ from .coding import (
     WorkflowMessage,
     WorkflowOutcome,
 )
-from .coding_commands import prepare_coding_repository, run_coding_job_command
 from .coding_dossier import (
     AcceptanceResult,
     DossierArtifact,
@@ -15,7 +14,6 @@ from .coding_dossier import (
     ProofEvidence,
     acceptance_is_proven,
     build_proof_dossier,
-    compile_acceptance_checklist,
     render_proof_dossier,
 )
 from .coding_pulse import (
@@ -65,8 +63,5 @@ __all__ = [
     "acceptance_is_proven",
     "build_coding_job_pulse",
     "build_proof_dossier",
-    "compile_acceptance_checklist",
-    "prepare_coding_repository",
-    "run_coding_job_command",
     "render_proof_dossier",
 ]

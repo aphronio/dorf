@@ -1,9 +1,11 @@
+import signal
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from dorf.workflows.coding import CommandInterrupted
 from dorf.workflows.coding_store import CodingStore
 from dorf.workflows.shadow_verifier import run_shadow_review
 
@@ -92,4 +94,45 @@ def test_shadow_review_cleans_up_when_clone_fails(tmp_path: Path) -> None:
             store, job(store), dorf, Gateway(), GitHub(), "super-secret-value"
         )
 
+    assert dorf.ended == [(dorf.name, True)]
+
+
+def test_shadow_review_persists_interrupted_run_and_translates_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = CodingStore.open(tmp_path / "state.sqlite3")
+    dorf = FakeDorf(Execution())
+
+    class InterruptedProcess:
+        pid = 1234
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            if timeout == 1800:
+                raise KeyboardInterrupt
+            self.returncode = -15
+            return self.returncode
+
+    process = InterruptedProcess()
+    stopped = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        "dorf.workflows.shadow_verifier.os.killpg",
+        lambda pid, sig: stopped.append((pid, sig)),
+    )
+
+    with pytest.raises(CommandInterrupted) as raised:
+        run_shadow_review(
+            store, job(store), dorf, Gateway(), GitHub(), "super-secret-value"
+        )
+
+    runs = store.list_command_runs("job")
+    assert len(runs) == 1
+    assert raised.value.run == runs[0]
+    assert (runs[0].status, runs[0].exit_code) == ("interrupted", 130)
+    assert stopped == [(process.pid, signal.SIGTERM)]
     assert dorf.ended == [(dorf.name, True)]

@@ -31,17 +31,21 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service) {
+func Register(client *absurd.Client, service spine.Service, store postgres.Store) {
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
-		for sequence := int64(2); ; sequence++ {
+		for {
 			disposition, err := service.RunUntilIdle(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
 			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
+			}
+			sequence, err := store.NextWakeSequence(ctx, params.JobID)
+			if err != nil {
+				return Result{}, err
 			}
 			_, err = absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), absurd.AwaitEventOptions{StepName: fmt.Sprintf("message-wake-%020d", sequence)})
 			if err != nil {
@@ -95,6 +99,24 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same caller ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
+}
+
+// RetrySetup atomically records a new setup Action generation and its FIFO
+// wake, then emits the recoverable Absurd event hint.
+func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID, retryID, input string) (spine.Action, spine.Message, bool, error) {
+	action, message, created, err := store.RetrySetup(ctx, jobID, retryID, input)
+	if err != nil {
+		return action, message, created, err
+	}
+	if action.State == spine.ActionFailed {
+		return action, message, false, nil
+	}
+	// Events carry no delivery truth. Re-emission is the recovery path for a
+	// crash after the Action/message transaction and before this wake hint.
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), Wake{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
+		return action, message, created, fmt.Errorf("setup retry message %s sequence %d was accepted, but its wake hint failed; retry the same setup identity and input: %w", message.ID, message.Sequence, err)
+	}
+	return action, message, created, nil
 }
 
 func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (spine.Job, error) {

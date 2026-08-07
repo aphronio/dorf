@@ -6,17 +6,87 @@ import json
 import os
 import secrets
 import shlex
+import signal
+import subprocess
 from pathlib import Path
 from typing import Protocol
 
-from dorf.command_runner import CommandSpec, run_job_command
 from dorf.github_app import GitHubRepositoryClient
 from dorf.provider_gateway import ProviderGateway
+from dorf.workflows.coding import CommandInterrupted
 from dorf.workflows.coding_store import CodingJob, CodingStore
 
 CLONE = "/workspace/verifier"
 NO_FINDINGS = "DORF_REVIEW_NO_FINDINGS"
 MODEL = "deepseek-v4-flash"
+
+
+def _stop_review_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def _run_review_command(
+    store: CodingStore,
+    job: CodingJob,
+    command: list[str],
+    *,
+    preview: str,
+    timeout_seconds: int,
+):
+    run = store.create_command_run(job.job_name, "verify-role:diff", preview, "")
+    output_path = (
+        store.database_path.parent / "runs" / "coding" / job.job_name / str(run.id) / "output.log"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    store.set_command_run_output_path(run.id, str(output_path))
+
+    with output_path.open("w") as output:
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=Path("/"),
+                env=os.environ.copy(),
+                stdin=subprocess.DEVNULL,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+        except FileNotFoundError:
+            output.write(f"Command not found: {command[0]}\n")
+            return store.finish_command_run(run.id, "failed", 127)
+        except OSError as error:
+            output.write(f"Could not launch review command: {preview}: {error}\n")
+            return store.finish_command_run(run.id, "failed", 126)
+        try:
+            exit_code = process.wait(timeout=timeout_seconds)
+            status = "succeeded" if exit_code == 0 else "failed"
+        except subprocess.TimeoutExpired:
+            _stop_review_process(process)
+            output.write(f"Command timed out after {timeout_seconds} seconds.\n")
+            exit_code, status = 124, "timed_out"
+        except KeyboardInterrupt:
+            _stop_review_process(process)
+            interrupted = store.finish_command_run(run.id, "interrupted", 130)
+            raise CommandInterrupted(interrupted) from None
+        except BaseException:
+            _stop_review_process(process)
+            raise
+    return store.finish_command_run(run.id, status, exit_code)
 
 
 class ReviewSandboxController(Protocol):
@@ -128,17 +198,12 @@ git -C {CLONE} diff {shlex.quote(job.target_start_sha)}..{commit} >/tmp/dorf-rev
         command = execution.process_command(
             ["bash", "-lc", pi], cwd=CLONE, provider_route=True
         )
-        run = run_job_command(
+        run = _run_review_command(
             store,
-            job.job_name,
-            Path("/"),
-            CommandSpec(
-                kind="verify-role:diff",
-                command=command,
-                preview=f"pi deepseek-v4-flash shadow diff at {commit}",
-                timeout_seconds=1800,
-            ),
-            os.environ.copy(),
+            job,
+            command,
+            preview=f"pi deepseek-v4-flash shadow diff at {commit}",
+            timeout_seconds=1800,
         )
         return store.set_command_run_git_commits(
             run.id, before=commit, after=commit if run.exit_code == 0 else None

@@ -17,6 +17,7 @@ import (
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
+	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -65,10 +66,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return admit(ctx, store, client, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
+	case "setup-retry":
+		return setupRetry(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
-		return inspect(ctx, store, args[1:], stdout, stderr)
+		return inspect(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
+	case "evidence":
+		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
 	default:
@@ -89,8 +94,10 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, 
 		client.Close()
 		return nil, spine.Service{}, err
 	}
-	service := spine.Service{Store: postgres.Store{DB: db}, Externals: terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}, Barrier: barrier}
-	workflow.Register(client, service)
+	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}
+	store := postgres.Store{DB: db}
+	service := spine.Service{Store: store, Externals: externals, Repository: externals, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
+	workflow.Register(client, service, store)
 	return client, service, nil
 }
 
@@ -113,7 +120,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 003_exactly_once_messages.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 006_setup_retry.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -187,6 +194,28 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "created": created, "accepted": true})
 }
 
+func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("setup-retry", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	retryID := set.String("id", "", "stable operator identity for this retry generation")
+	inputFile := set.String("input-file", "", "file containing the durable repair/wake note")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("setup-retry requires one Job ID")
+	}
+	input, err := readInput(*inputFile, "setup-retry", "repair note")
+	if err != nil {
+		return err
+	}
+	action, message, created, err := workflow.RetrySetup(ctx, store, client, set.Arg(0), *retryID, input)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"job_id": action.JobID, "action_id": action.ID, "action_state": action.State, "message_id": message.ID, "retry_created": created, "wake_sequence": message.Sequence})
+}
+
 func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -216,7 +245,7 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	return err
 }
 
-func inspect(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
+func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
@@ -238,6 +267,19 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err != nil {
 		return err
 	}
+	checks, err := store.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	evidenceRecords, err := store.Evidence(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	declared, declaredErr := store.DeclaredChecks(ctx, job.ID)
+	if declaredErr != nil {
+		declared = nil
+	}
+	assessment := spine.AssessReadiness(job, declared, checks, evidenceRecords, evidenceStore)
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -246,11 +288,14 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "messages": messages, "actions": actions, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
+	view := map[string]any{"job": job, "readiness": assessment, "claims": map[string]any{"implementation_agent_runs": messages, "authority": "Codex native Session; agent statements are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s @ %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
+	if job.WorkflowAttention != "" {
+		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+	}
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints)
 	if job.RunTerminalState != "" {
 		if job.RunTerminalState == "cancelled" && !job.AdmissionOpen {
@@ -262,7 +307,7 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
 	}
-	fmt.Fprintln(stdout, "  transcript: Codex-owned native context (not stored by Dorf)")
+	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
 	for _, message := range messages {
 		description := describeMessage(message, messages)
 		if !job.AdmissionOpen && message.State == spine.AgentRunPending {
@@ -271,8 +316,61 @@ func inspect(ctx context.Context, store postgres.Store, args []string, stdout, s
 		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
 	}
 	for _, action := range actions {
-		fmt.Fprintf(stdout, "  action %s: %s attempts=%d external=%s\n", action.Kind, action.State, action.Attempts, empty(action.ExternalID))
+		fmt.Fprintf(stdout, "  observed action %s: %s attempts=%d external=%s evidence=%s\n", action.Kind, action.State, action.Attempts, empty(action.ExternalID), empty(action.EvidenceDigest))
 	}
+	for _, check := range checks {
+		scope := "historical"
+		if check.Revision == job.Revision {
+			scope = "current"
+		}
+		fmt.Fprintf(stdout, "  observed Check %s [%s]: %s Revision=%s exit=%d evidence=%s\n", check.Name, scope, check.State, check.Revision, check.ExitCode, empty(check.EvidenceDigest))
+	}
+	for _, record := range evidenceRecords {
+		verification := "verified"
+		if err := evidenceStore.Verify(record.Digest, record.ByteSize); err != nil {
+			verification = "INVALID: " + err.Error()
+		}
+		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d provenance=%s producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Provenance, record.Producer, empty(record.Revision), verification)
+	}
+	return nil
+}
+
+func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("evidence", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 2 || set.Arg(0) != "verify" {
+		return fmt.Errorf("evidence requires: verify JOB_ID")
+	}
+	job, err := store.Job(ctx, set.Arg(1))
+	if err != nil {
+		return err
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := evidenceStore.Verify(record.Digest, record.ByteSize); err != nil {
+			return fmt.Errorf("Evidence %s: %w", record.ID, err)
+		}
+		fmt.Fprintf(stdout, "%s sha256=%s bytes=%d verified\n", record.ID, record.Digest, record.ByteSize)
+	}
+	declared, err := store.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	checks, err := store.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	verified, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore)
+	if err != nil {
+		return fmt.Errorf("current Revision %s readiness Evidence: %w", job.Revision, err)
+	}
+	fmt.Fprintf(stdout, "Revision %s: %d proving Evidence artifacts independently verified against Check rows\n", job.Revision, len(verified))
 	return nil
 }
 
@@ -402,6 +500,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|worker|inspect|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
