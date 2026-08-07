@@ -457,7 +457,18 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 	case spine.ActionRouteCreate:
 		_, err = tx.ExecContext(ctx, `insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'active') on conflict(job_id) do update set route_id=excluded.route_id,state='active',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
 	case spine.ActionSessionStart:
-		_, err = tx.ExecContext(ctx, `insert into dorf.sessions(job_id,action_id,native_session_id) values($1,$2,$3) on conflict(job_id) do update set native_session_id=excluded.native_session_id,observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
+		var result sql.Result
+		result, err = tx.ExecContext(ctx, `insert into dorf.sessions(job_id,action_id,native_session_id) values($1,$2,$3) on conflict(job_id) do update set native_session_id=excluded.native_session_id,observed_at=clock_timestamp() where dorf.sessions.native_session_id=excluded.native_session_id`, jobID, id, receipt.ExternalID)
+		if err == nil {
+			var affected int64
+			affected, err = result.RowsAffected()
+			if err == nil && affected != 1 {
+				err = fmt.Errorf("native Session binding conflicts with the recorded Session for Job %s", jobID)
+			}
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `update dorf.agent_runs set session_id=$2,updated_at=clock_timestamp() where job_id=$1 and (session_id is null or session_id=$2)`, jobID, receipt.ExternalID)
+		}
 	case spine.ActionRouteRevoke:
 		_, err = tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1`, jobID)
 	case spine.ActionSandboxDelete:
@@ -498,17 +509,19 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending') on conflict do nothing`, actionID, jobID, message.ID, spine.ActionTurnStart); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,$5,'implement','pending') on conflict do nothing`, runID, jobID, message.ID, actionID, sessionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,nullif($5,''),'implement','pending') on conflict do nothing`, runID, jobID, message.ID, actionID, sessionID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where message_id=$1 and (session_id is null or session_id=$2)`, message.ID, sessionID); err != nil {
-		return nil, err
+	if sessionID != "" {
+		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where message_id=$1 and (session_id is null or session_id=$2)`, message.ID, sessionID); err != nil {
+			return nil, err
+		}
 	}
 	run, err := scanAgentRun(tx.QueryRowContext(ctx, `select id,job_id,message_id,action_id,coalesce(session_id,''),state,baseline_native_turn_id is not null,coalesce(baseline_native_turn_id,''),coalesce(native_turn_id,''),coalesce(native_outcome,''),coalesce(attention,'') from dorf.agent_runs where message_id=$1`, message.ID))
 	if err != nil {
 		return nil, err
 	}
-	if run.SessionID != sessionID {
+	if sessionID != "" && run.SessionID != sessionID {
 		return nil, fmt.Errorf("AgentRun %s is bound to native Session %s, not %s", run.ID, run.SessionID, sessionID)
 	}
 	if err := tx.Commit(); err != nil {

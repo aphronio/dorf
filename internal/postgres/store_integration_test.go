@@ -346,8 +346,15 @@ func (e *integrationExternals) RepositoryClone(_ context.Context, job spine.Job,
 func (e *integrationExternals) RouteCreate(_ context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
 	return e.receipt(job, action)
 }
-func (e *integrationExternals) AgentSession(_ context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	return spine.Receipt{ExternalID: "integration-session-" + job.ID}, nil
+func (e *integrationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery) (string, spine.NativeTurn, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.turns) == 0 {
+		turn := spine.NativeTurn{ID: "integration-turn-" + delivery.Message.ID, Status: "running"}
+		e.submitted = append(e.submitted, delivery.Message.Sequence)
+		e.turns = append(e.turns, turn)
+	}
+	return "integration-session-" + job.ID, e.turns[0], nil
 }
 func (e *integrationExternals) AgentTurns(_ context.Context, _ spine.Job, _ string) ([]spine.NativeTurn, error) {
 	e.mu.Lock()

@@ -100,7 +100,7 @@ kill -KILL "$WORKER_PID"
 wait "$WORKER_PID" || true
 sleep 11
 
-# 2. Codex accepted turn/start, but Dorf has not bound its native ID.
+# 2. Codex accepted turn/start, but Dorf has bound neither the Session nor native turn ID.
 DORF_PROOF_FAULT_BARRIER='after-submit-before-bind' ./bin/dorf worker --once &
 export WORKER_PID=$!
 while kill -0 "$WORKER_PID" 2>/dev/null && ! test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-after-submit-before-bind.ready"; do sleep 0.1; done
@@ -162,6 +162,16 @@ unloaded. Only after PostgreSQL/native-history reconciliation proves the next in
 submit does Dorf call `thread/resume`; its response must return the exact bound native Session ID
 before `turn/start` is allowed. A rejection records only the safe protocol method category, never
 the app-server's arbitrary message or data.
+
+Codex 0.146.0 does not create a rollout for an empty `thread/start`; closing that WebSocket can
+discard the thread before another connection can read it. For FIFO sequence 1 only, Dorf therefore
+keeps `thread/start` and the first `turn/start` on one protocol connection and does not complete the
+Session Action until the native turn is accepted. If the connection dies before acceptance, the
+empty thread has no durable identity and recovery starts the still-unsettled initial delivery again.
+If acceptance may have happened, recovery lists the isolated Sandbox's Sessions and reads the one
+persisted turn before deciding; it adopts that exact Session/turn and does not query or trust
+`clientUserMessageId` deduplication. Multiple Sessions or turns persist attention instead of being
+guessed. Once sequence 1 is bound, all later FIFO inputs use the read/reconcile/resume flow above.
 
 Message admission and its Absurd wake hint do not commit atomically. The honest crash invariant is:
 PostgreSQL commits the immutable message and FIFO sequence first, then Dorf emits the deterministic

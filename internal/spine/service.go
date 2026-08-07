@@ -27,7 +27,7 @@ type Externals interface {
 	SandboxCreate(context.Context, Job, Action) (Receipt, error)
 	RepositoryClone(context.Context, Job, Action) (Receipt, error)
 	RouteCreate(context.Context, Job, Action) (Receipt, error)
-	AgentSession(context.Context, Job, Action) (Receipt, error)
+	AgentInitialTurn(context.Context, Job, Delivery) (string, NativeTurn, error)
 	AgentTurns(context.Context, Job, string) ([]NativeTurn, error)
 	AgentSubmit(context.Context, Job, Delivery) (NativeTurn, error)
 	AgentWait(context.Context, Job, string, string) (NativeTurn, error)
@@ -98,9 +98,27 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	if err != nil {
 		return RunIdle, err
 	}
-	sessionID, err := s.reconcileSession(ctx, job)
+	session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
 	if err != nil {
-		return RunIdle, fmt.Errorf("reconcile native Session: %w", err)
+		return RunIdle, err
+	}
+	sessionID := session.ExternalID
+	if session.State != ActionSucceeded {
+		delivery, err := s.Store.NextDelivery(ctx, jobID, "")
+		if err != nil {
+			return RunIdle, err
+		}
+		if delivery == nil || delivery.Message.Sequence != 1 {
+			return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
+		}
+		switch delivery.AgentRun.State {
+		case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
+			return RunBlocked, nil
+		}
+		sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
+		if err != nil {
+			return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
+		}
 	}
 	for {
 		job, err = s.Store.Job(ctx, jobID)
@@ -127,23 +145,56 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	}
 }
 
-func (s Service) reconcileSession(ctx context.Context, job Job) (string, error) {
-	action, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
+func (s Service) deliverInitial(ctx context.Context, job Job, session Action, delivery Delivery) (string, error) {
+	run := delivery.AgentRun
+	if run.SessionID != "" {
+		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun is bound while its native Session action is unsettled")
+	}
+	if !run.BaselineRecorded {
+		if err := s.Store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
+			return "", err
+		}
+		run.BaselineRecorded, run.State = true, AgentRunSubmitting
+		delivery.AgentRun = run
+	} else if run.BaselineTurnID != "" {
+		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun has a nonempty native baseline")
+	}
+	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
+		return "", err
+	}
+	if err := s.Store.BeginTurnSubmission(ctx, run.ID); err != nil {
+		return "", err
+	}
+	sessionID, turn, err := s.Externals.AgentInitialTurn(ctx, job, delivery)
 	if err != nil {
+		var attention interface{ AttentionNeeded() bool }
+		if errors.As(err, &attention) && attention.AttentionNeeded() {
+			_ = s.Store.UncertainAction(ctx, session.ID)
+			return "", s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		}
+		var definite interface{ DefiniteNoSubmit() bool }
+		if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
+			_ = s.Store.UncertainAction(ctx, session.ID)
+			return "", s.Store.FailAgentRun(ctx, run.ID, err.Error())
+		}
+		_ = s.Store.UncertainAction(ctx, session.ID)
+		_ = s.Store.AgentRunAttention(ctx, run.ID, "initial native submission is awaiting isolated Session reconciliation: "+err.Error())
 		return "", err
 	}
-	if action.State == ActionSucceeded {
-		return action.ExternalID, nil
+	if sessionID == "" || turn.ID == "" {
+		_ = s.Store.UncertainAction(ctx, session.ID)
+		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial native submission returned an incomplete Session or turn binding")
 	}
-	receipt, err := s.Externals.AgentSession(ctx, job, action)
-	if err != nil {
-		_ = s.Store.UncertainAction(ctx, action.ID)
+	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 		return "", err
 	}
-	if err := s.Store.CompleteAction(ctx, action.ID, receipt); err != nil {
+	if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID}); err != nil {
 		return "", err
 	}
-	return receipt.ExternalID, nil
+	if err := s.Store.BindNativeTurn(ctx, run.ID, turn.ID, turn.Status); err != nil {
+		return "", err
+	}
+	return sessionID, nil
 }
 
 func (s Service) deliver(ctx context.Context, job Job, delivery Delivery) error {

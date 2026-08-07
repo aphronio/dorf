@@ -51,9 +51,8 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	return spine.Receipt{ExternalID: route.ID}, nil
 }
 
-func (e Externals) AgentSession(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	sessionID, err := e.Agent.EnsureSession(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, job.SessionID, job.Model)
-	return spine.Receipt{ExternalID: sessionID}, err
+func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, spine.NativeTurn, error) {
+	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentTurns(ctx context.Context, job spine.Job, sessionID string) ([]spine.NativeTurn, error) {

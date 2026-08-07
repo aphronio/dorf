@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -351,6 +352,76 @@ func TestResumeRefusesSubstituteThreadBeforeTurnStart(t *testing.T) {
 	case request := <-requests:
 		t.Fatalf("unexpected request after mismatched resume: %v", request["method"])
 	default:
+	}
+}
+
+func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) {
+	var threadStarts atomic.Int32
+	var turnStarts atomic.Int32
+	var persisted atomic.Bool
+	var durableSession atomic.Value
+	server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			if !persisted.Load() {
+				return map[string]any{"data": []any{}}, false
+			}
+			return map[string]any{"data": []any{map[string]any{"id": durableSession.Load().(string), "status": map[string]any{"type": "notLoaded"}}}}, false
+		case "thread/start":
+			id := "session-empty-" + strconv.Itoa(int(threadStarts.Add(1)))
+			return map[string]any{"thread": map[string]any{"id": id}}, false
+		case "turn/start":
+			turnStarts.Add(1)
+			durableSession.Store(params["threadId"].(string))
+			persisted.Store(true)
+			return map[string]any{"turn": map[string]any{"id": "turn-native-1"}}, false
+		case "thread/read":
+			id := durableSession.Load().(string)
+			return map[string]any{"thread": map[string]any{"id": id, "turns": []any{map[string]any{"id": "turn-native-1", "status": "inProgress"}}}}, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	firstConnection := dialTestProtocol(t, server)
+	lostSession, err := firstConnection.startThread(context.Background(), "/workspace/job", "gpt-5.6-sol")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstConnection.connection.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	if lostSession != "session-empty-1" || persisted.Load() {
+		t.Fatalf("empty thread unexpectedly durable: session=%s persisted=%v", lostSession, persisted.Load())
+	}
+
+	secondConnection := dialTestProtocol(t, server)
+	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondConnection.connection.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	if sessionID != "session-empty-2" || turn != (TurnOutcome{ID: "turn-native-1", Status: "running"}) {
+		t.Fatalf("accepted binding session=%s turn=%#v", sessionID, turn)
+	}
+
+	thirdConnection := dialTestProtocol(t, server)
+	// The fake app-server implements no clientUserMessageId deduplication. A
+	// deliberately different hint still adopts by isolated Session history.
+	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", "initial input", "gpt-5.6-sol", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredSession != sessionID || recoveredTurn != (TurnOutcome{ID: "turn-native-1", Status: "inProgress"}) {
+		t.Fatalf("recovered binding session=%s turn=%#v", recoveredSession, recoveredTurn)
+	}
+	if threadStarts.Load() != 2 || turnStarts.Load() != 1 {
+		t.Fatalf("thread starts=%d turn starts=%d", threadStarts.Load(), turnStarts.Load())
 	}
 }
 

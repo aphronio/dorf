@@ -48,30 +48,22 @@ func (e *resumeBindingError) Error() string {
 }
 func (e *resumeBindingError) DefiniteNoSubmit() bool { return true }
 
-func (a Agent) EnsureSession(ctx context.Context, sandboxName, workspace, boundSessionID, model string) (string, error) {
+type attentionError struct{ reason string }
+
+func (e *attentionError) Error() string         { return e.reason }
+func (e *attentionError) AttentionNeeded() bool { return true }
+
+func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	sessionID := boundSessionID
+	var sessionID string
+	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
-		if sessionID == "" {
-			threads, err := protocol.listThreads(ctx, workspace)
-			if err != nil {
-				return err
-			}
-			if len(threads) > 1 {
-				return fmt.Errorf("Codex reconciliation is ambiguous: isolated Sandbox contains %d native Sessions", len(threads))
-			}
-			if len(threads) == 1 {
-				sessionID = threads[0]
-			} else {
-				sessionID, err = protocol.startThread(ctx, workspace, model)
-				return err
-			}
-		}
-		_, err := protocol.readTurns(ctx, sessionID)
+		var err error
+		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort)
 		return err
 	})
-	return sessionID, err
+	return sessionID, outcome, err
 }
 
 func (a Agent) ReadTurns(ctx context.Context, sandboxName, workspace, sessionID string) ([]TurnOutcome, error) {
@@ -295,6 +287,37 @@ func (p *protocol) startThread(ctx context.Context, workspace, model string) (st
 		return "", fmt.Errorf("thread/start response is missing result.thread.id")
 	}
 	return id, nil
+}
+
+func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID, goal, model, effort string) (string, TurnOutcome, error) {
+	threads, err := p.listThreads(ctx, workspace)
+	if err != nil {
+		return "", TurnOutcome{}, err
+	}
+	if len(threads) > 1 {
+		return "", TurnOutcome{}, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: isolated Sandbox contains %d native Sessions", len(threads))}
+	}
+	if len(threads) == 0 {
+		sessionID, err := p.startThread(ctx, workspace, model)
+		if err != nil {
+			return "", TurnOutcome{}, err
+		}
+		turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+		return sessionID, turn, err
+	}
+	sessionID := threads[0]
+	turns, err := p.readTurns(ctx, sessionID)
+	if err != nil {
+		return "", TurnOutcome{}, fmt.Errorf("inspect isolated native Session before initial submit: %v", err)
+	}
+	if len(turns) > 1 {
+		return "", TurnOutcome{}, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: initial native Session contains %d turns", len(turns))}
+	}
+	if len(turns) == 1 {
+		return sessionID, turns[0], nil
+	}
+	turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+	return sessionID, turn, err
 }
 
 func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutcome, error) {

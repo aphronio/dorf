@@ -51,6 +51,22 @@ func TestFaultBoundariesRecoverOneNativeTurn(t *testing.T) {
 			if err := service.Run(context.Background(), job.ID); !errors.Is(err, errBarrier) {
 				t.Fatalf("first run error=%v, want barrier", err)
 			}
+			checkpointSession := store.actions[ActionID(job.ID, ActionSessionStart)]
+			checkpointRun := store.runs[AgentRunID(message.ID)]
+			switch point {
+			case BarrierBeforeSubmit:
+				if checkpointSession.State == ActionSucceeded || checkpointRun.NativeTurnID != "" || len(externals.submittedSequences()) != 0 {
+					t.Fatalf("before-submit state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
+				}
+			case BarrierAfterSubmitBeforeBind:
+				if checkpointSession.State == ActionSucceeded || checkpointRun.NativeTurnID != "" || !reflect.DeepEqual(externals.submittedSequences(), []int64{1}) {
+					t.Fatalf("after-submit state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
+				}
+			case BarrierNativeActive:
+				if checkpointSession.State != ActionSucceeded || checkpointRun.NativeTurnID == "" || !reflect.DeepEqual(externals.submittedSequences(), []int64{1}) {
+					t.Fatalf("native-active state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
+				}
+			}
 			service.Barrier = nil
 			if err := service.Run(context.Background(), job.ID); err != nil {
 				t.Fatal(err)
@@ -59,10 +75,39 @@ func TestFaultBoundariesRecoverOneNativeTurn(t *testing.T) {
 				t.Fatalf("native submissions=%v want one", got)
 			}
 			run := store.runs[AgentRunID(message.ID)]
-			if run.State != AgentRunCompleted || run.NativeTurnID == "" || !run.BaselineRecorded {
+			session := store.actions[ActionID(job.ID, ActionSessionStart)]
+			if session.State != ActionSucceeded || session.ExternalID != "session-1" || run.SessionID != session.ExternalID || run.State != AgentRunCompleted || run.NativeTurnID == "" || !run.BaselineRecorded || run.BaselineTurnID != "" {
 				t.Fatalf("recovered AgentRun=%#v", run)
 			}
 		})
+	}
+}
+
+func TestInitialRecoveryAdoptsTurnAfterSessionCheckpoint(t *testing.T) {
+	store := newMemoryStore()
+	store.bindFailures = 1
+	job := testJob()
+	store.jobs[job.ID] = job
+	message := store.addMessage(job.ID, "one", "one input")
+	externals := newFakeExternals()
+	service := Service{Store: store, Externals: externals}
+	if err := service.Run(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "checkpoint native turn") {
+		t.Fatalf("first run error=%v", err)
+	}
+	session := store.actions[ActionID(job.ID, ActionSessionStart)]
+	run := store.runs[AgentRunID(message.ID)]
+	if session.State != ActionSucceeded || session.ExternalID != "session-1" || run.SessionID != "session-1" || run.NativeTurnID != "" {
+		t.Fatalf("partial checkpoint session=%#v run=%#v", session, run)
+	}
+	if err := service.Run(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("native submissions=%v want one", got)
+	}
+	run = store.runs[AgentRunID(message.ID)]
+	if run.State != AgentRunCompleted || run.NativeTurnID == "" {
+		t.Fatalf("recovered AgentRun=%#v", run)
 	}
 }
 
@@ -100,6 +145,13 @@ func TestAmbiguousNativeSuffixPersistsAttentionWithoutResubmission(t *testing.T)
 		t.Fatal(err)
 	}
 	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(context.Background(), job.ID, ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(context.Background(), session.ID, Receipt{ExternalID: "session-1"}); err != nil {
 		t.Fatal(err)
 	}
 	externals := newFakeExternals()
@@ -228,12 +280,13 @@ func (b *failBarrier) Reach(_ context.Context, point string, _ Delivery) error {
 }
 
 type memoryStore struct {
-	mu       sync.Mutex
-	fence    sync.Mutex
-	jobs     map[string]Job
-	messages map[string][]Message
-	runs     map[string]AgentRun
-	actions  map[string]Action
+	mu           sync.Mutex
+	fence        sync.Mutex
+	jobs         map[string]Job
+	messages     map[string][]Message
+	runs         map[string]AgentRun
+	actions      map[string]Action
+	bindFailures int
 }
 
 func newMemoryStore() *memoryStore {
@@ -286,6 +339,12 @@ func (s *memoryStore) CompleteAction(_ context.Context, id string, receipt Recei
 	job := s.jobs[action.JobID]
 	if action.Kind == ActionSessionStart {
 		job.SessionID = receipt.ExternalID
+		for id, run := range s.runs {
+			if run.JobID == action.JobID && run.SessionID == "" {
+				run.SessionID = receipt.ExternalID
+				s.runs[id] = run
+			}
+		}
 	}
 	s.jobs[action.JobID] = job
 	return nil
@@ -314,6 +373,9 @@ func (s *memoryStore) NextDelivery(_ context.Context, jobID, sessionID string) (
 			run = AgentRun{ID: runID, JobID: jobID, MessageID: message.ID, ActionID: actionID, SessionID: sessionID, State: AgentRunPending}
 			s.runs[runID] = run
 			s.actions[actionID] = Action{ID: actionID, JobID: jobID, MessageID: message.ID, Kind: ActionTurnStart, State: ActionPending}
+		} else if sessionID != "" && run.SessionID == "" {
+			run.SessionID = sessionID
+			s.runs[runID] = run
 		}
 		return &Delivery{Message: message, AgentRun: run}, nil
 	}
@@ -331,6 +393,10 @@ func (s *memoryStore) BeginTurnSubmission(_ context.Context, runID string) error
 func (s *memoryStore) BindNativeTurn(_ context.Context, runID, turnID, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.bindFailures > 0 {
+		s.bindFailures--
+		return errors.New("checkpoint native turn")
+	}
 	run := s.runs[runID]
 	run.NativeTurnID = turnID
 	switch status {
@@ -420,8 +486,15 @@ func (f *fakeExternals) RepositoryClone(_ context.Context, _ Job, action Action)
 func (f *fakeExternals) RouteCreate(_ context.Context, _ Job, action Action) (Receipt, error) {
 	return f.effect(action)
 }
-func (f *fakeExternals) AgentSession(_ context.Context, _ Job, _ Action) (Receipt, error) {
-	return Receipt{ExternalID: "session-1"}, nil
+func (f *fakeExternals) AgentInitialTurn(_ context.Context, _ Job, delivery Delivery) (string, NativeTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.turns) == 0 {
+		f.submitted = append(f.submitted, delivery.Message.Sequence)
+		turn := NativeTurn{ID: "turn-" + delivery.Message.ID, Status: "running"}
+		f.turns = append(f.turns, turn)
+	}
+	return "session-1", f.turns[0], nil
 }
 func (f *fakeExternals) AgentTurns(_ context.Context, _ Job, _ string) ([]NativeTurn, error) {
 	f.mu.Lock()
