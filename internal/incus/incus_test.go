@@ -10,6 +10,7 @@ import (
 
 type scriptedRunner struct {
 	calls    [][]string
+	inputs   [][]byte
 	existing bool
 	head     string
 }
@@ -74,6 +75,7 @@ func TestReviewSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testi
 
 func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, args ...string) (Result, error) {
 	r.calls = append(r.calls, append([]string{command}, args...))
+	r.inputs = append(r.inputs, append([]byte(nil), input...))
 	joined := strings.Join(args, " ")
 	if strings.HasPrefix(joined, "info ") && !r.existing {
 		return Result{ExitCode: 1, Stderr: "not found"}, nil
@@ -144,6 +146,17 @@ func TestRepositoryCloneVerifiesExactAdmittedHead(t *testing.T) {
 	sandbox.Runner = runner
 	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", "https://example.test/repo.git", revision, "dorf/proof"); err == nil || !strings.Contains(err.Error(), "does not match admitted Revision") {
 		t.Fatalf("mismatched Sandbox HEAD error = %v", err)
+	}
+}
+
+func TestInstallRouteEnablesResponsesWebSockets(t *testing.T) {
+	runner := &scriptedRunner{}
+	sandbox := Sandbox{Runner: runner}
+	if err := sandbox.InstallRoute(context.Background(), "dorf-job", "http://10.42.0.1:8317/v1", "scoped-test-key"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") {
+		t.Fatalf("installed Codex provider config does not enable Responses WebSockets: %q", runner.inputs)
 	}
 }
 
