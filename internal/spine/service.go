@@ -646,13 +646,13 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 			return err
 		}
 		if reviewStore, ok := s.Store.(ReviewStore); ok {
-			reviewExternals, externalOK := s.Externals.(ReviewExternals)
-			if !externalOK {
-				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
-			}
 			runs, err := reviewStore.AllReviewRuns(ctx, job.ID)
 			if err != nil {
 				return err
+			}
+			reviewExternals, externalOK := s.Externals.(ReviewExternals)
+			if len(runs) > 0 && !externalOK {
+				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
 			}
 			for _, run := range runs {
 				if run.ReviewerSandboxID == "" {
