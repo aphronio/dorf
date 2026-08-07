@@ -123,7 +123,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 007_review_policy.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 008_review_activation.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -413,22 +413,20 @@ func reviewCommand(ctx context.Context, store postgres.Store, service spine.Serv
 	if job.Revision != *revision {
 		return fmt.Errorf("activation Revision %s conflicts with Job current Revision %s", *revision, job.Revision)
 	}
-	if job.WorkflowPhase == "ready" {
-		declared, err := store.DeclaredChecks(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		checks, err := store.Checks(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		records, err := store.Evidence(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		if _, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
-			return fmt.Errorf("review activation requires independently verified exact-Revision Check Evidence: %w", err)
-		}
+	declared, err := store.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	checks, err := store.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
+		return fmt.Errorf("review activation requires independently verified exact-Revision Check Evidence: %w", err)
 	}
 	activation, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: *revision, RequestedRoles: []policy.Role(roles), RequestedByRunID: *requestedBy})
 	if err != nil {

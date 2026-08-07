@@ -32,11 +32,11 @@ func (s Store) MarkChecksVerified(ctx context.Context, jobID, revision string, v
 	if err := verifyEvidenceSet(ctx, tx, jobID, revision, verifiedEvidenceIDs); err != nil {
 		return err
 	}
-	requestedJSON, _ := json.Marshal([]policy.Role{})
-	if _, err := tx.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,requested_roles) values($1,$2,'pending',$3::jsonb) on conflict do nothing`, jobID, revision, requestedJSON); err != nil {
-		return err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
+	// Role requests must be bound before the mandatory policy result is
+	// computed. Leave an explicit activation boundary after verified Checks so
+	// review activate can atomically persist either the implementation's
+	// allowlisted requests or the explicit empty set.
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-activation',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -153,12 +153,15 @@ func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActiva
 	if !slices.Equal(stored.RequestedRoles, roles) || stored.RequestedByRunID != requestedBy {
 		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation is already bound to different immutable requested Roles or attribution")
 	}
-	if phase == "ready" && stored.State == "pending" {
-		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='ready'`, activation.JobID, revision)); err != nil {
+	if createdRows == 1 {
+		if phase != "review-activation" {
+			return spine.ReviewPlanRecord{}, false, fmt.Errorf("new review activation is not admissible during workflow phase %s", phase)
+		}
+		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='review-activation'`, activation.JobID, revision)); err != nil {
 			return spine.ReviewPlanRecord{}, false, err
 		}
-	} else if phase != "review-planning" && stored.State == "pending" {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation is not admissible during workflow phase %s", phase)
+	} else if phase == "review-activation" {
+		return spine.ReviewPlanRecord{}, false, fmt.Errorf("persisted review activation did not advance atomically")
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.ReviewPlanRecord{}, false, err

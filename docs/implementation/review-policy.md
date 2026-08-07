@@ -14,8 +14,12 @@ declared-performance facts add their mandatory allowlisted Roles. An implementat
 is unioned with that floor and attributed to the original implementation AgentRun. Unknown paths
 admit exactly one `review-triage` AgentRun, whose bounded JSON result may only add allowlisted Roles.
 
-The first policy result and its digest are atomic for `(Job, Revision)`. A retry either observes the
-same result or stops on conflict. Invalid or unsafe requested Roles block visibly. No-review is a
+After exact-Revision Checks are independently verified, the Job durably waits in
+`review-activation`. The orchestrator invokes `dorf review activate` with the implementation
+AgentRun's allowlisted requests, or with no requested Roles to bind an explicit empty set. That
+activation and attribution are persisted atomically before policy evaluation. The first policy
+result and its digest are atomic for `(Job, Revision)`; a retry either observes the same activation
+and result or stops on conflict. Invalid or unsafe requested Roles block visibly. No-review is a
 final persisted plan, not the absence of review rows.
 
 ## Native and Evidence boundaries
@@ -52,12 +56,12 @@ observations, latency, usage availability, yield, adjudication, and cleanup fact
 
 ## Existing-Job dogfood activation
 
-The narrow activation command exists for the issue Job that reached `ready` under the predecessor
-executable. It verifies the current Check Evidence blobs before changing the phase, persists the
-request once, and runs the existing Job synchronously under its Job fence. It does not create a Job,
-branch, Sandbox, or implementation Session.
+The narrow activation command consumes the durable `review-activation` boundary reached after
+exact-Revision Checks. It verifies the current Check Evidence blobs before changing the phase,
+persists the implementation request once, and runs the existing Job synchronously under its Job
+fence. It does not create a Job, branch, Sandbox, or implementation Session.
 
-After rebuilding and applying migration 007, use the exact identifiers printed by
+After rebuilding and applying migrations through 008, use the exact identifiers printed by
 `dorf inspect --json JOB_ID`:
 
 ```bash

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -377,28 +378,38 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	for _, test := range []struct {
-		name  string
-		paths []string
-		role  policy.Role
-		phase string
+		name      string
+		paths     []string
+		requested []policy.Role
+		roles     []policy.Role
+		phase     string
 	}{
 		{name: "explicit no review", paths: []string{"docs/review.md"}, phase: "ready"},
-		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, role: policy.RoleAuthAuthority, phase: "reviewing"},
+		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, roles: []policy.Role{policy.RoleAuthAuthority}, phase: "reviewing"},
+		{name: "implementation request is bound before policy", paths: []string{"internal/auth/session.go"}, requested: []policy.Role{policy.RoleCriticalBoundary}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleCriticalBoundary}, phase: "reviewing"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			job, revision, verifiedID := prepareReviewIntegrationJob(t, store, test.name)
 			if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 				t.Fatal(err)
 			}
-			record, err := store.ReviewPlan(ctx, job.ID, revision)
-			if err != nil || record.State != "pending" {
-				t.Fatalf("pending plan=%#v err=%v", record, err)
+			waiting, err := store.Job(ctx, job.ID)
+			if err != nil || waiting.WorkflowPhase != "review-activation" {
+				t.Fatalf("post-Checks activation boundary Job=%#v err=%v", waiting, err)
+			}
+			record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: test.requested})
+			if err != nil || !created || record.State != "pending" || !slices.Equal(record.RequestedRoles, test.requested) {
+				t.Fatalf("pending activation=%#v created=%v err=%v", record, created, err)
+			}
+			retried, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: test.requested})
+			if err != nil || created || !slices.Equal(retried.RequestedRoles, test.requested) {
+				t.Fatalf("idempotent activation=%#v created=%v err=%v", retried, created, err)
 			}
 			facts, err := policy.FactsFromPaths(job.StartingRevision, revision, test.paths, true, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := policy.ReviewPolicy(facts, nil)
+			plan, err := policy.ReviewPolicy(facts, test.requested)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -418,12 +429,19 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				t.Fatalf("persisted plan=%#v err=%v", persisted, err)
 			}
 			runs, err := store.ReviewRuns(ctx, job.ID, revision)
-			if test.role == "" {
+			if len(test.roles) == 0 {
 				if err != nil || len(runs) != 0 || persisted.Final.Decision != "no-review" {
 					t.Fatalf("no-review runs=%#v plan=%#v err=%v", runs, persisted, err)
 				}
-			} else if err != nil || len(runs) != 1 || runs[0].Role != string(test.role) || runs[0].ID != spine.ReviewAgentRunID(job.ID, revision, string(test.role)) || runs[0].Capability != spine.ReviewReadOnlyCapability || runs[0].Revision != revision {
-				t.Fatalf("selected runs=%#v err=%v", runs, err)
+			} else {
+				if err != nil || len(runs) != len(test.roles) {
+					t.Fatalf("selected runs=%#v err=%v", runs, err)
+				}
+				for i, role := range test.roles {
+					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision {
+						t.Fatalf("selected runs=%#v err=%v", runs, err)
+					}
+				}
 			}
 			changed := record
 			changed.Initial.Decision = "invalid-retry-change"
