@@ -2,6 +2,8 @@ package proofbarrier
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,5 +49,27 @@ func TestRepositoryProofBarrierRequiresIssue37PhraseAndExactJob(t *testing.T) {
 	barrier, err := FromEnv()
 	if err != nil || barrier == nil {
 		t.Fatalf("repository barrier=%v err=%v", barrier, err)
+	}
+}
+
+func TestProofBarrierRecoveryAcceptsOnlyExactBoundedPayload(t *testing.T) {
+	dir := t.TempDir()
+	barrier := Barrier{Point: spine.BarrierCommitCreated, JobID: "job-exact", Dir: dir, Wait: time.Second, Lease: 2 * time.Second}
+	payload := "job=job-exact\nidentity=action-exact\npoint=commit-created-before-record\n"
+	ready := filepath.Join(dir, "job-exact-action-exact-commit-created-before-record.ready")
+	if recovered, err := recoverReady(ready, payload); err != nil || recovered {
+		t.Fatalf("fresh marker recovered=%v err=%v", recovered, err)
+	}
+	if err := os.WriteFile(ready, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := barrier.ReachWorkflow(context.Background(), spine.BarrierCommitCreated, "job-exact", "action-exact"); err != nil {
+		t.Fatalf("exact recovery failed: %v", err)
+	}
+	if err := os.WriteFile(ready, []byte(payload+"corrupt=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := barrier.ReachWorkflow(context.Background(), spine.BarrierCommitCreated, "job-exact", "action-exact"); err == nil || !strings.Contains(err.Error(), "conflicts with exact bounded payload") {
+		t.Fatalf("mismatch error=%v", err)
 	}
 }

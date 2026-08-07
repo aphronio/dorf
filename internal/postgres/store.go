@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -105,7 +107,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -258,7 +260,7 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 	if !admissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
 	}
-	if workflowPhase == "checking" || workflowPhase == "repairing" || workflowPhase == "ready" || workflowPhase == "blocked" {
+	if workflowPhase != "setup" && workflowPhase != "implementing" {
 		return spine.Message{}, false, fmt.Errorf("Job %s no longer accepts implementation steering after its first Revision; deterministic Check repair is workflow-owned", input.JobID)
 	}
 	if err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, input.JobID).Scan(&message.Sequence); err != nil {
@@ -463,27 +465,53 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	return action, nil
 }
 
-func (s Store) BeginScopedAction(ctx context.Context, jobID string, kind spine.ActionKind, scope string) (spine.Action, error) {
-	desiredID := spine.ScopedActionID(jobID, kind, scope)
+// BeginCommit atomically closes implementation steering and reserves the
+// Revision Action only after every already-admitted FIFO input is terminal.
+// The additive committing phase is intentionally compatible with live v2
+// message tasks: the same executor resumes it from the stable scoped Action.
+func (s Store) BeginCommit(ctx context.Context, jobID, parent string) (spine.Action, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return spine.Action{}, err
+		return spine.Action{}, false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, kind, scope); err != nil {
-		return spine.Action{}, err
+	var revision, phase string
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase); err != nil {
+		return spine.Action{}, false, err
+	}
+	if revision != parent {
+		return spine.Action{}, false, fmt.Errorf("commit parent %s conflicts with current Revision %s", parent, revision)
+	}
+	if phase != "implementing" && phase != "repairing" && phase != "committing" {
+		return spine.Action{}, false, fmt.Errorf("Revision commit is not admissible during workflow phase %s", phase)
+	}
+	if phase != "committing" {
+		var unsettled int
+		if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and coalesce(ar.state,'') <> 'completed'`, jobID).Scan(&unsettled); err != nil {
+			return spine.Action{}, false, err
+		}
+		if unsettled != 0 {
+			if err := tx.Commit(); err != nil {
+				return spine.Action{}, false, err
+			}
+			return spine.Action{}, false, nil
+		}
+		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='committing' where id=$1 and revision=$2 and workflow_phase in ('implementing','repairing')`, jobID, parent)); err != nil {
+			return spine.Action{}, false, err
+		}
+	}
+	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositoryCommit, parent)
+	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, spine.ActionRepositoryCommit, parent); err != nil {
+		return spine.Action{}, false, err
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and scope_key=$3 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind, scope).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
-		return spine.Action{}, err
-	}
-	if action.ID != desiredID {
-		return spine.Action{}, fmt.Errorf("scoped Action identity conflicts for %s", scope)
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, desiredID, jobID, spine.ActionRepositoryCommit, parent).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+		return spine.Action{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return spine.Action{}, err
+		return spine.Action{}, false, err
 	}
-	return action, nil
+	return action, true, nil
 }
 
 func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spine.Evidence) error {
@@ -598,12 +626,12 @@ func (s Store) RecordRevision(ctx context.Context, actionID string, observation 
 		return err
 	}
 	defer tx.Rollback()
-	var jobID, scope, currentRevision, branch string
+	var jobID, scope, currentRevision, branch, phase string
 	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,a.scope_key,j.revision,j.branch from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &scope, &currentRevision, &branch); err != nil {
+	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,a.scope_key,j.revision,j.branch,j.workflow_phase from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &scope, &currentRevision, &branch, &phase); err != nil {
 		return err
 	}
-	if kind != spine.ActionRepositoryCommit || scope != observation.Parent || currentRevision != observation.Parent || branch != observation.Branch || evidence.ActionID != actionID || evidence.Revision != observation.Revision {
+	if kind != spine.ActionRepositoryCommit || scope != observation.Parent || currentRevision != observation.Parent || branch != observation.Branch || phase != "committing" || evidence.ActionID != actionID || evidence.Revision != observation.Revision {
 		return fmt.Errorf("Git Revision observation conflicts with durable parent, branch, or Action")
 	}
 	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
@@ -730,18 +758,57 @@ func (s Store) AdmitRepair(ctx context.Context, check spine.Check) (spine.Messag
 	return message, true, nil
 }
 
-func (s Store) MarkReady(ctx context.Context, jobID, revision string) error {
-	var declared, passing int
-	if err := s.DB.QueryRowContext(ctx, `select count(*) from dorf.repository_commands where job_id=$1 and name in ('check','smoke')`, jobID).Scan(&declared); err != nil {
+func (s Store) MarkReady(ctx context.Context, jobID, revision string, verifiedEvidenceIDs []string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	if err := s.DB.QueryRowContext(ctx, `select count(*) from dorf.checks c join dorf.repository_commands r on r.job_id=c.job_id and r.name=c.name and r.command=c.command where c.job_id=$1 and c.revision=$2 and c.state='passed'`, jobID, revision).Scan(&passing); err != nil {
+	defer tx.Rollback()
+	var currentRevision, phase string
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &phase); err != nil {
 		return err
 	}
-	if declared == 0 || passing != declared {
-		return fmt.Errorf("Revision %s is not ready: %d of %d pinned deterministic Checks pass", revision, passing, declared)
+	if currentRevision != revision || phase != "checking" {
+		return fmt.Errorf("Revision %s cannot become ready from phase %s at Revision %s", revision, phase, currentRevision)
 	}
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2`, jobID, revision))
+	rows, err := tx.QueryContext(ctx, `select c.evidence_id from dorf.repository_commands r join dorf.checks c on c.job_id=r.job_id and c.name=r.name and c.command=r.command and c.revision=$2 where r.job_id=$1 and r.name in ('check','smoke') and c.state='passed' and c.exit_code=0 order by r.name`, jobID, revision)
+	if err != nil {
+		return err
+	}
+	var proving []string
+	for rows.Next() {
+		var id sql.NullString
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		if !id.Valid || id.String == "" {
+			rows.Close()
+			return fmt.Errorf("Revision %s has a passing Check without Evidence", revision)
+		}
+		proving = append(proving, id.String)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	var declared int
+	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.repository_commands where job_id=$1 and name in ('check','smoke')`, jobID).Scan(&declared); err != nil {
+		return err
+	}
+	sort.Strings(proving)
+	verified := append([]string(nil), verifiedEvidenceIDs...)
+	sort.Strings(verified)
+	if declared == 0 || len(proving) != declared || !slices.Equal(proving, verified) {
+		return fmt.Errorf("Revision %s is not ready: verified Evidence does not exactly match %d declared Checks", revision, declared)
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s Store) BlockWorkflow(ctx context.Context, jobID, reason string) error {
@@ -799,6 +866,10 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 		return nil, err
 	}
 	defer tx.Rollback()
+	var workflowPhase string
+	if err := tx.QueryRowContext(ctx, `select workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&workflowPhase); err != nil {
+		return nil, err
+	}
 	var message spine.Message
 	err = tx.QueryRowContext(ctx, `
 		select m.id,m.job_id,m.caller_id,m.sequence,m.input
@@ -831,6 +902,17 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	if sessionID != "" && run.SessionID != sessionID {
 		return nil, fmt.Errorf("AgentRun %s is bound to native Session %s, not %s", run.ID, run.SessionID, sessionID)
+	}
+	allowed := run.Role == "implement" && (workflowPhase == "setup" || workflowPhase == "implementing") || run.Role == "repair" && workflowPhase == "repairing"
+	if !allowed {
+		reason := fmt.Sprintf("preserved FIFO sequence %d as attention: %s AgentRun cannot start during workflow phase %s", message.Sequence, run.Role, workflowPhase)
+		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 and state not in ('completed','failed','interrupted')`, run.ID, reason); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1`, jobID, reason); err != nil {
+			return nil, err
+		}
+		run.State, run.Attention = spine.AgentRunUncertain, reason
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

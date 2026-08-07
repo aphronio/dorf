@@ -118,7 +118,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 004_revision_evidence.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 005_commit_admission.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -251,6 +251,11 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
+	declared, declaredErr := store.DeclaredChecks(ctx, job.ID)
+	if declaredErr != nil {
+		declared = nil
+	}
+	assessment := spine.AssessReadiness(job, declared, checks, evidenceRecords, evidenceStore)
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -259,11 +264,11 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "claims": map[string]any{"implementation_agent_runs": messages, "authority": "Codex native Session; agent statements are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
+	view := map[string]any{"job": job, "readiness": assessment, "claims": map[string]any{"implementation_agent_runs": messages, "authority": "Codex native Session; agent statements are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, readiness(job, checks), openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -306,29 +311,6 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	return nil
 }
 
-func readiness(job spine.Job, checks []spine.Check) string {
-	if job.WorkflowPhase == "blocked" {
-		return "blocked — deterministic workflow attention must be resolved"
-	}
-	if job.WorkflowPhase != "ready" {
-		return "not ready — deterministic setup, commit, or Checks are incomplete"
-	}
-	count := 0
-	for _, check := range checks {
-		if check.Revision != job.Revision {
-			continue
-		}
-		count++
-		if check.State != "passed" {
-			return "not ready — a current-Revision Check is not passing"
-		}
-	}
-	if count == 0 {
-		return "not ready — no observed Check proves the current Revision"
-	}
-	return "ready — every declared Check has passing observed Evidence for the exact current Revision"
-}
-
 func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("evidence", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -338,10 +320,11 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore ev
 	if set.NArg() != 2 || set.Arg(0) != "verify" {
 		return fmt.Errorf("evidence requires: verify JOB_ID")
 	}
-	if _, err := store.Job(ctx, set.Arg(1)); err != nil {
+	job, err := store.Job(ctx, set.Arg(1))
+	if err != nil {
 		return err
 	}
-	records, err := store.Evidence(ctx, set.Arg(1))
+	records, err := store.Evidence(ctx, job.ID)
 	if err != nil {
 		return err
 	}
@@ -351,6 +334,19 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore ev
 		}
 		fmt.Fprintf(stdout, "%s sha256=%s bytes=%d verified\n", record.ID, record.Digest, record.ByteSize)
 	}
+	declared, err := store.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	checks, err := store.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	verified, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore)
+	if err != nil {
+		return fmt.Errorf("current Revision %s readiness Evidence: %w", job.Revision, err)
+	}
+	fmt.Fprintf(stdout, "Revision %s: %d proving Evidence artifacts independently verified against Check rows\n", job.Revision, len(verified))
 	return nil
 }
 

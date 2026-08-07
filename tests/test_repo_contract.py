@@ -16,7 +16,9 @@ def test_dorf_repo_declares_contract() -> None:
     assert contract.commands.get("prepare") == (
         "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups && go mod download"
     )
-    assert contract.commands.get("check", "").startswith("go test ./... && go vet ./...")
+    assert contract.commands.get("check", "").startswith(
+        "scripts/verify-issue-37-legacy-deletion.sh && go test ./... && go vet ./..."
+    )
     assert "go build -o .dorf/bin/dorf ./cmd/dorf" in contract.commands.get("smoke", "")
     assert "review" not in contract.commands
     assert contract.review is not None

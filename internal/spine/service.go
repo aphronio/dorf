@@ -42,15 +42,17 @@ type Externals interface {
 }
 
 type CodingStore interface {
-	BeginScopedAction(context.Context, string, ActionKind, string) (Action, error)
+	BeginCommit(context.Context, string, string) (Action, bool, error)
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
 	RecordRevision(context.Context, string, CommitObservation, Evidence) error
 	BeginCheck(context.Context, string, string, string, string) (Check, error)
 	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
 	AdmitRepair(context.Context, Check) (Message, bool, error)
-	MarkReady(context.Context, string, string) error
+	MarkReady(context.Context, string, string, []string) error
 	BlockWorkflow(context.Context, string, string) error
 	DeclaredChecks(context.Context, string) ([]DeclaredCheck, error)
+	Checks(context.Context, string) ([]Check, error)
+	Evidence(context.Context, string) ([]Evidence, error)
 }
 
 type RepositoryExternals interface {
@@ -62,6 +64,11 @@ type RepositoryExternals interface {
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
 }
+
+const (
+	commandEvidenceProducer = "dorf-go-worker"
+	observedProvenance      = "observed"
+)
 
 const (
 	BarrierBeforeSubmit          = "before-submit"
@@ -212,7 +219,8 @@ func (s Service) setup(ctx context.Context, job Job) (RunDisposition, error) {
 		}
 		return RunIdle, err
 	}
-	artifact, err := commandArtifact(observation)
+	observation = canonicalCommandObservation(observation)
+	artifact, err := commandArtifact(action.ID, job.StartingRevision, observation)
 	if err != nil {
 		return RunIdle, err
 	}
@@ -239,11 +247,14 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, false, nil
 	case "blocked":
 		return RunBlocked, false, nil
-	case "implementing", "repairing":
+	case "implementing", "repairing", "committing":
 		parent := job.Revision
-		action, err := store.BeginScopedAction(ctx, job.ID, ActionRepositoryCommit, parent)
+		action, started, err := store.BeginCommit(ctx, job.ID, parent)
 		if err != nil {
 			return RunIdle, false, err
+		}
+		if !started {
+			return RunIdle, true, nil
 		}
 		if action.State != ActionSucceeded {
 			observation, artifact, err := s.Repository.RepositoryCommit(ctx, job, action)
@@ -295,7 +306,8 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 				}
 				return RunIdle, false, err
 			}
-			artifact, err := commandArtifact(observation)
+			observation = canonicalCommandObservation(observation)
+			artifact, err := commandArtifact(check.ID, job.Revision, observation)
 			if err != nil {
 				return RunIdle, false, err
 			}
@@ -315,7 +327,27 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 				return s.handleFailedCheck(ctx, job, check)
 			}
 		}
-		if err := store.MarkReady(ctx, job.ID, job.Revision); err != nil {
+		checks, err := store.Checks(ctx, job.ID)
+		if err != nil {
+			return RunIdle, false, err
+		}
+		records, err := store.Evidence(ctx, job.ID)
+		if err != nil {
+			return RunIdle, false, err
+		}
+		verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.Evidence)
+		if err != nil {
+			reason := fmt.Sprintf("Revision %s Evidence verification failed: %v", job.Revision, err)
+			if blockErr := store.BlockWorkflow(ctx, job.ID, reason); blockErr != nil {
+				return RunIdle, false, blockErr
+			}
+			return RunBlocked, false, nil
+		}
+		verifiedIDs := make([]string, 0, len(verified))
+		for _, result := range verified {
+			verifiedIDs = append(verifiedIDs, result.EvidenceID)
+		}
+		if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
 			return RunIdle, false, err
 		}
 		return RunIdle, true, nil
@@ -344,8 +376,18 @@ func (s Service) handleFailedCheck(ctx context.Context, job Job, check Check) (R
 	return RunBlocked, false, nil
 }
 
-func commandArtifact(observation CommandObservation) ([]byte, error) {
+func canonicalCommandObservation(observation CommandObservation) CommandObservation {
+	observation.StartedAt = observation.StartedAt.UTC().Truncate(time.Microsecond)
+	observation.FinishedAt = observation.FinishedAt.UTC().Truncate(time.Microsecond)
+	return observation
+}
+
+func commandArtifact(identity, revision string, observation CommandObservation) ([]byte, error) {
 	return json.Marshal(struct {
+		Identity        string    `json:"identity"`
+		Revision        string    `json:"revision"`
+		Producer        string    `json:"producer"`
+		Provenance      string    `json:"provenance"`
 		Command         string    `json:"command"`
 		ExitCode        int       `json:"exit_code"`
 		StartedAt       time.Time `json:"started_at"`
@@ -355,7 +397,7 @@ func commandArtifact(observation CommandObservation) ([]byte, error) {
 		StdoutTruncated bool      `json:"stdout_truncated"`
 		StderrTruncated bool      `json:"stderr_truncated"`
 		Redactions      []string  `json:"redactions"`
-	}{observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
+	}{identity, revision, commandEvidenceProducer, observedProvenance, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
 }
 
 func (s Service) retainEvidence(ownerID, kind, actionID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
@@ -363,7 +405,7 @@ func (s Service) retainEvidence(ownerID, kind, actionID, checkID, revision strin
 	if err != nil {
 		return Evidence{}, err
 	}
-	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: "dorf-go-worker", Provenance: "observed", Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Round(time.Microsecond), FinishedAt: finishedAt.UTC().Round(time.Microsecond)}, nil
+	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Provenance: observedProvenance, Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
 }
 
 func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {

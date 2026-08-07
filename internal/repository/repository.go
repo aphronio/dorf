@@ -32,6 +32,18 @@ type NamedCommand struct {
 	Command string
 }
 
+type scopedSecret struct {
+	path        string
+	label       string
+	replacement string
+	value       string
+}
+
+var knownScopedSecrets = []scopedSecret{
+	{path: "/root/.config/dorf/provider-route.key", label: "dorf-provider-route-key", replacement: "[REDACTED_DORF_PROVIDER_ROUTE_KEY]"},
+	{path: "/tmp/dorf/codex-app-server.control-token", label: "dorf-codex-control-token", replacement: "[REDACTED_DORF_CODEX_CONTROL_TOKEN]"},
+}
+
 type Manager struct {
 	Sandbox   incus.Sandbox
 	Workspace string
@@ -170,7 +182,7 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	}
 	digestBytes := sha256.Sum256([]byte(command))
 	commandDigest := hex.EncodeToString(digestBytes[:])
-	redactionSecret, err := m.routeSecret(ctx, sandboxName)
+	redactionSecrets, err := m.redactionSecrets(ctx, sandboxName)
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
@@ -202,33 +214,41 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	if err := m.validateGit(ctx, sandboxName, revision, false); err != nil {
 		return spine.CommandObservation{}, &AttentionError{Reason: err.Error()}
 	}
-	redactions := []string{}
-	if redactionSecret != "" {
-		stdout, stderr = redact(stdout, stderr, redactionSecret)
-		redactions = append(redactions, "dorf-provider-route-key")
-	}
+	stdout, stderr, redactions := redact(stdout, stderr, redactionSecrets)
 	stdout, stderr = truncate(stdout, maxOutputBytes), truncate(stderr, maxOutputBytes)
 	return spine.CommandObservation{Command: command, ExitCode: exitCode, StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC(), Stdout: []byte(stdout), Stderr: []byte(stderr), StdoutCut: lines[6] == "1", StderrCut: lines[7] == "1", Redactions: redactions}, nil
 }
 
-func (m Manager) routeSecret(ctx context.Context, sandboxName string) (string, error) {
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", "test -r /root/.config/dorf/provider-route.key && cat /root/.config/dorf/provider-route.key")
-	if err != nil {
-		return "", err
+func (m Manager) redactionSecrets(ctx context.Context, sandboxName string) ([]scopedSecret, error) {
+	secrets := make([]scopedSecret, 0, len(knownScopedSecrets))
+	for _, known := range knownScopedSecrets {
+		result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", "test -r \"$1\" && cat \"$1\"", "dorf-secret", known.path)
+		if err != nil {
+			return nil, err
+		}
+		if result.ExitCode != 0 {
+			continue
+		}
+		known.value = strings.TrimSpace(result.Stdout)
+		if known.value == "" {
+			continue
+		}
+		if len(known.value) > redactionOverlap {
+			return nil, &AttentionError{Reason: fmt.Sprintf("scoped capability %s exceeds the bounded redaction window", known.label)}
+		}
+		secrets = append(secrets, known)
 	}
-	if result.ExitCode != 0 {
-		return "", nil
-	}
-	value := strings.TrimSpace(result.Stdout)
-	if len(value) > redactionOverlap {
-		return "", &AttentionError{Reason: "scoped Provider Gateway route key exceeds the bounded redaction window"}
-	}
-	return value, nil
+	return secrets, nil
 }
 
-func redact(stdout, stderr, secret string) (string, string) {
-	const replacement = "[REDACTED_DORF_PROVIDER_ROUTE_KEY]"
-	return strings.ReplaceAll(stdout, secret, replacement), strings.ReplaceAll(stderr, secret, replacement)
+func redact(stdout, stderr string, secrets []scopedSecret) (string, string, []string) {
+	redactions := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		stdout = strings.ReplaceAll(stdout, secret.value, secret.replacement)
+		stderr = strings.ReplaceAll(stderr, secret.value, secret.replacement)
+		redactions = append(redactions, secret.label)
+	}
+	return stdout, stderr, redactions
 }
 
 func truncate(value string, limit int) string {
@@ -347,7 +367,9 @@ else
   tree=$(git write-tree)
   parent_tree=$(git show -s --format=%T "$parent")
   test "$tree" != "$parent_tree" || { echo 'implementation tree matches its parent' >&2; exit 28; }
-  commit=$(printf '%s\n' "$message" | GIT_AUTHOR_NAME=Dorf GIT_AUTHOR_EMAIL=dorf@localhost GIT_COMMITTER_NAME=Dorf GIT_COMMITTER_EMAIL=dorf@localhost git commit-tree "$tree" -p "$parent")
+  parent_time=$(git show -s --format=%ct "$parent")
+  commit_time=$((parent_time + 1))
+  commit=$(printf '%s\n' "$message" | GIT_AUTHOR_NAME=Dorf GIT_AUTHOR_EMAIL=dorf@localhost GIT_AUTHOR_DATE="@$commit_time +0000" GIT_COMMITTER_NAME=Dorf GIT_COMMITTER_EMAIL=dorf@localhost GIT_COMMITTER_DATE="@$commit_time +0000" git commit-tree "$tree" -p "$parent")
   finish=$(date +%s%N)
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$parent" "$commit" "$tree" "$branch" "$start" "$finish" > "$marker.new"
   mv -f "$marker.new" "$marker"

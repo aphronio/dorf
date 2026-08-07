@@ -75,25 +75,30 @@ func (s Store) Put(contents []byte) (Blob, error) {
 }
 
 func (s Store) Verify(digest string, byteSize int64) error {
+	_, err := s.ReadVerified(digest, byteSize)
+	return err
+}
+
+func (s Store) ReadVerified(digest string, byteSize int64) ([]byte, error) {
 	decoded, decodeErr := hex.DecodeString(digest)
 	if decodeErr != nil || len(decoded) != sha256.Size {
-		return fmt.Errorf("invalid Evidence digest %q", digest)
+		return nil, fmt.Errorf("invalid Evidence digest %q", digest)
 	}
 	file, err := os.Open(s.path(digest))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
-	hash := sha256.New()
-	size, err := io.Copy(hash, file)
+	contents, err := io.ReadAll(io.LimitReader(file, byteSize+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	actual := hex.EncodeToString(hash.Sum(nil))
-	if actual != digest || size != byteSize {
-		return fmt.Errorf("Evidence %s failed independent rehash: digest=%s size=%d expected_size=%d", digest, actual, size, byteSize)
+	sum := sha256.Sum256(contents)
+	actual := hex.EncodeToString(sum[:])
+	if actual != digest || int64(len(contents)) != byteSize {
+		return nil, fmt.Errorf("Evidence %s failed independent rehash: digest=%s size=%d expected_size=%d", digest, actual, len(contents), byteSize)
 	}
-	return nil
+	return contents, nil
 }
 
 func (s Store) path(digest string) string {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -42,10 +43,20 @@ model = "gpt-5.6-sol"
 	}
 }
 
-func TestKnownScopedRouteSecretIsRedactedFromEvidenceOutput(t *testing.T) {
-	stdout, stderr := redact("before route-secret after", "route-secret", "route-secret")
-	if strings.Contains(stdout+stderr, "route-secret") || !strings.Contains(stdout+stderr, "REDACTED_DORF_PROVIDER_ROUTE_KEY") {
+func TestKnownScopedCapabilitiesAreRedactedFromEvidenceOutput(t *testing.T) {
+	if len(knownScopedSecrets) != 2 || knownScopedSecrets[0].path != "/root/.config/dorf/provider-route.key" || knownScopedSecrets[1].path != "/tmp/dorf/codex-app-server.control-token" {
+		t.Fatalf("bounded scoped capability allowlist=%#v", knownScopedSecrets)
+	}
+	secrets := []scopedSecret{
+		{label: "dorf-provider-route-key", replacement: "[REDACTED_DORF_PROVIDER_ROUTE_KEY]", value: "test-route-capability"},
+		{label: "dorf-codex-control-token", replacement: "[REDACTED_DORF_CODEX_CONTROL_TOKEN]", value: "test-control-capability"},
+	}
+	stdout, stderr, labels := redact("before test-route-capability test-control-capability after", "test-control-capability test-route-capability", secrets)
+	if strings.Contains(stdout+stderr, "test-route-capability") || strings.Contains(stdout+stderr, "test-control-capability") || !strings.Contains(stdout+stderr, "REDACTED_DORF_PROVIDER_ROUTE_KEY") || !strings.Contains(stdout+stderr, "REDACTED_DORF_CODEX_CONTROL_TOKEN") {
 		t.Fatalf("stdout=%q stderr=%q", stdout, stderr)
+	}
+	if fmt.Sprint(labels) != "[dorf-provider-route-key dorf-codex-control-token]" {
+		t.Fatalf("redaction labels=%v", labels)
 	}
 }
 
@@ -101,6 +112,41 @@ func TestCommitReconcilesLostResponseFromExactGitFacts(t *testing.T) {
 	}
 	if _, _, err := manager.Commit(context.Background(), "sandbox", actionID, "job-proof", "dorf/proof", parent, 1); err == nil || !strings.Contains(err.Error(), "attention") {
 		t.Fatalf("dirty reconciliation error=%v", err)
+	}
+}
+
+func TestCommitTreeCrashBeforeReceiptConvergesOnDeterministicOID(t *testing.T) {
+	repo, parent := testRepository(t)
+	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("bounded change\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "-A")
+	tree := gitOutput(t, repo, "write-tree")
+	parentTime := gitOutput(t, repo, "show", "-s", "--format=%ct", parent)
+	message := "Dorf Job job-proof revision 1\n"
+	commitTime, err := strconv.ParseInt(parentTime, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", repo, "commit-tree", tree, "-p", parent)
+	cmd.Stdin = strings.NewReader(message)
+	deterministicDate := fmt.Sprintf("@%d +0000", commitTime+1)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Dorf", "GIT_AUTHOR_EMAIL=dorf@localhost", "GIT_AUTHOR_DATE="+deterministicDate, "GIT_COMMITTER_NAME=Dorf", "GIT_COMMITTER_EMAIL=dorf@localhost", "GIT_COMMITTER_DATE="+deterministicDate)
+	lostOIDBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lostOID := strings.TrimSpace(string(lostOIDBytes))
+	if gitOutput(t, repo, "rev-parse", "HEAD") != parent {
+		t.Fatal("inner-boundary simulation unexpectedly advanced the branch")
+	}
+	manager := testManager(repo)
+	recovered, _, err := manager.Commit(context.Background(), "sandbox", "action-"+parent[:12], "job-proof", "dorf/proof", parent, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Revision != lostOID {
+		t.Fatalf("retry commit=%s lost-response commit=%s", recovered.Revision, lostOID)
 	}
 }
 

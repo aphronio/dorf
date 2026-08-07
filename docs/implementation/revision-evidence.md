@@ -20,17 +20,31 @@ workflow. A changed `.dorf.toml` cannot weaken the pinned Checks for the active 
   `$HOME/.local/state/dorf/evidence`) at `sha256/AA/REST`. Every reference records SHA-256, byte
   size, media type, producer, provenance, Action or Check, Revision, and bounded timing.
 - Codex owns transcript prose. Inspection labels implementation and repair output as claims; only
-  passing current-Revision Checks with independently rehashed observed Evidence make a Revision
-  ready.
+  passing current-Revision Checks with independently rehashed and decoded observed Evidence make a
+  Revision ready. Each proving artifact repeats its stable Check identity and exact Revision; its
+  command, exit code, bounded timing, producer, and provenance must match the PostgreSQL Check and
+  Evidence rows before readiness is persisted or rendered.
 
 Setup and Check commands leave bounded completion receipts in the Sandbox before the worker records
-PostgreSQL facts. The commit path writes a Git intent receipt containing exact parent, tree, branch,
-and commit OID before `git update-ref`. Recovery reads those receipts and Git authority first. A
-dirty, unborn, detached, diverged, changed-tree, or otherwise ambiguous checkout becomes durable
-attention; Dorf does not guess or create another commit.
+PostgreSQL facts. The commit path uses a deterministic author and committer timestamp exactly one
+second after its parent, so a crash after `git commit-tree` but before the receipt recreates the same
+OID. It then writes a Git intent receipt containing exact parent, tree, branch, and commit OID before
+`git update-ref`. Recovery reads those receipts and Git authority first. A dirty, unborn, detached,
+diverged, changed-tree, or otherwise ambiguous checkout becomes durable attention; Dorf does not
+guess or create another commit.
 
-Command stdout and stderr are each capped at 512 KiB with explicit truncation flags. The worker
-removes the scoped Provider Gateway route key before bytes enter Evidence and records that redaction;
+After the FIFO appears drained, Dorf locks the Job row, rechecks for an unsettled admitted input,
+and changes `implementing` or `repairing` to `committing` in the transaction that reserves the
+Revision Action. An admission that commits first is delivered before the Revision; an admission
+that loses that boundary is rejected before a native turn can start. Existing caller-ID retries
+remain readable. `committing` is an additive recovery phase handled by the existing
+`dorf-job-messages-v2` task, so already-admitted v2 Jobs are not reattached or stranded and no task
+identity change is required.
+
+Command stdout and stderr are each capped at 512 KiB with explicit truncation flags. Before
+truncation or Evidence retention, the worker removes both known Room-scoped bearer capabilities:
+`/root/.config/dorf/provider-route.key` and
+`/tmp/dorf/codex-app-server.control-token`. The bounded allowlist records which redactions occurred;
 repository commands receive no upstream credential or controller environment.
 
 ## Local deterministic verification
@@ -55,9 +69,28 @@ go version -m .dorf/bin/dorf
 ```
 
 The Python repository/Check/Evidence/repair implementation remains temporarily because deletion is
-gated on the real Go terminal below. After that terminal passes, delete those Python components and
-their coupled tests in the same issue branch; review, GitHub publication, and terminal-outcome code
-remain owned by later slices.
+gated on the real Go terminal below. The pinned `check` command intentionally begins with
+`scripts/verify-issue-37-legacy-deletion.sh`, which exits 37 while this superseded surface exists.
+This is the expected first-Revision Check failure, not a pre-terminal verification command.
+
+After the Go terminal has proved setup, commit, Checks, Evidence, and recovery, the single focused
+repair removes exactly:
+
+- `src/dorf/repo_contract.py`, `src/dorf/command_runner.py`, and
+  `src/dorf/workflows/coding_commands.py`;
+- `tests/test_repo_contract.py` and `tests/test_command_runner.py`;
+- `_check_gate`, `_ready_gate`, `_run_verify_fix`, `verify_fix_prompt`, and
+  `verify_job_readiness` from `src/dorf/workflows/coding.py`, with their coupled check/fix tests from
+  `tests/test_coding_workflows.py`; and
+- the `_VERIFICATION_COMMANDS` Check projection and its coupled Check-Evidence assertions from
+  `src/dorf/workflows/coding_dossier.py` and `tests/test_coding_dossier.py`.
+
+Remove obsolete imports and exports mechanically. `shadow_verifier.py` is later-slice review code;
+before deleting the shared Python command runner, preserve only the minimal review-specific process
+execution it still needs beside that reviewer. Do not delete or redesign review, GitHub publication,
+terminal outcome, host setup, image, Provider Gateway, generic claim documents, or release code.
+The guard names the production paths and symbols above and passes only when this bounded deletion is
+complete.
 
 ## Exact Incus, repair, and SIGKILL terminal
 
@@ -71,7 +104,7 @@ creates the second commit.
 go build -o ./bin/dorf ./cmd/dorf
 ./bin/dorf migrate
 mkdir -p .proof/issue-37/barriers
-printf '%s\n' 'Make one small test-first coding change. In this first turn, add the focused regression test that specifies the requested behavior but deliberately leave its implementation unrepaired so the repository Check fails. Do not run repository-wide checks and do not commit; Dorf owns Checks and Git commits.' > .proof/issue-37/goal.txt
+printf '%s\n' 'Make one small Go coding change with one focused regression test and the smallest implementation that satisfies it. Do not alter the repository contract or legacy-deletion guard, do not run repository-wide checks, and do not commit; Dorf owns Checks and Git commits.' > .proof/issue-37/goal.txt
 
 ./bin/dorf admit \
   --key issue-37-revision-evidence-final-v1 \
@@ -130,12 +163,16 @@ incus list --format csv -c n,s | rg '^dorf-' || true
 
 The barriers are disabled unless the issue-specific phrase, exact Job, point, and directory are
 supplied. Each shortens only its current Absurd claim to ten seconds, writes one `.ready` marker,
-and times out after eight seconds. Absurd 0.5.0 needs the rescue-only worker pass after each expiry.
+and times out after eight seconds. On recovery, an exact marker for the same Job, stable identity,
+point, and bounded payload means the boundary was already reached and execution continues; corrupt
+or conflicting bytes stop. Absurd 0.5.0 needs the rescue-only worker pass after each expiry.
 
-Success means inspection says the second full Revision is ready; generation 1 retains the failed
-Check and Evidence but cannot prove generation 2; setup has one Action and was not rerun; FIFO
-sequence 2 has role `repair` and the same Session as sequence 1; every byte independently rehashes;
-and cleanup deletes the route and Sandbox while retaining Revisions, Checks, and Evidence.
+Success means the first full Revision fails only the legacy-deletion guard with observed Evidence;
+the same-Session repair performs the exact deletion above; and inspection says the second full
+Revision is ready. Generation 1 retains the failed Check and Evidence but cannot prove generation
+2; setup has one Action and was not rerun; FIFO sequence 2 has role `repair` and the same Session as
+sequence 1; every proving artifact independently rehashes and matches its Check row; and cleanup
+deletes the route and Sandbox while retaining Revisions, Checks, and Evidence.
 
 ## Current implementation ledger
 
@@ -148,3 +185,12 @@ tests, Ruff, lock validation, package builds, and the direct Go smoke build also
 Incus/Codex terminal, its Revision OIDs and Evidence digests, external SIGKILL outcomes, and Python
 path deletion remain explicitly pending the outer orchestrator; no value is inferred or fabricated
 before that run.
+
+The consolidated pre-terminal repair added the atomic `committing` admission boundary,
+payload-validated barrier resumption, deterministic pre-receipt Git commit identity, independent
+artifact-to-Check readiness verification, both concrete Room capability redactions, and the
+intentional deletion guard. Focused service recovery tests cover setup-complete, commit-created,
+and Check-exited before their PostgreSQL records; PostgreSQL integration covers both sides of the
+late-steering boundary and rejects row-only readiness. The retained Python suite is run directly
+before the terminal; the pinned contract guard is expected to fail until the same-Session repair
+performs the documented deletion.

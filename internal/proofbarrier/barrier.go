@@ -85,10 +85,10 @@ func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload stri
 	base := fmt.Sprintf("%s-%s-%s", jobID, identity, point)
 	ready := filepath.Join(b.Dir, base+".ready")
 	release := filepath.Join(b.Dir, base+".release")
-	if _, err := os.Stat(ready); err == nil {
-		return fmt.Errorf("stale proof barrier marker exists: %s", ready)
-	} else if !os.IsNotExist(err) {
+	if recovered, err := recoverReady(ready, payload); err != nil {
 		return err
+	} else if recovered {
+		return nil
 	}
 	if err := absurd.Heartbeat(ctx, b.Lease); err != nil {
 		return fmt.Errorf("shorten proof claim lease: %w", err)
@@ -125,15 +125,15 @@ func (b Barrier) Reach(ctx context.Context, point string, delivery spine.Deliver
 	base := fmt.Sprintf("%s-seq-%d-%s", delivery.Message.JobID, delivery.Message.Sequence, point)
 	ready := filepath.Join(b.Dir, base+".ready")
 	release := filepath.Join(b.Dir, base+".release")
-	if _, err := os.Stat(ready); err == nil {
-		return fmt.Errorf("stale proof barrier marker exists: %s", ready)
-	} else if !os.IsNotExist(err) {
+	payload := fmt.Sprintf("job=%s\nsequence=%d\nmessage=%s\nagent_run=%s\npoint=%s\n", delivery.Message.JobID, delivery.Message.Sequence, delivery.Message.ID, delivery.AgentRun.ID, point)
+	if recovered, err := recoverReady(ready, payload); err != nil {
 		return err
+	} else if recovered {
+		return nil
 	}
 	if err := absurd.Heartbeat(ctx, b.Lease); err != nil {
 		return fmt.Errorf("shorten proof claim lease: %w", err)
 	}
-	payload := fmt.Sprintf("job=%s\nsequence=%d\nmessage=%s\nagent_run=%s\npoint=%s\n", delivery.Message.JobID, delivery.Message.Sequence, delivery.Message.ID, delivery.AgentRun.ID, point)
 	if err := os.WriteFile(ready, []byte(payload), 0o600); err != nil {
 		return err
 	}
@@ -151,4 +151,25 @@ func (b Barrier) Reach(ctx context.Context, point string, delivery spine.Deliver
 		}
 	}
 	return fmt.Errorf("proof barrier %s timed out before its shortened claim lease; SIGKILL was not observed", point)
+}
+
+func recoverReady(path, expected string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Size() != int64(len(expected)) {
+		return false, fmt.Errorf("proof barrier marker conflicts with exact bounded payload: %s", path)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if len(contents) != len(expected) || string(contents) != expected {
+		return false, fmt.Errorf("proof barrier marker conflicts with exact bounded payload: %s", path)
+	}
+	return true, nil
 }

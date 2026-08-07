@@ -130,6 +130,31 @@ func TestFaultBoundariesRecoverOneNativeTurn(t *testing.T) {
 	}
 }
 
+func TestRepositoryRecordBoundariesRecoverCompletedLogicalWork(t *testing.T) {
+	for _, point := range []string{BarrierSetupComplete, BarrierCommitCreated, BarrierCheckExited} {
+		t.Run(point, func(t *testing.T) {
+			base := newMemoryStore()
+			store := &codingMemoryStore{memoryStore: base, checks: map[string]Check{}, evidence: map[string]Evidence{}}
+			job := testJob()
+			job.StartingRevision, job.WorkflowPhase = job.Revision, "setup"
+			store.jobs[job.ID] = job
+			store.addMessage(job.ID, "initial", "make one bounded change")
+			repository := &receiptRepository{revision: strings.Repeat("c", 40)}
+			service := Service{Store: store, Externals: newFakeExternals(), Repository: repository, Evidence: evidence.Store{Root: t.TempDir()}, Barrier: &failWorkflowBarrier{point: point}}
+			if err := service.Run(context.Background(), job.ID); !errors.Is(err, errBarrier) {
+				t.Fatalf("first run error=%v", err)
+			}
+			if err := service.Run(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			ready := store.jobs[job.ID]
+			if ready.WorkflowPhase != "ready" || repository.setupExecutions != 1 || repository.commitExecutions != 1 || repository.checkExecutions != 1 {
+				t.Fatalf("ready=%#v logical executions setup=%d commit=%d check=%d", ready, repository.setupExecutions, repository.commitExecutions, repository.checkExecutions)
+			}
+		})
+	}
+}
+
 func TestInitialRecoveryAdoptsTurnAfterSessionCheckpoint(t *testing.T) {
 	store := newMemoryStore()
 	store.bindFailures = 1
@@ -445,6 +470,21 @@ type failBarrier struct {
 	failed bool
 }
 
+type failWorkflowBarrier struct {
+	point  string
+	failed bool
+}
+
+func (b *failWorkflowBarrier) Reach(context.Context, string, Delivery) error { return nil }
+
+func (b *failWorkflowBarrier) ReachWorkflow(_ context.Context, point, _, _ string) error {
+	if point == b.point && !b.failed {
+		b.failed = true
+		return errBarrier
+	}
+	return nil
+}
+
 func (b *failBarrier) Reach(_ context.Context, point string, _ Delivery) error {
 	if point == b.point && !b.failed {
 		b.failed = true
@@ -645,16 +685,27 @@ type codingMemoryStore struct {
 	declared []DeclaredCheck
 }
 
-func (s *codingMemoryStore) BeginScopedAction(_ context.Context, jobID string, kind ActionKind, scope string) (Action, error) {
+func (s *codingMemoryStore) BeginCommit(_ context.Context, jobID, scope string) (Action, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id := ScopedActionID(jobID, kind, scope)
-	if action, ok := s.actions[id]; ok {
-		return action, nil
+	job := s.jobs[jobID]
+	for _, message := range s.messages[jobID] {
+		if run := s.runs[AgentRunID(message.ID)]; run.State != AgentRunCompleted {
+			return Action{}, false, nil
+		}
 	}
-	action := Action{ID: id, JobID: jobID, Kind: kind, State: ActionPending, Scope: scope}
+	if job.WorkflowPhase != "implementing" && job.WorkflowPhase != "repairing" && job.WorkflowPhase != "committing" {
+		return Action{}, false, fmt.Errorf("commit during %s", job.WorkflowPhase)
+	}
+	job.WorkflowPhase = "committing"
+	s.jobs[jobID] = job
+	id := ScopedActionID(jobID, ActionRepositoryCommit, scope)
+	if action, ok := s.actions[id]; ok {
+		return action, true, nil
+	}
+	action := Action{ID: id, JobID: jobID, Kind: ActionRepositoryCommit, State: ActionPending, Scope: scope}
 	s.actions[id] = action
-	return action, nil
+	return action, true, nil
 }
 
 func (s *codingMemoryStore) RecordSetup(_ context.Context, actionID string, record Evidence, observation CommandObservation, declared []DeclaredCheck) error {
@@ -737,16 +788,39 @@ func (s *codingMemoryStore) AdmitRepair(_ context.Context, check Check) (Message
 	return message, true, nil
 }
 
-func (s *codingMemoryStore) MarkReady(_ context.Context, jobID, revision string) error {
+func (s *codingMemoryStore) MarkReady(_ context.Context, jobID, revision string, verified []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
 	if job.Revision != revision {
 		return errors.New("ready revision conflict")
 	}
+	if len(verified) != len(s.declared) {
+		return errors.New("ready Evidence conflict")
+	}
 	job.WorkflowPhase = "ready"
 	s.jobs[jobID] = job
 	return nil
+}
+
+func (s *codingMemoryStore) Checks(_ context.Context, _ string) ([]Check, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	checks := make([]Check, 0, len(s.checks))
+	for _, check := range s.checks {
+		checks = append(checks, check)
+	}
+	return checks, nil
+}
+
+func (s *codingMemoryStore) Evidence(_ context.Context, _ string) ([]Evidence, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := make([]Evidence, 0, len(s.evidence))
+	for _, record := range s.evidence {
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func (s *codingMemoryStore) BlockWorkflow(_ context.Context, jobID, reason string) error {
@@ -761,6 +835,50 @@ func (s *codingMemoryStore) BlockWorkflow(_ context.Context, jobID, reason strin
 type fakeRepository struct {
 	setupCalls, commitCalls, checkCalls int
 	firstRevision, repairedRevision     string
+}
+
+type receiptRepository struct {
+	revision                                           string
+	setupExecutions, commitExecutions, checkExecutions int
+	setupObservation                                   *CommandObservation
+	commitObservation                                  *CommitObservation
+	commitArtifact                                     []byte
+	checkObservations                                  map[string]CommandObservation
+}
+
+func (r *receiptRepository) RepositorySetup(_ context.Context, _ Job, _ Action) (CommandObservation, []DeclaredCheck, error) {
+	if r.setupObservation == nil {
+		r.setupExecutions++
+		now := time.Now().UTC()
+		observation := CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}
+		r.setupObservation = &observation
+	}
+	return *r.setupObservation, []DeclaredCheck{{Name: "check", Command: "go test ./..."}}, nil
+}
+
+func (r *receiptRepository) RepositoryCommit(_ context.Context, job Job, _ Action) (CommitObservation, []byte, error) {
+	if r.commitObservation == nil {
+		r.commitExecutions++
+		now := time.Now().UTC()
+		observation := CommitObservation{Parent: job.Revision, Revision: r.revision, Tree: strings.Repeat("d", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+		artifact, _ := json.Marshal(observation)
+		r.commitObservation, r.commitArtifact = &observation, artifact
+	}
+	return *r.commitObservation, append([]byte(nil), r.commitArtifact...), nil
+}
+
+func (r *receiptRepository) RepositoryCheck(_ context.Context, _ Job, check Check) (CommandObservation, error) {
+	if r.checkObservations == nil {
+		r.checkObservations = map[string]CommandObservation{}
+	}
+	observation, ok := r.checkObservations[check.ID]
+	if !ok {
+		r.checkExecutions++
+		now := time.Now().UTC()
+		observation = CommandObservation{Command: check.Command, StartedAt: now, FinishedAt: now}
+		r.checkObservations[check.ID] = observation
+	}
+	return observation, nil
 }
 
 func (r *fakeRepository) RepositorySetup(_ context.Context, _ Job, _ Action) (CommandObservation, []DeclaredCheck, error) {

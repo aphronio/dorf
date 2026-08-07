@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -33,18 +34,15 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 	}
 }
 
-func TestReadinessUsesOnlyObservedChecksForExactCurrentRevision(t *testing.T) {
-	job := spine.Job{Revision: strings.Repeat("b", 40), WorkflowPhase: "ready"}
-	historical := spine.Check{Revision: strings.Repeat("a", 40), State: "passed"}
-	if got := readiness(job, []spine.Check{historical}); !strings.Contains(got, "no observed Check") {
-		t.Fatalf("historical Evidence proved readiness: %q", got)
-	}
-	current := spine.Check{Revision: job.Revision, State: "passed"}
-	if got := readiness(job, []spine.Check{historical, current}); !strings.HasPrefix(got, "ready") || !strings.Contains(got, "exact current Revision") {
-		t.Fatalf("current readiness=%q", got)
+func TestInspectionReadinessDoesNotTrustPersistedReadyPhaseWithoutEvidence(t *testing.T) {
+	job := spine.Job{ID: "job-inspect", Revision: strings.Repeat("b", 40), WorkflowPhase: "ready"}
+	assessment := spine.AssessReadiness(job, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}, nil, nil, evidence.Store{Root: t.TempDir()})
+	if assessment.Ready || assessment.Status != "not_ready" || !strings.Contains(assessment.Reason, "Evidence") {
+		t.Fatalf("row-only readiness=%#v", assessment)
 	}
 	job.WorkflowPhase = "blocked"
-	if got := readiness(job, []spine.Check{current}); !strings.HasPrefix(got, "blocked") {
-		t.Fatalf("blocked readiness=%q", got)
+	assessment = spine.AssessReadiness(job, nil, nil, nil, evidence.Store{Root: t.TempDir()})
+	if assessment.Status != "blocked" {
+		t.Fatalf("blocked readiness=%#v", assessment)
 	}
 }

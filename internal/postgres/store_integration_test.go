@@ -266,9 +266,9 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-implementation-"+job.ID)
-	commit, err := store.BeginScopedAction(ctx, job.ID, spine.ActionRepositoryCommit, start)
-	if err != nil {
-		t.Fatal(err)
+	commit, started, err := store.BeginCommit(ctx, job.ID, start)
+	if err != nil || !started {
+		t.Fatalf("first commit started=%v err=%v", started, err)
 	}
 	firstRevisionEvidence := integrationEvidence(commit.ID, "git-revision", commit.ID, "", first, "b")
 	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil {
@@ -296,9 +296,9 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondCommit, err := store.BeginScopedAction(ctx, job.ID, spine.ActionRepositoryCommit, job.Revision)
-	if err != nil {
-		t.Fatal(err)
+	secondCommit, started, err := store.BeginCommit(ctx, job.ID, job.Revision)
+	if err != nil || !started {
+		t.Fatalf("second commit started=%v err=%v", started, err)
 	}
 	secondRevisionEvidence := integrationEvidence(secondCommit.ID, "git-revision", secondCommit.ID, "", second, "d")
 	if err := store.RecordRevision(ctx, secondCommit.ID, spine.CommitObservation{Parent: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil {
@@ -312,7 +312,10 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err := store.RecordCheck(ctx, passing, passingEvidence, spine.CommandObservation{Command: passing.Command, StartedAt: now, FinishedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkReady(ctx, job.ID, second); err != nil {
+	if err := store.MarkReady(ctx, job.ID, second, nil); err == nil || !strings.Contains(err.Error(), "verified Evidence") {
+		t.Fatalf("row-only readiness error=%v", err)
+	}
+	if err := store.MarkReady(ctx, job.ID, second, []string{passingEvidence.ID}); err != nil {
 		t.Fatal(err)
 	}
 	job, err = store.Job(ctx, job.ID)
@@ -338,6 +341,57 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	retainedEvidence, _ := store.Evidence(ctx, job.ID)
 	if len(retainedChecks) != len(checks) || len(retainedEvidence) != len(records) {
 		t.Fatalf("cleanup lost audit facts Checks=%d Evidence=%d", len(retainedChecks), len(retainedEvidence))
+	}
+}
+
+func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	start := strings.Repeat("6", 40)
+	key := fmt.Sprintf("commit-admission-boundary-%d", time.Now().UnixNano())
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/commit-boundary", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	setup, err := store.BeginAction(ctx, job.ID, spine.ActionRepositorySetup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSetup(ctx, setup.ID, integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "f"), spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session-" + job.ID
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-initial-"+job.ID)
+	if delivery, err := store.NextDelivery(ctx, job.ID, sessionID); err != nil || delivery != nil {
+		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
+	}
+
+	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-before-commit", Input: "include this bounded steering"})
+	if err != nil || !created {
+		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
+	}
+	if action, started, err := store.BeginCommit(ctx, job.ID, start); err != nil || started || action.ID != "" {
+		t.Fatalf("commit crossed admitted FIFO action=%#v started=%v err=%v", action, started, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-late-"+job.ID)
+	action, started, err := store.BeginCommit(ctx, job.ID, start)
+	if err != nil || !started || action.ID == "" {
+		t.Fatalf("commit reservation action=%#v started=%v err=%v", action, started, err)
+	}
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-commit", Input: "must not run"}); err == nil || !strings.Contains(err.Error(), "no longer accepts implementation steering") {
+		t.Fatalf("post-boundary admission error=%v", err)
+	}
+	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: late.CallerID, Input: late.Input})
+	if err != nil || created || retry != late {
+		t.Fatalf("idempotent admitted retry=%#v created=%v err=%v", retry, created, err)
 	}
 }
 
