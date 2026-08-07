@@ -68,6 +68,12 @@ directory. A barrier shortens only its current Absurd claim to ten seconds, writ
 marker, and fails after eight seconds if the outer orchestrator did not SIGKILL it. These hooks are
 deliberately unsuitable for production fault injection.
 
+Absurd 0.5.0 `WorkBatch` does not claim an expired task in the same invocation that rescues its
+expired claim. After each lease-expiry sleep below, the first unbarriered `worker --once` therefore
+prints `Absurd delivery reconciled` and returns; the following invocation claims the next attempt.
+Those rescue-only passes do not increment the task attempt count: the three killed barrier claims
+are attempts 1 through 3, and the terminal drain is attempt 4.
+
 ```bash
 go build -o ./bin/dorf ./cmd/dorf
 ./bin/dorf migrate
@@ -100,6 +106,9 @@ kill -KILL "$WORKER_PID"
 wait "$WORKER_PID" || true
 sleep 11
 
+# Rescue expired attempt 1; this pass does not execute the Job task.
+time ./bin/dorf worker --once
+
 # 2. Codex accepted turn/start, but Dorf has bound neither the Session nor native turn ID.
 DORF_PROOF_FAULT_BARRIER='after-submit-before-bind' ./bin/dorf worker --once &
 export WORKER_PID=$!
@@ -108,6 +117,9 @@ test -f "$DORF_PROOF_FAULT_BARRIER_DIR/$JOB_ID-seq-1-after-submit-before-bind.re
 kill -KILL "$WORKER_PID"
 wait "$WORKER_PID" || true
 sleep 11
+
+# Rescue expired attempt 2; the next worker claims attempt 3.
+time ./bin/dorf worker --once
 
 # 3. Recovery matched the baseline suffix and durably bound the still-active native turn.
 DORF_PROOF_FAULT_BARRIER='native-active' ./bin/dorf worker --once &
@@ -121,6 +133,9 @@ time ./bin/dorf message --job "$JOB_ID" --id owner-steer-1 --input-file .proof/i
 kill -KILL "$WORKER_PID"
 wait "$WORKER_PID" || true
 sleep 11
+
+# Rescue expired attempt 3 before the terminal drain claims attempt 4.
+time ./bin/dorf worker --once
 
 # Recovery reconnects to the exact live authenticated app-server when possible, reads and reconciles
 # sequence 1 without loading the thread, resumes the exact bound thread, and then starts exactly one
