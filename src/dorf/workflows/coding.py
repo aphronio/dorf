@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from dorf.command_runner import CommandInterrupted, shell_command
 from dorf.github_app import (
@@ -19,7 +20,6 @@ from dorf.github_app import (
 )
 from dorf.repo_contract import RepoContract
 from dorf.runtime import JobBinding
-from dorf.sdk import JobExecution
 
 from .coding_commands import CodingEnvironment, run_coding_job_command
 from .coding_dossier import (
@@ -36,6 +36,21 @@ VERIFIER_ATTENTION_KEY = "diff_verifier_attention"
 DIFF_REPAIR_PREFIX = "DeepSeek diff advisory findings for the exact implementation commit"
 
 
+class JobExecution(CodingEnvironment, Protocol):
+    """Minimum retained execution seam for later Checks/review/PR policy."""
+
+    def admit_message(
+        self,
+        *,
+        message_id: str,
+        text: str,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+    ): ...
+
+    def deliver_input(self, input_id: str): ...
+
+
 @dataclass(frozen=True)
 class WorkflowMessage:
     text: str
@@ -49,7 +64,7 @@ class WorkflowOutcome:
 
 
 class WorkflowFailure(RuntimeError):
-    """A coding-workflow failure that the CLI can translate to process behavior."""
+    """A coding-workflow failure that a later application boundary can translate."""
 
     def __init__(
         self,

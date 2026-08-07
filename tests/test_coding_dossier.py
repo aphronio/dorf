@@ -5,9 +5,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
 
-from dorf.cli import app
 from dorf.repo_contract import RepoContract
 from dorf.runtime import ArtifactInput, JobRuntime, NewJob, NewWorker, WorkerRuntime
 from dorf.workflows import CodingStore
@@ -138,28 +136,6 @@ def test_acceptance_can_be_corrected_until_frozen(tmp_path: Path) -> None:
     store.freeze_acceptance_checklist("proof")
     with pytest.raises(RuntimeError, match="already governs"):
         store.replace_acceptance_checklist("proof", initial)
-
-
-def test_acceptance_cli_applies_human_markdown_correction(tmp_path: Path, monkeypatch) -> None:
-    data_home = tmp_path / "data"
-    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
-    store, job, _ = assigned_coding_job(data_home / "dorf")
-    Path(job.target_repo, ".dorf.toml").write_text('[commands]\ncheck = "pytest"\n')
-    initial = (AcceptanceItem("goal-1", "Original", "goal", "manual", ""),)
-    store.record_acceptance_checklist("proof", goal="Pinned goal", items=initial)
-    correction = tmp_path / "acceptance.md"
-    correction.write_text("## Acceptance criteria\n- [ ] Human-corrected behavior\n")
-
-    result = CliRunner().invoke(
-        app,
-        ["acceptance", "proof", "--from-file", str(correction), "--json"],
-    )
-
-    assert result.exit_code == 0, result.output
-    corrected = store.get_acceptance_checklist("proof")
-    assert corrected.revision == 2
-    assert corrected.items[0].source == "human"
-    assert corrected.items[0].text == "Human-corrected behavior"
 
 
 def test_dossier_proofs_are_commit_pinned_and_new_head_invalidates_them(tmp_path: Path) -> None:

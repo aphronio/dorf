@@ -249,9 +249,7 @@ name = "dorf"
 version = "0.1.2"
 source = { editable = "." }
 dependencies = [
-    { name = "rich" },
     { name = "typer" },
-    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -263,9 +261,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "rich", specifier = ">=13.7.0" },
     { name = "typer", specifier = ">=0.12.0" },
-    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -38,6 +38,8 @@ Keep this file as the compact operating guide. Read deeper context only when the
   read for image, toolchain, credential, or Incus setup changes.
 - [Buzz Deployment](docs/implementation/buzz.md): persistent pinned Buzz deployment and private
   Tailscale access; read for Buzz infrastructure, lifecycle, credentials, or dogfood setup.
+- [Go Job Spine](docs/implementation/go-spine.md): issue #40 local PostgreSQL/Absurd setup and exact
+  Go-only Incus, Codex, redelivery, inspection, and cleanup proof commands.
 - [Release Process](docs/releasing.md): Python distribution verification, Trusted Publisher setup,
   TestPyPI rehearsal, and production release procedure; read before package publication changes.
 
