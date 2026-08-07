@@ -38,6 +38,7 @@ import json
 import os
 import pathlib
 import sys
+import urllib.parse
 
 VERSION = "7.2.104"
 
@@ -59,7 +60,9 @@ if "-codex-device-login" in sys.argv:
     print("Codex device URL: https://auth.openai.com/codex/device")
     print("Codex device code: ABCD-EFGH")
     auth_dir.mkdir(parents=True, exist_ok=True)
-    saved_path = auth_dir / "codex-private-account@example.com.json"
+    existing_auth = sorted(auth_dir.glob("codex-*.json"))
+    suffix = "" if not existing_auth else f"-{len(existing_auth) + 1}"
+    saved_path = auth_dir / f"codex-private-account{suffix}@example.com.json"
     saved_path.write_text('{"type":"codex","access_token":"upstream-secret"}')
     print(f"Authentication saved to {saved_path}")
     print("Codex device authentication successful!")
@@ -94,22 +97,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"data": models}).encode())
             return
-        if self.path == "/v0/management/auth-files":
+        if self.path.startswith("/v0/management/auth-files"):
             status_path = config_path.parent / "fake-auth-status.json"
             status = json.loads(status_path.read_text()) if status_path.exists() else {}
-            files = [
-                {
-                    "name": path.name,
-                    "provider": "codex",
-                    "status": status.get("status", "active"),
-                    "unavailable": status.get("unavailable", False),
-                    "id_token": {
-                        "plan_type": "pro",
-                        "chatgpt_account_id": "private-account-identifier",
-                    },
-                }
-                for path in auth_dir.glob("codex-*.json")
-            ]
+            files = []
+            for path in auth_dir.glob("codex-*.json"):
+                try:
+                    auth = json.loads(path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    auth = {}
+                files.append(
+                    {
+                        "name": path.name,
+                        "provider": "codex",
+                        "status": status.get("status", "active"),
+                        "unavailable": status.get("unavailable", False),
+                        "websockets": auth.get("websockets", False),
+                        "id_token": {
+                            "plan_type": "pro",
+                            "chatgpt_account_id": "private-account-identifier",
+                        },
+                    }
+                )
             if "codex-api-key:" in config:
                 files.append(
                     {
@@ -138,6 +147,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         route_keys.clear()
         route_keys.update(json.loads(self.rfile.read(length)))
+        self.send_response(200)
+        self.end_headers()
+
+    def do_PATCH(self):
+        if self.path != "/v0/management/auth-files/fields":
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length))
+        target = auth_dir / payload["name"]
+        auth = json.loads(target.read_text())
+        auth["websockets"] = payload["websockets"]
+        target.write_text(json.dumps(auth))
+        with (config_path.parent / "auth-management-actions").open("a") as actions:
+            actions.write(f"patch {target.name} websockets={str(payload['websockets']).lower()}\\n")
+        self.send_response(200)
+        self.end_headers()
+
+    def do_DELETE(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/v0/management/auth-files":
+            self.send_response(404)
+            self.end_headers()
+            return
+        name = urllib.parse.parse_qs(parsed.query)["name"][0]
+        (auth_dir / name).unlink(missing_ok=True)
+        with (config_path.parent / "auth-management-actions").open("a") as actions:
+            actions.write(f"delete {name}\\n")
         self.send_response(200)
         self.end_headers()
 
@@ -516,10 +554,23 @@ def test_chatgpt_subscription_connect_exposes_only_a_typed_device_challenge(
             status="connected",
         )
         assert gateway.list_connections() == (connected,)
-        assert (state_path / "broker-starts").read_text().splitlines() == [
-            "started",
-            "started",
-        ]
+        original = state_path / "auth" / "codex-private-account@example.com.json"
+        assert original.is_file()
+        assert not list((state_path / "auth").glob("codex-dorf-*.json"))
+        assert json.loads(original.read_text())["websockets"] is True
+        assert json.loads((state_path / "connections.json").read_text())[0][
+            "credential_ref"
+        ] == original.name
+        auth = json.loads(original.read_text())
+        auth["websockets"] = False
+        original.write_text(json.dumps(auth))
+        assert gateway.connect_chatgpt_subscription(
+            name="personal-chatgpt",
+            on_authorization=challenges.append,
+        ) == connected
+        assert json.loads(original.read_text())["websockets"] is True
+        assert len(challenges) == 1
+        assert (state_path / "broker-starts").read_text().splitlines() == ["started"]
         assert gateway.disconnect_connection("personal-chatgpt") is True
         gateway.shutdown()
 
@@ -531,6 +582,11 @@ def test_chatgpt_subscription_connect_exposes_only_a_typed_device_challenge(
     ]
     assert "ABCD-EFGH" not in repr(challenges[0])
     assert not list((state_path / "auth").glob("*.json"))
+    assert (state_path / "auth-management-actions").read_text().splitlines() == [
+        "patch codex-private-account@example.com.json websockets=true",
+        "patch codex-private-account@example.com.json websockets=true",
+        "delete codex-private-account@example.com.json",
+    ]
 
 
 def test_chatgpt_connect_adopts_one_existing_unnamed_bundle_without_reading_it(
@@ -542,7 +598,8 @@ def test_chatgpt_connect_adopts_one_existing_unnamed_bundle_without_reading_it(
     auth_path = state_path / "auth"
     auth_path.mkdir(parents=True)
     existing = auth_path / "codex-existing-private-account.json"
-    existing.write_text("opaque credential content that must not be parsed")
+    existing.write_text(json.dumps({"type": "codex", "access_token": "opaque-secret"}))
+    existing.chmod(0o640)
     challenges: list[DeviceAuthorization] = []
 
     with ProviderGateway.open(
@@ -558,6 +615,16 @@ def test_chatgpt_connect_adopts_one_existing_unnamed_bundle_without_reading_it(
         assert adopted.name == "personal-chatgpt"
         assert challenges == []
         assert gateway.list_connections() == (adopted,)
+        assert existing.exists()
+        assert os.stat(existing).st_mode & 0o777 == 0o640
+        assert json.loads(existing.read_text()) == {
+            "type": "codex",
+            "access_token": "opaque-secret",
+            "websockets": True,
+        }
+        assert json.loads((state_path / "connections.json").read_text())[0][
+            "credential_ref"
+        ] == existing.name
         route = gateway.create_route("personal-chatgpt", consumer="test-client")
         assert _model_status(route.base_url, route.api_key) == 200
         gateway.revoke_route(route.id)
@@ -584,7 +651,10 @@ def test_stale_subscription_status_blocks_routes_with_named_reconnect_remediatio
             name="personal-chatgpt",
             on_authorization=lambda challenge: None,
         )
-        next((state_path / "auth").glob("codex-dorf-*.json")).unlink()
+        credential_ref = json.loads((state_path / "connections.json").read_text())[0][
+            "credential_ref"
+        ]
+        (state_path / "auth" / credential_ref).unlink()
 
         stale = gateway.connection_status("personal-chatgpt")
         assert stale == ProviderConnection(
@@ -609,11 +679,7 @@ def test_stale_subscription_status_blocks_routes_with_named_reconnect_remediatio
             on_authorization=lambda challenge: None,
         )
         assert restored.status == "connected"
-        assert (state_path / "broker-starts").read_text().splitlines() == [
-            "started",
-            "started",
-            "started",
-        ]
+        assert (state_path / "broker-starts").read_text().splitlines() == ["started"]
         assert gateway.connection_status("personal-chatgpt").status == "connected"
         gateway.disconnect_connection("personal-chatgpt")
         gateway.shutdown()

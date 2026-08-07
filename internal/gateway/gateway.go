@@ -20,11 +20,12 @@ import (
 )
 
 type Route struct {
-	ID             string `json:"id"`
-	ConnectionName string `json:"connection_name"`
-	Consumer       string `json:"consumer"`
-	APIKey         string `json:"api_key"`
-	BaseURL        string `json:"-"`
+	ID                 string `json:"id"`
+	ConnectionName     string `json:"connection_name"`
+	Consumer           string `json:"consumer"`
+	APIKey             string `json:"api_key"`
+	BaseURL            string `json:"-"`
+	SupportsWebSockets bool   `json:"-"`
 }
 
 type connection struct {
@@ -55,7 +56,12 @@ func (g Gateway) BaseURL() (string, error) {
 func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, actionID string) (Route, error) {
 	var route Route
 	err := g.lock(func() error {
-		if err := g.requireConnection(connectionName); err != nil {
+		connection, err := g.requireConnection(connectionName)
+		if err != nil {
+			return err
+		}
+		supportsWebSockets, err := g.supportsWebSockets(ctx, connection)
+		if err != nil {
 			return err
 		}
 		routes, err := g.readRoutes()
@@ -68,6 +74,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 					return fmt.Errorf("provider consumer is bound to a different stable route")
 				}
 				route = existing
+				route.SupportsWebSockets = supportsWebSockets
 				return g.activate(ctx, routes)
 			}
 		}
@@ -75,7 +82,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
+		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key, SupportsWebSockets: supportsWebSockets}
 		routes = append(routes, route)
 		if err := g.writeRoutes(routes); err != nil {
 			return err
@@ -141,11 +148,19 @@ func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error
 		return Route{}, false, err
 	}
 	found.BaseURL = origin + "/v1"
+	connection, err := g.requireConnection(found.ConnectionName)
+	if err != nil {
+		return Route{}, false, err
+	}
+	found.SupportsWebSockets, err = g.supportsWebSockets(ctx, connection)
+	if err != nil {
+		return Route{}, false, err
+	}
 	return found, true, nil
 }
 
 func (g Gateway) Check(ctx context.Context, connectionName string) error {
-	if err := g.requireConnection(connectionName); err != nil {
+	if _, err := g.requireConnection(connectionName); err != nil {
 		return err
 	}
 	auth, err := g.readAuthority()
@@ -173,10 +188,10 @@ func (g Gateway) Check(ctx context.Context, connectionName string) error {
 	return nil
 }
 
-func (g Gateway) requireConnection(name string) error {
+func (g Gateway) requireConnection(name string) (connection, error) {
 	var records []connection
 	if err := readJSON(filepath.Join(g.StatePath, "connections.json"), &records); err != nil {
-		return fmt.Errorf("provider connections are unreadable: %w", err)
+		return connection{}, fmt.Errorf("provider connections are unreadable: %w", err)
 	}
 	selectedCategory := ""
 	for _, record := range records {
@@ -188,7 +203,7 @@ func (g Gateway) requireConnection(name string) error {
 		}
 	}
 	if selectedCategory == "" {
-		return fmt.Errorf("provider connection %q was not found", name)
+		return connection{}, fmt.Errorf("provider connection %q was not found", name)
 	}
 	categoryCount := 0
 	for _, record := range records {
@@ -201,28 +216,72 @@ func (g Gateway) requireConnection(name string) error {
 		}
 	}
 	if categoryCount > 1 {
-		return fmt.Errorf("provider selection is ambiguous for connection %q", name)
+		return connection{}, fmt.Errorf("provider selection is ambiguous for connection %q", name)
 	}
 	for _, record := range records {
 		if record.Name != name {
 			continue
 		}
 		root := "auth"
-		validCredential := regexp.MustCompile(`^codex-dorf-[0-9a-f]{16}\.json$`).MatchString(record.CredentialRef) && record.Provider == "chatgpt" && record.AuthMode == "subscription"
+		validCredential := regexp.MustCompile(`^codex-[^/\\]+\.json$`).MatchString(record.CredentialRef) && record.Provider == "chatgpt" && record.AuthMode == "subscription"
 		if record.AuthMode == "api_key" {
 			root = "credentials"
 			validCredential = regexp.MustCompile(`^(openai|deepseek)-[0-9a-f]{16}\.key$`).MatchString(record.CredentialRef) && (record.Provider == "openai" || record.Provider == "deepseek")
 		}
 		if !validCredential || filepath.Base(record.CredentialRef) != record.CredentialRef {
-			return fmt.Errorf("provider connection %q has invalid credential metadata", name)
+			return connection{}, fmt.Errorf("provider connection %q has invalid credential metadata", name)
 		}
 		info, err := os.Lstat(filepath.Join(g.StatePath, root, record.CredentialRef))
 		if err != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("provider connection %q needs authentication", name)
+			return connection{}, fmt.Errorf("provider connection %q needs authentication", name)
 		}
-		return nil
+		return record, nil
 	}
-	return fmt.Errorf("provider connection %q needs authentication", name)
+	return connection{}, fmt.Errorf("provider connection %q needs authentication", name)
+}
+
+func (g Gateway) supportsWebSockets(ctx context.Context, record connection) (bool, error) {
+	if record.Provider != "chatgpt" || record.AuthMode != "subscription" {
+		return false, nil
+	}
+	auth, err := g.readAuthority()
+	if err != nil {
+		return false, err
+	}
+	origin, err := g.origin()
+	if err != nil {
+		return false, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/v0/management/auth-files", nil)
+	if err != nil {
+		return false, err
+	}
+	request.Header.Set("Authorization", "Bearer "+auth.ManagementKey)
+	response, err := g.client().Do(request)
+	if err != nil {
+		return false, fmt.Errorf("provider connection capability is unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return false, fmt.Errorf("provider connection capability returned HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		Files []struct {
+			Name       string `json:"name"`
+			Provider   string `json:"provider"`
+			WebSockets bool   `json:"websockets"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return false, fmt.Errorf("provider connection capability is unreadable")
+	}
+	for _, entry := range payload.Files {
+		if entry.Name == record.CredentialRef && entry.Provider == "codex" {
+			return entry.WebSockets, nil
+		}
+	}
+	return false, fmt.Errorf("provider connection capability was not found")
 }
 
 func (g Gateway) activate(ctx context.Context, routes []Route) error {

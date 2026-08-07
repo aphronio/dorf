@@ -15,6 +15,10 @@ import (
 func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	var active [][]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "codex-private-account@example.com.json", "provider": "codex", "websockets": true}}})
+			return
+		}
 		if r.URL.Path != "/v0/management/api-keys" || r.Method != http.MethodPut {
 			http.NotFound(w, r)
 			return
@@ -45,6 +49,9 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	if first.ID != second.ID || first.APIKey != second.APIKey {
 		t.Fatalf("route was duplicated: %#v %#v", first, second)
 	}
+	if !first.SupportsWebSockets || !second.SupportsWebSockets {
+		t.Fatalf("ChatGPT route did not retain verified WebSocket capability: %#v %#v", first, second)
+	}
 	var routes []Route
 	if err := readJSON(filepath.Join(state, "routes.json"), &routes); err != nil {
 		t.Fatal(err)
@@ -60,6 +67,29 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	}
 	if got := active[len(active)-1]; len(got) != 1 || got[0] != "guard-secret" {
 		t.Fatalf("active keys after revocation=%v", got)
+	}
+}
+
+func TestRouteRetainsHTTPWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "codex-private-account@example.com.json", "provider": "codex", "websockets": false}}})
+		case r.URL.Path == "/v0/management/api-keys" && r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	gateway := Gateway{StatePath: gatewayState(t, server.URL), Client: server.Client()}
+
+	route, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "action-http")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.SupportsWebSockets {
+		t.Fatalf("route enabled WebSockets without verified upstream capability: %#v", route)
 	}
 }
 
@@ -83,8 +113,8 @@ func gatewayState(t *testing.T, origin string) string {
 	if err := os.Mkdir(filepath.Join(state, "auth"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mustWrite("auth/codex-dorf-0123456789abcdef.json", "{}")
-	mustWrite("connections.json", `[{"name":"primary","provider":"chatgpt","auth_mode":"subscription","credential_ref":"codex-dorf-0123456789abcdef.json"}]`)
+	mustWrite("auth/codex-private-account@example.com.json", "{}")
+	mustWrite("connections.json", `[{"name":"primary","provider":"chatgpt","auth_mode":"subscription","credential_ref":"codex-private-account@example.com.json"}]`)
 	mustWrite("authority.json", `{"guard_key":"guard-secret","management_key":"control-secret"}`)
 	mustWrite("routes.json", "[]")
 	mustWrite("broker.yaml", fmt.Sprintf("host: %q\nport: %d\n", parsed.Hostname(), port))

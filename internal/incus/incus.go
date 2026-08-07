@@ -172,8 +172,8 @@ func (s Sandbox) BridgeIPv4(ctx context.Context) (string, error) {
 	return address.String(), nil
 }
 
-func (s Sandbox) InstallRoute(ctx context.Context, name, baseURL, key string) error {
-	config := fmt.Sprintf("model_provider = \"dorf\"\n\n[model_providers.dorf]\nname = \"Dorf Provider Gateway\"\nbase_url = %q\nenv_key = \"DORF_PROVIDER_ROUTE_KEY\"\nwire_api = \"responses\"\nrequires_openai_auth = false\n", baseURL)
+func (s Sandbox) InstallRoute(ctx context.Context, name, baseURL, key string, supportsWebSockets bool) error {
+	config := fmt.Sprintf("model_provider = \"dorf\"\n\n[model_providers.dorf]\nname = \"Dorf Provider Gateway\"\nbase_url = %q\nenv_key = \"DORF_PROVIDER_ROUTE_KEY\"\nwire_api = \"responses\"\nsupports_websockets = %t\nrequires_openai_auth = false\n", baseURL, supportsWebSockets)
 	script := "umask 077; mkdir -p /root/.codex /root/.config/dorf; IFS= read -r config; printf '%s' \"$config\" > /root/.codex/config.toml; IFS= read -r key; printf '%s\\n' \"$key\" > /root/.config/dorf/provider-route.key"
 	input := []byte(strings.ReplaceAll(config, "\n", "\\n") + "\n" + key + "\n")
 	// printf %b decodes the newline escapes without interpolating either value.

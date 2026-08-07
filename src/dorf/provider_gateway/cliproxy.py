@@ -14,6 +14,7 @@ import subprocess
 import tarfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -464,12 +465,38 @@ class ProviderGateway:
     ) -> ProviderConnection:
         """Connect one named ChatGPT subscription through a device challenge."""
         name = _validate_connection_name(name)
+        with self._locked():
+            existing = next(
+                (record for record in self._read_connections() if record["name"] == name),
+                None,
+            )
+            if existing is not None and (
+                existing["provider"] != "chatgpt"
+                or existing["auth_mode"] != "subscription"
+            ):
+                raise ValueError(f"Provider connection already exists: {name}")
+            existing_credential = None
+            if existing is not None:
+                path = self._auth_path / existing["credential_ref"]
+                if not path.is_symlink() and path.is_file():
+                    existing_credential = existing["credential_ref"]
+        if existing_credential is not None:
+            self.ensure_ready()
+            self._enable_subscription_websockets(existing_credential)
+            self._await_models_available(self._read_authority()["guard_key"])
+            return ProviderConnection(
+                name=name,
+                provider="chatgpt",
+                auth_mode="subscription",
+                status="connected",
+            )
         adopted = self._adopt_single_unnamed_subscription(name)
         if adopted is not None:
-            self.shutdown()
+            connection, credential_ref = adopted
             self.ensure_ready()
+            self._enable_subscription_websockets(credential_ref)
             self._await_models_available(self._read_authority()["guard_key"])
-            return adopted
+            return connection
         self.ensure_ready()
         before = self._snapshot_auth_files()
         try:
@@ -520,8 +547,7 @@ class ProviderGateway:
         if return_code != 0 or not saw_success or len(changed) != 1:
             raise ProviderAuthenticationError(name)
 
-        credential_name = f"codex-dorf-{hashlib.sha256(name.encode()).hexdigest()[:16]}.json"
-        credential_path = self._auth_path / credential_name
+        credential_name = changed[0].name
         with self._locked():
             records = self._read_connections()
             existing = next(
@@ -532,8 +558,6 @@ class ProviderGateway:
                 existing["provider"] != "chatgpt" or existing["auth_mode"] != "subscription"
             ):
                 raise ValueError(f"Provider connection already exists: {name}")
-            os.replace(changed[0], credential_path)
-            credential_path.chmod(0o600)
             records = [record for record in records if record["name"] != name]
             records.append(
                 {
@@ -544,8 +568,7 @@ class ProviderGateway:
                 }
             )
             self._write_connections(records)
-        self.shutdown()
-        self.ensure_ready()
+        self._enable_subscription_websockets(credential_name)
         self._await_models_available(self._read_authority()["guard_key"])
         return ProviderConnection(
             name=name,
@@ -557,7 +580,7 @@ class ProviderGateway:
     def _adopt_single_unnamed_subscription(
         self,
         name: str,
-    ) -> ProviderConnection | None:
+    ) -> tuple[ProviderConnection, str] | None:
         with self._locked():
             records = self._read_connections()
             if any(record["name"] == name for record in records):
@@ -578,10 +601,7 @@ class ProviderGateway:
                 raise ProviderSelectionUnsupportedError(
                     "Multiple unnamed Provider Connections require explicit cleanup"
                 )
-            credential_name = f"codex-dorf-{hashlib.sha256(name.encode()).hexdigest()[:16]}.json"
-            credential_path = self._auth_path / credential_name
-            os.replace(candidates[0], credential_path)
-            credential_path.chmod(0o600)
+            credential_name = candidates[0].name
             records.append(
                 {
                     "name": name,
@@ -591,11 +611,14 @@ class ProviderGateway:
                 }
             )
             self._write_connections(records)
-        return ProviderConnection(
-            name=name,
-            provider="chatgpt",
-            auth_mode="subscription",
-            status="connected",
+        return (
+            ProviderConnection(
+                name=name,
+                provider="chatgpt",
+                auth_mode="subscription",
+                status="connected",
+            ),
+            credential_name,
         )
 
     def disconnect_connection(self, name: str) -> bool:
@@ -623,7 +646,7 @@ class ProviderGateway:
             if removed[0]["auth_mode"] == "api_key":
                 (self._credentials_path / credential_ref).unlink(missing_ok=True)
             else:
-                (self._auth_path / credential_ref).unlink(missing_ok=True)
+                self._delete_subscription_auth(credential_ref)
         if removed[0]["auth_mode"] == "api_key":
             self.shutdown()
             self.ensure_ready()
@@ -965,7 +988,6 @@ class ProviderGateway:
                 continue
             if path.name in records_by_credential:
                 continue
-            path.chmod(0o600)
             connection_name = f"connection-{hashlib.sha256(path.name.encode()).hexdigest()[:16]}"
             connections.append(
                 ProviderConnection(
@@ -1027,6 +1049,62 @@ class ProviderGateway:
             None,
         )
 
+    def _enable_subscription_websockets(self, credential_ref: str) -> None:
+        authority = self._read_authority()
+        request = urllib.request.Request(
+            f"{self._origin}/v0/management/auth-files/fields",
+            data=json.dumps(
+                {"name": credential_ref, "websockets": True},
+                separators=(",", ":"),
+            ).encode(),
+            method="PATCH",
+            headers={
+                "Authorization": f"Bearer {authority['management_key']}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                if response.status != 200:
+                    raise GatewayUnavailableError(
+                        "Provider connection WebSocket capability was rejected"
+                    )
+        except (OSError, urllib.error.URLError):
+            raise GatewayUnavailableError(
+                "Provider connection WebSocket capability is unavailable"
+            ) from None
+        status = self._connection_backend_status(
+            {
+                "name": "subscription",
+                "provider": "chatgpt",
+                "auth_mode": "subscription",
+                "credential_ref": credential_ref,
+            }
+        )
+        if status is None or status.get("websockets") is not True:
+            raise GatewayUnavailableError(
+                "Provider connection WebSocket capability did not become active"
+            )
+
+    def _delete_subscription_auth(self, credential_ref: str) -> None:
+        authority = self._read_authority()
+        query = urllib.parse.urlencode({"name": credential_ref})
+        request = urllib.request.Request(
+            f"{self._origin}/v0/management/auth-files?{query}",
+            method="DELETE",
+            headers={"Authorization": f"Bearer {authority['management_key']}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=3) as response:
+                if response.status != 200:
+                    raise GatewayUnavailableError(
+                        "Provider connection disconnect was rejected"
+                    )
+        except (OSError, urllib.error.URLError):
+            raise GatewayUnavailableError(
+                "Provider connection disconnect is unavailable"
+            ) from None
+
     def _read_connections(self) -> list[dict[str, str]]:
         try:
             raw = json.loads(self._connections_path.read_text())
@@ -1062,7 +1140,8 @@ class ProviderGateway:
             valid_credential = (
                 provider == "chatgpt"
                 and auth_mode == "subscription"
-                and re.fullmatch(r"codex-dorf-[0-9a-f]{16}\.json", credential_ref) is not None
+                and re.fullmatch(r"codex-[^/\\\\\x00]+\.json", credential_ref) is not None
+                and Path(credential_ref).name == credential_ref
             ) or (
                 provider in {"openai", "deepseek"}
                 and auth_mode == "api_key"

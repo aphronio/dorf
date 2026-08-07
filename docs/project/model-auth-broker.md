@@ -43,10 +43,14 @@ Concrete choices:
 
 1. **Broker custody.** The OAuth bundle lives only in the broker's auth dir. The broker refreshes
    on a timer as the sole writer, so concurrent sandboxes cannot invalidate each other (the failure
-   observed with cloned Droid state in #112/#114).
+   observed with cloned Droid state in #112/#114). Dorf retains the broker-issued auth filename
+   unchanged and uses CLIProxyAPI's authenticated management API to enable capabilities or delete
+   the bundle; it does not rename, rewrite, chmod, or unlink the OAuth file directly.
 2. **Sandbox wiring.** Per sandbox, provisioning writes `config.toml` with a custom
    `model_provider` (`base_url`, `env_key`, `wire_api = "responses"`) and injects one scoped
-   broker key as the named env var. `requires_openai_auth` stays false. Sandboxes carry no
+   broker key as the named env var. `requires_openai_auth` stays false. Responses WebSockets are
+   enabled only when the broker reports `websockets = true` for the selected ChatGPT auth record;
+   otherwise the Room retains HTTP/SSE without a failed WebSocket attempt. Sandboxes carry no
    `auth.json` and no OpenAI material; a leaked scoped key cannot reach the ChatGPT account.
 3. **Credential-free images.** D008's secret-bearing Incus image is retired for the Codex leg.
 4. **Broker-only egress.** Sandboxes may be network-restricted to the broker alone; validated that
