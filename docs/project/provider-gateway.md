@@ -94,9 +94,9 @@ ChatGPT subscription or OpenAI API key
 ```
 
 D035 validates the Codex Responses path. One unprefixed implementation connection may coexist
-with one `deepseek/`-prefixed reviewer connection. CLIProxyAPI's `force-model-prefix` setting keeps
-prefixed credentials out of unprefixed requests; ambiguous duplicates still fail closed. Route keys
-remain broker credentials rather than provider-specific allowlists.
+with one `deepseek/`-prefixed scoped client connection. CLIProxyAPI's `force-model-prefix` setting
+keeps prefixed credentials out of unprefixed requests; ambiguous duplicates still fail closed.
+Route keys remain broker credentials rather than provider-specific allowlists.
 
 ## Failure and security semantics
 

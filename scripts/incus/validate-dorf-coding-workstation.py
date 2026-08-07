@@ -15,7 +15,7 @@ from time import monotonic
 REPOSITORY = "https://github.com/aphronio/dorf.git"
 GOAL = """\
 Inspect the cloned repository without modifying it. Report its current Git revision and the
-installed versions of codex, git, node, pi, and uv. Keep the response concise.
+installed versions of codex, git, node, and uv. Keep the response concise.
 """
 
 

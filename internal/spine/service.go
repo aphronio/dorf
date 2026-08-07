@@ -145,26 +145,29 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	if err != nil {
 		return RunIdle, err
 	}
-	session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
-	if err != nil {
-		return RunIdle, err
-	}
-	sessionID := session.ExternalID
-	if session.State != ActionSucceeded {
-		delivery, err := s.Store.NextDelivery(ctx, jobID, "")
+	sessionID := job.SessionID
+	if !reviewPhasePreemptsFIFO(job.WorkflowPhase) {
+		session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
 		if err != nil {
 			return RunIdle, err
 		}
-		if delivery == nil || delivery.Message.Sequence != 1 {
-			return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
-		}
-		switch delivery.AgentRun.State {
-		case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
-			return RunBlocked, nil
-		}
-		sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
-		if err != nil {
-			return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
+		sessionID = session.ExternalID
+		if session.State != ActionSucceeded {
+			delivery, err := s.Store.NextDelivery(ctx, jobID, "")
+			if err != nil {
+				return RunIdle, err
+			}
+			if delivery == nil || delivery.Message.Sequence != 1 {
+				return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
+			}
+			switch delivery.AgentRun.State {
+			case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
+				return RunBlocked, nil
+			}
+			sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
+			if err != nil {
+				return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
+			}
 		}
 	}
 	for {
@@ -174,6 +177,13 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		}
 		if !job.AdmissionOpen {
 			return RunClosed, nil
+		}
+		if reviewPhasePreemptsFIFO(job.WorkflowPhase) {
+			disposition, progressed, err := s.advanceCoding(ctx, job)
+			if err != nil || disposition == RunBlocked || !progressed {
+				return disposition, err
+			}
+			continue
 		}
 		delivery, err := s.Store.NextDelivery(ctx, jobID, sessionID)
 		if err != nil {
@@ -196,6 +206,15 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		if err := s.deliver(ctx, job, *delivery); err != nil {
 			return RunIdle, err
 		}
+	}
+}
+
+func reviewPhasePreemptsFIFO(phase string) bool {
+	switch phase {
+	case "review-planning", "review-triage", "reviewing":
+		return true
+	default:
+		return false
 	}
 }
 

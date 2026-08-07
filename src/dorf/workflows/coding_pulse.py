@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 
 from dorf.runtime import JobInspection, TimelineEvent
@@ -347,16 +346,6 @@ def _attention(
 ) -> PulseAttention:
     if terminal is not None:
         return PulseAttention("none", f"Job is terminal: {terminal}")
-    if raw := coding_job.metadata.get("diff_verifier_attention"):
-        try:
-            verifier = json.loads(raw)
-        except json.JSONDecodeError:
-            verifier = {}
-        if verifier.get("status"):
-            return PulseAttention(
-                str(verifier["status"]),
-                f"DeepSeek diff advisory decision {verifier.get('id', 'is retained')}",
-            )
     if outcome_stage == "needs-human":
         return PulseAttention("needs-human", "Coding workflow requires a human decision")
     turn = inspection.latest_turn

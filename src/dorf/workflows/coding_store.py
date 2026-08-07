@@ -442,17 +442,13 @@ class CodingStore(RuntimeStore):
             after=git_commit_after,
         )
 
-    def coding_verifier_lock(self, job_name: str):
-        return self._named_process_lock(job_name, "deepseek-verifier", blocking=False)
-
     def interrupt_abandoned_afk_runs(self, job_name: str) -> list[CodingCommandRun]:
         rows = self._connection.execute(
             """
             UPDATE coding_command_runs
             SET status = 'interrupted', exit_code = 130, finished_at = ?
             WHERE job_name = ? AND status = 'running'
-              AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke'
-                   OR kind LIKE 'verify-role:%')
+              AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke')
             RETURNING id
             """,
             (_now(), job_name),

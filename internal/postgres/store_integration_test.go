@@ -452,6 +452,66 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
+func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "rejected-material-ready")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	if err != nil || !created {
+		t.Fatalf("activation=%#v created=%t err=%v", record, created, err)
+	}
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts, record.RequestedRoles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("review runs=%#v err=%v", runs, err)
+	}
+	run := runs[0].AgentRun
+	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
+	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
+	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleCriticalBoundary, Material: true, Summary: "claim", Rationale: "requires adjudication", AffectedRoles: []policy.Role{policy.RoleCriticalBoundary}, AffectedChecks: []string{"check"}}
+	if err := store.RecordReviewResult(ctx, run.ID, spine.NativeTurn{ID: "turn-" + run.ID, Status: "completed"}, claim, observed, finding); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID); err != nil || !created {
+		t.Fatalf("repair created=%t err=%v", created, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-review-repair-"+job.ID)
+	if err := store.RejectReviewFinding(ctx, job.ID, revision); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkReviewReady(ctx, job.ID, revision); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := store.Job(ctx, job.ID)
+	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || runsErr != nil || ready.WorkflowPhase != "ready" || len(runs) != 1 || runs[0].Finding == nil || !runs[0].Finding.Material || runs[0].Finding.Adjudication != "rejected" || runs[0].Finding.EvidenceID != claim.ID {
+		t.Fatalf("ready=%#v runs=%#v err=%v runsErr=%v", ready, runs, err, runsErr)
+	}
+}
+
 func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, string) {
 	t.Helper()
 	ctx := context.Background()

@@ -96,12 +96,11 @@ repair removes exactly:
 - the `_VERIFICATION_COMMANDS` Check projection and its coupled Check-Evidence assertions from
   `src/dorf/workflows/coding_dossier.py` and `tests/test_coding_dossier.py`.
 
-Remove obsolete imports and exports mechanically. `shadow_verifier.py` is later-slice review code;
-before deleting the shared Python command runner, preserve only the minimal review-specific process
-execution it still needs beside that reviewer. Do not delete or redesign review, GitHub publication,
-terminal outcome, host setup, image, Provider Gateway, generic claim documents, or release code.
-The guard names the production paths and symbols above and passes only when this bounded deletion is
-complete.
+Remove obsolete imports and exports mechanically. Review is owned by the Go review-policy path; the
+superseded Python reviewer has no retained process-execution seam. Preserve GitHub publication,
+terminal outcome, host setup, the core image, Provider Gateway, generic claim documents, and release
+code. The guard names the production paths and symbols above and passes only when this bounded
+deletion is complete.
 
 ## Exact Incus, repair, and SIGKILL terminal
 

@@ -178,7 +178,7 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 	}
 	var material []spineFindingRun
 	for _, view := range runs {
-		if selected[view.Role] && view.Finding != nil && view.Finding.Material {
+		if selected[view.Role] && view.Finding != nil && view.Finding.Material && view.Finding.Adjudication != "rejected" {
 			material = append(material, spineFindingRun{runID: view.ID, role: view.Role})
 		}
 	}
