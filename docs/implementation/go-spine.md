@@ -146,6 +146,16 @@ terminal, blocked, or genuinely uncertain delivery truth and identifies any bloc
 reason; it never prints or stores transcript items. Cleanup closes admission before cancellation and
 leaves the route revoked, the Sandbox deleted, and the cleanup task checkpointed.
 
+The detached app-server keeps only replaceable operational control facts in the Sandbox. Its exact
+PID is `/tmp/dorf/codex-app-server.pid`; the raw reconnect capability is retained separately at
+`/tmp/dorf/codex-app-server.control-token` in a root-only directory and file. App-server argv contains
+only `--ws-token-sha256 <digest>`, never the raw capability or the retained file path. Recovery reads
+the raw capability only after matching the tracked PID to the expected app-server endpoint and auth
+argv and matching its digest. A live process with a missing, mismatched, or rejected capability is
+attention and is not killed; once no app-server is live, stale PID and capability files may be
+atomically replaced. Neither file is native Session identity or PostgreSQL state, and proof output
+must not print the capability.
+
 Message admission and its Absurd wake hint do not commit atomically. The honest crash invariant is:
 PostgreSQL commits the immutable message and FIFO sequence first, then Dorf emits the deterministic
 event identity `dorf.job-message:<job>:<zero-padded-sequence>`. Absurd 0.5.0 events are immutable

@@ -3,7 +3,9 @@ package codex
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,8 +21,11 @@ import (
 const maxMessageBytes = 16 << 20
 
 const (
-	serverPIDPath = "/tmp/dorf/codex-app-server.pid"
-	tokenPath     = "/tmp/dorf/codex-app-server.token"
+	serverPIDPath    = "/tmp/dorf/codex-app-server.pid"
+	controlTokenPath = "/tmp/dorf/codex-app-server.control-token"
+	serverLogPath    = "/tmp/dorf/codex-app-server.log"
+	serverControlDir = "/tmp/dorf"
+	serverAuthMode   = "capability-token"
 )
 
 type Agent struct {
@@ -40,7 +45,7 @@ func (a Agent) EnsureSession(ctx context.Context, sandboxName, workspace, boundS
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	sessionID := boundSessionID
-	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		if sessionID == "" {
 			threads, err := protocol.listThreads(ctx, workspace)
 			if err != nil {
@@ -66,7 +71,7 @@ func (a Agent) ReadTurns(ctx context.Context, sandboxName, workspace, sessionID 
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var turns []TurnOutcome
-	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
 		turns, err = protocol.readTurns(ctx, sessionID)
 		return err
@@ -78,7 +83,7 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID,
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var outcome TurnOutcome
-	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
 		outcome, err = protocol.startTurn(ctx, sessionID, workspace, agentRunID, input, model, effort)
 		return err
@@ -90,7 +95,7 @@ func (a Agent) WaitTurn(ctx context.Context, sandboxName, workspace, sessionID, 
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	outcome := TurnOutcome{ID: turnID, Status: "running"}
-	err := a.withServer(ctx, sandboxName, workspace, func(protocol *protocol) error {
+	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		return protocol.pollTurn(ctx, sessionID, turnID, &outcome)
 	})
 	return outcome, err
@@ -103,19 +108,23 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 	return context.WithCancel(ctx)
 }
 
-func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn func(*protocol) error) error {
+func (a Agent) withServer(ctx context.Context, sandboxName string, fn func(*protocol) error) error {
 	address, err := a.Sandbox.PrivateIPv4(ctx, sandboxName)
 	if err != nil {
 		return err
 	}
-	probe, err := a.probeServer(ctx, sandboxName)
+	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
+	return a.withServerEndpoint(ctx, sandboxName, endpoint, fn)
+}
+
+func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint string, fn func(*protocol) error) error {
+	probe, err := a.probeServer(ctx, sandboxName, endpoint)
 	if err != nil {
 		return err
 	}
-	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
 	// Prefer the exact authenticated process left by a dead executor. A live
 	// process that cannot be inspected is attention, never permission to kill it.
-	if probe.token != "" {
+	if probe.running && probe.tracked && probe.token != "" {
 		protocol, dialErr := dialProtocol(ctx, endpoint, probe.token)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
@@ -132,14 +141,14 @@ func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn
 	if err != nil {
 		return err
 	}
-	write, err := a.Sandbox.Exec(ctx, sandboxName, []byte(token+"\n"), "bash", "-lc", "umask 077; mkdir -p /tmp/dorf; cat > "+tokenPath)
+	write, err := a.Sandbox.Exec(ctx, sandboxName, []byte(token+"\n"), "bash", "-lc", controlCapabilityScript())
 	if err != nil {
 		return err
 	}
 	if write.ExitCode != 0 {
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
-	launch := appServerScript(endpoint)
+	launch := appServerScript(endpoint, tokenSHA256(token))
 	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", launch)
 	if err != nil {
 		return err
@@ -165,17 +174,22 @@ func (a Agent) withServer(ctx context.Context, sandboxName, workspace string, fn
 	}
 }
 
-func appServerScript(endpoint string) string {
-	return "umask 077; mkdir -p /tmp/dorf; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server --listen " + endpoint + " --ws-auth capability-token --ws-token-file " + tokenPath + " </dev/null >/tmp/dorf/codex-app-server.log 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
+func controlCapabilityScript() string {
+	return "umask 077; install -d -m 700 " + serverControlDir + "; cat > " + controlTokenPath + ".new; chmod 600 " + controlTokenPath + ".new; mv -f " + controlTokenPath + ".new " + controlTokenPath
+}
+
+func appServerScript(endpoint, tokenDigest string) string {
+	return "umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
 }
 
 type serverProbe struct {
 	running bool
+	tracked bool
 	token   string
 }
 
-func (a Agent) probeServer(ctx context.Context, sandboxName string) (serverProbe, error) {
-	script := "running=0; if test -f " + serverPIDPath + "; then IFS= read -r pid < " + serverPIDPath + "; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && test -r /proc/$pid/cmdline && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq 'codex app-server'; then running=1; fi; elif pgrep -f '[c]odex app-server --listen ws://' >/dev/null; then running=1; fi; printf '%s\\n' \"$running\"; if test -r " + tokenPath + "; then cat " + tokenPath + "; fi"
+func (a Agent) probeServer(ctx context.Context, sandboxName, endpoint string) (serverProbe, error) {
+	script := probeServerScript(endpoint)
 	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script)
 	if err != nil {
 		return serverProbe{}, err
@@ -184,11 +198,23 @@ func (a Agent) probeServer(ctx context.Context, sandboxName string) (serverProbe
 		return serverProbe{}, fmt.Errorf("inspect exact Codex app-server: %s", strings.TrimSpace(result.Stderr))
 	}
 	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
-	probe := serverProbe{running: len(lines) > 0 && lines[0] == "1"}
-	if len(lines) > 1 {
-		probe.token = strings.TrimSpace(lines[1])
+	probe := serverProbe{running: len(lines) > 0 && lines[0] == "1", tracked: len(lines) > 1 && lines[1] == "1"}
+	if probe.tracked && len(lines) > 2 {
+		probe.token = strings.TrimSpace(lines[2])
 	}
 	return probe, nil
+}
+
+func probeServerScript(endpoint string) string {
+	return "running=0; tracked=0; pid=; if test -f " + serverPIDPath + "; then IFS= read -r pid < " + serverPIDPath + "; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; fi; " +
+		"if test -n \"$pid\" && test -r /proc/$pid/cmdline && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq 'codex app-server' && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq -- '--listen " + endpoint + "' && tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq -- '--ws-auth " + serverAuthMode + "'; then running=1; tracked=1; fi; " +
+		"if test \"$running\" = 0 && pgrep -f '[c]odex app-server --listen ws://' >/dev/null; then running=1; fi; printf '%s\\n' \"$running\" \"$tracked\"; " +
+		"if test \"$tracked\" = 1 && test -r " + controlTokenPath + "; then IFS= read -r token < " + controlTokenPath + "; if test -n \"$token\"; then digest=$(printf '%s' \"$token\" | sha256sum); digest=${digest%% *}; if tr '\\000' ' ' < /proc/$pid/cmdline | grep -Fq -- \"--ws-token-sha256 $digest\"; then printf '%s\\n' \"$token\"; fi; fi; fi"
+}
+
+func tokenSHA256(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
 }
 
 func dialProtocol(ctx context.Context, endpoint, token string) (*protocol, error) {
