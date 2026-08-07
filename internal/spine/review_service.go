@@ -346,10 +346,21 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		return NativeTurn{}, err
 	}
 	if run.State == AgentRunUncertain {
-		if session.State != ActionUncertain || !strings.HasPrefix(session.Outcome, ReviewSubmissionUncertainOutcome+": ") || run.SessionID != "" || run.NativeTurnID != "" {
-			return NativeTurn{}, reviewBoundaryError("uncertain review AgentRun is not eligible for no-submit reconciliation: " + run.Attention)
+		switch {
+		case run.SessionID == "" && run.NativeTurnID == "":
+			if session.State != ActionUncertain || !strings.HasPrefix(session.Outcome, ReviewSubmissionUncertainOutcome+": ") {
+				return NativeTurn{}, reviewBoundaryError("uncertain review AgentRun is not eligible for no-submit reconciliation: " + run.Attention)
+			}
+			return s.reconcileUnboundReview(ctx, job, run, session, externals)
+		case run.SessionID == "" || run.NativeTurnID == "":
+			reason := "uncertain review AgentRun has a partial native Session/turn binding"
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+			return NativeTurn{}, reviewBoundaryError(reason)
+		case session.State != ActionSucceeded:
+			reason := "uncertain bound review AgentRun does not have a succeeded Session Action"
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+			return NativeTurn{}, reviewBoundaryError(reason)
 		}
-		return s.reconcileUnboundReview(ctx, job, run, session, externals)
 	}
 	if run.SessionID == "" {
 		if !run.BaselineRecorded {

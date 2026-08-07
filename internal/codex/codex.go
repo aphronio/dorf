@@ -238,7 +238,7 @@ func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner i
 
 func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol, string) error) error {
 	logicalID := spine.ReviewControllerID(owner.AgentRunID, sandboxName, owner.OwnershipNonce)
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, func(_ string) (string, error) {
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, true, func(_ string) (string, error) {
 		// Re-attest after reconnect or process replacement. The authentication
 		// token can rotate; only this exact host-owned Sandbox identity persists.
 		if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
@@ -253,12 +253,12 @@ func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint str
 }
 
 func (a Agent) withServerEndpointIdentity(ctx context.Context, sandboxName, endpoint string, fn func(*protocol, string) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, func(token string) (string, error) {
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, false, func(token string) (string, error) {
 		return appServerIdentity(token), nil
 	}, fn)
 }
 
-func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, controllerIdentity func(string) (string, error), fn func(*protocol, string) error) error {
+func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, reviewReadOnly bool, controllerIdentity func(string) (string, error), fn func(*protocol, string) error) error {
 	probe, err := a.probeServer(ctx, sandboxName, endpoint)
 	if err != nil {
 		return err
@@ -293,7 +293,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 	if write.ExitCode != 0 {
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
-	launch := appServerScript(endpoint, tokenSHA256(token))
+	launch := appServerScript(endpoint, tokenSHA256(token), reviewReadOnly)
 	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", launch)
 	if err != nil {
 		return err
@@ -331,8 +331,12 @@ func controlCapabilityScript() string {
 	return "umask 077; install -d -m 700 " + serverControlDir + "; cat > " + controlTokenPath + ".new; chmod 600 " + controlTokenPath + ".new; mv -f " + controlTokenPath + ".new " + controlTokenPath
 }
 
-func appServerScript(endpoint, tokenDigest string) string {
-	return "umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
+func appServerScript(endpoint, tokenDigest string, reviewReadOnly bool) string {
+	configuration := ` -c 'approval_policy="never"'`
+	if reviewReadOnly {
+		configuration += ` -c 'sandbox_mode="read-only"'`
+	}
+	return "umask 077; install -d -m 700 " + serverControlDir + "; rm -f " + serverPIDPath + "; IFS= read -r DORF_PROVIDER_ROUTE_KEY < /root/.config/dorf/provider-route.key; export DORF_PROVIDER_ROUTE_KEY; nohup codex app-server" + configuration + " --listen " + endpoint + " --ws-auth " + serverAuthMode + " --ws-token-sha256 " + tokenDigest + " </dev/null >" + serverLogPath + " 2>&1 & printf '%s\\n' \"$!\" > " + serverPIDPath
 }
 
 type serverProbe struct {
@@ -566,7 +570,13 @@ func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedS
 }
 
 func (p *protocol) strictReviewSnapshot(ctx context.Context, workspace, sessionID, model, effort string) (string, []map[string]any, error) {
-	result, err := p.call(ctx, "thread/resume", map[string]any{"threadId": sessionID})
+	result, err := p.call(ctx, "thread/resume", map[string]any{
+		"threadId":       sessionID,
+		"cwd":            workspace,
+		"model":          model,
+		"approvalPolicy": "never",
+		"sandbox":        "read-only",
+	})
 	if err != nil {
 		return "", nil, err
 	}

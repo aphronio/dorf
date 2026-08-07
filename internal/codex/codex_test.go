@@ -86,10 +86,10 @@ func (r *probeRunner) Run(_ context.Context, command string, input []byte, args 
 	return r.result, nil
 }
 
-func TestAppServerLaunchRetainsCapabilitySeparatelyAndExposesOnlyItsDigest(t *testing.T) {
+func TestAppServerLaunchRetainsCapabilityAndEnforcesDorfAutonomy(t *testing.T) {
 	rawToken := "private-control-capability"
 	digest := tokenSHA256(rawToken)
-	launch := appServerScript("ws://10.0.0.2:4500", digest)
+	launch := appServerScript("ws://10.0.0.2:4500", digest, false)
 	if !strings.Contains(launch, `printf '%s\n' "$!" > `+serverPIDPath) {
 		t.Fatalf("launch does not retain the native PID: %s", launch)
 	}
@@ -104,6 +104,13 @@ func TestAppServerLaunchRetainsCapabilitySeparatelyAndExposesOnlyItsDigest(t *te
 	}
 	if strings.Contains(launch, "--ws-token-file") || strings.Contains(launch, controlTokenPath) {
 		t.Fatalf("retained reconnect capability was confused with one-shot startup input: %s", launch)
+	}
+	if !strings.Contains(launch, `codex app-server -c 'approval_policy="never"' --listen`) || strings.Contains(launch, `sandbox_mode=`) {
+		t.Fatalf("implementation app-server launch does not retain writable sandbox with fixed never approval: %s", launch)
+	}
+	reviewLaunch := appServerScript("ws://10.0.0.3:4500", digest, true)
+	if !strings.Contains(reviewLaunch, `codex app-server -c 'approval_policy="never"' -c 'sandbox_mode="read-only"' --listen`) {
+		t.Fatalf("review app-server launch lacks fixed never/read-only configuration: %s", reviewLaunch)
 	}
 	store := controlCapabilityScript()
 	if !strings.Contains(store, "install -d -m 700 "+serverControlDir) || !strings.Contains(store, controlTokenPath+".new") || !strings.Contains(store, "chmod 600 "+controlTokenPath+".new") || !strings.Contains(store, "mv -f "+controlTokenPath+".new "+controlTokenPath) {
@@ -447,6 +454,9 @@ func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) 
 			if params["threadId"] != sessionID {
 				t.Fatalf("%s threadId=%v", want, params["threadId"])
 			}
+			if want == "thread/resume" && len(params) != 1 {
+				t.Fatalf("ordinary implementation thread/resume changed params: %#v", params)
+			}
 		}
 	}
 }
@@ -682,6 +692,9 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 		{name: "wrong model", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["model"] = "forged-model" }, want: "model, effort, cwd, approval, or read-only policy"},
 		{name: "wrong approval", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["approvalPolicy"] = "on-request" }, want: "model, effort, cwd, approval, or read-only policy"},
 		{name: "wrong sandbox", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["sandbox"] = map[string]any{"type": "dangerFullAccess"} }, want: "model, effort, cwd, approval, or read-only policy"},
+		{name: "network enabled", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) {
+			result["sandbox"] = map[string]any{"type": "readOnly", "networkAccess": true}
+		}, want: "unexpectedly exposes network access"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
@@ -711,6 +724,67 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStrictReviewResumeOverridesReplacementProcessDefaults(t *testing.T) {
+	nonce := strings.Repeat("9", 64)
+	input := "exact replacement-process review input"
+	for _, test := range []struct {
+		name           string
+		honorOverrides bool
+		wantAttention  bool
+	}{
+		{name: "overrides restore never policy", honorOverrides: true},
+		{name: "ignored overrides remain attention", wantAttention: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var resumeParams map[string]any
+			server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+				switch method {
+				case "initialize":
+					return map[string]any{}, false
+				case "thread/list":
+					return map[string]any{"data": strictReviewTestThreads("session-review"), "nextCursor": nil}, false
+				case "thread/resume":
+					resumeParams = params
+					approval := "on-request"
+					if test.honorOverrides && strictReviewResumeParamsMatch(params, "session-review", "/workspace/job", "gpt-5.6-sol") {
+						approval = "never"
+					}
+					result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn("turn-review", nonce, input)}})
+					result["approvalPolicy"] = approval
+					return result, false
+				default:
+					return nil, true
+				}
+			})
+			defer server.Close()
+
+			p := dialTestProtocol(t, server)
+			_, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
+			if test.wantAttention {
+				if err == nil || !strings.Contains(err.Error(), "approval") {
+					t.Fatalf("ignored override error=%v", err)
+				}
+				if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
+					t.Fatalf("ignored override was not attention: %T %v", err, err)
+				}
+			} else if err != nil || len(turns) != 1 || turns[0].ID != "turn-review" {
+				t.Fatalf("override recovery turns=%#v err=%v", turns, err)
+			}
+			methods := reviewProtocolMethods(requests)
+			if !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
+				t.Fatalf("replacement recovery methods=%v", methods)
+			}
+			if !strictReviewResumeParamsMatch(resumeParams, "session-review", "/workspace/job", "gpt-5.6-sol") {
+				t.Fatalf("strict review resume params=%#v", resumeParams)
+			}
+		})
+	}
+}
+
+func strictReviewResumeParamsMatch(params map[string]any, sessionID, workspace, model string) bool {
+	return len(params) == 5 && params["threadId"] == sessionID && params["cwd"] == workspace && params["model"] == model && params["approvalPolicy"] == "never" && params["sandbox"] == "read-only"
 }
 
 func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T) {

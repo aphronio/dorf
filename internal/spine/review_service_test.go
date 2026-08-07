@@ -507,6 +507,79 @@ func TestUncertainReviewSubmissionPositiveConflictFailsClosed(t *testing.T) {
 	}
 }
 
+func TestBoundUncertainReviewReentersExactReadOnlyRecoveryWithoutSubmission(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	controllerID := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	run.State, run.BaselineRecorded = AgentRunUncertain, true
+	run.SessionID, run.NativeTurnID, run.ReviewerAppServer = "review-session", "review-turn", controllerID
+	base.runs[run.ID] = run
+	session := base.actions[store.sessionActionID]
+	session.State, session.ExternalID, session.Outcome = ActionSucceeded, run.SessionID, controllerID
+	base.actions[session.ID] = session
+	turnAction := base.actions[run.ActionID]
+	turnAction.State, turnAction.ExternalID, turnAction.Outcome = ActionSucceeded, run.NativeTurnID, "submitted"
+	base.actions[turnAction.ID] = turnAction
+	externals := &reviewRecoveryExternals{turn: NativeTurn{ID: run.NativeTurnID, Status: "running"}, store: store}
+
+	outcome, err := (Service{Store: store}).executeReviewRun(context.Background(), job, run, externals, store)
+	recovered := base.runs[run.ID]
+	if err != nil || outcome.Status != "completed" || recovered.State != AgentRunCompleted || recovered.SessionID != run.SessionID || recovered.NativeTurnID != run.NativeTurnID || recovered.ReviewerAppServer != controllerID || externals.histories != 1 || externals.waits != 1 || externals.recoveries != 0 || externals.submissions != 0 {
+		t.Fatalf("bound recovery run=%#v outcome=%#v histories=%d waits=%d recoveries=%d submissions=%d err=%v", recovered, outcome, externals.histories, externals.waits, externals.recoveries, externals.submissions, err)
+	}
+}
+
+func TestUncertainReviewPartialNativeBindingFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sessionID string
+		turnID    string
+	}{
+		{name: "Session only", sessionID: "review-session"},
+		{name: "turn only", turnID: "review-turn"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := newMemoryStore()
+			job := testJob()
+			base.jobs[job.ID] = job
+			run := preparedReviewRecoveryRun(t, base, job)
+			store := reviewRecoveryStoreFor(base, run)
+			run.State, run.SessionID, run.NativeTurnID = AgentRunUncertain, test.sessionID, test.turnID
+			base.runs[run.ID] = run
+			session := base.actions[store.sessionActionID]
+			session.State = ActionSucceeded
+			base.actions[session.ID] = session
+			externals := &reviewRecoveryExternals{}
+
+			_, err := (Service{Store: store}).executeReviewRun(context.Background(), job, run, externals, store)
+			settled := base.runs[run.ID]
+			if err == nil || !strings.Contains(err.Error(), "partial native Session/turn binding") || !attentionNeeded(err) || !strings.Contains(settled.Attention, "partial native Session/turn binding") || externals.histories != 0 || externals.waits != 0 || externals.recoveries != 0 || externals.submissions != 0 {
+				t.Fatalf("partial binding run=%#v error=%v histories=%d waits=%d recoveries=%d submissions=%d", settled, err, externals.histories, externals.waits, externals.recoveries, externals.submissions)
+			}
+		})
+	}
+}
+
+func TestBoundUncertainReviewRequiresSucceededSessionAction(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	run.State, run.SessionID, run.NativeTurnID = AgentRunUncertain, "review-session", "review-turn"
+	base.runs[run.ID] = run
+	externals := &reviewRecoveryExternals{}
+
+	_, err := (Service{Store: store}).executeReviewRun(context.Background(), job, run, externals, store)
+	settled := base.runs[run.ID]
+	if err == nil || !strings.Contains(err.Error(), "succeeded Session Action") || !attentionNeeded(err) || !strings.Contains(settled.Attention, "succeeded Session Action") || externals.histories != 0 || externals.waits != 0 || externals.recoveries != 0 || externals.submissions != 0 {
+		t.Fatalf("Session Action guard run=%#v error=%v histories=%d waits=%d recoveries=%d submissions=%d", settled, err, externals.histories, externals.waits, externals.recoveries, externals.submissions)
+	}
+}
+
 func preparedReviewRecoveryRun(t *testing.T, base *memoryStore, job Job) AgentRun {
 	t.Helper()
 	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
@@ -672,6 +745,8 @@ type reviewRecoveryExternals struct {
 	lostResponseOnce bool
 	recoverErr       error
 	recoveries       int
+	histories        int
+	waits            int
 	controllerID     string
 	store            *reviewRecoveryStore
 	boundBeforeWait  bool
@@ -743,11 +818,13 @@ func (e *reviewRecoveryExternals) ReviewRecover(_ context.Context, _ Job, run Ag
 func (e *reviewRecoveryExternals) ReviewTurns(_ context.Context, _ Job, run AgentRun) (ReviewNativeHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.histories++
 	return e.reviewHistory(run), nil
 }
 func (e *reviewRecoveryExternals) ReviewWait(_ context.Context, _ Job, run AgentRun, _ string) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.waits++
 	if e.store != nil {
 		e.store.mu.Lock()
 		persisted := e.store.runs[run.ID]
