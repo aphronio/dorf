@@ -645,7 +645,11 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 		t.Fatal(err)
 	}
 	if session.State != spine.ActionSucceeded {
-		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: "app-server-" + run.ID}); err != nil {
+		controllerID := spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: "foreign-review-controller"}); err == nil {
+			t.Fatal("foreign logical reviewer controller identity was accepted")
+		}
+		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: controllerID}); err != nil {
 			t.Fatal(err)
 		}
 	}

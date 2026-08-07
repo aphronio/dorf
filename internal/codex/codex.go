@@ -61,11 +61,11 @@ func (a Agent) StartReviewInitialTurn(ctx context.Context, sandboxName, workspac
 	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "read-only")
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var binding spine.ReviewNativeBinding
-	err := a.withServerIdentity(ctx, sandboxName, func(protocol *protocol, appServerID string) error {
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
 		sessionID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
 		binding = spine.ReviewNativeBinding{AppServerID: appServerID, SessionID: sessionID, Turn: turn}
 		return err
@@ -73,11 +73,11 @@ func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace
 	return binding, err
 }
 
-func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace, sessionID, submissionNonce, input, model, effort string) (spine.ReviewNativeHistory, error) {
+func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, sessionID, submissionNonce, input, model, effort string) (spine.ReviewNativeHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var history spine.ReviewNativeHistory
-	err := a.withServerIdentity(ctx, sandboxName, func(protocol *protocol, appServerID string) error {
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
 		observedSession, turns, err := protocol.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
 		history = spine.ReviewNativeHistory{AppServerID: appServerID, SessionID: observedSession, Turns: turns}
 		return err
@@ -85,11 +85,11 @@ func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace
 	return history, err
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace, sessionID, turnID, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, sessionID, turnID, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := spine.ReviewNativeBinding{SessionID: sessionID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
-	err := a.withServerIdentity(ctx, sandboxName, func(protocol *protocol, appServerID string) error {
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
 		binding.AppServerID = appServerID
 		for {
 			observedSession, turns, err := protocol.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
@@ -194,11 +194,41 @@ func (a Agent) withServerIdentity(ctx context.Context, sandboxName string, fn fu
 	return a.withServerEndpointIdentity(ctx, sandboxName, endpoint, fn)
 }
 
+func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner incus.ReviewMetadata, fn func(*protocol, string) error) error {
+	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+		return err
+	}
+	address, err := a.Sandbox.PrivateIPv4(ctx, sandboxName)
+	if err != nil {
+		return err
+	}
+	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
+	return a.withReviewServerEndpoint(ctx, sandboxName, endpoint, owner, fn)
+}
+
+func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol, string) error) error {
+	logicalID := spine.ReviewControllerID(owner.AgentRunID, sandboxName, owner.OwnershipNonce)
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, func(_ string) (string, error) {
+		// Re-attest after reconnect or process replacement. The authentication
+		// token can rotate; only this exact host-owned Sandbox identity persists.
+		if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+			return "", err
+		}
+		return logicalID, nil
+	}, fn)
+}
+
 func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint string, fn func(*protocol) error) error {
 	return a.withServerEndpointIdentity(ctx, sandboxName, endpoint, func(protocol *protocol, _ string) error { return fn(protocol) })
 }
 
 func (a Agent) withServerEndpointIdentity(ctx context.Context, sandboxName, endpoint string, fn func(*protocol, string) error) error {
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, func(token string) (string, error) {
+		return appServerIdentity(token), nil
+	}, fn)
+}
+
+func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, controllerIdentity func(string) (string, error), fn func(*protocol, string) error) error {
 	probe, err := a.probeServer(ctx, sandboxName, endpoint)
 	if err != nil {
 		return err
@@ -209,7 +239,11 @@ func (a Agent) withServerEndpointIdentity(ctx context.Context, sandboxName, endp
 		protocol, dialErr := dialProtocol(ctx, endpoint, probe.token)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
-			return fn(protocol, appServerIdentity(probe.token))
+			identity, identityErr := controllerIdentity(probe.token)
+			if identityErr != nil {
+				return identityErr
+			}
+			return fn(protocol, identity)
 		}
 		if probe.running {
 			return fmt.Errorf("exact live Codex app-server could not be authenticated or inspected: %w", dialErr)
@@ -242,7 +276,11 @@ func (a Agent) withServerEndpointIdentity(ctx context.Context, sandboxName, endp
 		protocol, dialErr := dialProtocol(ctx, endpoint, token)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
-			return fn(protocol, appServerIdentity(token))
+			identity, identityErr := controllerIdentity(token)
+			if identityErr != nil {
+				return identityErr
+			}
+			return fn(protocol, identity)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("Codex app-server did not become ready: %w", dialErr)

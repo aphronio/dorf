@@ -260,6 +260,10 @@ func ReviewSandboxName(runID string) string {
 	return "dorf-review-" + digest(runID, 20)
 }
 
+func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
+	return "review-controller-" + digest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
+}
+
 func ActionID(jobID string, kind ActionKind) string {
 	return "action-" + digest(jobID+"\x00"+string(kind), 24)
 }

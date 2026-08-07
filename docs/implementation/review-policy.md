@@ -35,16 +35,19 @@ Before installing a provider route, Dorf exports only the Git objects reachable 
 clean implementation HEAD and materializes them in a detached reviewer checkout. It removes remote
 and ref reachability, prunes unreachable objects, and observes exact HEAD, tree, and clean state.
 The reviewer VM never runs repository setup, Check, or smoke commands. Each VM receives its own
-scoped provider route and independently controlled Codex app-server. Exact HEAD/tree/clean state is
-observed again after the native turn and before any claim Evidence can be recorded.
+scoped provider route and independently controlled Codex app-server. Its durable logical controller
+identity is derived from the AgentRun, reviewer Sandbox, and host-attested ownership nonce; the
+random WebSocket control token is only a rotating authentication capability. Exact HEAD/tree/clean
+state is observed again after the native turn and before any claim Evidence can be recorded.
 
 Before native submission, Dorf durably records a random stable submission nonce and the exact input
 digest. Review-only recovery performs bounded Session discovery and accepts exactly one turn only
 when its persisted user message has that nonce and byte-exact input. It also attests the bound
 Session, app-server control identity, model, reasoning effort, `approvalPolicy=never`, and read-only
-policy. Missing or mismatched identity, prompt, policy, extra turns, or competing Sessions stop with
-attention and cannot produce review Evidence. This strict path does not change legitimate recovery
-for the original implementation Session.
+policy. Every Initial/Turns/Wait operation re-attests reviewer Sandbox ownership, including after an
+app-server process replacement. Missing or mismatched identity, prompt, policy, extra turns, or
+competing Sessions stop with attention and cannot produce review Evidence. This strict path does not
+change legitimate recovery for the original implementation Session.
 
 After every selected run has a distinct reviewer Sandbox, route, immutable checkout, Action set,
 and native binding, read-only review turns may overlap. Any other capability class is serialized.

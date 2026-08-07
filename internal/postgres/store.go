@@ -1012,6 +1012,13 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			if err != nil {
 				break
 			}
+			var sandboxName, ownershipNonce string
+			if err = tx.QueryRowContext(ctx, `select sandbox_name,ownership_nonce from dorf.review_resources where run_id=$1`, scope).Scan(&sandboxName, &ownershipNonce); err == nil && receipt.Outcome != spine.ReviewControllerID(scope, sandboxName, ownershipNonce) {
+				err = fmt.Errorf("review logical controller identity conflicts with its host-owned Sandbox")
+			}
+			if err != nil {
+				break
+			}
 			if err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set app_server_id=coalesce(app_server_id,$2) where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and (app_server_id is null or app_server_id=$2)`, scope, receipt.Outcome)); err == nil {
 				err = expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where id=$1 and (session_id is null or session_id=$2)`, scope, receipt.ExternalID))
 			}

@@ -266,7 +266,8 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 		fail("terminal native binding, exact Revision, or least-capability envelope is incomplete")
 	}
 	inputDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(run.InputContract)))
-	if run.ReviewerSandboxID != ReviewSandboxName(run.ID) || run.ReviewerRouteID == "" || run.ReviewerAppServer == "" || len(run.SubmissionNonce) != 64 || run.InputDigest != inputDigest || run.RevisionTree == "" || run.CheckoutState != "verified" || run.PostReviewState != "verified" || run.ReviewerSandboxState != "created" && run.ReviewerSandboxState != "deleted" || run.ReviewerRouteState != "active" && run.ReviewerRouteState != "revoked" {
+	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	if run.ReviewerSandboxID != ReviewSandboxName(run.ID) || run.ReviewerRouteID == "" || run.ReviewerAppServer != expectedController || len(run.SubmissionNonce) != 64 || run.InputDigest != inputDigest || run.RevisionTree == "" || run.CheckoutState != "verified" || run.PostReviewState != "verified" || run.ReviewerSandboxState != "created" && run.ReviewerSandboxState != "deleted" || run.ReviewerRouteState != "active" && run.ReviewerRouteState != "revoked" {
 		fail("isolated reviewer Sandbox, route, strict submission, or pre/post Git attestation is incomplete")
 	}
 	recordsByID := make(map[string]Evidence, len(records))

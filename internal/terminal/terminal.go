@@ -255,15 +255,15 @@ func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run s
 }
 
 func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeBinding, error) {
-	return e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	return e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
 func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeHistory, error) {
-	return e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, run.Workspace, run.SessionID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	return e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
 func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.AgentRun, turnID string) (spine.ReviewNativeBinding, error) {
-	return e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, run.SessionID, turnID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	return e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, turnID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
 func reviewMetadata(job spine.Job, run spine.AgentRun) incus.ReviewMetadata {

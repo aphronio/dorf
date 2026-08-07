@@ -385,6 +385,11 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		if binding.AppServerID == "" || binding.SessionID == "" || binding.Turn.ID == "" {
 			return NativeTurn{}, fmt.Errorf("review native submission returned incomplete Session or turn binding")
 		}
+		if binding.AppServerID != ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce) {
+			reason := "review native submission returned a foreign logical controller identity"
+			_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+			return NativeTurn{}, reviewBoundaryError(reason)
+		}
 		if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 			return NativeTurn{}, err
 		}
@@ -506,7 +511,8 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Ag
 }
 
 func validateReviewNativeOwner(run AgentRun, appServerID, sessionID string) error {
-	if appServerID == "" || sessionID == "" || run.ReviewerAppServer != appServerID || run.SessionID != sessionID {
+	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	if appServerID == "" || appServerID != expectedController || sessionID == "" || run.ReviewerAppServer != appServerID || run.SessionID != sessionID {
 		return reviewBoundaryError("review native recovery conflicts with the exact reviewer app-server or Session")
 	}
 	return nil

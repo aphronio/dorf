@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
 
@@ -19,6 +20,37 @@ type probeRunner struct {
 	result incus.Result
 	calls  [][]string
 	inputs [][]byte
+}
+
+type reviewRestartRunner struct {
+	sandboxName string
+	metadata    incus.ReviewMetadata
+	token       string
+	stopped     bool
+	calls       [][]string
+	inputs      [][]byte
+}
+
+func (r *reviewRestartRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
+	r.calls = append(r.calls, append([]string{command}, args...))
+	r.inputs = append(r.inputs, append([]byte(nil), input...))
+	joined := strings.Join(args, " ")
+	if strings.HasPrefix(joined, "list --format=json") {
+		config := map[string]string{
+			"user.dorf.owner": "review", "user.dorf.job": r.metadata.JobID,
+			"user.dorf.agent_run": r.metadata.AgentRunID, "user.dorf.revision": r.metadata.Revision,
+			"user.dorf.ownership_nonce": r.metadata.OwnershipNonce,
+		}
+		payload, _ := json.Marshal([]map[string]any{{"name": r.sandboxName, "config": config}})
+		return incus.Result{Stdout: string(payload)}, nil
+	}
+	if strings.Contains(joined, "running=0; tracked=0") {
+		if r.stopped {
+			return incus.Result{Stdout: "0\n0\n"}, nil
+		}
+		return incus.Result{Stdout: "1\n1\n" + r.token + "\n"}, nil
+	}
+	return incus.Result{}, nil
 }
 
 type reviewIsolationRunner struct{ calls [][]string }
@@ -34,13 +66,14 @@ func (r *reviewIsolationRunner) Run(_ context.Context, command string, _ []byte,
 func TestStrictReviewNeverDiscoversImplementationSandboxNativeState(t *testing.T) {
 	runner := &reviewIsolationRunner{}
 	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}, Port: 4500}
-	_, err := agent.StartStrictReviewTurn(context.Background(), "dorf-review-owned", "/workspace/job", strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
+	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
+	_, err := agent.StartStrictReviewTurn(context.Background(), "dorf-review-owned", "/workspace/job", owner, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
 	if err == nil {
 		t.Fatal("strict review unexpectedly passed the forced reviewer probe failure")
 	}
 	for _, call := range runner.calls {
 		joined := strings.Join(call, " ")
-		if !strings.Contains(joined, "exec dorf-review-owned --") || strings.Contains(joined, "dorf-implementation-forged") {
+		if strings.Contains(joined, "dorf-implementation-forged") || strings.Contains(joined, " exec ") && !strings.Contains(joined, "exec dorf-review-owned --") {
 			t.Fatalf("strict review escaped its reviewer Sandbox: %v", runner.calls)
 		}
 	}
@@ -114,6 +147,79 @@ func TestLiveExactServerReconnectUsesRetainedCapability(t *testing.T) {
 	}
 	if !called || len(runner.calls) != 1 {
 		t.Fatalf("reconnect called=%v guest calls=%d", called, len(runner.calls))
+	}
+}
+
+func TestStrictReviewProcessRestartRotatesCapabilityButRecoversStableControllerSessionAndTurn(t *testing.T) {
+	const oldToken = "old-review-control-capability"
+	nonce, input := strings.Repeat("a", 64), "exact persisted review input"
+	sessionID, turnID := "session-review", "turn-review"
+	server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
+		case "thread/resume":
+			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
+		case "turn/start":
+			t.Fatal("recovery submitted a second review turn")
+			return nil, true
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	sandboxName := "dorf-review-owned"
+	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
+	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: owner, token: oldToken}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	recover := func() spine.ReviewNativeHistory {
+		var history spine.ReviewNativeHistory
+		err := agent.withReviewServerEndpoint(context.Background(), sandboxName, endpoint, owner, func(protocol *protocol, controllerID string) error {
+			observedSession, turns, err := protocol.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
+			history = spine.ReviewNativeHistory{AppServerID: controllerID, SessionID: observedSession, Turns: turns}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return history
+	}
+
+	first := recover()
+	runner.stopped = true
+	second := recover()
+	wantController := spine.ReviewControllerID(owner.AgentRunID, sandboxName, owner.OwnershipNonce)
+	if first.AppServerID != wantController || second.AppServerID != wantController || first.SessionID != sessionID || second.SessionID != sessionID || len(second.Turns) != 1 || second.Turns[0].ID != turnID {
+		t.Fatalf("restart recovery first=%#v second=%#v", first, second)
+	}
+	var rotated string
+	for _, value := range runner.inputs {
+		if text := strings.TrimSpace(string(value)); text != "" {
+			rotated = text
+		}
+	}
+	if rotated == "" || rotated == oldToken || appServerIdentity(rotated) == wantController {
+		t.Fatalf("authentication capability did not rotate independently: rotated=%q controller=%q", rotated, wantController)
+	}
+}
+
+func TestStrictReviewForeignOwnershipCannotClaimLogicalControllerIdentity(t *testing.T) {
+	sandboxName := "dorf-review-owned"
+	actual := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
+	foreign := actual
+	foreign.OwnershipNonce = strings.Repeat("d", 64)
+	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: actual, token: "retained"}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	_, err := agent.StartStrictReviewTurn(context.Background(), sandboxName, "/workspace/job", foreign, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
+	if err == nil || !strings.Contains(err.Error(), "ownership_nonce") {
+		t.Fatalf("foreign ownership error=%v", err)
+	}
+	if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
+		t.Fatalf("foreign ownership was not attention: %T %v", err, err)
 	}
 }
 

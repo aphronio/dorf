@@ -42,6 +42,24 @@ func TestRevisionRoleReviewIdentityIsStableAndDistinct(t *testing.T) {
 	}
 }
 
+func TestReviewControllerIdentityIsStableAndBoundToExactOwnership(t *testing.T) {
+	runID, sandbox := "agent-run-review", "dorf-review-owned"
+	nonce := strings.Repeat("a", 64)
+	first := ReviewControllerID(runID, sandbox, nonce)
+	if first == "" || first != ReviewControllerID(runID, sandbox, nonce) {
+		t.Fatalf("logical reviewer controller identity is not stable: %q", first)
+	}
+	for _, foreign := range []string{
+		ReviewControllerID("agent-run-foreign", sandbox, nonce),
+		ReviewControllerID(runID, "dorf-review-foreign", nonce),
+		ReviewControllerID(runID, sandbox, strings.Repeat("b", 64)),
+	} {
+		if foreign == first {
+			t.Fatalf("foreign reviewer ownership reused logical identity %q", first)
+		}
+	}
+}
+
 func TestRejectedMaterialFindingSettlesButPendingOrAcceptedRetainsAuthority(t *testing.T) {
 	for _, test := range []struct {
 		name         string
@@ -375,7 +393,7 @@ func (e reviewAttentionTestError) Error() string         { return string(e) }
 func (e reviewAttentionTestError) AttentionNeeded() bool { return true }
 
 func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) {
-	for _, reason := range []string{"missing client message identity", "wrong prompt", "extra turn", "competing Session", "mismatched read-only policy", "mismatched reviewer-Sandbox metadata"} {
+	for _, reason := range []string{"missing client message identity", "wrong prompt", "extra turn", "competing Session", "mismatched read-only policy", "mismatched reviewer-Sandbox metadata", "foreign logical controller identity"} {
 		t.Run(reason, func(t *testing.T) {
 			base := newMemoryStore()
 			job := testJob()
@@ -396,6 +414,10 @@ func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) 
 			}
 			store := &reviewRecoveryStore{memoryStore: base, runID: run.ID, sandboxActionID: actions[ActionSandboxCreate].ID, routeActionID: actions[ActionRouteCreate].ID, workspaceActionID: actions[ActionReviewWorkspaceCreate].ID, sessionActionID: actions[ActionSessionStart].ID}
 			externals := &reviewRecoveryExternals{initialErr: reviewAttentionTestError(reason)}
+			if reason == "foreign logical controller identity" {
+				externals.initialErr = nil
+				externals.controllerID = "foreign-review-controller"
+			}
 			_, err := (Service{Store: store}).executeAndRecordReview(context.Background(), job, run, store, externals)
 			settled := store.runs[run.ID]
 			if err == nil || settled.State != AgentRunUncertain || !strings.Contains(settled.Attention, reason) || store.recordedResults != 0 || settled.ClaimEvidenceID != "" || settled.ObservedEvidenceID != "" {
@@ -487,10 +509,11 @@ func (s *reviewRecoveryStore) ReviewRepairTargets(context.Context, string) ([]po
 func (s *reviewRecoveryStore) RejectReviewFinding(context.Context, string, string) error { return nil }
 
 type reviewRecoveryExternals struct {
-	mu          sync.Mutex
-	submissions int
-	turn        NativeTurn
-	initialErr  error
+	mu           sync.Mutex
+	submissions  int
+	turn         NativeTurn
+	initialErr   error
+	controllerID string
 }
 
 func (e *reviewRecoveryExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
@@ -517,7 +540,18 @@ func (e *reviewRecoveryExternals) ReviewRouteRevoke(context.Context, Job, AgentR
 func (e *reviewRecoveryExternals) ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error) {
 	return Receipt{}, nil
 }
-func (e *reviewRecoveryExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
+func (e *reviewRecoveryExternals) reviewBinding(run AgentRun) ReviewNativeBinding {
+	controllerID := e.controllerID
+	if controllerID == "" {
+		controllerID = ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	}
+	return ReviewNativeBinding{AppServerID: controllerID, SessionID: "review-session", Turn: e.turn}
+}
+func (e *reviewRecoveryExternals) reviewHistory(run AgentRun) ReviewNativeHistory {
+	binding := e.reviewBinding(run)
+	return ReviewNativeHistory{AppServerID: binding.AppServerID, SessionID: binding.SessionID, Turns: []NativeTurn{e.turn}}
+}
+func (e *reviewRecoveryExternals) ReviewInitialTurn(_ context.Context, _ Job, run AgentRun) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.initialErr != nil {
@@ -527,17 +561,17 @@ func (e *reviewRecoveryExternals) ReviewInitialTurn(context.Context, Job, AgentR
 		e.submissions++
 		e.turn = NativeTurn{ID: "review-turn", Status: "running"}
 	}
-	return ReviewNativeBinding{AppServerID: "review-app-server", SessionID: "review-session", Turn: e.turn}, nil
+	return e.reviewBinding(run), nil
 }
-func (e *reviewRecoveryExternals) ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error) {
+func (e *reviewRecoveryExternals) ReviewTurns(_ context.Context, _ Job, run AgentRun) (ReviewNativeHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return ReviewNativeHistory{AppServerID: "review-app-server", SessionID: "review-session", Turns: []NativeTurn{e.turn}}, nil
+	return e.reviewHistory(run), nil
 }
-func (e *reviewRecoveryExternals) ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error) {
+func (e *reviewRecoveryExternals) ReviewWait(_ context.Context, _ Job, run AgentRun, _ string) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.turn.Status = "completed"
 	e.turn.Output = `{"material":false,"summary":"clear","rationale":"clear","affected_roles":[],"affected_checks":[]}`
-	return ReviewNativeBinding{AppServerID: "review-app-server", SessionID: "review-session", Turn: e.turn}, nil
+	return e.reviewBinding(run), nil
 }
