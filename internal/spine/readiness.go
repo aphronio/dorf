@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"time"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	policy "github.com/aphronio/dorf/internal/review"
 )
 
 type EvidenceVerification struct {
@@ -21,11 +23,22 @@ type EvidenceVerification struct {
 }
 
 type ReadinessAssessment struct {
-	Status   string                 `json:"status"`
-	Ready    bool                   `json:"ready"`
-	Revision string                 `json:"revision"`
-	Reason   string                 `json:"reason"`
-	Evidence []EvidenceVerification `json:"evidence_verification"`
+	Status         string                       `json:"status"`
+	Ready          bool                         `json:"ready"`
+	Revision       string                       `json:"revision"`
+	Reason         string                       `json:"reason"`
+	Evidence       []EvidenceVerification       `json:"evidence_verification"`
+	ReviewEvidence []ReviewEvidenceVerification `json:"review_evidence_verification,omitempty"`
+}
+
+type ReviewEvidenceVerification struct {
+	AgentRunID         string `json:"agent_run_id"`
+	Role               string `json:"role"`
+	Revision           string `json:"revision"`
+	ClaimEvidenceID    string `json:"claim_evidence_id,omitempty"`
+	ObservedEvidenceID string `json:"observed_evidence_id,omitempty"`
+	Verified           bool   `json:"verified"`
+	Error              string `json:"error,omitempty"`
 }
 
 type commandEvidenceArtifact struct {
@@ -153,4 +166,166 @@ func AssessReadiness(job Job, declared []DeclaredCheck, checks []Check, records 
 	assessment.Status, assessment.Ready = "ready", true
 	assessment.Reason = "every declared Check has independently verified observed Evidence for the exact current Revision"
 	return assessment
+}
+
+func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, runs []ReviewRunView) ReadinessAssessment {
+	assessment := AssessReadiness(job, declared, checks, records, blobs)
+	if job.WorkflowPhase == "blocked" || assessment.Status == "blocked" {
+		return assessment
+	}
+	// AssessReadiness intentionally treats non-ready workflow phases as
+	// incomplete. Review-aware readiness still verifies Check Evidence first.
+	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
+	assessment.Evidence = verified
+	if err != nil {
+		assessment.Status, assessment.Ready = "not_ready", false
+		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
+		return assessment
+	}
+	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
+		assessment.Status, assessment.Ready = "not_ready", false
+		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
+		return assessment
+	}
+	if plan.State != "final" || plan.Final.Decision != "no-review" && plan.Final.Decision != "selected" {
+		assessment.Status, assessment.Ready = "not_ready", false
+		assessment.Reason = "persisted review plan is not final"
+		return assessment
+	}
+	byRole := make(map[string]ReviewRunView, len(runs))
+	byID := make(map[string]ReviewRunView, len(runs))
+	for _, run := range runs {
+		if run.Revision == job.Revision {
+			byRole[run.Role] = run
+			byID[run.ID] = run
+		}
+	}
+	declaredNames := make([]string, 0, len(declared))
+	for _, check := range declared {
+		declaredNames = append(declaredNames, check.Name)
+	}
+	verifyRun := func(run ReviewRunView) bool {
+		verification := VerifyReviewRunEvidence(run, records, blobs, declaredNames, plan)
+		assessment.ReviewEvidence = append(assessment.ReviewEvidence, verification)
+		if !verification.Verified {
+			assessment.Status, assessment.Ready = "not_ready", false
+			assessment.Reason = fmt.Sprintf("review AgentRun %s Evidence is invalid: %s", run.ID, verification.Error)
+			return false
+		}
+		return true
+	}
+	if plan.TriageRunID != "" {
+		triage, ok := byID[plan.TriageRunID]
+		if !ok || triage.State != AgentRunCompleted || !verifyRun(triage) {
+			if assessment.Reason == "" || assessment.Reason == "deterministic setup, commit, or Checks are incomplete" {
+				assessment.Status, assessment.Ready = "not_ready", false
+				assessment.Reason = "persisted triage AgentRun is not settled with verified claim and observed Evidence"
+			}
+			return assessment
+		}
+	}
+	for _, role := range plan.Final.Roles {
+		run, ok := byRole[string(role)]
+		if !ok || run.State != AgentRunCompleted || run.Finding == nil || run.ClaimEvidenceID == "" || run.ObservedEvidenceID == "" {
+			assessment.Status, assessment.Ready = "not_ready", false
+			assessment.Reason = fmt.Sprintf("selected review Role %s has not settled with separate claim and observed Evidence", role)
+			return assessment
+		}
+		if !verifyRun(run) {
+			return assessment
+		}
+		if run.Finding.Material && run.Finding.Adjudication != "rejected" {
+			assessment.Status, assessment.Ready = "not_ready", false
+			assessment.Reason = fmt.Sprintf("selected review Role %s has an unsettled material claim", role)
+			return assessment
+		}
+	}
+	if job.WorkflowPhase != "ready" {
+		assessment.Status, assessment.Ready = "not_ready", false
+		assessment.Reason = "review planning, triage, selected AgentRuns, or same-Session repair is incomplete"
+		return assessment
+	}
+	assessment.Status, assessment.Ready = "ready", true
+	if plan.Final.Decision == "no-review" {
+		assessment.Reason = "Checks have observed Evidence and ReviewPolicy explicitly selected no agent review for the exact Revision"
+	} else {
+		assessment.Reason = "Checks have observed Evidence and every selected Revision-bound review AgentRun is settled; reviewer output remains claim Evidence"
+	}
+	return assessment
+}
+
+func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs evidence.Store, declaredChecks []string, plan *ReviewPlanRecord) ReviewEvidenceVerification {
+	result := ReviewEvidenceVerification{AgentRunID: run.ID, Role: run.Role, Revision: run.Revision, ClaimEvidenceID: run.ClaimEvidenceID, ObservedEvidenceID: run.ObservedEvidenceID}
+	fail := func(format string, args ...any) {
+		if result.Error == "" {
+			result.Error = fmt.Sprintf(format, args...)
+		}
+	}
+	if run.State != AgentRunCompleted || run.NativeOutcome != "completed" || run.NativeTurnID == "" || run.SessionID == "" || run.Revision == "" || run.Capability != ReviewReadOnlyCapability || run.Workspace == "" {
+		fail("terminal native binding, exact Revision, or least-capability envelope is incomplete")
+	}
+	recordsByID := make(map[string]Evidence, len(records))
+	for _, record := range records {
+		recordsByID[record.ID] = record
+	}
+	claimKind := "review-finding"
+	if run.Role == ReviewTriageRole {
+		claimKind = "review-triage-rationale"
+	}
+	claim, claimOK := recordsByID[run.ClaimEvidenceID]
+	observed, observedOK := recordsByID[run.ObservedEvidenceID]
+	if !claimOK || run.ClaimEvidenceID != EvidenceID(run.ID, claimKind) {
+		fail("claim Evidence metadata is missing or has the wrong stable identity")
+	}
+	if !observedOK || run.ObservedEvidenceID != EvidenceID(run.ID, "review-native-observation") {
+		fail("observed Evidence metadata is missing or has the wrong stable identity")
+	}
+	for _, item := range []struct {
+		record     Evidence
+		provenance string
+		kind       string
+		mediaType  string
+	}{{claim, "claim", claimKind, "application/vnd.dorf.agent-claim+json"}, {observed, "observed", "review-native-observation", "application/vnd.dorf.observation+json"}} {
+		if item.record.ActionID != run.ActionID || item.record.CheckID != "" || item.record.Revision != run.Revision || item.record.Producer != reviewEvidenceProducer || item.record.Provenance != item.provenance || item.record.Kind != item.kind || item.record.MediaType != item.mediaType || !item.record.StartedAt.Equal(run.StartedAt) || !item.record.FinishedAt.Equal(run.FinishedAt) {
+			fail("%s Evidence does not match its AgentRun, Revision, provenance, producer, or bounded timing", item.kind)
+		}
+	}
+	claimBytes, err := blobs.ReadVerified(claim.Digest, claim.ByteSize)
+	if err != nil {
+		fail("claim blob is unavailable or invalid: %v", err)
+	} else if run.Role == ReviewTriageRole {
+		output, parseErr := policy.ParseTriageOutput(string(claimBytes))
+		if parseErr != nil || plan == nil || output.Rationale != plan.TriageRationale {
+			fail("triage claim does not match its bounded persisted result")
+		}
+	} else {
+		output, parseErr := policy.ParseFindingOutput(string(claimBytes), policy.Role(run.Role), declaredChecks)
+		if parseErr != nil || run.Finding == nil {
+			fail("finding claim does not match its bounded persisted result")
+		} else {
+			expected := policy.FindingOutput{Material: run.Finding.Material, Summary: run.Finding.Summary, Rationale: run.Finding.Rationale, AffectedRoles: run.Finding.AffectedRoles, AffectedChecks: run.Finding.AffectedChecks}
+			if !reflect.DeepEqual(output, expected) || run.Finding.EvidenceID != claim.ID {
+				fail("finding row differs from immutable claim Evidence")
+			}
+		}
+	}
+	observedBytes, err := blobs.ReadVerified(observed.Digest, observed.ByteSize)
+	if err != nil {
+		fail("observed blob is unavailable or invalid: %v", err)
+	} else {
+		var artifact reviewObservationArtifact
+		decoder := json.NewDecoder(bytes.NewReader(observedBytes))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&artifact); err != nil {
+			fail("observed artifact is invalid: %v", err)
+		} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			fail("observed artifact has trailing content")
+		}
+		expected := reviewObservationArtifact{run.ID, run.Revision, run.Role, run.Capability, run.Workspace, run.SessionID, run.NativeTurnID, run.NativeOutcome, run.InputTokens, run.CachedInputTokens, run.OutputTokens, run.CostMicrousd, run.UsageAvailable}
+		if artifact != expected {
+			fail("observed artifact differs from native AgentRun facts")
+		}
+	}
+	result.Verified = result.Error == ""
+	return result
 }

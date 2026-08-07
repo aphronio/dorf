@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/incus"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -23,8 +24,9 @@ const (
 var safeIdentity = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 type Contract struct {
-	Prepare string
-	Checks  []NamedCommand
+	Prepare             string
+	Checks              []NamedCommand
+	DeclaredPerformance bool
 }
 
 type NamedCommand struct {
@@ -58,6 +60,7 @@ func ParseContract(contents string) (Contract, error) {
 	var contract Contract
 	section := ""
 	seen := map[string]bool{}
+	reviewPerformanceSeen := false
 	for lineNumber, raw := range strings.Split(contents, "\n") {
 		line := strings.TrimSpace(stripComment(raw))
 		if line == "" {
@@ -78,6 +81,18 @@ func ParseContract(contents string) (Contract, error) {
 			return Contract{}, fmt.Errorf("invalid .dorf.toml assignment on line %d", lineNumber+1)
 		}
 		name := strings.TrimSpace(parts[0])
+		if section == "review" && name == "performance" {
+			if reviewPerformanceSeen {
+				return Contract{}, fmt.Errorf("review.performance is duplicated")
+			}
+			reviewPerformanceSeen = true
+			value := strings.TrimSpace(parts[1])
+			if value != "true" && value != "false" {
+				return Contract{}, fmt.Errorf("review.performance must be true or false on line %d", lineNumber+1)
+			}
+			contract.DeclaredPerformance = value == "true"
+			continue
+		}
 		if section != "commands" {
 			if section == "" && name == "commands" {
 				return Contract{}, fmt.Errorf("[commands] must be a table")
@@ -109,6 +124,45 @@ func ParseContract(contents string) (Contract, error) {
 		return Contract{}, fmt.Errorf("repository contract requires commands.check or commands.smoke")
 	}
 	return contract, nil
+}
+
+func (m Manager) ChangeFacts(ctx context.Context, sandboxName, baseRevision, revision string) (policy.ChangeFacts, error) {
+	if !fullOID(baseRevision) || !fullOID(revision) {
+		return policy.ChangeFacts{}, fmt.Errorf("ChangeFacts require full immutable Git Revisions")
+	}
+	if err := m.validateGit(ctx, sandboxName, revision, false); err != nil {
+		return policy.ChangeFacts{}, &AttentionError{Reason: err.Error()}
+	}
+	contract, err := m.LoadContract(ctx, sandboxName)
+	if err != nil {
+		return policy.ChangeFacts{}, err
+	}
+	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "git", "-C", m.Workspace, "diff", "--name-only", "-z", baseRevision, revision, "--")
+	if err != nil {
+		return policy.ChangeFacts{}, err
+	}
+	if result.ExitCode != 0 {
+		return policy.ChangeFacts{}, &AttentionError{Reason: "observe exact Git change paths: " + strings.TrimSpace(result.Stderr)}
+	}
+	parts := strings.Split(result.Stdout, "\x00")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return policy.FactsFromPaths(baseRevision, revision, parts, true, contract.DeclaredPerformance)
+}
+
+func (m Manager) HasChanges(ctx context.Context, sandboxName, revision string) (bool, error) {
+	if err := m.validateGit(ctx, sandboxName, revision, true); err != nil {
+		return false, &AttentionError{Reason: err.Error()}
+	}
+	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "git", "-C", m.Workspace, "status", "--porcelain=v1", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, &AttentionError{Reason: "observe review adjudication Git state: " + strings.TrimSpace(result.Stderr)}
+	}
+	return strings.TrimSpace(result.Stdout) != "", nil
 }
 
 func stripComment(line string) string {

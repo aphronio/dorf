@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strings"
 
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/repository"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -49,11 +51,82 @@ func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action sp
 }
 
 func (e Externals) RepositoryCommit(ctx context.Context, job spine.Job, action spine.Action) (spine.CommitObservation, []byte, error) {
-	return e.repository().Commit(ctx, e.Sandbox.Name(job.ID), action.ID, job.ID, job.Branch, job.Revision, job.RepairCount+1)
+	return e.repository().Commit(ctx, e.Sandbox.Name(job.ID), action.ID, job.ID, job.Branch, job.Revision, job.RevisionGeneration+1)
 }
 
 func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spine.Check) (spine.CommandObservation, error) {
 	return e.repository().RunCommand(ctx, e.Sandbox.Name(job.ID), check.ID, job.Revision, check.Command)
+}
+
+func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (policy.ChangeFacts, error) {
+	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
+}
+
+func (e Externals) RepositoryHasChanges(ctx context.Context, job spine.Job) (bool, error) {
+	return e.repository().HasChanges(ctx, e.Sandbox.Name(job.ID), job.Revision)
+}
+
+func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	if run.Revision != job.Revision || !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
+		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
+	}
+	script := `set -eu
+main=$1; workspace=$2; revision=$3
+mkdir -p "$(dirname "$workspace")"
+if test ! -e "$workspace/.git"; then
+  git -C "$main" worktree add --detach "$workspace" "$revision"
+fi
+test "$(git -C "$workspace" rev-parse HEAD)" = "$revision"
+test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"`
+	result, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", script, "dorf-review-workspace", e.Sandbox.Config.Workspace, run.Workspace, run.Revision)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if result.ExitCode != 0 {
+		return spine.Receipt{}, fmt.Errorf("prepare exact review workspace: %s", strings.TrimSpace(result.Stderr))
+	}
+	return spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision}, nil
+}
+
+func (e Externals) ReviewWorkspaceDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+	if !strings.HasPrefix(run.Workspace, "/tmp/dorf/review-workspaces/agent-run-") {
+		return spine.Receipt{}, fmt.Errorf("refusing review workspace cleanup outside the bounded root")
+	}
+	script := `set -eu
+main=$1; workspace=$2
+if test -e "$workspace"; then git -C "$main" worktree remove --force "$workspace"; fi
+git -C "$main" worktree prune
+test ! -e "$workspace"`
+	result, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", script, "dorf-review-cleanup", e.Sandbox.Config.Workspace, run.Workspace)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	if result.ExitCode != 0 {
+		return spine.Receipt{}, fmt.Errorf("remove exact review workspace: %s", strings.TrimSpace(result.Stderr))
+	}
+	return spine.Receipt{ExternalID: run.Workspace, Outcome: "deleted"}, nil
+}
+
+func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.AgentRun) (string, spine.NativeTurn, error) {
+	return e.Agent.StartReviewInitialTurn(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.ID, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+}
+
+func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.AgentRun) ([]spine.NativeTurn, error) {
+	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.SessionID)
+}
+
+func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.AgentRun, turnID string) (spine.NativeTurn, error) {
+	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), run.Workspace, run.SessionID, turnID)
+}
+
+func reviewEffort(role, implementationEffort string) string {
+	if role == "review-triage" {
+		return "low"
+	}
+	if role == "auth-authority" || role == "critical-boundary" {
+		return implementationEffort
+	}
+	return "medium"
 }
 
 func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
@@ -125,3 +198,5 @@ func requireBridgeRoute(baseURL, bridgeIPv4 string) error {
 	}
 	return nil
 }
+
+var _ spine.ReviewExternals = Externals{}

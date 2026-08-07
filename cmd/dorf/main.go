@@ -22,6 +22,7 @@ import (
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -76,6 +77,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
+	case "review":
+		return reviewCommand(ctx, store, service, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	default:
 		_ = service
 		return usage(stderr)
@@ -120,7 +123,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 006_setup_retry.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 007_review_policy.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -279,7 +282,21 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if declaredErr != nil {
 		declared = nil
 	}
-	assessment := spine.AssessReadiness(job, declared, checks, evidenceRecords, evidenceStore)
+	plans, err := store.ReviewPlans(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	reviewRuns, err := store.AllReviewRuns(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	var currentPlan *spine.ReviewPlanRecord
+	for i := range plans {
+		if plans[i].Revision == job.Revision {
+			currentPlan = &plans[i]
+		}
+	}
+	assessment := spine.AssessReviewReadiness(job, declared, checks, evidenceRecords, evidenceStore, currentPlan, reviewRuns)
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -288,7 +305,7 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "readiness": assessment, "claims": map[string]any{"implementation_agent_runs": messages, "authority": "Codex native Session; agent statements are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Session (not copied into Dorf)"}
+	view := map[string]any{"job": job, "readiness": assessment, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
@@ -325,12 +342,116 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 		}
 		fmt.Fprintf(stdout, "  observed Check %s [%s]: %s Revision=%s exit=%d evidence=%s\n", check.Name, scope, check.State, check.Revision, check.ExitCode, empty(check.EvidenceDigest))
 	}
+	for _, plan := range plans {
+		scope := "historical"
+		if plan.Revision == job.Revision {
+			scope = "current"
+		}
+		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v requested=%v requested-by=%s digest=%s\n", scope, plan.Revision, plan.State, plan.Final.Decision, plan.Final.Roles, plan.RequestedRoles, empty(plan.RequestedByRunID), empty(plan.PolicyDigest))
+		for _, reason := range plan.Final.Reasons {
+			fmt.Fprintf(stdout, "    reason %s [%s]: %s\n", reason.Role, reason.Source, reason.Detail)
+		}
+		if plan.TriageRationale != "" {
+			fmt.Fprintf(stdout, "    triage claim %s: %s\n", plan.TriageRunID, plan.TriageRationale)
+		}
+	}
+	for _, run := range reviewRuns {
+		latency := time.Duration(0)
+		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
+			latency = run.FinishedAt.Sub(run.StartedAt)
+		}
+		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s cleanup=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.WorkspaceState), run.Stale)
+		if run.Finding != nil {
+			fmt.Fprintf(stdout, "    claim material=%t adjudication=%s evidence=%s summary=%s\n", run.Finding.Material, run.Finding.Adjudication, run.Finding.EvidenceID, run.Finding.Summary)
+		}
+	}
 	for _, record := range evidenceRecords {
 		verification := "verified"
 		if err := evidenceStore.Verify(record.Digest, record.ByteSize); err != nil {
 			verification = "INVALID: " + err.Error()
 		}
 		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d provenance=%s producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Provenance, record.Producer, empty(record.Revision), verification)
+	}
+	return nil
+}
+
+type roleFlags []policy.Role
+
+func (r *roleFlags) String() string {
+	values := make([]string, 0, len(*r))
+	for _, role := range *r {
+		values = append(values, string(role))
+	}
+	return strings.Join(values, ",")
+}
+
+func (r *roleFlags) Set(value string) error {
+	*r = append(*r, policy.Role(strings.TrimSpace(value)))
+	return nil
+}
+
+func reviewCommand(ctx context.Context, store postgres.Store, service spine.Service, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "activate" {
+		return fmt.Errorf("review requires: activate JOB_ID --revision EXACT_OID [--requested-role ROLE]")
+	}
+	set := flag.NewFlagSet("review activate", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	revision := set.String("revision", "", "exact committed Revision already proven by Checks")
+	requestedBy := set.String("requested-by-agent-run", "", "original implementation AgentRun that requested additional review")
+	var roles roleFlags
+	set.Var(&roles, "requested-role", "allowlisted additional Role requested by the implementation AgentRun (repeatable)")
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	if set.NArg() != 1 || !postgres.ValidRevision(*revision) {
+		return fmt.Errorf("review activate requires one Job ID and --revision with a lowercase full commit OID")
+	}
+	job, err := store.Job(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if job.Revision != *revision {
+		return fmt.Errorf("activation Revision %s conflicts with Job current Revision %s", *revision, job.Revision)
+	}
+	if job.WorkflowPhase == "ready" {
+		declared, err := store.DeclaredChecks(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		checks, err := store.Checks(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		records, err := store.Evidence(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
+			return fmt.Errorf("review activation requires independently verified exact-Revision Check Evidence: %w", err)
+		}
+	}
+	activation, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: *revision, RequestedRoles: []policy.Role(roles), RequestedByRunID: *requestedBy})
+	if err != nil {
+		return err
+	}
+	disposition, err := service.RunUntilIdle(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	plan, planErr := store.ReviewPlan(ctx, job.ID, job.Revision)
+	runs, runsErr := store.AllReviewRuns(ctx, job.ID)
+	if planErr != nil || runsErr != nil {
+		return errors.Join(planErr, runsErr)
+	}
+	if err := writeJSON(stdout, map[string]any{"job_id": job.ID, "revision": job.Revision, "activation_created": created, "activation": activation, "plan": plan, "review_agent_runs": runs, "workflow_phase": job.WorkflowPhase, "disposition": disposition}); err != nil {
+		return err
+	}
+	if disposition == spine.RunBlocked || job.WorkflowPhase == "blocked" {
+		return fmt.Errorf("review workflow stopped visibly: %s", job.WorkflowAttention)
 	}
 	return nil
 }
@@ -500,6 +621,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

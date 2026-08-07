@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	policy "github.com/aphronio/dorf/internal/review"
 )
 
 func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *testing.T) {
@@ -84,6 +85,37 @@ func TestRevisionReadinessAcceptsExactObservedArtifact(t *testing.T) {
 	assessment := AssessReadiness(Job{ID: jobID, Revision: revision, WorkflowPhase: "ready"}, declared, []Check{check}, []Evidence{record}, store)
 	if !assessment.Ready || assessment.Status != "ready" {
 		t.Fatalf("assessment=%#v", assessment)
+	}
+}
+
+func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testing.T) {
+	store, jobID, revision, declared, check, record := readinessFixture(t)
+	job := Job{ID: jobID, Revision: revision, WorkflowPhase: "ready"}
+	withoutPlan := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, nil, nil)
+	if withoutPlan.Ready || !strings.Contains(withoutPlan.Reason, "no explicit persisted") {
+		t.Fatalf("missing plan readiness=%#v", withoutPlan)
+	}
+	noReview := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Final: policy.ReviewPlan{Decision: "no-review"}}
+	explicit := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &noReview, nil)
+	if !explicit.Ready || !strings.Contains(explicit.Reason, "explicitly selected no agent review") {
+		t.Fatalf("explicit no-review readiness=%#v", explicit)
+	}
+	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Final: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
+	incomplete := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &selected, nil)
+	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not settled") {
+		t.Fatalf("incomplete selected readiness=%#v", incomplete)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	run := ReviewRunView{AgentRun: AgentRun{ID: ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary)), JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/tmp/review", StartedAt: now, FinishedAt: now.Add(time.Second)}, Finding: &ReviewFinding{Material: false, Summary: "clear", Rationale: "no issue", AffectedRoles: []policy.Role{}, AffectedChecks: []string{}}}
+	outcome := NativeTurn{ID: run.NativeTurnID, Status: "completed", Output: `{"material":false,"summary":"clear","rationale":"no issue","affected_roles":[],"affected_checks":[]}`}
+	claim, observed, err := (Service{Evidence: store}).reviewEvidence(run.AgentRun, outcome, "review-finding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.ClaimEvidenceID, run.ObservedEvidenceID, run.Finding.EvidenceID = claim.ID, observed.ID, claim.ID
+	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, claim, observed}, store, &selected, []ReviewRunView{run})
+	if !settled.Ready || !strings.Contains(settled.Reason, "claim Evidence") {
+		t.Fatalf("settled selected readiness=%#v", settled)
 	}
 }
 

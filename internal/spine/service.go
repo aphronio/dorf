@@ -248,7 +248,24 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, false, nil
 	case "blocked":
 		return RunBlocked, false, nil
-	case "implementing", "repairing", "committing":
+	case "implementing", "repairing", "review-repairing", "committing":
+		if job.WorkflowPhase == "review-repairing" {
+			observer, ok := s.Externals.(ReviewAdjudicationExternals)
+			if !ok {
+				return RunIdle, false, fmt.Errorf("review adjudication requires an observed Git workspace boundary")
+			}
+			changed, err := observer.RepositoryHasChanges(ctx, job)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if !changed {
+				reviewStore := s.Store.(ReviewStore)
+				if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
+					return RunIdle, false, err
+				}
+				return RunIdle, true, nil
+			}
+		}
 		parent := job.Revision
 		action, started, err := store.BeginCommit(ctx, job.ID, parent)
 		if err != nil {
@@ -348,10 +365,16 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		for _, result := range verified {
 			verifiedIDs = append(verifiedIDs, result.EvidenceID)
 		}
-		if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+		if reviewStore, ok := s.Store.(ReviewStore); ok {
+			if err := reviewStore.MarkChecksVerified(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+				return RunIdle, false, err
+			}
+		} else if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
 			return RunIdle, false, err
 		}
 		return RunIdle, true, nil
+	case "review-planning", "review-triage", "reviewing":
+		return s.advanceReview(ctx, job)
 	default:
 		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
 	}
@@ -364,7 +387,7 @@ func attentionNeeded(err error) bool {
 
 func (s Service) handleFailedCheck(ctx context.Context, job Job, check Check) (RunDisposition, bool, error) {
 	store := s.Store.(CodingStore)
-	if job.RepairCount == 0 {
+	if job.RepairCount == 0 && job.ReviewRepairCount == 0 {
 		if _, _, err := store.AdmitRepair(ctx, check); err != nil {
 			return RunIdle, false, err
 		}
@@ -597,6 +620,39 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		}
 		if err := s.reconcileCleanupMutation(ctx, job); err != nil {
 			return err
+		}
+		if reviewStore, ok := s.Store.(ReviewStore); ok {
+			reviewExternals, externalOK := s.Externals.(ReviewExternals)
+			if !externalOK {
+				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
+			}
+			runs, err := reviewStore.AllReviewRuns(ctx, job.ID)
+			if err != nil {
+				return err
+			}
+			for _, run := range runs {
+				if run.State != AgentRunCompleted && run.State != AgentRunFailed && run.State != AgentRunInterrupted {
+					return fmt.Errorf("cleanup retained Sandbox and route: review AgentRun %s (%s) is not safely settled", run.ID, run.State)
+				}
+				if run.WorkspaceState == "deleted" {
+					continue
+				}
+				action, err := reviewStore.BeginReviewWorkspaceCleanup(ctx, run.ID)
+				if err != nil {
+					return err
+				}
+				if action.State == ActionSucceeded {
+					continue
+				}
+				receipt, err := reviewExternals.ReviewWorkspaceDelete(ctx, job, run.AgentRun, action)
+				if err != nil {
+					_ = s.Store.UncertainAction(ctx, action.ID)
+					return fmt.Errorf("reconcile exact review workspace %s: %w", run.Workspace, err)
+				}
+				if err := s.Store.CompleteAction(ctx, action.ID, receipt); err != nil {
+					return err
+				}
+			}
 		}
 		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
 			if _, err := s.reconcile(ctx, job, kind); err != nil {

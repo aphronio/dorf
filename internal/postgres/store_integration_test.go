@@ -13,6 +13,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -334,6 +335,34 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err != nil || len(records) != 5 {
 		t.Fatalf("Evidence=%#v err=%v", records, err)
 	}
+	sandboxCreate, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, sandboxCreate.ID, spine.Receipt{ExternalID: "sandbox-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	routeCreate, err := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, routeCreate.ID, spine.Receipt{ExternalID: "route-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	routeDelete, err := store.BeginAction(ctx, job.ID, spine.ActionRouteRevoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, routeDelete.ID, spine.Receipt{ExternalID: "route-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	sandboxDelete, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: "sandbox-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +371,113 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if len(retainedChecks) != len(checks) || len(retainedEvidence) != len(records) {
 		t.Fatalf("cleanup lost audit facts Checks=%d Evidence=%d", len(retainedChecks), len(retainedEvidence))
 	}
+}
+
+func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	for _, test := range []struct {
+		name  string
+		paths []string
+		role  policy.Role
+		phase string
+	}{
+		{name: "explicit no review", paths: []string{"docs/review.md"}, phase: "ready"},
+		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, role: policy.RoleAuthAuthority, phase: "reviewing"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job, revision, verifiedID := prepareReviewIntegrationJob(t, store, test.name)
+			if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.ReviewPlan(ctx, job.ID, revision)
+			if err != nil || record.State != "pending" {
+				t.Fatalf("pending plan=%#v err=%v", record, err)
+			}
+			facts, err := policy.FactsFromPaths(job.StartingRevision, revision, test.paths, true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := policy.ReviewPolicy(facts, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record.Facts, record.Initial, record.Final = facts, plan, plan
+			if err := store.RecordReviewPolicy(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordReviewPolicy(ctx, record); err != nil {
+				t.Fatalf("idempotent policy retry: %v", err)
+			}
+			updated, err := store.Job(ctx, job.ID)
+			if err != nil || updated.WorkflowPhase != test.phase {
+				t.Fatalf("updated Job=%#v err=%v", updated, err)
+			}
+			persisted, err := store.ReviewPlan(ctx, job.ID, revision)
+			if err != nil || persisted.State != "final" || persisted.PolicyDigest == "" || persisted.Final.Decision != plan.Decision {
+				t.Fatalf("persisted plan=%#v err=%v", persisted, err)
+			}
+			runs, err := store.ReviewRuns(ctx, job.ID, revision)
+			if test.role == "" {
+				if err != nil || len(runs) != 0 || persisted.Final.Decision != "no-review" {
+					t.Fatalf("no-review runs=%#v plan=%#v err=%v", runs, persisted, err)
+				}
+			} else if err != nil || len(runs) != 1 || runs[0].Role != string(test.role) || runs[0].ID != spine.ReviewAgentRunID(job.ID, revision, string(test.role)) || runs[0].Capability != spine.ReviewReadOnlyCapability || runs[0].Revision != revision {
+				t.Fatalf("selected runs=%#v err=%v", runs, err)
+			}
+			changed := record
+			changed.Initial.Decision = "invalid-retry-change"
+			if err := store.RecordReviewPolicy(ctx, changed); err == nil || !strings.Contains(err.Error(), "changed across retry") {
+				t.Fatalf("changed atomic policy error=%v", err)
+			}
+		})
+	}
+}
+
+func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	start, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/review-policy", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	setup, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSetup(ctx, setup.ID, integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "1"), spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + job.ID}); err != nil {
+		t.Fatal(err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-"+job.ID)
+	commit, started, err := store.BeginCommit(ctx, job.ID, start)
+	if err != nil || !started {
+		t.Fatalf("commit=%#v started=%v err=%v", commit, started, err)
+	}
+	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}, integrationEvidence(commit.ID, "git-revision", commit.ID, "", revision, "2")); err != nil {
+		t.Fatal(err)
+	}
+	check, err := store.BeginCheck(ctx, job.ID, revision, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkEvidence := integrationEvidence(check.ID, "check-output", "", check.ID, revision, "3")
+	if err := store.RecordCheck(ctx, check, checkEvidence, spine.CommandObservation{Command: check.Command, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job, revision, checkEvidence.ID
 }
 
 func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing.T) {

@@ -236,7 +236,7 @@ func TestPersistedThreadRejectsTurnStartUntilResumeWithoutLeakingNativeDetail(t 
 	defer server.Close()
 	p := dialTestProtocol(t, server)
 
-	_, err := p.startTurn(context.Background(), "session-persisted", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high")
+	_, err := p.startTurn(context.Background(), "session-persisted", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err == nil || err.Error() != "Codex app-server rejected turn/start" {
 		t.Fatalf("safe rejection=%v", err)
 	}
@@ -295,7 +295,7 @@ func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) 
 	if len(turns) != 1 || turns[0] != (TurnOutcome{ID: "turn-prior", Status: "completed"}) {
 		t.Fatalf("turns=%#v", turns)
 	}
-	outcome, err := p.resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", "agent-run-stable-2", "next input", "gpt-5.6-sol", "high")
+	outcome, err := p.resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", "agent-run-stable-2", "next input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestResumeRefusesSubstituteThreadBeforeTurnStart(t *testing.T) {
 	defer server.Close()
 	p := dialTestProtocol(t, server)
 
-	_, err := p.resumeAndStartTurn(context.Background(), "session-bound", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high")
+	_, err := p.resumeAndStartTurn(context.Background(), "session-bound", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err == nil || err.Error() != "thread/resume did not return the exact bound native Session" {
 		t.Fatalf("resume error=%v", err)
 	}
@@ -387,7 +387,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	defer server.Close()
 
 	firstConnection := dialTestProtocol(t, server)
-	lostSession, err := firstConnection.startThread(context.Background(), "/workspace/job", "gpt-5.6-sol")
+	lostSession, err := firstConnection.startThread(context.Background(), "/workspace/job", "gpt-5.6-sol", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	}
 
 	secondConnection := dialTestProtocol(t, server)
-	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high")
+	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	thirdConnection := dialTestProtocol(t, server)
 	// The fake app-server implements no clientUserMessageId deduplication. A
 	// deliberately different hint still adopts by isolated Session history.
-	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", "initial input", "gpt-5.6-sol", "high")
+	recoveredSession, recoveredTurn, err := thirdConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "different-native-hint", "initial input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyNativeOutcome(t *testing
 	if err := p.initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := p.startTurn(context.Background(), "session-native-1", "/workspace/job", "action-stable-agent-run", "complete goal", "gpt-5.6-sol", "high")
+	outcome, err := p.startTurn(context.Background(), "session-native-1", "/workspace/job", "action-stable-agent-run", "complete goal", "gpt-5.6-sol", "high", "read-only")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -511,5 +511,19 @@ func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyNativeOutcome(t *testing
 	params := turnRequest["params"].(map[string]any)
 	if params["clientUserMessageId"] != "action-stable-agent-run" {
 		t.Fatalf("clientUserMessageId=%v", params["clientUserMessageId"])
+	}
+	if policy := params["sandboxPolicy"].(map[string]any); policy["type"] != "readOnly" {
+		t.Fatalf("review sandboxPolicy=%v", policy)
+	}
+}
+
+func TestParseTurnRetainsBoundedFinalClaimAndAvailableUsage(t *testing.T) {
+	turn := parseTurn(map[string]any{
+		"id": "turn-review", "status": "completed",
+		"items": []any{map[string]any{"type": "agentMessage", "text": `{"material":false}`}},
+		"usage": map[string]any{"inputTokens": float64(12), "cachedInputTokens": float64(4), "outputTokens": float64(3), "costMicrousd": float64(9)},
+	})
+	if turn.ID != "turn-review" || turn.Output != `{"material":false}` || !turn.UsageAvailable || turn.InputTokens != 12 || turn.CachedInputTokens != 4 || turn.OutputTokens != 3 || turn.CostMicrousd != 9 {
+		t.Fatalf("parsed review turn=%#v", turn)
 	}
 }

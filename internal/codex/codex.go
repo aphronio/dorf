@@ -54,13 +54,21 @@ func (e *attentionError) Error() string         { return e.reason }
 func (e *attentionError) AttentionNeeded() bool { return true }
 
 func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
+	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
+}
+
+func (a Agent) StartReviewInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
+	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "read-only")
+}
+
+func (a Agent) startInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort, capability string) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var sessionID string
 	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort)
+		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
 		return err
 	})
 	return sessionID, outcome, err
@@ -97,7 +105,7 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID,
 	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		outcome, err = protocol.resumeAndStartTurn(ctx, sessionID, workspace, agentRunID, input, model, effort)
+		outcome, err = protocol.resumeAndStartTurn(ctx, sessionID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
 	})
 	return outcome, err
@@ -289,8 +297,8 @@ func (p *protocol) listThreads(ctx context.Context, workspace string) ([]string,
 	return ids, nil
 }
 
-func (p *protocol) startThread(ctx context.Context, workspace, model string) (string, error) {
-	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": "danger-full-access"})
+func (p *protocol) startThread(ctx context.Context, workspace, model, capability string) (string, error) {
+	result, err := p.call(ctx, "thread/start", map[string]any{"cwd": workspace, "model": model, "approvalPolicy": "never", "sandbox": capability})
 	if err != nil {
 		return "", err
 	}
@@ -302,23 +310,23 @@ func (p *protocol) startThread(ctx context.Context, workspace, model string) (st
 	return id, nil
 }
 
-func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID, goal, model, effort string) (string, TurnOutcome, error) {
+func (p *protocol) reconcileInitialTurn(ctx context.Context, workspace, agentRunID, goal, model, effort, capability string) (string, TurnOutcome, error) {
 	sessionID, turns, err := p.inspectInitialTurns(ctx, workspace)
 	if err != nil {
 		return "", TurnOutcome{}, err
 	}
 	if sessionID == "" {
-		sessionID, err = p.startThread(ctx, workspace, model)
+		sessionID, err = p.startThread(ctx, workspace, model, capability)
 		if err != nil {
 			return "", TurnOutcome{}, err
 		}
-		turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+		turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
 		return sessionID, turn, err
 	}
 	if len(turns) == 1 {
 		return sessionID, turns[0], nil
 	}
-	turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+	turn, err := p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
 	return sessionID, turn, err
 }
 
@@ -362,13 +370,58 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 		if !ok {
 			continue
 		}
-		id, _ := turn["id"].(string)
-		status, _ := turn["status"].(string)
-		if id != "" {
-			turns = append(turns, TurnOutcome{ID: id, Status: status})
+		parsed := parseTurn(turn)
+		if parsed.ID != "" {
+			turns = append(turns, parsed)
 		}
 	}
 	return turns, nil
+}
+
+func parseTurn(turn map[string]any) TurnOutcome {
+	id, _ := turn["id"].(string)
+	status, _ := turn["status"].(string)
+	outcome := TurnOutcome{ID: id, Status: status}
+	if usage, ok := turn["usage"].(map[string]any); ok {
+		outcome.UsageAvailable = true
+		outcome.InputTokens = integer(usage["inputTokens"])
+		outcome.CachedInputTokens = integer(usage["cachedInputTokens"])
+		outcome.OutputTokens = integer(usage["outputTokens"])
+		outcome.CostMicrousd = integer(usage["costMicrousd"])
+	}
+	items, _ := turn["items"].([]any)
+	for _, value := range items {
+		item, ok := value.(map[string]any)
+		if !ok || item["type"] != "agentMessage" {
+			continue
+		}
+		if text, ok := item["text"].(string); ok && text != "" {
+			outcome.Output = text
+			continue
+		}
+		if contents, ok := item["content"].([]any); ok {
+			for _, raw := range contents {
+				content, _ := raw.(map[string]any)
+				if text, ok := content["text"].(string); ok && text != "" {
+					outcome.Output = text
+				}
+			}
+		}
+	}
+	return outcome
+}
+
+func integer(value any) int64 {
+	switch number := value.(type) {
+	case float64:
+		return int64(number)
+	case int64:
+		return number
+	case int:
+		return int64(number)
+	default:
+		return 0
+	}
 }
 
 func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
@@ -383,15 +436,19 @@ func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort string) (TurnOutcome, error) {
+func (p *protocol) resumeAndStartTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort, capability string) (TurnOutcome, error) {
 	if err := p.resumeThread(ctx, sessionID); err != nil {
 		return TurnOutcome{}, err
 	}
-	return p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort)
+	return p.startTurn(ctx, sessionID, workspace, agentRunID, goal, model, effort, capability)
 }
 
-func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort string) (TurnOutcome, error) {
-	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": goal}}, "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": "dangerFullAccess"}})
+func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRunID, goal, model, effort, capability string) (TurnOutcome, error) {
+	policyType := "dangerFullAccess"
+	if capability == "read-only" {
+		policyType = "readOnly"
+	}
+	result, err := p.call(ctx, "turn/start", map[string]any{"threadId": sessionID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": goal}}, "cwd": workspace, "model": model, "effort": effort, "approvalPolicy": "never", "sandboxPolicy": map[string]string{"type": policyType}})
 	if err != nil {
 		return TurnOutcome{}, err
 	}
