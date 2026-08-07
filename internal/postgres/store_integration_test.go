@@ -573,6 +573,72 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	}
 }
 
+func TestReviewSubmissionUncertaintyIsAtomicAndExactBindingCanRecover(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "review-submission-uncertainty")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	run := runs[0].AgentRun
+	prepareReviewResourcesIntegration(t, store, run)
+	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginReviewSession(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UncertainReviewSubmission(ctx, run.ID, session.ID, "turn/start response lost"); err != nil {
+		t.Fatal(err)
+	}
+
+	uncertain, err := store.ReviewRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionState, sessionOutcome, turnState, turnOutcome string
+	if err := db.QueryRowContext(ctx, `select state,coalesce(external_outcome,'') from dorf.actions where id=$1`, session.ID).Scan(&sessionState, &sessionOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select state,coalesce(external_outcome,'') from dorf.actions where id=$1`, run.ActionID).Scan(&turnState, &turnOutcome); err != nil {
+		t.Fatal(err)
+	}
+	wantOutcome := spine.ReviewSubmissionUncertainOutcome + ": turn/start response lost"
+	if uncertain.State != spine.AgentRunUncertain || uncertain.SessionID != "" || uncertain.NativeTurnID != "" || sessionState != "uncertain" || turnState != "uncertain" || sessionOutcome != wantOutcome || turnOutcome != wantOutcome {
+		t.Fatalf("uncertain run=%#v session=%s/%q turn=%s/%q", uncertain, sessionState, sessionOutcome, turnState, turnOutcome)
+	}
+
+	controllerID := spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: controllerID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.ReviewRun(ctx, run.ID)
+	if err != nil || recovered.State != spine.AgentRunActive || recovered.SessionID != "session-"+run.ID || recovered.NativeTurnID != "turn-"+run.ID || recovered.ReviewerAppServer != controllerID {
+		t.Fatalf("recovered run=%#v err=%v", recovered, err)
+	}
+}
+
 func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -612,6 +678,38 @@ func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T)
 func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run spine.AgentRun) {
 	t.Helper()
 	ctx := context.Background()
+	prepareReviewResourcesIntegration(t, store, run)
+	session, err := store.BeginReviewSession(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.State != spine.ActionSucceeded {
+		controllerID := spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: "foreign-review-controller"}); err == nil {
+			t.Fatal("foreign logical reviewer controller identity was accepted")
+		}
+		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: controllerID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	tree := strings.Repeat("d", 40)
+	if err := store.RecordReviewPostState(ctx, run.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func prepareReviewResourcesIntegration(t *testing.T, store postgres.Store, run spine.AgentRun) {
+	t.Helper()
+	ctx := context.Background()
 	sandbox, err := store.BeginReviewSandbox(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -639,31 +737,6 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: "route-" + run.ID, Outcome: run.ReviewerSandboxID}); err != nil {
 			t.Fatal(err)
 		}
-	}
-	session, err := store.BeginReviewSession(ctx, run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session.State != spine.ActionSucceeded {
-		controllerID := spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
-		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: "foreign-review-controller"}); err == nil {
-			t.Fatal("foreign logical reviewer controller identity was accepted")
-		}
-		if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + run.ID, Outcome: controllerID}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BeginTurnSubmission(ctx, run.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindNativeTurn(ctx, run.ID, "turn-"+run.ID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordReviewPostState(ctx, run.ID, spine.Receipt{ExternalID: run.Workspace, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
-		t.Fatal(err)
 	}
 }
 

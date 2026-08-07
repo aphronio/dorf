@@ -526,6 +526,32 @@ func (s Store) BeginReviewWorkspace(ctx context.Context, runID string) (spine.Ac
 func (s Store) BeginReviewSession(ctx context.Context, runID string) (spine.Action, error) {
 	return s.beginReviewAction(ctx, runID, spine.ActionSessionStart)
 }
+
+func (s Store) UncertainReviewSubmission(ctx context.Context, runID, sessionActionID, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("review submission uncertainty requires a reason")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var turnActionID string
+	if err := tx.QueryRowContext(ctx, `select ar.action_id from dorf.agent_runs ar join dorf.review_resources rr on rr.run_id=ar.id where ar.id=$1 and ar.state in ('submitting','uncertain') and ar.capability=$2 for update of ar`, runID, spine.ReviewReadOnlyCapability).Scan(&turnActionID); err != nil {
+		return err
+	}
+	outcome := spine.ReviewSubmissionUncertainOutcome + ": " + reason
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$3,updated_at=clock_timestamp() where id=$1 and scope_key=$2 and kind='codex-session-start' and state in ('pending','uncertain')`, sessionActionID, runID, outcome)); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2,updated_at=clock_timestamp() where id=$1 and state in ('pending','uncertain')`, turnActionID, outcome)); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 and session_id is null and native_turn_id is null`, runID, reason)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 func (s Store) BeginReviewWorkspaceCleanup(ctx context.Context, runID string) (spine.Action, error) {
 	return s.beginReviewAction(ctx, runID, spine.ActionReviewWorkspaceDelete)
 }

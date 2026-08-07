@@ -69,6 +69,8 @@ type ReviewNativeHistory struct {
 	Turns       []NativeTurn
 }
 
+const ReviewSubmissionUncertainOutcome = "review-submission-uncertain"
+
 type reviewObservationArtifact struct {
 	AgentRunID        string `json:"agent_run_id"`
 	Revision          string `json:"revision"`
@@ -101,6 +103,7 @@ type ReviewStore interface {
 	BeginReviewRoute(context.Context, string) (Action, error)
 	BeginReviewWorkspace(context.Context, string) (Action, error)
 	BeginReviewSession(context.Context, string) (Action, error)
+	UncertainReviewSubmission(context.Context, string, string, string) error
 	ReviewRun(context.Context, string) (AgentRun, error)
 	RecordReviewResult(context.Context, string, NativeTurn, Evidence, Evidence, ReviewFinding) error
 	RecordTriageResult(context.Context, string, NativeTurn, Evidence, Evidence, policy.ReviewPlan, string) error
@@ -125,6 +128,7 @@ type ReviewExternals interface {
 	ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
 	ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error)
+	ReviewRecover(context.Context, Job, AgentRun) (ReviewNativeBinding, error)
 	ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error)
 	ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error)
 }

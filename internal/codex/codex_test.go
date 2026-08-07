@@ -760,7 +760,7 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
 		t.Fatalf("first strict binding session=%s turn=%#v err=%v", gotSession, gotTurn, err)
 	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start", "thread/list", "thread/resume"}) {
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
 		t.Fatalf("fresh strict review methods=%v", methods)
 	}
 	_ = first.connection.CloseNow()
@@ -831,13 +831,96 @@ func TestStrictReviewLostAfterTrustedSubmissionAdoptsPersistedTurnWithoutDuplica
 	}
 
 	retry := dialTestProtocol(t, server)
-	gotSession, gotTurn, err := retry.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
+	gotSession, gotTurn, err := retry.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", false)
 	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
 		t.Fatalf("retry binding session=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
 	}
 	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
 		t.Fatalf("retry methods=%v", methods)
 	}
+}
+
+func TestStrictReviewDirectBindingToleratesDelayedNativeVisibility(t *testing.T) {
+	nonce := strings.Repeat("e", 64)
+	input := "exact delayed visibility input"
+	sessionID, turnID := "session-delayed", "turn-delayed"
+	var sessionCreated, turnCreated bool
+	var postSubmitLists atomic.Int32
+	var threadStarts, turnStarts atomic.Int32
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			if !sessionCreated {
+				return map[string]any{"data": []any{}, "nextCursor": nil}, false
+			}
+			if turnCreated && postSubmitLists.Add(1) == 1 {
+				return map[string]any{"data": []any{}, "nextCursor": nil}, false
+			}
+			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
+		case "thread/start":
+			threadStarts.Add(1)
+			sessionCreated = true
+			result := strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{}})
+			result["reasoningEffort"] = nil
+			return result, false
+		case "turn/start":
+			turnStarts.Add(1)
+			turnCreated = true
+			return map[string]any{"turn": map[string]any{"id": turnID, "status": "running"}}, false
+		case "thread/resume":
+			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	p := dialTestProtocol(t, server)
+	gotSession, gotTurn, err := p.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
+	if err != nil || gotSession != sessionID || gotTurn.ID != turnID {
+		t.Fatalf("direct binding session=%s turn=%#v err=%v", gotSession, gotTurn, err)
+	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/start", "turn/start"}) {
+		t.Fatalf("direct binding waited for readback: %v", methods)
+	}
+	if _, _, err := p.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high"); err == nil || !isRetryableReviewVisibility(err) {
+		t.Fatalf("first delayed discovery error=%T %v", err, err)
+	}
+	observedSession, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
+	if err != nil || observedSession != sessionID || len(turns) != 1 || turns[0].ID != turnID || threadStarts.Load() != 1 || turnStarts.Load() != 1 {
+		t.Fatalf("converged session=%s turns=%#v starts=%d/%d err=%v", observedSession, turns, threadStarts.Load(), turnStarts.Load(), err)
+	}
+}
+
+func TestStrictReviewReconciliationOnlyEmptyDiscoveryNeverSubmits(t *testing.T) {
+	nonce := strings.Repeat("f", 64)
+	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			return map[string]any{"data": []any{}, "nextCursor": nil}, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+
+	p := dialTestProtocol(t, server)
+	_, _, err := p.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, "exact input", "gpt-5.6-sol", "high", false)
+	if err == nil || !isRetryableReviewVisibility(err) {
+		t.Fatalf("empty reconciliation error=%T %v", err, err)
+	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list"}) {
+		t.Fatalf("reconciliation-only methods=%v", methods)
+	}
+}
+
+func isRetryableReviewVisibility(err error) bool {
+	var missing interface{ RetryableReviewVisibility() bool }
+	return errors.As(err, &missing) && missing.RetryableReviewVisibility()
 }
 
 func reviewProtocolMethods(requests <-chan map[string]any) []string {

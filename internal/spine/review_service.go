@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -143,7 +144,7 @@ func (s Service) executeSelectedReviews(ctx context.Context, job Job, store Revi
 		if view.Role == ReviewTriageRole || !selected[view.Role] || view.Finding != nil {
 			continue
 		}
-		if view.State == AgentRunFailed || view.State == AgentRunInterrupted || view.State == AgentRunUncertain {
+		if view.State == AgentRunFailed || view.State == AgentRunInterrupted {
 			return s.blockReview(ctx, job.ID, fmt.Sprintf("selected review Role %s is %s: %s", view.Role, view.State, view.Attention))
 		}
 		pending = append(pending, view.AgentRun)
@@ -323,9 +324,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 	if run.State == AgentRunCompleted {
 		history, err := externals.ReviewTurns(ctx, job, run)
 		if err != nil {
-			if attentionNeeded(err) {
-				_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-			}
+			s.recordReviewReadError(ctx, run.ID, err)
 			return NativeTurn{}, err
 		}
 		if err := validateReviewNativeOwner(run, history.AppServerID, history.SessionID); err != nil {
@@ -339,12 +338,18 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		}
 		return NativeTurn{}, fmt.Errorf("terminal review AgentRun %s native output is unavailable", run.ID)
 	}
-	if run.State == AgentRunFailed || run.State == AgentRunInterrupted || run.State == AgentRunUncertain {
+	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
 		return NativeTurn{ID: run.NativeTurnID, Status: string(run.State)}, nil
 	}
 	session, err := store.BeginReviewSession(ctx, run.ID)
 	if err != nil {
 		return NativeTurn{}, err
+	}
+	if run.State == AgentRunUncertain {
+		if session.State != ActionUncertain || !strings.HasPrefix(session.Outcome, ReviewSubmissionUncertainOutcome+": ") || run.SessionID != "" || run.NativeTurnID != "" {
+			return NativeTurn{}, reviewBoundaryError("uncertain review AgentRun is not eligible for no-submit reconciliation: " + run.Attention)
+		}
+		return s.reconcileUnboundReview(ctx, job, run, session, externals)
 	}
 	if run.SessionID == "" {
 		if !run.BaselineRecorded {
@@ -362,9 +367,9 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		}
 		binding, err := externals.ReviewInitialTurn(ctx, job, run)
 		if err != nil {
-			_ = s.Store.UncertainAction(ctx, session.ID)
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
+				_ = s.Store.UncertainAction(ctx, session.ID)
 				if binding.SessionID != "" {
 					if bindErr := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.AppServerID}); bindErr != nil {
 						return NativeTurn{}, bindErr
@@ -376,9 +381,12 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 				return NativeTurn{Status: "failed"}, nil
 			}
 			if attentionNeeded(err) {
+				_ = s.Store.UncertainAction(ctx, session.ID)
 				if attentionErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); attentionErr != nil {
 					return NativeTurn{}, attentionErr
 				}
+			} else if uncertainErr := store.UncertainReviewSubmission(ctx, run.ID, session.ID, err.Error()); uncertainErr != nil {
+				return NativeTurn{}, uncertainErr
 			}
 			return NativeTurn{}, err
 		}
@@ -405,7 +413,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		}
 		waited, err := externals.ReviewWait(ctx, job, run, binding.Turn.ID)
 		if err != nil {
-			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted review native turn outcome is currently unavailable: "+err.Error())
+			s.recordReviewReadError(ctx, run.ID, err)
 			return NativeTurn{}, err
 		}
 		if err := validateReviewNativeOwner(run, waited.AppServerID, waited.SessionID); err != nil {
@@ -419,9 +427,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 	}
 	history, err := externals.ReviewTurns(ctx, job, run)
 	if err != nil {
-		if attentionNeeded(err) {
-			_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		}
+		s.recordReviewReadError(ctx, run.ID, err)
 		return NativeTurn{}, err
 	}
 	if err := validateReviewNativeOwner(run, history.AppServerID, history.SessionID); err != nil {
@@ -442,7 +448,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 	if reconciliation.Classification == "active" {
 		waited, err := externals.ReviewWait(ctx, job, run, reconciliation.Turn.ID)
 		if err != nil {
-			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted review native turn outcome is currently unavailable: "+err.Error())
+			s.recordReviewReadError(ctx, run.ID, err)
 			return NativeTurn{}, err
 		}
 		if err := validateReviewNativeOwner(run, waited.AppServerID, waited.SessionID); err != nil {
@@ -455,6 +461,58 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original AgentRu
 		return waited.Turn, nil
 	}
 	return reconciliation.Turn, nil
+}
+
+func (s Service) reconcileUnboundReview(ctx context.Context, job Job, run AgentRun, session Action, externals ReviewExternals) (NativeTurn, error) {
+	binding, err := externals.ReviewRecover(ctx, job, run)
+	if err != nil {
+		var missing interface{ RetryableReviewVisibility() bool }
+		if errors.As(err, &missing) && missing.RetryableReviewVisibility() {
+			_ = s.Store.AgentRunAttention(ctx, run.ID, err.Error())
+		} else if attentionNeeded(err) {
+			_ = s.Store.FailAgentRun(ctx, run.ID, "strict review no-submit reconciliation conflict: "+err.Error())
+		} else {
+			_ = s.Store.AgentRunAttention(ctx, run.ID, err.Error())
+		}
+		return NativeTurn{}, err
+	}
+	if binding.AppServerID != ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce) || binding.SessionID == "" || binding.Turn.ID == "" {
+		reason := "review reconciliation returned a foreign or incomplete controller, Session, or turn binding"
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+		return NativeTurn{}, reviewBoundaryError(reason)
+	}
+	if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.AppServerID}); err != nil {
+		return NativeTurn{}, err
+	}
+	if err := s.Store.BindNativeTurn(ctx, run.ID, binding.Turn.ID, binding.Turn.Status); err != nil {
+		return NativeTurn{}, err
+	}
+	run.SessionID, run.NativeTurnID, run.ReviewerAppServer = binding.SessionID, binding.Turn.ID, binding.AppServerID
+	if terminalNative(binding.Turn.Status) {
+		return binding.Turn, nil
+	}
+	waited, err := externals.ReviewWait(ctx, job, run, binding.Turn.ID)
+	if err != nil {
+		s.recordReviewReadError(ctx, run.ID, err)
+		return NativeTurn{}, err
+	}
+	if err := validateReviewNativeOwner(run, waited.AppServerID, waited.SessionID); err != nil {
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		return NativeTurn{}, err
+	}
+	if err := s.Store.BindNativeTurn(ctx, run.ID, waited.Turn.ID, waited.Turn.Status); err != nil {
+		return NativeTurn{}, err
+	}
+	return waited.Turn, nil
+}
+
+func (s Service) recordReviewReadError(ctx context.Context, runID string, err error) {
+	var missing interface{ RetryableReviewVisibility() bool }
+	if errors.As(err, &missing) && missing.RetryableReviewVisibility() {
+		_ = s.Store.AgentRunAttention(ctx, runID, err.Error())
+	} else if attentionNeeded(err) {
+		_ = s.Store.UncertainAgentRun(ctx, runID, err.Error())
+	}
 }
 
 func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original AgentRun, store ReviewStore, externals ReviewExternals) error {

@@ -574,6 +574,21 @@ func (s *memoryStore) UncertainAction(_ context.Context, id string) error {
 	s.actions[id] = action
 	return nil
 }
+func (s *memoryStore) UncertainReviewSubmission(_ context.Context, runID, sessionActionID, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[runID]
+	outcome := ReviewSubmissionUncertainOutcome + ": " + reason
+	session := s.actions[sessionActionID]
+	session.State, session.Outcome = ActionUncertain, outcome
+	s.actions[sessionActionID] = session
+	turn := s.actions[run.ActionID]
+	turn.State, turn.Outcome = ActionUncertain, outcome
+	s.actions[run.ActionID] = turn
+	run.State, run.Attention = AgentRunUncertain, reason
+	s.runs[runID] = run
+	return nil
+}
 func (s *memoryStore) NextDelivery(_ context.Context, jobID, sessionID string) (*Delivery, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

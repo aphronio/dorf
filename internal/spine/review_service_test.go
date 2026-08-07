@@ -344,6 +344,9 @@ func TestUncertainReviewerResourceCleanupIsOrderedRecordedAndRetrySafe(t *testin
 func (e *reviewDispatchExternals) ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
 	return ReviewNativeBinding{}, nil
 }
+func (e *reviewDispatchExternals) ReviewRecover(context.Context, Job, AgentRun) (ReviewNativeBinding, error) {
+	return ReviewNativeBinding{}, nil
+}
 func (e *reviewDispatchExternals) ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error) {
 	return ReviewNativeHistory{}, nil
 }
@@ -392,6 +395,146 @@ type reviewAttentionTestError string
 func (e reviewAttentionTestError) Error() string         { return string(e) }
 func (e reviewAttentionTestError) AttentionNeeded() bool { return true }
 
+type reviewVisibilityTestError string
+
+func (e reviewVisibilityTestError) Error() string                   { return string(e) }
+func (e reviewVisibilityTestError) RetryableReviewVisibility() bool { return true }
+
+func TestUncertainReviewSubmissionRecoversExactEffectWithoutResubmission(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	externals := &reviewRecoveryExternals{lostResponseOnce: true, store: store}
+	service := Service{Store: store}
+
+	if _, err := service.executeReviewRun(context.Background(), job, run, externals, store); err == nil || !strings.Contains(err.Error(), "response was lost") {
+		t.Fatalf("lost response error=%v", err)
+	}
+	checkpoint := store.runs[run.ID]
+	session := store.actions[store.sessionActionID]
+	turnAction := store.actions[run.ActionID]
+	if externals.submissions != 1 || checkpoint.State != AgentRunUncertain || checkpoint.SessionID != "" || checkpoint.NativeTurnID != "" || session.State != ActionUncertain || turnAction.State != ActionUncertain || !strings.HasPrefix(session.Outcome, ReviewSubmissionUncertainOutcome+": ") || session.Outcome != turnAction.Outcome {
+		t.Fatalf("uncertain checkpoint run=%#v session=%#v turn=%#v submissions=%d", checkpoint, session, turnAction, externals.submissions)
+	}
+
+	outcome, err := service.executeReviewRun(context.Background(), job, run, externals, store)
+	recovered := store.runs[run.ID]
+	if err != nil || outcome.Status != "completed" || externals.submissions != 1 || !externals.boundBeforeWait || recovered.State != AgentRunCompleted || recovered.SessionID != "review-session" || recovered.NativeTurnID != "review-turn" {
+		t.Fatalf("recovered run=%#v outcome=%#v submissions=%d err=%v", recovered, outcome, externals.submissions, err)
+	}
+}
+
+func TestSuccessfulReviewSubmissionBindsDirectResponseBeforeWaiting(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	externals := &reviewRecoveryExternals{store: store}
+
+	outcome, err := (Service{Store: store}).executeReviewRun(context.Background(), job, run, externals, store)
+	persisted := store.runs[run.ID]
+	if err != nil || outcome.Status != "completed" || externals.submissions != 1 || !externals.boundBeforeWait || persisted.SessionID != "review-session" || persisted.NativeTurnID != "review-turn" || persisted.State != AgentRunCompleted {
+		t.Fatalf("direct binding run=%#v outcome=%#v submissions=%d boundBeforeWait=%t err=%v", persisted, outcome, externals.submissions, externals.boundBeforeWait, err)
+	}
+}
+
+func TestUncertainReviewSubmissionWithNoVisibleSessionRemainsUncertain(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	if err := store.UncertainReviewSubmission(context.Background(), run.ID, store.sessionActionID, "response lost"); err != nil {
+		t.Fatal(err)
+	}
+	externals := &reviewRecoveryExternals{recoverErr: reviewVisibilityTestError("strict review bound native Session is not yet visible")}
+
+	if _, err := (Service{Store: store}).executeReviewRun(context.Background(), job, run, externals, store); err == nil || !strings.Contains(err.Error(), "not yet visible") || attentionNeeded(err) {
+		t.Fatalf("empty recovery error=%v", err)
+	}
+	checkpoint := store.runs[run.ID]
+	if externals.submissions != 0 || externals.recoveries != 1 || checkpoint.State != AgentRunUncertain || checkpoint.SessionID != "" || checkpoint.NativeTurnID != "" || store.actions[store.sessionActionID].State != ActionUncertain || store.actions[run.ActionID].State != ActionUncertain {
+		t.Fatalf("empty recovery mutated checkpoint run=%#v submissions=%d", checkpoint, externals.submissions)
+	}
+}
+
+func TestReviewPhaseKeepsTemporaryUncertainSubmissionRecoverable(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	job.WorkflowPhase = "reviewing"
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	recoveryStore := reviewRecoveryStoreFor(base, run)
+	if err := recoveryStore.UncertainReviewSubmission(context.Background(), run.ID, recoveryStore.sessionActionID, "response lost"); err != nil {
+		t.Fatal(err)
+	}
+	store := &reviewPhaseRecoveryStore{
+		reviewRecoveryStore: recoveryStore,
+		plan:                ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, State: "final", Final: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}},
+	}
+	externals := &reviewRecoveryExternals{recoverErr: reviewVisibilityTestError("strict review bound native Session is not yet visible")}
+
+	disposition, progressed, err := (Service{Store: store}).executeSelectedReviews(context.Background(), job, store, externals)
+	if err == nil || !strings.Contains(err.Error(), "not yet visible") || disposition != RunIdle || progressed || base.jobs[job.ID].WorkflowPhase == "blocked" || externals.recoveries != 1 || externals.submissions != 0 {
+		t.Fatalf("disposition=%s progressed=%t job=%#v recoveries=%d submissions=%d err=%v", disposition, progressed, base.jobs[job.ID], externals.recoveries, externals.submissions, err)
+	}
+}
+
+func TestUncertainReviewSubmissionPositiveConflictFailsClosed(t *testing.T) {
+	base := newMemoryStore()
+	job := testJob()
+	base.jobs[job.ID] = job
+	run := preparedReviewRecoveryRun(t, base, job)
+	store := reviewRecoveryStoreFor(base, run)
+	if err := store.UncertainReviewSubmission(context.Background(), run.ID, store.sessionActionID, "response lost"); err != nil {
+		t.Fatal(err)
+	}
+	externals := &reviewRecoveryExternals{recoverErr: reviewAttentionTestError("competing native Session")}
+	service := Service{Store: store}
+
+	if _, err := service.executeReviewRun(context.Background(), job, run, externals, store); err == nil || !strings.Contains(err.Error(), "competing") {
+		t.Fatalf("conflicting recovery error=%v", err)
+	}
+	failed := store.runs[run.ID]
+	if failed.State != AgentRunFailed || externals.recoveries != 1 || externals.submissions != 0 || failed.ClaimEvidenceID != "" || failed.ObservedEvidenceID != "" {
+		t.Fatalf("conflicting recovery run=%#v recoveries=%d submissions=%d", failed, externals.recoveries, externals.submissions)
+	}
+	if outcome, err := service.executeReviewRun(context.Background(), job, run, externals, store); err != nil || outcome.Status != string(AgentRunFailed) || externals.recoveries != 1 {
+		t.Fatalf("terminal retry outcome=%#v recoveries=%d err=%v", outcome, externals.recoveries, err)
+	}
+}
+
+func preparedReviewRecoveryRun(t *testing.T, base *memoryStore, job Job) AgentRun {
+	t.Helper()
+	run := AgentRun{ID: ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary)), JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: "bounded", OutputContract: policy.FindingOutputContract, State: AgentRunPending, ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", ReviewerOwnerNonce: strings.Repeat("2", 64), SubmissionNonce: strings.Repeat("1", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("bounded")))}
+	run.ReviewerSandboxID = ReviewSandboxName(run.ID)
+	run.ActionID = ScopedActionID(job.ID, ActionTurnStart, run.ID)
+	base.runs[run.ID] = run
+	for _, kind := range []ActionKind{ActionSandboxCreate, ActionRouteCreate, ActionReviewWorkspaceCreate, ActionSessionStart, ActionTurnStart} {
+		id := ScopedActionID(job.ID, kind, run.ID)
+		state := ActionSucceeded
+		if kind == ActionSessionStart || kind == ActionTurnStart {
+			state = ActionPending
+		}
+		base.actions[id] = Action{ID: id, JobID: job.ID, Kind: kind, Scope: run.ID, State: state}
+	}
+	return run
+}
+
+func reviewRecoveryStoreFor(base *memoryStore, run AgentRun) *reviewRecoveryStore {
+	return &reviewRecoveryStore{
+		memoryStore:       base,
+		runID:             run.ID,
+		sandboxActionID:   ScopedActionID(run.JobID, ActionSandboxCreate, run.ID),
+		routeActionID:     ScopedActionID(run.JobID, ActionRouteCreate, run.ID),
+		workspaceActionID: ScopedActionID(run.JobID, ActionReviewWorkspaceCreate, run.ID),
+		sessionActionID:   ScopedActionID(run.JobID, ActionSessionStart, run.ID),
+	}
+}
+
 func TestStrictReviewMismatchStopsWithAttentionAndNoClaimEvidence(t *testing.T) {
 	for _, reason := range []string{"missing client message identity", "wrong prompt", "extra turn", "competing Session", "mismatched read-only policy", "mismatched reviewer-Sandbox metadata", "foreign logical controller identity"} {
 		t.Run(reason, func(t *testing.T) {
@@ -433,11 +576,24 @@ type reviewRecoveryStore struct {
 	recordedResults                                                           int
 }
 
+type reviewPhaseRecoveryStore struct {
+	*reviewRecoveryStore
+	plan ReviewPlanRecord
+}
+
+func (s *reviewPhaseRecoveryStore) ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error) {
+	return s.plan, nil
+}
+
+func (s *reviewPhaseRecoveryStore) ReviewRuns(context.Context, string, string) ([]ReviewRunView, error) {
+	return []ReviewRunView{{AgentRun: s.runs[s.runID]}}, nil
+}
+
 func (s *reviewRecoveryStore) CompleteAction(_ context.Context, id string, receipt Receipt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	action := s.actions[id]
-	action.State, action.ExternalID = ActionSucceeded, receipt.ExternalID
+	action.State, action.ExternalID, action.Outcome = ActionSucceeded, receipt.ExternalID, receipt.Outcome
 	s.actions[id] = action
 	if id == s.sessionActionID {
 		run := s.runs[s.runID]
@@ -509,11 +665,16 @@ func (s *reviewRecoveryStore) ReviewRepairTargets(context.Context, string) ([]po
 func (s *reviewRecoveryStore) RejectReviewFinding(context.Context, string, string) error { return nil }
 
 type reviewRecoveryExternals struct {
-	mu           sync.Mutex
-	submissions  int
-	turn         NativeTurn
-	initialErr   error
-	controllerID string
+	mu               sync.Mutex
+	submissions      int
+	turn             NativeTurn
+	initialErr       error
+	lostResponseOnce bool
+	recoverErr       error
+	recoveries       int
+	controllerID     string
+	store            *reviewRecoveryStore
+	boundBeforeWait  bool
 }
 
 func (e *reviewRecoveryExternals) RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error) {
@@ -561,6 +722,22 @@ func (e *reviewRecoveryExternals) ReviewInitialTurn(_ context.Context, _ Job, ru
 		e.submissions++
 		e.turn = NativeTurn{ID: "review-turn", Status: "running"}
 	}
+	if e.lostResponseOnce {
+		e.lostResponseOnce = false
+		return ReviewNativeBinding{}, errors.New("review turn submission response was lost")
+	}
+	return e.reviewBinding(run), nil
+}
+func (e *reviewRecoveryExternals) ReviewRecover(_ context.Context, _ Job, run AgentRun) (ReviewNativeBinding, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.recoveries++
+	if e.recoverErr != nil {
+		return ReviewNativeBinding{}, e.recoverErr
+	}
+	if e.turn.ID == "" {
+		return ReviewNativeBinding{}, reviewVisibilityTestError("strict review bound native Session is not yet visible")
+	}
 	return e.reviewBinding(run), nil
 }
 func (e *reviewRecoveryExternals) ReviewTurns(_ context.Context, _ Job, run AgentRun) (ReviewNativeHistory, error) {
@@ -571,6 +748,12 @@ func (e *reviewRecoveryExternals) ReviewTurns(_ context.Context, _ Job, run Agen
 func (e *reviewRecoveryExternals) ReviewWait(_ context.Context, _ Job, run AgentRun, _ string) (ReviewNativeBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.store != nil {
+		e.store.mu.Lock()
+		persisted := e.store.runs[run.ID]
+		e.store.mu.Unlock()
+		e.boundBeforeWait = persisted.SessionID == "review-session" && persisted.NativeTurnID == "review-turn" && persisted.State == AgentRunActive
+	}
 	e.turn.Status = "completed"
 	e.turn.Output = `{"material":false,"summary":"clear","rationale":"clear","affected_roles":[],"affected_checks":[]}`
 	return e.reviewBinding(run), nil

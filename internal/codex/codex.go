@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -53,6 +54,11 @@ type attentionError struct{ reason string }
 func (e *attentionError) Error() string         { return e.reason }
 func (e *attentionError) AttentionNeeded() bool { return true }
 
+type reviewVisibilityError struct{ reason string }
+
+func (e *reviewVisibilityError) Error() string                   { return e.reason }
+func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
+
 func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
 	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
 }
@@ -85,17 +91,41 @@ func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace
 	return history, err
 }
 
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	var binding spine.ReviewNativeBinding
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
+		sessionID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
+		binding = spine.ReviewNativeBinding{AppServerID: appServerID, SessionID: sessionID, Turn: turn}
+		return err
+	})
+	return binding, err
+}
+
 func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, sessionID, turnID, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := spine.ReviewNativeBinding{SessionID: sessionID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
 	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
 		binding.AppServerID = appServerID
+		missingAttempts := 0
 		for {
 			observedSession, turns, err := protocol.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
 			if err != nil {
-				return err
+				var missing interface{ RetryableReviewVisibility() bool }
+				if !errors.As(err, &missing) || !missing.RetryableReviewVisibility() || missingAttempts >= 20 {
+					return err
+				}
+				missingAttempts++
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(100 * time.Millisecond):
+				}
+				continue
 			}
+			missingAttempts = 0
 			binding.SessionID = observedSession
 			if len(turns) != 1 || turns[0].ID != turnID {
 				return reviewAttention("strict review recovery found the wrong native turn")
@@ -470,7 +500,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 	fresh := false
 	if len(threads) == 0 {
 		if !allowStart || expectedSession != "" {
-			return "", TurnOutcome{}, reviewAttention("strict review bound native Session is missing")
+			return "", TurnOutcome{}, reviewVisibilityMissing("strict review bound native Session is not yet visible")
 		}
 		sessionID, err = p.startStrictReviewThread(ctx, workspace, model, effort)
 		if err != nil {
@@ -497,19 +527,15 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 			}
 			return observedSession, parseTurn(turns[0]), nil
 		}
+		if !allowStart {
+			return sessionID, TurnOutcome{}, reviewVisibilityMissing("strict review bound native turn is not yet visible")
+		}
 	}
 	turn, err := p.startTurn(ctx, sessionID, workspace, submissionNonce, input, model, effort, "read-only")
 	if err != nil {
 		return sessionID, TurnOutcome{}, err
 	}
-	observedSession, attested, err := p.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
-	if err != nil {
-		return sessionID, TurnOutcome{}, err
-	}
-	if len(attested) != 1 || attested[0].ID != turn.ID {
-		return sessionID, TurnOutcome{}, reviewAttention("strict review turn/start did not persist the exact submitted turn")
-	}
-	return observedSession, attested[0], nil
+	return sessionID, turn, nil
 }
 
 func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedSession, submissionNonce, input, model, effort string) (string, []TurnOutcome, error) {
@@ -517,12 +543,18 @@ func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedS
 	if err != nil {
 		return "", nil, err
 	}
+	if len(threads) == 0 {
+		return "", nil, reviewVisibilityMissing("strict review bound native Session is not yet visible")
+	}
 	if len(threads) != 1 || stringValue(threads[0]["id"]) != expectedSession {
 		return "", nil, reviewAttention("strict review recovery found a missing or competing native Session")
 	}
 	sessionID, rawTurns, err := p.strictReviewSnapshot(ctx, workspace, expectedSession, model, effort)
 	if err != nil {
 		return "", nil, err
+	}
+	if len(rawTurns) == 0 {
+		return sessionID, nil, reviewVisibilityMissing("strict review bound native turn is not yet visible")
 	}
 	if len(rawTurns) != 1 {
 		return sessionID, nil, reviewAttention(fmt.Sprintf("strict review native Session contains %d turns; exactly one is required", len(rawTurns)))
@@ -608,6 +640,8 @@ func attestReviewTurn(turn map[string]any, submissionNonce, input string) error 
 }
 
 func reviewAttention(reason string) error { return &attentionError{reason: reason} }
+
+func reviewVisibilityMissing(reason string) error { return &reviewVisibilityError{reason: reason} }
 
 func stringValue(value any) string {
 	text, _ := value.(string)
