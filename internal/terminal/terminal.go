@@ -55,6 +55,10 @@ func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery
 	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
 }
 
+func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (string, []spine.NativeTurn, error) {
+	return e.Agent.ReadInitialTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace)
+}
+
 func (e Externals) AgentTurns(ctx context.Context, job spine.Job, sessionID string) ([]spine.NativeTurn, error) {
 	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID)
 }

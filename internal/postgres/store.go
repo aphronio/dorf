@@ -600,7 +600,7 @@ func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
 	}
 	defer tx.Rollback()
 	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='failed',native_outcome='failed',attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
+	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='failed',native_outcome=case when native_turn_id is null then null else 'failed' end,attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='failed',external_outcome=$2,updated_at=clock_timestamp() where id=$1`, actionID, reason); err != nil {
@@ -669,23 +669,28 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 	return views, nil
 }
 
-func (s Store) NativeMutationBlocker(ctx context.Context, jobID string) (*spine.MessageView, error) {
-	var blocker spine.MessageView
+func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
+	var delivery spine.Delivery
 	err := s.DB.QueryRowContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input,ar.id,ar.state,
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,
+		       ar.id,ar.job_id,ar.message_id,ar.action_id,coalesce(ar.session_id,''),ar.state,
+		       ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),
 		       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,'')
 		from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
 		where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
 		order by m.sequence limit 1`, jobID).Scan(
-		&blocker.ID, &blocker.JobID, &blocker.CallerID, &blocker.Sequence, &blocker.Input,
-		&blocker.AgentRunID, &blocker.State, &blocker.NativeTurnID, &blocker.NativeOutcome, &blocker.Attention)
+		&delivery.Message.ID, &delivery.Message.JobID, &delivery.Message.CallerID, &delivery.Message.Sequence, &delivery.Message.Input,
+		&delivery.AgentRun.ID, &delivery.AgentRun.JobID, &delivery.AgentRun.MessageID, &delivery.AgentRun.ActionID,
+		&delivery.AgentRun.SessionID, &delivery.AgentRun.State, &delivery.AgentRun.BaselineRecorded,
+		&delivery.AgentRun.BaselineTurnID, &delivery.AgentRun.NativeTurnID, &delivery.AgentRun.NativeOutcome,
+		&delivery.AgentRun.Attention)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &blocker, nil
+	return &delivery, nil
 }
 
 func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {

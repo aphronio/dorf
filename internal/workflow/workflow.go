@@ -108,17 +108,6 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 			result = job
 			return nil
 		}
-		blocker, err := store.NativeMutationBlocker(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		if blocker != nil {
-			reason := blocker.Attention
-			if reason == "" {
-				reason = string(blocker.State)
-			}
-			return fmt.Errorf("cleanup blocked by message sequence %d (%s): recover and inspect the native turn before deleting its Sandbox", blocker.Sequence, reason)
-		}
 		if err := store.CloseAdmission(ctx, jobID); err != nil {
 			return err
 		}

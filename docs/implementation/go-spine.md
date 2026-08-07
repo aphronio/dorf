@@ -162,6 +162,16 @@ terminal, blocked, or genuinely uncertain delivery truth and identifies any bloc
 reason; it never prints or stores transcript items. Cleanup closes admission before cancellation and
 leaves the route revoked, the Sandbox deleted, and the cleanup task checkpointed.
 
+Cleanup recovery does not depend on the message task having another attempt. Scheduling first
+closes admission and cancels or observes the terminal ordinary run while holding the Job mutation
+fence, then creates the independent cleanup task. Under that same fence, cleanup may inspect only an
+already-`submitting` or `active` AgentRun from its recorded Session, baseline, and native turn ID. A
+proven no-submit delivery is terminalized locally with a cleanup reason; an accepted turn is bound
+and awaited to its exact native outcome. Cleanup never calls `turn/start` and never drains a later
+pending FIFO message. Missing or ambiguous history persists attention and retains the route and
+Sandbox. Once no native mutation blocker remains, route revocation and Sandbox deletion reconcile
+normally even when the ordinary Absurd task is terminal `failed` after exhausting its attempts.
+
 The detached app-server keeps only replaceable operational control facts in the Sandbox. Its exact
 PID is `/tmp/dorf/codex-app-server.pid`; the raw reconnect capability is retained separately at
 `/tmp/dorf/codex-app-server.control-token` in a root-only directory and file. App-server argv contains

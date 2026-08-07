@@ -219,6 +219,7 @@ func TestOverlappingClaimsSerializeNativeMutation(t *testing.T) {
 func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	store := newMemoryStore()
 	job := testJob()
+	job.AdmissionOpen = false
 	store.jobs[job.ID] = job
 	externals := newFakeExternals()
 	service := Service{Store: store, Externals: externals}
@@ -231,6 +232,132 @@ func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	if got, want := externals.effects, []ActionKind{ActionRouteRevoke, ActionSandboxDelete}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cleanup effects=%v want=%v", got, want)
 	}
+}
+
+func TestCleanupRecoversCompletedTurnAfterRunTaskFailed(t *testing.T) {
+	store, job, delivery := cleanupDelivery(t, AgentRunActive)
+	job.RunTerminalState = "failed"
+	store.jobs[job.ID] = job
+	delivery.AgentRun.NativeTurnID = "turn-existing"
+	store.runs[delivery.AgentRun.ID] = delivery.AgentRun
+	externals := newFakeExternals()
+	externals.turns = []NativeTurn{{ID: "turn-existing", Status: "completed"}}
+	externals.submitted = []int64{1}
+
+	if err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := store.runs[delivery.AgentRun.ID]
+	if run.State != AgentRunCompleted || run.NativeOutcome != "completed" || run.NativeTurnID != "turn-existing" {
+		t.Fatalf("recovered run=%#v", run)
+	}
+	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("cleanup resubmitted native input: %v", got)
+	}
+	if got, want := externals.effects, []ActionKind{ActionRouteRevoke, ActionSandboxDelete}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cleanup effects=%v want=%v", got, want)
+	}
+}
+
+func TestCleanupAdoptsInitialTurnBeforeSessionCheckpoint(t *testing.T) {
+	store, job, delivery := cleanupDelivery(t, AgentRunSubmitting)
+	job.SessionID = ""
+	store.jobs[job.ID] = job
+	delivery.AgentRun.SessionID = ""
+	store.runs[delivery.AgentRun.ID] = delivery.AgentRun
+	externals := newFakeExternals()
+	externals.initialSessionID = "session-recovered"
+	externals.turns = []NativeTurn{{ID: "turn-recovered", Status: "completed"}}
+	externals.submitted = []int64{1}
+
+	if err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := store.runs[delivery.AgentRun.ID]
+	session := store.actions[ActionID(job.ID, ActionSessionStart)]
+	if session.State != ActionSucceeded || session.ExternalID != "session-recovered" || run.SessionID != session.ExternalID || run.NativeTurnID != "turn-recovered" || run.State != AgentRunCompleted {
+		t.Fatalf("recovered session=%#v run=%#v", session, run)
+	}
+	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("cleanup resubmitted initial input: %v", got)
+	}
+}
+
+func TestCleanupTerminalizesProvenNoSubmitWithoutCallingAgent(t *testing.T) {
+	store, job, delivery := cleanupDelivery(t, AgentRunSubmitting)
+	job.SessionID = ""
+	store.jobs[job.ID] = job
+	delivery.AgentRun.SessionID = ""
+	store.runs[delivery.AgentRun.ID] = delivery.AgentRun
+	externals := newFakeExternals()
+	if err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	run := store.runs[delivery.AgentRun.ID]
+	if run.State != AgentRunFailed || run.NativeTurnID != "" || run.NativeOutcome != "" || !strings.Contains(run.Attention, "proved no turn was submitted") {
+		t.Fatalf("locally terminal run=%#v", run)
+	}
+	if len(externals.submittedSequences()) != 0 {
+		t.Fatalf("cleanup submitted native input: %v", externals.submittedSequences())
+	}
+}
+
+func TestCleanupDoesNotSubmitLaterPendingFIFO(t *testing.T) {
+	store, job, delivery := cleanupDelivery(t, AgentRunActive)
+	delivery.AgentRun.NativeTurnID = "turn-existing"
+	store.runs[delivery.AgentRun.ID] = delivery.AgentRun
+	second := store.addMessage(job.ID, "second", "must remain pending")
+	secondRun := AgentRun{ID: AgentRunID(second.ID), JobID: job.ID, MessageID: second.ID, ActionID: TurnActionID(second.ID), SessionID: "session-1", State: AgentRunPending}
+	store.runs[secondRun.ID] = secondRun
+	store.actions[secondRun.ActionID] = Action{ID: secondRun.ActionID, JobID: job.ID, MessageID: second.ID, Kind: ActionTurnStart, State: ActionPending}
+	externals := newFakeExternals()
+	externals.turns = []NativeTurn{{ID: "turn-existing", Status: "completed"}}
+	externals.submitted = []int64{1}
+
+	if err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.runs[secondRun.ID]; got.State != AgentRunPending || got.NativeTurnID != "" {
+		t.Fatalf("later FIFO mutated=%#v", got)
+	}
+	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("cleanup drained later FIFO: %v", got)
+	}
+}
+
+func TestCleanupRetainsResourcesWhenNativeHistoryIsUncertain(t *testing.T) {
+	store, job, delivery := cleanupDelivery(t, AgentRunSubmitting)
+	externals := newFakeExternals()
+	externals.turns = []NativeTurn{{ID: "ambiguous-a", Status: "completed"}, {ID: "ambiguous-b", Status: "completed"}}
+	err := (Service{Store: store, Externals: externals}).Cleanup(context.Background(), job.ID)
+	if err == nil || !strings.Contains(err.Error(), "retained Sandbox and route") || !strings.Contains(err.Error(), "sequence 1") {
+		t.Fatalf("cleanup error=%v", err)
+	}
+	run := store.runs[delivery.AgentRun.ID]
+	if run.State != AgentRunUncertain || !strings.Contains(run.Attention, "2 native turns") || len(externals.effects) != 0 || store.jobs[job.ID].CleanupState == CleanupComplete {
+		t.Fatalf("uncertain cleanup run=%#v effects=%v job=%#v", run, externals.effects, store.jobs[job.ID])
+	}
+}
+
+func cleanupDelivery(t *testing.T, state AgentRunState) (*memoryStore, Job, Delivery) {
+	t.Helper()
+	store := newMemoryStore()
+	job := testJob()
+	job.AdmissionOpen = false
+	job.CleanupState = CleanupScheduled
+	job.SessionID = "session-1"
+	store.jobs[job.ID] = job
+	message := store.addMessage(job.ID, "first", "first input")
+	delivery, err := store.NextDelivery(context.Background(), job.ID, job.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := delivery.AgentRun
+	run.State = state
+	run.BaselineRecorded = true
+	store.runs[AgentRunID(message.ID)] = run
+	delivery.AgentRun = run
+	return store, job, *delivery
 }
 
 func TestBaselineReconciliationClassifications(t *testing.T) {
@@ -442,6 +569,19 @@ func (s *memoryStore) AgentRunAttention(_ context.Context, runID, reason string)
 	s.runs[runID] = run
 	return nil
 }
+func (s *memoryStore) NativeMutationDelivery(_ context.Context, jobID string) (*Delivery, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	messages := append([]Message(nil), s.messages[jobID]...)
+	sort.Slice(messages, func(i, j int) bool { return messages[i].Sequence < messages[j].Sequence })
+	for _, message := range messages {
+		run, ok := s.runs[AgentRunID(message.ID)]
+		if ok && (run.State == AgentRunSubmitting || run.State == AgentRunActive || run.State == AgentRunUncertain) {
+			return &Delivery{Message: message, AgentRun: run}, nil
+		}
+	}
+	return nil, nil
+}
 func (s *memoryStore) CompleteCleanup(_ context.Context, jobID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -452,15 +592,16 @@ func (s *memoryStore) CompleteCleanup(_ context.Context, jobID string) error {
 }
 
 type fakeExternals struct {
-	mu          sync.Mutex
-	turns       []NativeTurn
-	submitted   []int64
-	outcomes    map[int64]string
-	effects     []ActionKind
-	blockFirst  chan struct{}
-	firstActive chan struct{}
-	activeOnce  sync.Once
-	secondClaim chan struct{}
+	mu               sync.Mutex
+	turns            []NativeTurn
+	submitted        []int64
+	outcomes         map[int64]string
+	effects          []ActionKind
+	blockFirst       chan struct{}
+	firstActive      chan struct{}
+	activeOnce       sync.Once
+	secondClaim      chan struct{}
+	initialSessionID string
 }
 
 func newFakeExternals() *fakeExternals {
@@ -495,6 +636,11 @@ func (f *fakeExternals) AgentInitialTurn(_ context.Context, _ Job, delivery Deli
 		f.turns = append(f.turns, turn)
 	}
 	return "session-1", f.turns[0], nil
+}
+func (f *fakeExternals) AgentInitialTurns(_ context.Context, _ Job) (string, []NativeTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.initialSessionID, append([]NativeTurn(nil), f.turns...), nil
 }
 func (f *fakeExternals) AgentTurns(_ context.Context, _ Job, _ string) ([]NativeTurn, error) {
 	f.mu.Lock()

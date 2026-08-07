@@ -20,6 +20,7 @@ type Store interface {
 	FailAgentRun(context.Context, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
+	NativeMutationDelivery(context.Context, string) (*Delivery, error)
 	CompleteCleanup(context.Context, string) error
 }
 
@@ -28,6 +29,7 @@ type Externals interface {
 	RepositoryClone(context.Context, Job, Action) (Receipt, error)
 	RouteCreate(context.Context, Job, Action) (Receipt, error)
 	AgentInitialTurn(context.Context, Job, Delivery) (string, NativeTurn, error)
+	AgentInitialTurns(context.Context, Job) (string, []NativeTurn, error)
 	AgentTurns(context.Context, Job, string) ([]NativeTurn, error)
 	AgentSubmit(context.Context, Job, Delivery) (NativeTurn, error)
 	AgentWait(context.Context, Job, string, string) (NativeTurn, error)
@@ -318,6 +320,12 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		if err != nil {
 			return err
 		}
+		if job.AdmissionOpen {
+			return fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
+		}
+		if err := s.reconcileCleanupMutation(ctx, job); err != nil {
+			return err
+		}
 		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
 			if _, err := s.reconcile(ctx, job, kind); err != nil {
 				return fmt.Errorf("reconcile %s: %w", kind, err)
@@ -325,6 +333,98 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		}
 		return s.Store.CompleteCleanup(ctx, job.ID)
 	})
+}
+
+func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
+	delivery, err := s.Store.NativeMutationDelivery(ctx, job.ID)
+	if err != nil || delivery == nil {
+		return err
+	}
+	run := delivery.AgentRun
+	if run.State == AgentRunUncertain {
+		return cleanupBlocked(*delivery, run.Attention)
+	}
+	sessionID := run.SessionID
+	var turns []NativeTurn
+	if sessionID == "" {
+		sessionID, turns, err = s.Externals.AgentInitialTurns(ctx, job)
+		if err == nil && sessionID == "" && len(turns) > 0 {
+			err = fmt.Errorf("cleanup initial history returned turns without a native Session")
+		}
+		if err == nil && sessionID != "" && len(turns) > 0 {
+			session, actionErr := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
+			if actionErr != nil {
+				return actionErr
+			}
+			if session.State == ActionSucceeded && session.ExternalID != sessionID {
+				err = fmt.Errorf("cleanup isolated Session conflicts with the recorded Session")
+			} else if session.State != ActionSucceeded {
+				err = s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID})
+			}
+			run.SessionID = sessionID
+			delivery.AgentRun = run
+		}
+	} else {
+		turns, err = s.Externals.AgentTurns(ctx, job, sessionID)
+	}
+	if err != nil {
+		var attention interface{ AttentionNeeded() bool }
+		if errors.As(err, &attention) && attention.AttentionNeeded() {
+			if persistErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
+				return persistErr
+			}
+			return cleanupBlocked(*delivery, err.Error())
+		}
+		reason := "cleanup could not inspect the bound native Session: " + err.Error()
+		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		return cleanupBlocked(*delivery, reason)
+	}
+	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
+	switch reconciliation.Classification {
+	case "no-submit":
+		reason := "cleanup closed delivery after native history proved no turn was submitted"
+		if err := s.Store.FailAgentRun(ctx, run.ID, reason); err != nil {
+			return err
+		}
+		return nil
+	case "uncertain":
+		if reconciliation.Turn.ID != "" {
+			if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+				return err
+			}
+		} else if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
+			return err
+		}
+		return cleanupBlocked(*delivery, reconciliation.Reason)
+	}
+	if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+		return err
+	}
+	if reconciliation.Classification != "active" {
+		return nil
+	}
+	outcome, err := s.Externals.AgentWait(ctx, job, sessionID, reconciliation.Turn.ID)
+	if err != nil {
+		reason := "cleanup is waiting for the exact native turn outcome: " + err.Error()
+		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		return cleanupBlocked(*delivery, reason)
+	}
+	if err := s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status); err != nil {
+		return err
+	}
+	if !terminalNative(outcome.Status) {
+		reason := fmt.Sprintf("cleanup inspection returned nonterminal native status %q", outcome.Status)
+		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		return cleanupBlocked(*delivery, reason)
+	}
+	return nil
+}
+
+func cleanupBlocked(delivery Delivery, reason string) error {
+	if reason == "" {
+		reason = string(delivery.AgentRun.State)
+	}
+	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
 }
 
 func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Receipt, error) {

@@ -166,12 +166,13 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err := store.BindNativeTurn(ctx, next.AgentRun.ID, "native-turn-2-"+job.ID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := workflow.ScheduleCleanup(ctx, store, client, job.ID); err == nil {
-		t.Fatal("cleanup did not stop at the durable active native-turn binding")
+	blocker, err := store.NativeMutationDelivery(ctx, job.ID)
+	if err != nil || blocker == nil || blocker.AgentRun.State != spine.AgentRunActive {
+		t.Fatalf("active native mutation=%#v err=%v", blocker, err)
 	}
 	stillOpen, err := store.Job(ctx, job.ID)
 	if err != nil || !stillOpen.AdmissionOpen {
-		t.Fatalf("blocked cleanup closed admission before native inspection: %#v err=%v", stillOpen, err)
+		t.Fatalf("native mutation inspection changed admission: %#v err=%v", stillOpen, err)
 	}
 	if err := store.BindNativeTurn(ctx, next.AgentRun.ID, "native-turn-2-"+job.ID, "completed"); err != nil {
 		t.Fatal(err)
@@ -328,13 +329,104 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 	}
 }
 
+func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: "cleanup-exhausted-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/cleanup-exhausted", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit Job created=%v err=%v", created, err)
+	}
+	taskIDs := []string{job.TaskID}
+	t.Cleanup(func() {
+		for _, id := range taskIDs {
+			_ = client.CancelTask(context.Background(), config.QueueName, id)
+		}
+	})
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "cleanup-session-" + suffix}); err != nil {
+		t.Fatal(err)
+	}
+	delivery, err := store.NextDelivery(ctx, job.ID, "cleanup-session-"+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, delivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	turnID := "cleanup-turn-" + suffix
+	if err := store.BindNativeTurn(ctx, delivery.AgentRun.ID, turnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "later-pending", Input: "must not be submitted by cleanup"})
+	if err != nil || !created || second.Sequence != 2 {
+		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.r_dorf_jobs set state='failed',claimed_by=null,claim_expires_at=null where task_id=$1::uuid`, job.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.t_dorf_jobs set state='failed',attempts=5 where task_id=$1::uuid`, job.TaskID); err != nil {
+		t.Fatal(err)
+	}
+
+	externals := &integrationExternals{turns: []spine.NativeTurn{{ID: turnID, Status: "completed"}}, submitted: []int64{1}}
+	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskIDs = append(taskIDs, cleaning.CleanupTaskID)
+	if cleaning.AdmissionOpen || cleaning.RunTerminalState != "failed" {
+		t.Fatalf("cleanup did not close admission and retain failed run truth: %#v", cleaning)
+	}
+	if err := (spine.Service{Store: store, Externals: externals}).Cleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := (spine.Service{Store: store, Externals: externals}).Cleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleaned.CleanupState != spine.CleanupComplete || cleaned.RunTerminalState != "failed" {
+		t.Fatalf("cleaned Job=%#v", cleaned)
+	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].State != spine.AgentRunCompleted || messages[0].NativeTurnID != turnID || messages[1].State != spine.AgentRunPending || messages[1].NativeTurnID != "" {
+		t.Fatalf("cleanup delivery truth=%#v", messages)
+	}
+	if got := externals.submittedSequences(); fmt.Sprint(got) != "[1]" {
+		t.Fatalf("cleanup submitted pending FIFO input: %v", got)
+	}
+	if got := externals.effectKinds(); fmt.Sprint(got) != "[provider-route-revoke sandbox-delete]" {
+		t.Fatalf("cleanup effects=%v", got)
+	}
+	evidence, err := store.TaskEvidence(ctx, job.TaskID)
+	if err != nil || evidence.State != "failed" || evidence.Attempts != 5 {
+		t.Fatalf("failed run evidence=%#v err=%v", evidence, err)
+	}
+}
+
 type integrationExternals struct {
 	mu        sync.Mutex
 	turns     []spine.NativeTurn
 	submitted []int64
+	effects   []spine.ActionKind
 }
 
 func (e *integrationExternals) receipt(job spine.Job, action spine.Action) (spine.Receipt, error) {
+	e.mu.Lock()
+	e.effects = append(e.effects, action.Kind)
+	e.mu.Unlock()
 	return spine.Receipt{ExternalID: "integration-" + string(action.Kind) + "-" + job.ID}, nil
 }
 func (e *integrationExternals) SandboxCreate(_ context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
@@ -355,6 +447,11 @@ func (e *integrationExternals) AgentInitialTurn(_ context.Context, job spine.Job
 		e.turns = append(e.turns, turn)
 	}
 	return "integration-session-" + job.ID, e.turns[0], nil
+}
+func (e *integrationExternals) AgentInitialTurns(_ context.Context, job spine.Job) (string, []spine.NativeTurn, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return "integration-session-" + job.ID, append([]spine.NativeTurn(nil), e.turns...), nil
 }
 func (e *integrationExternals) AgentTurns(_ context.Context, _ spine.Job, _ string) ([]spine.NativeTurn, error) {
 	e.mu.Lock()
@@ -389,6 +486,12 @@ func (e *integrationExternals) submittedSequences() []int64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]int64(nil), e.submitted...)
+}
+
+func (e *integrationExternals) effectKinds() []spine.ActionKind {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]spine.ActionKind(nil), e.effects...)
 }
 
 func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {

@@ -398,6 +398,18 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 		t.Fatalf("empty thread unexpectedly durable: session=%s persisted=%v", lostSession, persisted.Load())
 	}
 
+	inspectionConnection := dialTestProtocol(t, server)
+	inspectedSession, inspectedTurns, err := inspectionConnection.inspectInitialTurns(context.Background(), "/workspace/job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectionConnection.connection.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	if inspectedSession != "" || len(inspectedTurns) != 0 || threadStarts.Load() != 1 || turnStarts.Load() != 0 {
+		t.Fatalf("read-only initial inspection session=%s turns=%#v thread starts=%d turn starts=%d", inspectedSession, inspectedTurns, threadStarts.Load(), turnStarts.Load())
+	}
+
 	secondConnection := dialTestProtocol(t, server)
 	sessionID, turn, err := secondConnection.reconcileInitialTurn(context.Background(), "/workspace/job", "agent-run-stable", "initial input", "gpt-5.6-sol", "high")
 	if err != nil {

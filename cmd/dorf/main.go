@@ -368,7 +368,11 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	case spine.AgentRunCompleted:
 		detail = "terminal: native turn completed"
 	case spine.AgentRunFailed:
-		detail = "terminal: native turn failed; later FIFO input is blocked"
+		if message.NativeTurnID == "" {
+			detail = "terminal locally: delivery ended before any native turn was submitted; later FIFO input is blocked"
+		} else {
+			detail = "terminal: native turn failed; later FIFO input is blocked"
+		}
 	case spine.AgentRunInterrupted:
 		detail = "terminal: native turn was interrupted; later FIFO input is blocked"
 	case spine.AgentRunUncertain:
