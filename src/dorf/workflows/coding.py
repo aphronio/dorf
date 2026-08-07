@@ -109,6 +109,10 @@ class VerificationInfrastructureFailed(WorkflowFailure):
 class CommandInterrupted(RuntimeError):
     """A retained review or follow-up turn was interrupted."""
 
+    def __init__(self, run: CodingCommandRun) -> None:
+        super().__init__(f"{run.kind} was interrupted")
+        self.run = run
+
 
 @dataclass(frozen=True)
 class ReviewThreadFeedback:

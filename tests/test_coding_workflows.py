@@ -563,6 +563,8 @@ def test_interrupted_deepseek_run_stays_interrupted_without_consuming_attention(
         ).verify()
 
     assert raised.value.kind == "interrupted"
+    assert raised.value.exit_code == 130
+    assert raised.value.messages[-1].text == "Verify interrupted for checkout-perf."
     current = store.get_coding_job(job.job_name)
     assert "diff_verifier_attention" not in current.metadata
 

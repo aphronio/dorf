@@ -13,6 +13,7 @@ from typing import Protocol
 
 from dorf.github_app import GitHubRepositoryClient
 from dorf.provider_gateway import ProviderGateway
+from dorf.workflows.coding import CommandInterrupted
 from dorf.workflows.coding_store import CodingJob, CodingStore
 
 CLONE = "/workspace/verifier"
@@ -78,6 +79,10 @@ def _run_review_command(
             _stop_review_process(process)
             output.write(f"Command timed out after {timeout_seconds} seconds.\n")
             exit_code, status = 124, "timed_out"
+        except KeyboardInterrupt:
+            _stop_review_process(process)
+            interrupted = store.finish_command_run(run.id, "interrupted", 130)
+            raise CommandInterrupted(interrupted) from None
         except BaseException:
             _stop_review_process(process)
             raise
