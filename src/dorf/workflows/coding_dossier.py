@@ -7,15 +7,11 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from dorf.repo_contract import RepoContract
 from dorf.runtime import JobArtifact, JobBinding, TimelineEvent
 
 from .coding_store import AcceptanceItem, CodingCommandRun, CodingJob, CodingStore
 
-_CHECKBOX = re.compile(r"^\s*-\s*\[[ xX]\]\s+(.+?)\s*$")
-_HEADING = re.compile(r"^\s*##+\s+(.+?)\s*$")
 REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
-_VERIFICATION_COMMANDS = ("check", "smoke")
 
 
 @dataclass(frozen=True)
@@ -84,63 +80,11 @@ class ProofDossier:
     checklist_revision: int
     acceptance: tuple[AcceptanceResult, ...]
     environment: EnvironmentProvenance
-    checks: tuple[ProofEvidence, ...]
     independent_review: tuple[ProofEvidence, ...]
     assumptions_and_claims: tuple[ProofEvidence, ...]
     unresolved_risks: tuple[str, ...]
     relevant_artifacts: tuple[DossierArtifact, ...]
     cleanup: CleanupState
-
-
-def compile_acceptance_checklist(
-    goal: str,
-    contract: RepoContract,
-) -> tuple[AcceptanceItem, ...]:
-    """Compile concise issue criteria plus concrete repository verification obligations."""
-    criteria = _acceptance_criteria(goal)
-    if "check" in contract.commands:
-        issue_verifier, issue_verifier_ref = "command", "check"
-    elif "smoke" in contract.commands:
-        issue_verifier, issue_verifier_ref = "command", "smoke"
-    else:
-        issue_verifier, issue_verifier_ref = None, ""
-    items = [
-        AcceptanceItem(
-            key=f"issue-{position}",
-            text=text,
-            source="issue",
-            verifier=issue_verifier,
-            verifier_ref=issue_verifier_ref,
-            verifier_command=contract.commands[issue_verifier_ref],
-        )
-        for position, text in enumerate(criteria, start=1)
-        if issue_verifier is not None
-    ]
-    if not items and issue_verifier is not None:
-        summary = next((line.strip() for line in goal.splitlines() if line.strip()), "Pinned goal")
-        items.append(
-            AcceptanceItem(
-                key="goal-1",
-                text=summary,
-                source="goal",
-                verifier=issue_verifier,
-                verifier_ref=issue_verifier_ref,
-                verifier_command=contract.commands[issue_verifier_ref],
-            )
-        )
-    for name in _VERIFICATION_COMMANDS:
-        if command := contract.commands.get(name):
-            items.append(
-                AcceptanceItem(
-                    key=f"repo-{name}",
-                    text=f"Repository {name} passes: {command}",
-                    source="contract",
-                    verifier="command",
-                    verifier_ref=name,
-                    verifier_command=command,
-                )
-            )
-    return tuple(items)
 
 
 def build_proof_dossier(
@@ -186,10 +130,6 @@ def build_proof_dossier(
             commit_sha=commit_sha,
         )
         for item in active_items
-    )
-    checks = tuple(
-        run_evidence[run.id]
-        for run in _compact_runs(runs, commit_sha, lambda run: run.kind in _VERIFICATION_COMMANDS)
     )
     reviews = tuple(
         run_evidence[run.id]
@@ -282,12 +222,11 @@ def build_proof_dossier(
                 sorted((str(key), str(value)) for key, value in binding.metadata.items())
             ),
         ),
-        checks=checks,
         independent_review=reviews,
         assumptions_and_claims=claims,
         unresolved_risks=tuple(dict.fromkeys(risks)),
         relevant_artifacts=_relevant_artifacts(
-            (*acceptance_evidence, *checks, *reviews, *claims)
+            (*acceptance_evidence, *reviews, *claims)
         ),
         cleanup=CleanupState(
             job=binding.job.status,
@@ -343,7 +282,6 @@ def render_proof_dossier(dossier: ProofDossier) -> str:
     )
     if environment.metadata:
         lines.append(" · ".join(f"{key}=`{value}`" for key, value in environment.metadata))
-    _render_evidence_section(lines, "Checks", dossier.checks)
     _render_evidence_section(lines, "Independent review", dossier.independent_review)
     _render_evidence_section(
         lines,
@@ -386,19 +324,6 @@ def _compact_acceptance_reason(item: AcceptanceResult) -> str:
     if item.reason.endswith(repeated_text):
         return item.reason[: -len(repeated_text)]
     return item.reason
-
-
-def _acceptance_criteria(goal: str) -> list[str]:
-    inside = False
-    criteria: list[str] = []
-    for line in goal.splitlines():
-        heading = _HEADING.match(line)
-        if heading:
-            inside = heading.group(1).strip().casefold() == "acceptance criteria"
-            continue
-        if inside and (match := _CHECKBOX.match(line)):
-            criteria.append(" ".join(match.group(1).split()))
-    return criteria
 
 
 def _evaluate_acceptance_item(
@@ -614,7 +539,6 @@ __all__ = [
     "ProofEvidence",
     "acceptance_is_proven",
     "build_proof_dossier",
-    "compile_acceptance_checklist",
     "render_proof_dossier",
     "review_output_has_no_findings",
 ]

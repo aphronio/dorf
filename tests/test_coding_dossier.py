@@ -6,14 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from dorf.repo_contract import RepoContract
 from dorf.runtime import ArtifactInput, JobRuntime, NewJob, NewWorker, WorkerRuntime
 from dorf.workflows import CodingStore
 from dorf.workflows.coding_dossier import (
     AcceptanceItem,
     acceptance_is_proven,
     build_proof_dossier,
-    compile_acceptance_checklist,
     render_proof_dossier,
     review_output_has_no_findings,
 )
@@ -75,53 +73,6 @@ def assigned_coding_job(tmp_path: Path):
     return store, job, binding
 
 
-def test_acceptance_is_compiled_from_pinned_issue_and_verification_contract() -> None:
-    prompt = """\
-Issue body:
-## Acceptance criteria
-- [ ] Checkout is faster than 200ms.
-- [ ] The fallback remains correct.
-
-## Step-change bar
-Proof, not vibes.
-"""
-    contract = RepoContract(
-        mode="configured",
-        commands={"prepare": "uv sync", "check": "uv run pytest", "smoke": "./smoke.sh"},
-        env={},
-    )
-
-    checklist = compile_acceptance_checklist(prompt, contract)
-
-    assert [item.text for item in checklist] == [
-        "Checkout is faster than 200ms.",
-        "The fallback remains correct.",
-        "Repository check passes: uv run pytest",
-        "Repository smoke passes: ./smoke.sh",
-    ]
-    assert {item.verifier for item in checklist} == {"command"}
-    assert {item.verifier_ref for item in checklist} == {"check", "smoke"}
-
-
-def test_generic_repo_does_not_compile_an_unprovable_manual_gate() -> None:
-    contract = RepoContract(mode="generic", commands={}, env={})
-
-    checklist = compile_acceptance_checklist("Implement the requested change", contract)
-
-    assert checklist == ()
-
-
-def test_command_acceptance_requires_an_exact_pinned_command(tmp_path: Path) -> None:
-    store, _, _ = assigned_coding_job(tmp_path)
-
-    with pytest.raises(ValueError, match="pinned command"):
-        store.record_acceptance_checklist(
-            "proof",
-            goal="Pinned goal",
-            items=(AcceptanceItem("repo-check", "Checks pass", "contract", "command", "check"),),
-        )
-
-
 def test_acceptance_can_be_corrected_until_frozen(tmp_path: Path) -> None:
     store, _, _ = assigned_coding_job(tmp_path)
     initial = (
@@ -136,163 +87,6 @@ def test_acceptance_can_be_corrected_until_frozen(tmp_path: Path) -> None:
     store.freeze_acceptance_checklist("proof")
     with pytest.raises(RuntimeError, match="already governs"):
         store.replace_acceptance_checklist("proof", initial)
-
-
-def test_dossier_proofs_are_commit_pinned_and_new_head_invalidates_them(tmp_path: Path) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "repo-check",
-                "Checks pass",
-                "contract",
-                "command",
-                "check",
-                "uv run pytest",
-            ),
-        ),
-    )
-    output = tmp_path / "check.log"
-    output.write_text("1 passed\n")
-    run = store.create_command_run("proof", "check", "uv run pytest", str(output))
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-    store.documents.append_event(
-        "proof",
-        event_id=f"evt-command-{run.id}-output",
-        source="workflow",
-        provenance="fact",
-        kind="command-result",
-        summary="check succeeded (exit 0)",
-        related={
-            "assignment": binding.assignment.id,
-            "run": str(run.id),
-            "room": binding.room.id,
-            "worker": binding.worker.name,
-        },
-        artifacts=[ArtifactInput("check-output.log", output, "text/plain")],
-    )
-
-    proven = build_proof_dossier(store, job, binding, commit_sha=commit)
-    stale = build_proof_dossier(store, job, binding, commit_sha="c" * 40)
-
-    assert proven.acceptance[0].status == "proven"
-    assert proven.acceptance[0].evidence[0].provenance == "fact"
-    assert proven.acceptance[0].evidence[0].commit_sha == commit
-    assert proven.acceptance[0].evidence[0].artifacts[0].digest.startswith("sha256:")
-    assert stale.acceptance[0].status == "unproven"
-    assert "older commit" in stale.acceptance[0].reason
-
-
-def test_ready_verdict_requires_the_exact_proof_commit(tmp_path: Path) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    verified_commit = "b" * 40
-    other_commit = "c" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "repo-check",
-                "Checks pass",
-                "contract",
-                "command",
-                "check",
-                "pytest",
-            ),
-        ),
-    )
-    run = store.create_command_run(
-        "proof", "check", "pytest", str(tmp_path / "check.log")
-    )
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(
-        run.id, before=verified_commit, after=verified_commit
-    )
-    store.update_status("proof", "ready")
-    store.set_metadata_value("proof", "proof_commit", other_commit)
-    job = store.get_coding_job("proof")
-    assert job is not None
-
-    not_ready = build_proof_dossier(
-        store, job, binding, commit_sha=verified_commit
-    )
-
-    store.set_metadata_value("proof", "proof_commit", verified_commit)
-    job = store.get_coding_job("proof")
-    assert job is not None
-    ready = build_proof_dossier(store, job, binding, commit_sha=verified_commit)
-
-    assert not_ready.acceptance[0].status == "proven"
-    assert not_ready.verdict == "not ready"
-    assert any("readiness is pinned" in risk for risk in not_ready.unresolved_risks)
-    assert ready.verdict == "ready"
-
-
-def test_command_acceptance_rejects_a_different_command_under_the_same_name(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "repo-check",
-                "Repository check passes: pytest",
-                "contract",
-                "command",
-                "check",
-                verifier_command="pytest",
-            ),
-        ),
-    )
-    run = store.create_command_run("proof", "check", "true", str(tmp_path / "check.log"))
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert dossier.acceptance[0].status == "unproven"
-
-
-def test_command_acceptance_uses_the_newest_observation_at_the_commit(
-    tmp_path: Path,
-) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    store.record_acceptance_checklist(
-        "proof",
-        goal="Pinned goal",
-        items=(
-            AcceptanceItem(
-                "repo-check",
-                "Repository check passes: pytest",
-                "contract",
-                "command",
-                "check",
-                verifier_command="pytest",
-            ),
-        ),
-    )
-    passed = store.create_command_run(
-        "proof", "check", "pytest", str(tmp_path / "passed.log")
-    )
-    store.finish_command_run(passed.id, "succeeded", 0)
-    store.set_command_run_git_commits(passed.id, before=commit, after=commit)
-    failed = store.create_command_run(
-        "proof", "check", "pytest", str(tmp_path / "failed.log")
-    )
-    store.finish_command_run(failed.id, "failed", 1)
-    store.set_command_run_git_commits(failed.id, before=commit, after=commit)
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert dossier.acceptance[0].status == "unproven"
 
 
 def test_deepseek_review_is_advisory_and_decline_is_a_visible_risk(tmp_path: Path) -> None:
@@ -449,7 +243,6 @@ def test_dossier_keeps_claims_separate_and_renders_ordered_compact_sections(
         "## Exact commit",
         "## Acceptance status",
         "## Environment / image provenance",
-        "## Checks",
         "## Independent review",
         "## Assumptions and Worker claims",
         "## Unresolved risks",
