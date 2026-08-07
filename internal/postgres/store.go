@@ -107,7 +107,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -219,22 +219,48 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 }
 
 func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
-	input.JobID = strings.TrimSpace(input.JobID)
-	input.CallerID = strings.TrimSpace(input.CallerID)
-	if input.JobID == "" || input.CallerID == "" || strings.TrimSpace(input.Input) == "" {
-		return spine.Message{}, false, fmt.Errorf("message admission requires Job ID, caller ID, and complete input")
-	}
-	if len(input.CallerID) > 256 || strings.HasPrefix(input.CallerID, "dorf:") {
-		return spine.Message{}, false, fmt.Errorf("caller ID must be at most 256 characters and must not use the reserved dorf: prefix")
-	}
-	if len(input.Input) > 1<<20 {
-		return spine.Message{}, false, fmt.Errorf("message input exceeds 1 MiB")
+	return s.admitMessage(ctx, input, false)
+}
+
+func (s Store) admitMessage(ctx context.Context, input NewMessage, allowSetupRetry bool) (spine.Message, bool, error) {
+	input, err := normalizeMessage(input, allowSetupRetry)
+	if err != nil {
+		return spine.Message{}, false, err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
 	defer tx.Rollback()
+	message, created, err := admitMessageTx(ctx, tx, input)
+	if err != nil {
+		return spine.Message{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return spine.Message{}, false, err
+	}
+	return message, created, nil
+}
+
+func normalizeMessage(input NewMessage, allowSetupRetry bool) (NewMessage, error) {
+	input.JobID = strings.TrimSpace(input.JobID)
+	input.CallerID = strings.TrimSpace(input.CallerID)
+	if input.JobID == "" || input.CallerID == "" || strings.TrimSpace(input.Input) == "" {
+		return NewMessage{}, fmt.Errorf("message admission requires Job ID, caller ID, and complete input")
+	}
+	if len(input.CallerID) > 256 || strings.HasPrefix(input.CallerID, "dorf:") && !allowSetupRetry {
+		return NewMessage{}, fmt.Errorf("caller ID must be at most 256 characters and must not use the reserved dorf: prefix")
+	}
+	if allowSetupRetry && !strings.HasPrefix(input.CallerID, "dorf:setup-retry:") {
+		return NewMessage{}, fmt.Errorf("internal setup retry caller ID is invalid")
+	}
+	if len(input.Input) > 1<<20 {
+		return NewMessage{}, fmt.Errorf("message input exceeds 1 MiB")
+	}
+	return input, nil
+}
+
+func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Message, bool, error) {
 	var admissionOpen bool
 	var workflowPhase string
 	if err := tx.QueryRowContext(ctx, `select admission_open,workflow_phase from dorf.jobs where id=$1 for update`, input.JobID).Scan(&admissionOpen, &workflowPhase); err != nil {
@@ -244,13 +270,10 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 		return spine.Message{}, false, err
 	}
 	var message spine.Message
-	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, input.JobID, input.CallerID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input)
+	err := tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, input.JobID, input.CallerID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input)
 	if err == nil {
 		if message.Input != input.Input {
 			return spine.Message{}, false, fmt.Errorf("caller ID %q is already bound to different complete message input", input.CallerID)
-		}
-		if err := tx.Commit(); err != nil {
-			return spine.Message{}, false, err
 		}
 		return message, false, nil
 	}
@@ -276,9 +299,6 @@ func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Messag
 		return spine.Message{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending')`, runID, message.JobID, message.ID, actionID); err != nil {
-		return spine.Message{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return spine.Message{}, false, err
 	}
 	return message, true, nil
@@ -465,6 +485,122 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	return action, nil
 }
 
+// BeginSetup returns only the setup generation currently selected by the Job.
+// A failed generation is terminal; RetrySetup selects a new scoped Action
+// without changing or deleting its retained Evidence.
+func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return spine.Action{}, err
+	}
+	defer tx.Rollback()
+	desiredID := spine.ActionID(jobID, spine.ActionRepositorySetup)
+	var currentID string
+	if err := tx.QueryRowContext(ctx, `select coalesce(setup_action_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&currentID); err != nil {
+		return spine.Action{}, err
+	}
+	if currentID == "" {
+		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, spine.ActionRepositorySetup); err != nil {
+			return spine.Action{}, err
+		}
+		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set setup_action_id=$2 where id=$1 and setup_action_id is null`, jobID, desiredID)); err != nil {
+			return spine.Action{}, err
+		}
+		currentID = desiredID
+	}
+	var action spine.Action
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 and job_id=$2 and kind=$3 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, currentID, jobID, spine.ActionRepositorySetup).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+		return spine.Action{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return spine.Action{}, err
+	}
+	return action, nil
+}
+
+// RetrySetup atomically selects one explicit setup generation and admits its
+// durable wake after a terminal failure. retryID is the stable operator
+// identity for the Action/message pair.
+func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (spine.Action, spine.Message, bool, error) {
+	jobID = strings.TrimSpace(jobID)
+	retryID = strings.TrimSpace(retryID)
+	if jobID == "" || retryID == "" {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry requires a Job ID and stable retry identity")
+	}
+	if len(retryID) > 239 || strings.HasPrefix(retryID, "dorf:") {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity must be at most 239 characters and must not use the reserved dorf: prefix")
+	}
+	messageInput, err := normalizeMessage(NewMessage{JobID: jobID, CallerID: "dorf:setup-retry:" + retryID, Input: input}, true)
+	if err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	defer tx.Rollback()
+	var phase, currentID string
+	var admissionOpen bool
+	if err := tx.QueryRowContext(ctx, `select workflow_phase,coalesce(setup_action_id,''),admission_open from dorf.jobs where id=$1 for update`, jobID).Scan(&phase, &currentID, &admissionOpen); err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositorySetup, retryID)
+	var existing spine.Action
+	err = tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3`, desiredID, jobID, spine.ActionRepositorySetup).Scan(&existing.ID, &existing.JobID, &existing.MessageID, &existing.Kind, &existing.State, &existing.ExternalID, &existing.Outcome, &existing.Scope)
+	if err == nil {
+		message, _, messageErr := admitMessageTx(ctx, tx, messageInput)
+		if messageErr != nil {
+			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
+		}
+		if err := tx.Commit(); err != nil {
+			return spine.Action{}, spine.Message{}, false, err
+		}
+		return existing, message, false, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	if !admissionOpen {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s admission is closed; repository setup cannot be retried", jobID)
+	}
+	if phase != "blocked" || currentID == "" {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s repository setup retry is not admissible during workflow phase %s", jobID, phase)
+	}
+	var currentState spine.ActionState
+	if err := tx.QueryRowContext(ctx, `select state from dorf.actions where id=$1 and job_id=$2 and kind=$3 for update`, currentID, jobID, spine.ActionRepositorySetup).Scan(&currentState); err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	if currentState != spine.ActionFailed {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s is %s, not terminal failed", jobID, currentID, currentState)
+	}
+	result, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, spine.ActionRepositorySetup, retryID)
+	if err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	createdRows, err := result.RowsAffected()
+	if err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	if createdRows != 1 {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q was already used by another generation", retryID)
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set setup_action_id=$2,workflow_phase='setup',workflow_attention=null where id=$1 and setup_action_id=$3 and workflow_phase='blocked'`, jobID, desiredID, currentID)); err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	message, messageCreated, err := admitMessageTx(ctx, tx, messageInput)
+	if err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	if !messageCreated {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q already has a message without its Action", retryID)
+	}
+	action := spine.Action{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup, State: spine.ActionPending, Scope: retryID}
+	if err := tx.Commit(); err != nil {
+		return spine.Action{}, spine.Message{}, false, err
+	}
+	return action, message, true, nil
+}
+
 // BeginCommit atomically closes implementation steering and reserves the
 // Revision Action only after every already-admitted FIFO input is terminal.
 // The additive committing phase is intentionally compatible with live v2
@@ -552,12 +688,12 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		return err
 	}
 	defer tx.Rollback()
-	var jobID string
+	var jobID, currentSetupID string
 	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `select job_id,kind from dorf.actions where id=$1 for update`, actionID).Scan(&jobID, &kind); err != nil {
+	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,coalesce(j.setup_action_id,'') from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &currentSetupID); err != nil {
 		return err
 	}
-	if kind != spine.ActionRepositorySetup || evidence.ActionID != actionID {
+	if kind != spine.ActionRepositorySetup || evidence.ActionID != actionID || currentSetupID != actionID {
 		return fmt.Errorf("setup Evidence does not match its Action")
 	}
 	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
@@ -1172,7 +1308,31 @@ func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, er
 
 func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {
 	var sequence int64
-	err := s.DB.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, jobID).Scan(&sequence)
+	err := s.DB.QueryRowContext(ctx, `
+		select coalesce(
+			(
+				select m.sequence
+				from dorf.jobs j
+				join dorf.actions a on a.id=j.setup_action_id
+				join dorf.job_messages m on m.job_id=j.id and m.caller_id='dorf:setup-retry:'||a.scope_key
+				where j.id=$1 and j.workflow_phase='setup' and a.kind='repository-setup'
+				  and a.scope_key<>'' and a.state in ('pending','uncertain')
+			),
+			(
+				select min(m.sequence)
+				from dorf.job_messages m
+				join dorf.agent_runs ar on ar.message_id=m.id
+				where m.job_id=$1 and m.sequence>1 and ar.state='pending'
+				  and not exists (
+					select 1
+					from dorf.job_messages earlier
+					join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
+					where earlier.job_id=m.job_id and earlier.sequence<m.sequence
+					  and earlier_run.state<>'completed'
+				  )
+			),
+			(select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)
+		)`, jobID).Scan(&sequence)
 	return sequence, err
 }
 

@@ -250,7 +250,7 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
 	now := time.Now().UTC().Round(time.Microsecond)
-	setup, err := store.BeginAction(ctx, job.ID, spine.ActionRepositorySetup)
+	setup, err := store.BeginSetup(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,6 +344,103 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	}
 }
 
+func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	start := strings.Repeat("7", 40)
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: fmt.Sprintf("setup-retry-%d", time.Now().UnixNano()), Goal: "bounded setup retry", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/setup-retry", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Round(time.Microsecond)
+	failed, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := integrationEvidence(failed.ID, "repository-setup", failed.ID, "", start, "8")
+	observation := spine.CommandObservation{Command: "go mod download", ExitCode: 127, StartedAt: now, FinishedAt: now}
+	declared := []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}
+	collidingPublic, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "setup-retry:toolchain-repair-1", Input: "ordinary caller input"})
+	if err != nil || !created || collidingPublic.Sequence != 2 {
+		t.Fatalf("public collision setup=%#v created=%v err=%v", collidingPublic, created, err)
+	}
+	if err := store.RecordSetup(ctx, failed.ID, failedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.RetrySetup(ctx, job.ID, "invalid-no-wake", " "); err == nil {
+		t.Fatal("setup retry admitted an Action without a valid durable wake")
+	}
+	job, err = store.Job(ctx, job.ID)
+	actions, actionsErr := store.Actions(ctx, job.ID)
+	invalidActionID := spine.ScopedActionID(job.ID, spine.ActionRepositorySetup, "invalid-no-wake")
+	invalidActionPresent := false
+	for _, action := range actions {
+		invalidActionPresent = invalidActionPresent || action.ID == invalidActionID
+	}
+	if err != nil || actionsErr != nil || job.WorkflowPhase != "blocked" || invalidActionPresent {
+		t.Fatalf("invalid retry mutated Job=%#v Actions=%#v err=%v actionsErr=%v", job, actions, err, actionsErr)
+	}
+
+	retry, wake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || !retryCreated || retry.ID == failed.ID || retry.Scope != "toolchain-repair-1" || wake.Sequence != 3 {
+		t.Fatalf("retry=%#v wake=%#v created=%v err=%v", retry, wake, retryCreated, err)
+	}
+	nextWake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || nextWake != wake.Sequence {
+		t.Fatalf("setup retry race selected wake sequence %d, want retry sequence %d: %v", nextWake, wake.Sequence, err)
+	}
+	repeated, repeatedWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, " toolchain-repair-1 ", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || repeated != retry || repeatedWake != wake {
+		t.Fatalf("idempotent retry=%#v wake=%#v created=%v err=%v", repeated, repeatedWake, retryCreated, err)
+	}
+	if err := store.RecordSetup(ctx, failed.ID, failedEvidence, observation, declared); err == nil {
+		t.Fatal("superseded failed setup Action was allowed to mutate the current workflow")
+	}
+	current, err := store.BeginSetup(ctx, job.ID)
+	if err != nil || current.ID != retry.ID {
+		t.Fatalf("current setup=%#v err=%v", current, err)
+	}
+	retryFailedEvidence := integrationEvidence(retry.ID, "repository-setup", retry.ID, "", start, "9")
+	if err := store.RecordSetup(ctx, retry.ID, retryFailedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	terminalRetry, terminalWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || terminalRetry.ID != retry.ID || terminalRetry.State != spine.ActionFailed || terminalWake != wake {
+		t.Fatalf("terminal exact retry=%#v wake=%#v created=%v err=%v", terminalRetry, terminalWake, retryCreated, err)
+	}
+	secondRetry, secondWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-2", "operator repaired the declared toolchain again")
+	if err != nil || !retryCreated || secondRetry.ID == retry.ID {
+		t.Fatalf("second retry=%#v created=%v err=%v", secondRetry, retryCreated, err)
+	}
+	supersededRetry, supersededWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-1", "operator repaired the declared toolchain")
+	if err != nil || retryCreated || supersededRetry.ID != retry.ID || supersededRetry.State != spine.ActionFailed || supersededWake != wake {
+		t.Fatalf("superseded exact retry=%#v wake=%#v created=%v err=%v", supersededRetry, supersededWake, retryCreated, err)
+	}
+	passedEvidence := integrationEvidence(secondRetry.ID, "repository-setup", secondRetry.ID, "", start, "a")
+	observation.ExitCode = 0
+	if err := store.RecordSetup(ctx, secondRetry.ID, passedEvidence, observation, declared); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "implementing" {
+		t.Fatalf("recovered Job=%#v err=%v", job, err)
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil || len(records) != 3 || records[0].ID != failedEvidence.ID || records[1].ID != retryFailedEvidence.ID || records[2].ID != passedEvidence.ID {
+		t.Fatalf("retained setup Evidence=%#v err=%v", records, err)
+	}
+	if _, _, _, err := store.RetrySetup(ctx, job.ID, "unjustified-second-retry", "not justified after success"); err == nil {
+		t.Fatal("successful setup admitted another retry generation")
+	}
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	closedRetry, closedWake, retryCreated, err := workflow.RetrySetup(ctx, store, client, job.ID, "toolchain-repair-2", "operator repaired the declared toolchain again")
+	if err != nil || retryCreated || closedRetry.ID != secondRetry.ID || closedRetry.State != spine.ActionSucceeded || closedWake != secondWake {
+		t.Fatalf("closed exact retry=%#v wake=%#v created=%v err=%v", closedRetry, closedWake, retryCreated, err)
+	}
+}
+
 func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -354,7 +451,7 @@ func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testi
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	setup, err := store.BeginAction(ctx, job.ID, spine.ActionRepositorySetup)
+	setup, err := store.BeginSetup(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +551,10 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second", Input: "second"})
 	if err != nil || !created || second.Sequence != 2 {
 		t.Fatalf("crash-window admission=%#v created=%v err=%v", second, created, err)
+	}
+	nextWake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || nextWake != second.Sequence {
+		t.Fatalf("idle/admission race selected wake sequence %d, want pending sequence %d: %v", nextWake, second.Sequence, err)
 	}
 	retried, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: job.ID, CallerID: "second", Input: "second"})
 	if err != nil || created || retried != second {

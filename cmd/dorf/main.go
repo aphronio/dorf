@@ -66,6 +66,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return admit(ctx, store, client, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
+	case "setup-retry":
+		return setupRetry(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
@@ -118,7 +120,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 005_commit_admission.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 006_setup_retry.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -190,6 +192,28 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 		return err
 	}
 	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "created": created, "accepted": true})
+}
+
+func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("setup-retry", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	retryID := set.String("id", "", "stable operator identity for this retry generation")
+	inputFile := set.String("input-file", "", "file containing the durable repair/wake note")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("setup-retry requires one Job ID")
+	}
+	input, err := readInput(*inputFile, "setup-retry", "repair note")
+	if err != nil {
+		return err
+	}
+	action, message, created, err := workflow.RetrySetup(ctx, store, client, set.Arg(0), *retryID, input)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"job_id": action.JobID, "action_id": action.ID, "action_state": action.State, "message_id": message.ID, "retry_created": created, "wake_sequence": message.Sequence})
 }
 
 func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -476,6 +500,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|worker|inspect|evidence|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

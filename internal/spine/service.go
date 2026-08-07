@@ -15,6 +15,7 @@ type Store interface {
 	WithJobFence(context.Context, string, func() error) error
 	StartRun(context.Context, string) error
 	BeginAction(context.Context, string, ActionKind) (Action, error)
+	BeginSetup(context.Context, string) (Action, error)
 	CompleteAction(context.Context, string, Receipt) error
 	UncertainAction(context.Context, string) error
 	NextDelivery(context.Context, string, string) (*Delivery, error)
@@ -200,7 +201,7 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 
 func (s Service) setup(ctx context.Context, job Job) (RunDisposition, error) {
 	store := s.Store.(CodingStore)
-	action, err := s.Store.BeginAction(ctx, job.ID, ActionRepositorySetup)
+	action, err := s.Store.BeginSetup(ctx, job.ID)
 	if err != nil {
 		return RunIdle, err
 	}

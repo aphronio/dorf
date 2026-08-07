@@ -1,11 +1,27 @@
 package evidence
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestReadVerifiedRejectsInvalidByteSizes(t *testing.T) {
+	store := Store{Root: t.TempDir()}
+	digest := strings.Repeat("0", 64)
+
+	for _, byteSize := range []int64{-1, math.MaxInt64} {
+		t.Run(fmt.Sprintf("%d", byteSize), func(t *testing.T) {
+			_, err := store.ReadVerified(digest, byteSize)
+			if got, want := fmt.Sprint(err), fmt.Sprintf("invalid Evidence byte size %d", byteSize); got != want {
+				t.Fatalf("ReadVerified error = %q, want %q", got, want)
+			}
+		})
+	}
+}
 
 func TestContentAddressedEvidenceIsImmutableAndIndependentlyRehashed(t *testing.T) {
 	store := Store{Root: t.TempDir()}

@@ -544,6 +544,9 @@ func (s *memoryStore) BeginAction(_ context.Context, jobID string, kind ActionKi
 	s.actions[id] = action
 	return action, nil
 }
+func (s *memoryStore) BeginSetup(ctx context.Context, jobID string) (Action, error) {
+	return s.BeginAction(ctx, jobID, ActionRepositorySetup)
+}
 func (s *memoryStore) CompleteAction(_ context.Context, id string, receipt Receipt) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

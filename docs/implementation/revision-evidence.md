@@ -41,6 +41,17 @@ remain readable. `committing` is an additive recovery phase handled by the exist
 `dorf-job-messages-v2` task, so already-admitted v2 Jobs are not reattached or stranded and no task
 identity change is required.
 
+A repository setup command that exits nonzero is terminal for that setup Action and its Evidence.
+After an operator repairs the concrete environment, `dorf setup-retry` atomically selects one new
+setup Action scoped by a stable retry identity and admits a byte-exact FIFO repair note as the
+durable wake. An
+exact client retry returns the same Action and message; a stale completion from the superseded
+Action is rejected. The failed observation remains inspectable and is never deleted or rewritten.
+Before sleeping, the task selects the reserved retry message or the oldest otherwise-deliverable
+pending FIFO position before choosing a future sequence, so admission between an idle observation
+and event wait cannot strand work. Failed earlier AgentRuns still block later messages rather than
+turning an already-consumed event into a busy loop.
+
 Command stdout and stderr are each capped at 512 KiB with explicit truncation flags. Before
 truncation or Evidence retention, the worker removes both known Room-scoped bearer capabilities:
 `/root/.config/dorf/provider-route.key` and
@@ -94,11 +105,13 @@ complete.
 
 ## Exact Incus, repair, and SIGKILL terminal
 
-Start from the issue implementation Revision, not an abbreviated hash. The bounded goal uses a real
-test-first change whose first turn deliberately adds a failing regression test without its repair.
-The workflow-owned repair message then supplies the failed Check, command, exit, exact Revision, and
-Evidence digest to the same Session. The repair turn fixes product code and does not commit; Dorf
-creates the second commit.
+Start from the issue implementation Revision, not an abbreviated hash. The first bounded Go change
+hardens `evidence.Store.ReadVerified` against invalid byte sizes and is complete with passing focused
+regression tests in the initial implementation turn. It does not deliberately leave a failing Go
+test: the intentional first-Revision failure is solely the legacy-deletion guard. The workflow-owned
+repair message then supplies that failed Check, command, exit, exact Revision, and Evidence digest to
+the same Session. The repair turn performs only the documented legacy deletion and does not commit;
+Dorf creates the second commit.
 
 ```bash
 go build -o ./bin/dorf ./cmd/dorf
@@ -170,9 +183,11 @@ or conflicting bytes stop. Absurd 0.5.0 needs the rescue-only worker pass after 
 Success means the first full Revision fails only the legacy-deletion guard with observed Evidence;
 the same-Session repair performs the exact deletion above; and inspection says the second full
 Revision is ready. Generation 1 retains the failed Check and Evidence but cannot prove generation
-2; setup has one Action and was not rerun; FIFO sequence 2 has role `repair` and the same Session as
-sequence 1; every proving artifact independently rehashes and matches its Check row; and cleanup
-deletes the route and Sandbox while retaining Revisions, Checks, and Evidence.
+2. A clean terminal has one successful setup Action; an explicitly repaired environment retains
+both the terminal failed setup Action/Evidence and its one successful retry Action. The
+workflow-owned Check repair has role `repair` and the same Session as the implementation; every
+proving artifact independently rehashes and matches its Check row; and cleanup deletes the route
+and Sandbox while retaining Revisions, Checks, and Evidence.
 
 ## Current implementation ledger
 
@@ -194,3 +209,13 @@ and Check-exited before their PostgreSQL records; PostgreSQL integration covers 
 late-steering boundary and rejects row-only readiness. The retained Python suite is run directly
 before the terminal; the pinned contract guard is expected to fail until the same-Session repair
 performs the documented deletion.
+
+The first outer setup observation on 2026-08-07 exited 127 because the published `dorf-codex`
+image contained Git, Node, uv, and Codex but no Go executable. Dorf retained Evidence digest
+`748a1205459e4b8f89553bcb0eb75c30c9e0651b7e222dbef7ac3d4912c9fca5` and blocked the Job. The
+operator then installed the official Go 1.25.12 Linux amd64 archive in that exact Sandbox after
+verifying SHA-256 `234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1`.
+Migration `006_setup_retry.sql` and `dorf setup-retry` preserve the failed generation while giving
+the repaired environment a distinct setup Action and durable wake. The public image/toolchain
+contract remains separate cutover resistance #55. Exact successful retry and later barrier
+artifacts are retained in the Job inspection and epic ledger when the terminal runs.

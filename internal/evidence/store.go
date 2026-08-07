@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -80,6 +81,9 @@ func (s Store) Verify(digest string, byteSize int64) error {
 }
 
 func (s Store) ReadVerified(digest string, byteSize int64) ([]byte, error) {
+	if byteSize < 0 || byteSize == math.MaxInt64 {
+		return nil, fmt.Errorf("invalid Evidence byte size %d", byteSize)
+	}
 	decoded, decodeErr := hex.DecodeString(digest)
 	if decodeErr != nil || len(decoded) != sha256.Size {
 		return nil, fmt.Errorf("invalid Evidence digest %q", digest)
