@@ -573,7 +573,6 @@ func (p *protocol) strictReviewSnapshot(ctx context.Context, workspace, sessionI
 	result, err := p.call(ctx, "thread/resume", map[string]any{
 		"threadId":       sessionID,
 		"cwd":            workspace,
-		"model":          model,
 		"approvalPolicy": "never",
 		"sandbox":        "read-only",
 	})

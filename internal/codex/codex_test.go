@@ -690,6 +690,8 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 		{name: "competing Session", threads: append(strictReviewTestThreads("session-review"), strictReviewTestThreads("session-forged")...), turns: []any{validTurn}, want: "competing native Sessions"},
 		{name: "unbounded discovery", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, cursor: "more", want: "exceeded its bound"},
 		{name: "wrong model", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["model"] = "forged-model" }, want: "model, effort, cwd, approval, or read-only policy"},
+		{name: "null effort", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["reasoningEffort"] = nil }, want: "model, effort, cwd, approval, or read-only policy"},
+		{name: "different effort", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["reasoningEffort"] = "medium" }, want: "model, effort, cwd, approval, or read-only policy"},
 		{name: "wrong approval", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["approvalPolicy"] = "on-request" }, want: "model, effort, cwd, approval, or read-only policy"},
 		{name: "wrong sandbox", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) { result["sandbox"] = map[string]any{"type": "dangerFullAccess"} }, want: "model, effort, cwd, approval, or read-only policy"},
 		{name: "network enabled", threads: strictReviewTestThreads("session-review"), turns: []any{validTurn}, mutate: func(result map[string]any) {
@@ -729,62 +731,49 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 func TestStrictReviewResumeOverridesReplacementProcessDefaults(t *testing.T) {
 	nonce := strings.Repeat("9", 64)
 	input := "exact replacement-process review input"
-	for _, test := range []struct {
-		name           string
-		honorOverrides bool
-		wantAttention  bool
-	}{
-		{name: "overrides restore never policy", honorOverrides: true},
-		{name: "ignored overrides remain attention", wantAttention: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var resumeParams map[string]any
-			server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-				switch method {
-				case "initialize":
-					return map[string]any{}, false
-				case "thread/list":
-					return map[string]any{"data": strictReviewTestThreads("session-review"), "nextCursor": nil}, false
-				case "thread/resume":
-					resumeParams = params
-					approval := "on-request"
-					if test.honorOverrides && strictReviewResumeParamsMatch(params, "session-review", "/workspace/job", "gpt-5.6-sol") {
-						approval = "never"
-					}
-					result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn("turn-review", nonce, input)}})
-					result["approvalPolicy"] = approval
-					return result, false
-				default:
-					return nil, true
-				}
-			})
-			defer server.Close()
+	var resumeParams map[string]any
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/list":
+			return map[string]any{"data": strictReviewTestThreads("session-review"), "nextCursor": nil}, false
+		case "thread/resume":
+			resumeParams = params
+			// Codex 0.146 restores the persisted model/effort pair only when
+			// resume does not supply a model-family override.
+			var restoredEffort any = "high"
+			if _, overridesModel := params["model"]; overridesModel {
+				restoredEffort = nil
+			}
+			result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn("turn-review", nonce, input)}})
+			result["reasoningEffort"] = restoredEffort
+			return result, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
 
-			p := dialTestProtocol(t, server)
-			_, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
-			if test.wantAttention {
-				if err == nil || !strings.Contains(err.Error(), "approval") {
-					t.Fatalf("ignored override error=%v", err)
-				}
-				if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
-					t.Fatalf("ignored override was not attention: %T %v", err, err)
-				}
-			} else if err != nil || len(turns) != 1 || turns[0].ID != "turn-review" {
-				t.Fatalf("override recovery turns=%#v err=%v", turns, err)
-			}
-			methods := reviewProtocolMethods(requests)
-			if !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
-				t.Fatalf("replacement recovery methods=%v", methods)
-			}
-			if !strictReviewResumeParamsMatch(resumeParams, "session-review", "/workspace/job", "gpt-5.6-sol") {
-				t.Fatalf("strict review resume params=%#v", resumeParams)
-			}
-		})
+	p := dialTestProtocol(t, server)
+	_, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
+	if err != nil || len(turns) != 1 || turns[0].ID != "turn-review" {
+		t.Fatalf("replacement recovery turns=%#v err=%v", turns, err)
+	}
+	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
+		t.Fatalf("replacement recovery methods=%v", methods)
+	}
+	if !strictReviewResumeParamsMatch(resumeParams, "session-review", "/workspace/job") {
+		t.Fatalf("strict review resume params=%#v", resumeParams)
 	}
 }
 
-func strictReviewResumeParamsMatch(params map[string]any, sessionID, workspace, model string) bool {
-	return len(params) == 5 && params["threadId"] == sessionID && params["cwd"] == workspace && params["model"] == model && params["approvalPolicy"] == "never" && params["sandbox"] == "read-only"
+func strictReviewResumeParamsMatch(params map[string]any, sessionID, workspace string) bool {
+	_, hasModel := params["model"]
+	_, hasConfig := params["config"]
+	_, hasEffort := params["effort"]
+	_, hasModelEffort := params["model_reasoning_effort"]
+	return len(params) == 4 && !hasModel && !hasConfig && !hasEffort && !hasModelEffort && params["threadId"] == sessionID && params["cwd"] == workspace && params["approvalPolicy"] == "never" && params["sandbox"] == "read-only"
 }
 
 func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T) {
