@@ -146,6 +146,16 @@ terminal, blocked, or genuinely uncertain delivery truth and identifies any bloc
 reason; it never prints or stores transcript items. Cleanup closes admission before cancellation and
 leaves the route revoked, the Sandbox deleted, and the cleanup task checkpointed.
 
+Message admission and its Absurd wake hint do not commit atomically. The honest crash invariant is:
+PostgreSQL commits the immutable message and FIFO sequence first, then Dorf emits the deterministic
+event identity `dorf.job-message:<job>:<zero-padded-sequence>`. Absurd 0.5.0 events are immutable
+first-write-wins, so every sequence has a distinct wake identity. A crash in between leaves accepted
+input durable but may leave the task asleep; retrying the same caller ID and byte-identical input
+returns the same message and sequence and re-emits that same event identity. Changed input conflicts,
+and the worker treats every event only as a hint before rereading PostgreSQL delivery truth. The
+PostgreSQL integration test `TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO` exercises
+that crash window and two later admissions across separate Absurd wait/wake cycles.
+
 ## Exact terminal and redelivery proof
 
 The remainder of this section is the retained issue #40 one-turn proof record. Its task names and

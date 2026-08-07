@@ -1,8 +1,7 @@
 alter table dorf.jobs
-    add column if not exists admission_open boolean not null default true;
-alter table dorf.jobs
-    drop column if exists native_outcome,
-    drop column if exists observed_at;
+    add column if not exists admission_open boolean not null default true,
+    add column if not exists native_outcome text,
+    add column if not exists observed_at timestamptz;
 
 create table if not exists dorf.job_messages (
     id text primary key,
@@ -15,8 +14,21 @@ create table if not exists dorf.job_messages (
     unique (job_id, sequence)
 );
 
+-- Preserve already-durable issue #40 Jobs. Their initial input becomes FIFO
+-- sequence 1, while their existing native Action and AgentRun identities stay
+-- intact. New admissions use the hashed application identity; this legacy
+-- identity is deterministic and is never regenerated as a new logical input.
+insert into dorf.job_messages(id,job_id,caller_id,sequence,input,admitted_at)
+select 'message-legacy-' || j.id,j.id,'dorf:initial',1,j.goal,j.admitted_at
+from dorf.jobs j
+on conflict(job_id,caller_id) do nothing;
+
 alter table dorf.actions drop constraint if exists actions_job_id_kind_key;
 alter table dorf.actions add column if not exists message_id text references dorf.job_messages(id);
+update dorf.actions a
+set message_id=m.id
+from dorf.job_messages m
+where a.job_id=m.job_id and a.kind='codex-turn-start' and a.message_id is null and m.sequence=1;
 alter table dorf.actions drop constraint if exists actions_state_check;
 alter table dorf.actions add constraint actions_state_check
     check (state in ('pending', 'succeeded', 'failed', 'uncertain'));
@@ -33,11 +45,24 @@ alter table dorf.agent_runs add column if not exists state text not null default
 alter table dorf.agent_runs add column if not exists baseline_native_turn_id text;
 alter table dorf.agent_runs add column if not exists attention text;
 alter table dorf.agent_runs add column if not exists updated_at timestamptz not null default clock_timestamp();
-delete from dorf.agent_runs where message_id is null;
-delete from dorf.actions where kind = 'codex-turn-start' and message_id is null;
+alter table dorf.agent_runs add column if not exists observed_at timestamptz not null default clock_timestamp();
+update dorf.agent_runs ar
+set message_id=m.id,
+    state=case ar.native_outcome
+        when 'completed' then 'completed'
+        when 'failed' then 'failed'
+        when 'interrupted' then 'interrupted'
+        else 'uncertain'
+    end,
+    baseline_native_turn_id='',
+    attention=case when ar.native_outcome in ('completed','failed','interrupted') then null
+        else 'legacy native outcome is unsupported and requires inspection'
+    end,
+    updated_at=ar.observed_at
+from dorf.job_messages m
+where ar.job_id=m.job_id and ar.message_id is null and m.sequence=1;
 alter table dorf.agent_runs alter column message_id set not null;
 alter table dorf.agent_runs alter column session_id drop not null;
-alter table dorf.agent_runs drop column if exists observed_at;
 alter table dorf.agent_runs drop constraint if exists agent_runs_state_check;
 alter table dorf.agent_runs add constraint agent_runs_state_check
     check (state in ('pending', 'submitting', 'active', 'completed', 'failed', 'interrupted', 'uncertain'));

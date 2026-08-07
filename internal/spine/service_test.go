@@ -114,6 +114,27 @@ func TestAmbiguousNativeSuffixPersistsAttentionWithoutResubmission(t *testing.T)
 	}
 }
 
+func TestUnsupportedNativeStatusPersistsAttentionAndBlocksFIFO(t *testing.T) {
+	store := newMemoryStore()
+	job := testJob()
+	store.jobs[job.ID] = job
+	first := store.addMessage(job.ID, "first", "first")
+	store.addMessage(job.ID, "second", "second")
+	externals := newFakeExternals()
+	externals.outcomes[1] = "pausedByFutureServer"
+	disposition, err := (Service{Store: store, Externals: externals}).RunUntilIdle(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := store.runs[AgentRunID(first.ID)]
+	if disposition != RunBlocked || run.State != AgentRunUncertain || !strings.Contains(run.Attention, "unsupported status") {
+		t.Fatalf("disposition=%s run=%#v", disposition, run)
+	}
+	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
+		t.Fatalf("unsupported status allowed later FIFO submission: %v", got)
+	}
+}
+
 func TestOverlappingClaimsSerializeNativeMutation(t *testing.T) {
 	store := newMemoryStore()
 	job := testJob()
@@ -171,6 +192,7 @@ func TestBaselineReconciliationClassifications(t *testing.T) {
 	}{
 		{"no submit", true, "before", "", turns[:1], "no-submit"},
 		{"submitted active", true, "before", "", turns, "active"},
+		{"submitted app-server active", true, "before", "", []NativeTurn{{ID: "before", Status: "completed"}, {ID: "logical", Status: "inProgress"}}, "active"},
 		{"submitted completed before bind", true, "before", "", []NativeTurn{{ID: "before", Status: "completed"}, {ID: "logical", Status: "completed"}}, "completed"},
 		{"known completed", true, "before", "logical", []NativeTurn{{ID: "logical", Status: "completed"}}, "completed"},
 		{"known failed", true, "before", "logical", []NativeTurn{{ID: "logical", Status: "failed"}}, "failed"},
@@ -178,6 +200,7 @@ func TestBaselineReconciliationClassifications(t *testing.T) {
 		{"multiple suffix", true, "before", "", append(turns, NativeTurn{ID: "other", Status: "running"}), "uncertain"},
 		{"missing baseline", true, "gone", "", turns, "uncertain"},
 		{"missing known", true, "before", "logical", turns[:1], "uncertain"},
+		{"unknown status", true, "before", "", []NativeTurn{{ID: "before", Status: "completed"}, {ID: "logical", Status: "pausedByFutureServer"}}, "uncertain"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -317,8 +340,11 @@ func (s *memoryStore) BindNativeTurn(_ context.Context, runID, turnID, status st
 		run.State, run.NativeOutcome = AgentRunFailed, status
 	case "interrupted":
 		run.State, run.NativeOutcome = AgentRunInterrupted, status
-	default:
+	case "running", "inProgress":
 		run.State = AgentRunActive
+	default:
+		run.State = AgentRunUncertain
+		run.Attention = "native turn " + turnID + " has unsupported status \"" + status + "\""
 	}
 	s.runs[runID] = run
 	action := s.actions[run.ActionID]

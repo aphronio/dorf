@@ -23,14 +23,19 @@ type Result struct {
 	Outcome string `json:"outcome"`
 }
 type Wake struct {
-	JobID string `json:"job_id"`
+	JobID    string `json:"job_id"`
+	Sequence int64  `json:"sequence"`
 }
 
-func WakeEvent(jobID string) string { return "dorf.job-message:" + jobID }
+func WakeEvent(jobID string, sequence int64) string {
+	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
+}
 
 func Register(client *absurd.Client, service spine.Service) {
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
-		for wake := 1; ; wake++ {
+		// Sequence 1 is present before this task is spawned. Every later FIFO
+		// position owns one immutable Absurd event identity, starting at 2.
+		for sequence := int64(2); ; sequence++ {
 			disposition, err := service.RunUntilIdle(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
@@ -38,7 +43,7 @@ func Register(client *absurd.Client, service spine.Service) {
 			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
-			_, err = absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID), absurd.AwaitEventOptions{StepName: fmt.Sprintf("message-wake-%06d", wake)})
+			_, err = absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), absurd.AwaitEventOptions{StepName: fmt.Sprintf("message-wake-%020d", sequence)})
 			if err != nil {
 				return Result{}, err
 			}
@@ -75,7 +80,7 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	}
 	// Events carry no delivery truth. Re-emitting on an idempotent client retry
 	// repairs a crash after PostgreSQL admission but before this wake hint.
-	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID), Wake{JobID: message.JobID}); err != nil {
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), Wake{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same caller ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
@@ -105,9 +110,6 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		}
 		if err := store.CloseAdmission(ctx, jobID); err != nil {
 			return err
-		}
-		if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(jobID), Wake{JobID: jobID}); err != nil {
-			return fmt.Errorf("wake delivery task for cleanup: %w", err)
 		}
 		if _, err := store.CancelRun(ctx, jobID); err != nil {
 			return err

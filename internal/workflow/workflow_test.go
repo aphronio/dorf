@@ -2,11 +2,14 @@ package workflow
 
 import "testing"
 
-func TestWakeEventIsStableAndJobScoped(t *testing.T) {
-	if WakeEvent("job-a") != WakeEvent("job-a") {
-		t.Fatal("same Job did not retain its wake identity")
+func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
+	if WakeEvent("job-a", 2) != WakeEvent("job-a", 2) {
+		t.Fatal("same admitted FIFO position did not retain its wake identity")
 	}
-	if WakeEvent("job-a") == WakeEvent("job-b") {
+	if WakeEvent("job-a", 2) == WakeEvent("job-b", 2) {
 		t.Fatal("distinct Jobs share a wake event")
+	}
+	if WakeEvent("job-a", 2) == WakeEvent("job-a", 3) {
+		t.Fatal("distinct FIFO positions share an immutable Absurd event")
 	}
 }

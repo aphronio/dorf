@@ -172,14 +172,18 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	if err := tx.QueryRowContext(ctx, `select id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, id, initialCallerID).Scan(&existingID, &sequence, &existingInput); err != nil {
 		return spine.Job{}, false, err
 	}
-	if existingID != messageID || sequence != 1 || existingInput != input.Goal {
+	if sequence != 1 || existingInput != input.Goal {
 		return spine.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
 	}
-	actionID, runID := spine.TurnActionID(messageID), spine.AgentRunID(messageID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending') on conflict do nothing`, actionID, id, messageID, spine.ActionTurnStart); err != nil {
+	actionID := spine.TurnActionID(existingID)
+	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending') on conflict do nothing`, actionID, id, existingID, spine.ActionTurnStart); err != nil {
 		return spine.Job{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending') on conflict do nothing`, runID, id, messageID, actionID); err != nil {
+	if err := tx.QueryRowContext(ctx, `select id from dorf.actions where message_id=$1 and kind=$2`, existingID, spine.ActionTurnStart).Scan(&actionID); err != nil {
+		return spine.Job{}, false, err
+	}
+	runID := spine.AgentRunID(existingID)
+	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending') on conflict do nothing`, runID, id, existingID, actionID); err != nil {
 		return spine.Job{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -442,12 +446,16 @@ func (s Store) BeginTurnSubmission(ctx context.Context, runID string) error {
 func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string) error {
 	state := spine.AgentRunActive
 	outcome := ""
+	attention := ""
 	if status == "completed" {
 		state, outcome = spine.AgentRunCompleted, status
 	} else if status == "failed" {
 		state, outcome = spine.AgentRunFailed, status
 	} else if status == "interrupted" {
 		state, outcome = spine.AgentRunInterrupted, status
+	} else if status != "running" && status != "inProgress" {
+		state = spine.AgentRunUncertain
+		attention = fmt.Sprintf("native turn %s has unsupported status %q", turnID, status)
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -455,7 +463,7 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 	}
 	defer tx.Rollback()
 	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state=$3,native_outcome=nullif($4,''),attention=null,updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID, state, outcome).Scan(&actionID); err != nil {
+	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state=$3,native_outcome=nullif($4,''),attention=nullif($5,''),updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID, state, outcome, attention).Scan(&actionID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='submitted',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {

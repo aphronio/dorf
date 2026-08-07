@@ -37,8 +37,11 @@ func ReconcileTurns(baselineRecorded bool, baselineTurnID, knownTurnID string, t
 }
 
 func classifyTurn(turn NativeTurn) Reconciliation {
-	if turn.Status == "completed" || turn.Status == "failed" || turn.Status == "interrupted" {
+	if terminalNative(turn.Status) {
 		return Reconciliation{Classification: turn.Status, Turn: turn}
 	}
-	return Reconciliation{Classification: "active", Turn: turn}
+	if activeNative(turn.Status) {
+		return Reconciliation{Classification: "active", Turn: turn}
+	}
+	return Reconciliation{Classification: "uncertain", Turn: turn, Reason: fmt.Sprintf("native turn %s has unsupported status %q", turn.ID, turn.Status)}
 }

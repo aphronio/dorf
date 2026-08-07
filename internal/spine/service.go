@@ -166,6 +166,9 @@ func (s Service) deliver(ctx context.Context, job Job, delivery Delivery) error 
 	}
 	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
 	if reconciliation.Classification == "uncertain" {
+		if reconciliation.Turn.ID != "" {
+			return s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
+		}
 		return s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 	}
 	if reconciliation.Classification == "no-submit" {
@@ -211,6 +214,9 @@ func (s Service) submit(ctx context.Context, job Job, delivery Delivery) error {
 			return err
 		}
 		if reconciliation.Classification == "uncertain" {
+			if reconciliation.Turn.ID != "" {
+				return s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
+			}
 			return s.Store.UncertainAgentRun(ctx, delivery.AgentRun.ID, reconciliation.Reason)
 		}
 		turn = reconciliation.Turn
@@ -222,6 +228,9 @@ func (s Service) submit(ctx context.Context, job Job, delivery Delivery) error {
 		return err
 	}
 	if terminalNative(turn.Status) {
+		return nil
+	}
+	if !activeNative(turn.Status) {
 		return nil
 	}
 	if err := s.reach(ctx, BarrierNativeActive, delivery); err != nil {
@@ -244,6 +253,12 @@ func (s Service) reach(ctx context.Context, point string, delivery Delivery) err
 
 func terminalNative(status string) bool {
 	return status == "completed" || status == "failed" || status == "interrupted"
+}
+
+func activeNative(status string) bool {
+	// "inProgress" is the app-server thread/read spelling. "running" is
+	// Dorf's local status immediately after turn/start acceptance.
+	return status == "running" || status == "inProgress"
 }
 
 func (s Service) Cleanup(ctx context.Context, jobID string) error {
