@@ -93,6 +93,44 @@ func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	}
 }
 
+func TestAPIRoutesDoNotRequireChatGPTSubscriptionCapability(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v0/management/auth-files" {
+			t.Error("API-key route queried ChatGPT OAuth capability")
+			http.Error(w, "unexpected capability query", http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == "/v0/management/api-keys" && r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	for _, provider := range []string{"openai", "deepseek"} {
+		t.Run(provider, func(t *testing.T) {
+			state := gatewayState(t, server.URL)
+			if err := os.Mkdir(filepath.Join(state, "credentials"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			credentialRef := provider + "-0123456789abcdef.key"
+			if err := os.WriteFile(filepath.Join(state, "credentials", credentialRef), []byte("test-secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			connections, _ := json.Marshal([]connection{{Name: provider, Provider: provider, AuthMode: "api_key", CredentialRef: credentialRef}})
+			if err := os.WriteFile(filepath.Join(state, "connections.json"), connections, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			gateway := Gateway{StatePath: state, Client: server.Client()}
+			if _, err := gateway.ReconcileCreate(context.Background(), provider, "sandbox:job-"+provider, "action-"+provider); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func gatewayState(t *testing.T, origin string) string {
 	t.Helper()
 	state := t.TempDir()

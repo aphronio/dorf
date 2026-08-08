@@ -59,12 +59,8 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		supportsWebSockets, err := g.supportsWebSockets(ctx, connection)
-		if err != nil {
+		if err := g.validateTransport(ctx, connection); err != nil {
 			return err
-		}
-		if !supportsWebSockets {
-			return fmt.Errorf("provider connection %q does not support required Responses WebSockets", connectionName)
 		}
 		routes, err := g.readRoutes()
 		if err != nil {
@@ -153,12 +149,8 @@ func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error
 	if err != nil {
 		return Route{}, false, err
 	}
-	supportsWebSockets, err := g.supportsWebSockets(ctx, connection)
-	if err != nil {
+	if err := g.validateTransport(ctx, connection); err != nil {
 		return Route{}, false, err
-	}
-	if !supportsWebSockets {
-		return Route{}, false, fmt.Errorf("provider connection %q does not support required Responses WebSockets", found.ConnectionName)
 	}
 	return found, true, nil
 }
@@ -244,10 +236,27 @@ func (g Gateway) requireConnection(name string) (connection, error) {
 	return connection{}, fmt.Errorf("provider connection %q needs authentication", name)
 }
 
-func (g Gateway) supportsWebSockets(ctx context.Context, record connection) (bool, error) {
-	if record.Provider != "chatgpt" || record.AuthMode != "subscription" {
-		return false, nil
+func (g Gateway) validateTransport(ctx context.Context, record connection) error {
+	switch {
+	case record.Provider == "chatgpt" && record.AuthMode == "subscription":
+		enabled, err := g.chatGPTWebSocketsEnabled(ctx, record)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			return fmt.Errorf("provider connection %q does not support required Responses WebSockets", record.Name)
+		}
+		return nil
+	case record.Provider == "openai" && record.AuthMode == "api_key":
+		return nil
+	case record.Provider == "deepseek" && record.AuthMode == "api_key":
+		return nil
+	default:
+		return fmt.Errorf("unsupported provider authentication: %s/%s", record.Provider, record.AuthMode)
 	}
+}
+
+func (g Gateway) chatGPTWebSocketsEnabled(ctx context.Context, record connection) (bool, error) {
 	auth, err := g.readAuthority()
 	if err != nil {
 		return false, err

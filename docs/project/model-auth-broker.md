@@ -49,8 +49,10 @@ Concrete choices:
 2. **Sandbox wiring.** Per sandbox, provisioning writes `config.toml` with a custom
    `model_provider` (`base_url`, `env_key`, `wire_api = "responses"`) and injects one scoped
    broker key as the named env var. `requires_openai_auth` stays false. Responses WebSockets are
-   required: route admission fails unless the broker reports `websockets = true` for the selected
-   ChatGPT auth record, and every admitted Room sets `supports_websockets = true`. Sandboxes carry no
+   required: ChatGPT subscription route admission fails unless the broker reports
+   `websockets = true` for the selected auth record, and every admitted Room sets
+   `supports_websockets = true`. API-key routes do not consult the ChatGPT OAuth capability;
+   CLIProxyAPI owns their provider-specific upstream transport. Sandboxes carry no
    `auth.json` and no OpenAI material; a leaked scoped key cannot reach the ChatGPT account.
 3. **Credential-free images.** D008's secret-bearing Incus image is retired for the Codex leg.
 4. **Broker-only egress.** Sandboxes may be network-restricted to the broker alone; validated that
