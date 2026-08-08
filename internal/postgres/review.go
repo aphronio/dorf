@@ -33,11 +33,13 @@ func (s Store) MarkChecksVerified(ctx context.Context, jobID, revision string, v
 	if err := verifyEvidenceSet(ctx, tx, jobID, revision, verifiedEvidenceIDs); err != nil {
 		return err
 	}
-	// Role requests must be bound before the mandatory policy result is
-	// computed. Leave an explicit activation boundary after verified Checks so
-	// review activate can atomically persist either the implementation's
-	// allowlisted requests or the explicit empty set.
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-activation',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
+	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, jobID); err != nil {
+		return fmt.Errorf("automatic review planning blocked: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state) values($1,$2,'pending')`, jobID, revision); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -81,108 +83,8 @@ func verifyEvidenceSet(ctx context.Context, tx *sql.Tx, jobID, revision string, 
 	return nil
 }
 
-func implementationRunID(ctx context.Context, tx *sql.Tx, jobID string) (string, error) {
-	var id string
-	err := tx.QueryRowContext(ctx, `select ar.id from dorf.agent_runs ar join dorf.job_messages m on m.id=ar.message_id where ar.job_id=$1 and ar.role='implement' and ar.state='completed' order by m.sequence limit 1`, jobID).Scan(&id)
-	if err != nil {
-		return "", fmt.Errorf("review requires the completed original implementation AgentRun: %w", err)
-	}
-	return id, nil
-}
-
-func normalizeRequestedRoles(roles []policy.Role) ([]policy.Role, error) {
-	seen := map[policy.Role]bool{}
-	result := make([]policy.Role, 0, len(roles))
-	for _, role := range roles {
-		if !policy.Allowed(role) || seen[role] {
-			return nil, fmt.Errorf("invalid, unsafe, or duplicate requested review Role %q", role)
-		}
-		seen[role] = true
-		result = append(result, role)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result, nil
-}
-
-func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActivation) (spine.ReviewPlanRecord, bool, error) {
-	roles, err := normalizeRequestedRoles(activation.RequestedRoles)
-	if err != nil {
-		_ = s.BlockWorkflow(ctx, activation.JobID, "review activation rejected: "+err.Error())
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	defer tx.Rollback()
-	var revision, phase, cleanupState string
-	var reviewRepairCount int
-	var admissionOpen bool
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,admission_open,cleanup_state,review_repair_count from dorf.jobs where id=$1 for update`, activation.JobID).Scan(&revision, &phase, &admissionOpen, &cleanupState, &reviewRepairCount); err != nil {
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	if !admissionOpen || cleanupState != string(spine.CleanupPending) {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation requires open admission before cleanup")
-	}
-	if revision != activation.Revision {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation Revision %s conflicts with current Revision %s", activation.Revision, revision)
-	}
-	if reviewRepairCount == 1 && len(roles) > 0 {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("repaired Revision review activation cannot replay optional requested Roles")
-	}
-	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, activation.JobID); err != nil {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation compatibility diagnosis: %w", err)
-	}
-	requestedBy := strings.TrimSpace(activation.RequestedByRunID)
-	if len(roles) > 0 {
-		original, err := implementationRunID(ctx, tx, activation.JobID)
-		if err != nil {
-			return spine.ReviewPlanRecord{}, false, err
-		}
-		if requestedBy == "" {
-			requestedBy = original
-		}
-		if requestedBy != original {
-			return spine.ReviewPlanRecord{}, false, fmt.Errorf("review request must be attributed to original implementation AgentRun %s", original)
-		}
-	} else {
-		requestedBy = ""
-	}
-	encoded, _ := json.Marshal(roles)
-	result, err := tx.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,requested_roles,requested_by_run_id) values($1,$2,'pending',$3::jsonb,nullif($4,'')) on conflict do nothing`, activation.JobID, revision, encoded, requestedBy)
-	if err != nil {
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	createdRows, _ := result.RowsAffected()
-	stored, err := reviewPlanTx(ctx, tx, activation.JobID, revision)
-	if err != nil {
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	if !slices.Equal(stored.RequestedRoles, roles) || stored.RequestedByRunID != requestedBy {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation is already bound to different immutable requested Roles or attribution")
-	}
-	if createdRows == 1 {
-		if phase != "review-activation" {
-			return spine.ReviewPlanRecord{}, false, fmt.Errorf("new review activation is not admissible during workflow phase %s", phase)
-		}
-		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='review-activation'`, activation.JobID, revision)); err != nil {
-			return spine.ReviewPlanRecord{}, false, err
-		}
-	} else if phase == "review-activation" {
-		return spine.ReviewPlanRecord{}, false, fmt.Errorf("persisted review activation did not advance atomically")
-	} else if phase == "blocked" && stored.State == "pending" {
-		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='blocked'`, activation.JobID, revision)); err != nil {
-			return spine.ReviewPlanRecord{}, false, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return spine.ReviewPlanRecord{}, false, err
-	}
-	return stored, createdRows == 1, nil
-}
-
 func (s Store) ReviewPlan(ctx context.Context, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	return reviewPlanRow(s.DB.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),requested_roles,coalesce(requested_by_run_id,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2`, jobID, revision))
+	return reviewPlanRow(s.DB.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2`, jobID, revision))
 }
 
 func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPlanRecord, error) {
@@ -214,14 +116,14 @@ func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPla
 }
 
 func reviewPlanTx(ctx context.Context, tx *sql.Tx, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	return reviewPlanRow(tx.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),requested_roles,coalesce(requested_by_run_id,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2 for update`, jobID, revision))
+	return reviewPlanRow(tx.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2 for update`, jobID, revision))
 }
 
 func reviewPlanRow(row *sql.Row) (spine.ReviewPlanRecord, error) {
 	var record spine.ReviewPlanRecord
-	var facts, initial, final, requested []byte
+	var facts, initial, final []byte
 	var finalized sql.NullTime
-	err := row.Scan(&record.JobID, &record.Revision, &record.State, &facts, &initial, &final, &record.PolicyDigest, &requested, &record.RequestedByRunID, &record.TriageRunID, &record.TriageRationale, &record.CreatedAt, &finalized)
+	err := row.Scan(&record.JobID, &record.Revision, &record.State, &facts, &initial, &final, &record.PolicyDigest, &record.TriageRunID, &record.TriageRationale, &record.CreatedAt, &finalized)
 	if err != nil {
 		return record, err
 	}
@@ -243,19 +145,14 @@ func reviewPlanRow(row *sql.Row) (spine.ReviewPlanRecord, error) {
 			return record, err
 		}
 	}
-	if err := json.Unmarshal(requested, &record.RequestedRoles); err != nil {
-		return record, err
-	}
 	return record, nil
 }
 
-func policyDigest(facts policy.ChangeFacts, plan policy.ReviewPlan, requested []policy.Role, requestedBy string) (string, error) {
+func policyDigest(facts policy.ChangeFacts, plan policy.ReviewPlan) (string, error) {
 	contents, err := json.Marshal(struct {
-		Facts       policy.ChangeFacts `json:"facts"`
-		Plan        policy.ReviewPlan  `json:"plan"`
-		Requested   []policy.Role      `json:"requested_roles"`
-		RequestedBy string             `json:"requested_by"`
-	}{facts, plan, requested, requestedBy})
+		Facts policy.ChangeFacts `json:"facts"`
+		Plan  policy.ReviewPlan  `json:"plan"`
+	}{facts, plan})
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +161,7 @@ func policyDigest(facts policy.ChangeFacts, plan policy.ReviewPlan, requested []
 }
 
 func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlanRecord) error {
-	digest, err := policyDigest(proposed.Facts, proposed.Initial, proposed.RequestedRoles, proposed.RequestedByRunID)
+	digest, err := policyDigest(proposed.Facts, proposed.Initial)
 	if err != nil {
 		return err
 	}
@@ -286,8 +183,8 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 		}
 		return tx.Commit()
 	}
-	if stored.State != "pending" || !slices.Equal(stored.RequestedRoles, proposed.RequestedRoles) || stored.RequestedByRunID != proposed.RequestedByRunID {
-		return fmt.Errorf("review policy conflicts with its durable activation")
+	if stored.State != "pending" {
+		return fmt.Errorf("review policy conflicts with its durable per-Revision state")
 	}
 	factsJSON, _ := json.Marshal(proposed.Facts)
 	initialJSON, _ := json.Marshal(proposed.Initial)

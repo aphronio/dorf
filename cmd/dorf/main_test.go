@@ -14,21 +14,21 @@ import (
 )
 
 func TestPublicationGrammarParsesJobBeforeFlags(t *testing.T) {
-	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	set := flag.NewFlagSet("publication retry", flag.ContinueOnError)
 	revision := set.String("revision", "", "")
-	jobID, err := parsePublicationTarget(set, []string{"job-exact", "--revision", strings.Repeat("a", 40)}, "publication publish")
+	jobID, err := parsePublicationTarget(set, []string{"job-exact", "--revision", strings.Repeat("a", 40)}, "publication retry")
 	if err != nil || jobID != "job-exact" || *revision != strings.Repeat("a", 40) {
 		t.Fatalf("job=%q revision=%q err=%v", jobID, *revision, err)
 	}
-	if _, err := parsePublicationTarget(flag.NewFlagSet("publication publish", flag.ContinueOnError), []string{"--revision", strings.Repeat("a", 40), "job-exact"}, "publication publish"); err == nil {
+	if _, err := parsePublicationTarget(flag.NewFlagSet("publication retry", flag.ContinueOnError), []string{"--revision", strings.Repeat("a", 40), "job-exact"}, "publication retry"); err == nil {
 		t.Fatal("flags-before-Job grammar was accepted")
 	}
 }
 
-func TestPublicationGrammarExposesOnlyPublish(t *testing.T) {
+func TestPublicationGrammarExposesOnlyRetry(t *testing.T) {
 	for _, args := range [][]string{nil, {"bind", "job-exact", "--github-repo", "aphronio/dorf"}, {"other"}} {
 		err := publicationCommand(context.Background(), postgres.Store{}, nil, nil, args, io.Discard, io.Discard)
-		if err == nil || err.Error() != "publication requires: publish JOB_ID --revision EXACT_OID" {
+		if err == nil || err.Error() != "publication requires: retry JOB_ID --revision EXACT_OID" {
 			t.Fatalf("args=%v error=%v", args, err)
 		}
 	}
@@ -82,5 +82,43 @@ func TestInspectionReadinessDoesNotTrustPersistedReadyPhaseWithoutEvidence(t *te
 	assessment = spine.AssessReadiness(job, nil, nil, nil, evidence.Store{Root: t.TempDir()})
 	if assessment.Status != "blocked" {
 		t.Fatalf("blocked readiness=%#v", assessment)
+	}
+}
+
+func TestInspectionDistinguishesAutomaticContinuationFromExternalAuthority(t *testing.T) {
+	job := spine.Job{WorkflowPhase: "reviewing", CleanupState: spine.CleanupPending}
+	run := postgres.TaskEvidence{State: "sleeping"}
+	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{}); got.Mode != "self-advancing" || got.Actor != "admitted Dorf worker" {
+		t.Fatalf("review continuation=%#v", got)
+	}
+	job.WorkflowPhase, job.PublicationTaskID = "published", "publication-task"
+	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{}); got.Mode != "external-authority" || !strings.Contains(got.Detail, "accepted, rejected, or explicitly abandoned") {
+		t.Fatalf("published continuation=%#v", got)
+	}
+	outcome := &spine.JobOutcome{Kind: spine.OutcomeRejected}
+	job.CleanupState, job.CleanupTaskID = spine.CleanupScheduled, "cleanup-task"
+	if got := continuationFor(job, outcome, run, nil, postgres.TaskEvidence{State: "pending"}); got.Mode != "automatic-cleanup" || got.Actor != "Dorf cleanup task" {
+		t.Fatalf("outcome continuation=%#v", got)
+	}
+	job.CleanupState = spine.CleanupComplete
+	if got := continuationFor(job, outcome, run, nil, postgres.TaskEvidence{State: "completed"}); got.Mode != "terminal" {
+		t.Fatalf("clean continuation=%#v", got)
+	}
+	job.WorkflowPhase = "publication-blocked"
+	want := continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
+	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{State: "completed"}); got != want {
+		t.Fatalf("clean no-outcome continuation=%#v want=%#v", got, want)
+	}
+}
+
+func TestInspectionExposesFailedDurableContinuationAsAttention(t *testing.T) {
+	job := spine.Job{WorkflowPhase: "reviewing", CleanupState: spine.CleanupPending, AdmissionOpen: true}
+	if got := continuationFor(job, nil, postgres.TaskEvidence{State: "failed"}, nil, postgres.TaskEvidence{}); got.Mode != "attention" || !strings.Contains(got.Detail, "Job task is terminal") {
+		t.Fatalf("failed Job continuation=%#v", got)
+	}
+	job.WorkflowPhase = "publishing"
+	publication := postgres.PublicationTaskEvidence{Current: true, State: "failed"}
+	if got := continuationFor(job, nil, postgres.TaskEvidence{State: "sleeping"}, []postgres.PublicationTaskEvidence{publication}, postgres.TaskEvidence{}); got.Mode != "attention" || !strings.Contains(got.Detail, "publication task exhausted") {
+		t.Fatalf("failed publication continuation=%#v", got)
 	}
 }

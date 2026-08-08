@@ -3,7 +3,6 @@ package postgres_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -698,15 +697,14 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	for _, test := range []struct {
-		name      string
-		paths     []string
-		requested []policy.Role
-		roles     []policy.Role
-		phase     string
+		name  string
+		paths []string
+		roles []policy.Role
+		phase string
 	}{
 		{name: "explicit no review", paths: []string{"docs/review.md"}, phase: "ready"},
 		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, roles: []policy.Role{policy.RoleAuthAuthority}, phase: "reviewing"},
-		{name: "implementation request is bound before policy", paths: []string{"internal/auth/session.go"}, requested: []policy.Role{policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}, phase: "reviewing"},
+		{name: "multiple mandatory roles", paths: []string{"internal/auth/session.go", "web/login.tsx"}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleBrowserUI}, phase: "reviewing"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			job, revision, verifiedID := prepareReviewIntegrationJob(t, store, test.name)
@@ -714,22 +712,18 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				t.Fatal(err)
 			}
 			waiting, err := store.Job(ctx, job.ID)
-			if err != nil || waiting.WorkflowPhase != "review-activation" {
-				t.Fatalf("post-Checks activation boundary Job=%#v err=%v", waiting, err)
+			if err != nil || waiting.WorkflowPhase != "review-planning" {
+				t.Fatalf("post-Checks automatic planning Job=%#v err=%v", waiting, err)
 			}
-			record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: test.requested})
-			if err != nil || !created || record.State != "pending" || !slices.Equal(record.RequestedRoles, test.requested) {
-				t.Fatalf("pending activation=%#v created=%v err=%v", record, created, err)
-			}
-			retried, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: test.requested})
-			if err != nil || created || !slices.Equal(retried.RequestedRoles, test.requested) {
-				t.Fatalf("idempotent activation=%#v created=%v err=%v", retried, created, err)
+			record, err := store.ReviewPlan(ctx, job.ID, revision)
+			if err != nil || record.State != "pending" {
+				t.Fatalf("automatic pending policy input=%#v err=%v", record, err)
 			}
 			facts, err := policy.FactsFromPaths(job.StartingRevision, revision, test.paths, true, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := policy.ReviewPolicy(facts, test.requested)
+			plan, err := policy.ReviewPolicy(facts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -777,6 +771,61 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
+func TestAdmittedJobTaskRedeliveryReconcilesPublicationPhases(t *testing.T) {
+	for _, test := range []struct {
+		phase            string
+		wantPhase        string
+		wantPublications int
+	}{
+		{phase: "ready", wantPhase: "publishing", wantPublications: 1},
+		{phase: "publishing", wantPhase: "publishing"},
+		{phase: "published", wantPhase: "published"},
+	} {
+		t.Run(test.phase, func(t *testing.T) {
+			db, store, client := testDatabase(t)
+			ctx := context.Background()
+			key := fmt.Sprintf("publication-redelivery-%s-%d", test.phase, time.Now().UnixNano())
+			revision := strings.Repeat("a", 40)
+			job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{
+				AdmissionKey: key, Goal: "reconcile one publication boundary", Repository: "https://github.com/aphronio/dorf.git",
+				Revision: revision, Branch: "dorf/" + key, ProviderConnection: "primary",
+				ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+				GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
+			})
+			if err != nil || !created {
+				t.Fatalf("admit=%#v created=%t err=%v", job, created, err)
+			}
+			t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, job.TaskID) })
+			attachedTaskID := ""
+			if test.phase == "ready" {
+				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				attachedTaskID = "00000000-0000-0000-0000-000000000082"
+				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,publication_task_id=$3 where id=$1`, job.ID, test.phase, attachedTaskID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "publication-redelivery-" + key, BatchSize: 1}); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := store.Job(ctx, job.ID)
+			var publications int
+			if countErr := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&publications); countErr != nil {
+				t.Fatal(countErr)
+			}
+			task, taskErr := client.FetchTaskResult(ctx, config.QueueName, job.TaskID)
+			if err != nil || taskErr != nil || task.State != absurd.TaskSleeping || updated.WorkflowPhase != test.wantPhase || updated.PublicationTaskID == "" || publications != test.wantPublications || attachedTaskID != "" && updated.PublicationTaskID != attachedTaskID {
+				t.Fatalf("continued Job=%#v task=%#v publication tasks=%d attached publication=%s errors=%v/%v", updated, task, publications, attachedTaskID, err, taskErr)
+			}
+			if test.phase == "ready" {
+				t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, updated.PublicationTaskID) })
+			}
+		})
+	}
+}
+
 func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -784,15 +833,15 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
-	if err != nil || !created {
-		t.Fatalf("activation=%#v created=%t err=%v", record, created, err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := policy.ReviewPolicy(facts, record.RequestedRoles)
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +857,7 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 	prepareReviewBoundaryIntegration(t, store, run)
 	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
 	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
-	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleCriticalBoundary, Material: true, Summary: "claim", Rationale: "requires adjudication", AffectedRoles: []policy.Role{policy.RoleCriticalBoundary}, AffectedChecks: []string{"check"}}
+	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleAuthAuthority, Material: true, Summary: "claim", Rationale: "requires adjudication", AffectedRoles: []policy.Role{policy.RoleAuthAuthority}, AffectedChecks: []string{"check"}}
 	if err := store.RecordReviewResult(ctx, run.ID, spine.NativeTurn{ID: "turn-" + run.ID, Status: "completed"}, claim, observed, finding); err != nil {
 		t.Fatal(err)
 	}
@@ -829,6 +878,78 @@ func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) 
 	}
 }
 
+func TestAcceptedMaterialRepairCreatesNewRevisionAndAutomaticallyReentersPolicy(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "accepted-material-reentry")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("review runs=%#v err=%v", runs, err)
+	}
+	run := runs[0].AgentRun
+	prepareReviewBoundaryIntegration(t, store, run)
+	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
+	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
+	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleAuthAuthority, Material: true, Summary: "repair authority check", Rationale: "authorization path is incomplete", AffectedRoles: []policy.Role{policy.RoleAuthAuthority}, AffectedChecks: []string{"check"}}
+	if err := store.RecordReviewResult(ctx, run.ID, spine.NativeTurn{ID: "turn-" + run.ID, Status: "completed"}, claim, observed, finding); err != nil {
+		t.Fatal(err)
+	}
+	message, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID)
+	if err != nil || !created {
+		t.Fatalf("repair message=%#v created=%t err=%v", message, created, err)
+	}
+	if repeated, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID); err != nil || created || repeated.ID != message.ID {
+		t.Fatalf("repeated repair=%#v created=%t err=%v", repeated, created, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-accepted-review-repair-"+job.ID)
+
+	newRevision := strings.Repeat("d", 40)
+	commit, started, err := store.BeginCommit(ctx, job.ID, revision)
+	if err != nil || !started {
+		t.Fatalf("repair commit=%#v started=%t err=%v", commit, started, err)
+	}
+	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, integrationEvidence(commit.ID, "git-revision", commit.ID, "", newRevision, "8")); err != nil {
+		t.Fatal(err)
+	}
+	check, err := store.BeginCheck(ctx, job.ID, newRevision, "check", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkEvidence := integrationEvidence(check.ID, "check-output", "", check.ID, newRevision, "9")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := store.RecordCheck(ctx, check, checkEvidence, spine.CommandObservation{Command: check.Command, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkChecksVerified(ctx, job.ID, newRevision, []string{checkEvidence.ID}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Job(ctx, job.ID)
+	newPlan, planErr := store.ReviewPlan(ctx, job.ID, newRevision)
+	oldRuns, runsErr := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || planErr != nil || runsErr != nil || updated.Revision != newRevision || updated.WorkflowPhase != "review-planning" || newPlan.State != "pending" || len(oldRuns) != 1 || oldRuns[0].Finding == nil || oldRuns[0].Finding.Adjudication != "accepted" || !oldRuns[0].Finding.Stale {
+		t.Fatalf("updated=%#v new plan=%#v old runs=%#v errors=%v/%v/%v", updated, newPlan, oldRuns, err, planErr, runsErr)
+	}
+}
+
 func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -836,12 +957,12 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
-	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts)
 	record.Facts, record.Initial, record.Final = facts, plan, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
@@ -981,15 +1102,15 @@ func TestCleanupReviewEnumerationUsesPersistedResourcesAndRetainsHistoricalEvide
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := policy.ReviewPolicy(facts, record.RequestedRoles)
+	plan, err := policy.ReviewPolicy(facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1060,12 +1181,12 @@ func TestReviewSubmissionUncertaintyIsAtomicAndExactBindingCanRecover(t *testing
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
-	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts)
 	record.Facts, record.Initial, record.Final = facts, plan, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
@@ -1126,12 +1247,12 @@ func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T)
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
-	plan, _ := policy.ReviewPolicy(facts, record.RequestedRoles)
+	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	plan, _ := policy.ReviewPolicy(facts)
 	record.Facts, record.Initial, record.Final = facts, plan, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
@@ -1227,15 +1348,15 @@ func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision})
-	if err != nil || !created {
-		t.Fatalf("activation=%#v created=%t err=%v", record, created, err)
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
+	if err != nil {
+		t.Fatal(err)
 	}
 	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/cache/cache.go"}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := policy.ReviewPolicy(facts, nil)
+	plan, err := policy.ReviewPolicy(facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1251,7 +1372,7 @@ func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T
 	}
 }
 
-func TestRepairedActivationRejectsOptionalRolesAndPersistsTargetedFloor(t *testing.T) {
+func TestRepairedRevisionAutomaticallyPersistsTargetedFloor(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
 	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "repaired-targeted-floor")
@@ -1261,26 +1382,19 @@ func TestRepairedActivationRejectsOptionalRolesAndPersistsTargetedFloor(t *testi
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
-	requested := []policy.Role{policy.RoleBrowserUI, policy.RoleCriticalBoundary, policy.RolePerformance}
-	if _, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: requested}); err == nil || !strings.Contains(err.Error(), "cannot replay optional requested Roles") {
-		t.Fatalf("repaired optional activation error=%v", err)
-	}
-	if _, err := store.ReviewPlan(ctx, job.ID, revision); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("rejected activation persisted a plan: %v", err)
-	}
 	waiting, err := store.Job(ctx, job.ID)
-	if err != nil || waiting.WorkflowPhase != "review-activation" {
-		t.Fatalf("rejected activation mutated Job=%#v err=%v", waiting, err)
+	if err != nil || waiting.WorkflowPhase != "review-planning" {
+		t.Fatalf("repaired Revision did not enter automatic planning: Job=%#v err=%v", waiting, err)
 	}
-	record, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision})
-	if err != nil || !created || len(record.RequestedRoles) != 0 || record.RequestedByRunID != "" {
-		t.Fatalf("empty repaired activation=%#v created=%t err=%v", record, created, err)
+	record, err := store.ReviewPlan(ctx, job.ID, revision)
+	if err != nil {
+		t.Fatalf("automatic repaired policy input=%#v err=%v", record, err)
 	}
 	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	floor, err := policy.ReviewPolicy(facts, nil)
+	floor, err := policy.ReviewPolicy(facts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1301,11 +1415,6 @@ func TestRepairedActivationRejectsOptionalRolesAndPersistsTargetedFloor(t *testi
 	}
 	if err != nil || runsErr != nil || !slices.Equal(persisted.Initial.Roles, wantRoles) || !slices.Equal(persisted.Initial.Reasons, wantReasons) || len(runs) != len(wantRoles) {
 		t.Fatalf("targeted plan=%#v runs=%#v err=%v runsErr=%v", persisted, runs, err, runsErr)
-	}
-	for _, reason := range persisted.Initial.Reasons {
-		if reason.Source == "implementation-request" {
-			t.Fatalf("targeted plan retained optional provenance: %#v", persisted.Initial.Reasons)
-		}
 	}
 }
 

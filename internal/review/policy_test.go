@@ -9,23 +9,21 @@ import (
 func TestReviewPolicyTable(t *testing.T) {
 	base, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	tests := []struct {
-		name      string
-		paths     []string
-		perf      bool
-		requested []Role
-		decision  string
-		roles     []Role
+		name     string
+		paths    []string
+		perf     bool
+		decision string
+		roles    []Role
 	}{
-		{"green docs only", []string{"README.md", "docs/review.md"}, false, nil, "no-review", nil},
-		{"docs web marker stays documentation", []string{"docs/web/guide.md"}, false, nil, "no-review", nil},
-		{"docs auth marker stays documentation", []string{"docs/auth/README.md"}, false, nil, "no-review", nil},
-		{"browser UI", []string{"web/app.tsx"}, false, nil, "selected", []Role{RoleBrowserUI}},
-		{"authentication authority", []string{"internal/auth/policy.go"}, false, nil, "selected", []Role{RoleAuthAuthority}},
-		{"declared performance retains unknown triage", []string{"internal/cache/cache.go"}, true, nil, "triage", []Role{RolePerformance}},
-		{"covered UI plus declared performance", []string{"web/app.tsx"}, true, nil, "selected", []Role{RoleBrowserUI, RolePerformance}},
-		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, false, nil, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
-		{"mandatory plus implementation request", []string{"web/app.tsx"}, false, []Role{RoleCriticalBoundary}, "selected", []Role{RoleBrowserUI, RoleCriticalBoundary}},
-		{"unknown", []string{"internal/spine/service.go"}, false, nil, "triage", nil},
+		{"green docs only", []string{"README.md", "docs/review.md"}, false, "no-review", nil},
+		{"docs web marker stays documentation", []string{"docs/web/guide.md"}, false, "no-review", nil},
+		{"docs auth marker stays documentation", []string{"docs/auth/README.md"}, false, "no-review", nil},
+		{"browser UI", []string{"web/app.tsx"}, false, "selected", []Role{RoleBrowserUI}},
+		{"authentication authority", []string{"internal/auth/policy.go"}, false, "selected", []Role{RoleAuthAuthority}},
+		{"declared performance retains unknown triage", []string{"internal/cache/cache.go"}, true, "triage", []Role{RolePerformance}},
+		{"covered UI plus declared performance", []string{"web/app.tsx"}, true, "selected", []Role{RoleBrowserUI, RolePerformance}},
+		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, false, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
+		{"unknown", []string{"internal/spine/service.go"}, false, "triage", nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -33,14 +31,14 @@ func TestReviewPolicyTable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := ReviewPolicy(facts, test.requested)
+			got, err := ReviewPolicy(facts)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got.Decision != test.decision || !reflect.DeepEqual(got.Roles, test.roles) {
 				t.Fatalf("plan=%#v want decision=%s roles=%v", got, test.decision, test.roles)
 			}
-			repeated, err := ReviewPolicy(facts, test.requested)
+			repeated, err := ReviewPolicy(facts)
 			if err != nil || !reflect.DeepEqual(got, repeated) {
 				t.Fatalf("repeated policy changed: %#v err=%v", repeated, err)
 			}
@@ -48,23 +46,20 @@ func TestReviewPolicyTable(t *testing.T) {
 	}
 }
 
-func TestMandatoryRulesCannotBeWaivedAndUnsafeRequestsStop(t *testing.T) {
+func TestMandatoryRulesAreDeterministic(t *testing.T) {
 	facts, err := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"auth/login.go"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := ReviewPolicy(facts, nil)
+	plan, err := ReviewPolicy(facts)
 	if err != nil || !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority}) {
 		t.Fatalf("mandatory plan=%#v err=%v", plan, err)
-	}
-	if _, err := ReviewPolicy(facts, []Role{"coordinator"}); err == nil || !strings.Contains(err.Error(), "invalid or unsafe") {
-		t.Fatalf("unsafe request error=%v", err)
 	}
 }
 
 func TestTriageCanOnlyAddAllowlistedRolesOnce(t *testing.T) {
 	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/spine/service.go"}, true, false)
-	plan, _ := ReviewPolicy(facts, nil)
+	plan, _ := ReviewPolicy(facts)
 	resolved, err := AddTriage(plan, []Role{RoleCriticalBoundary}, "durable state transition needs boundary review")
 	if err != nil || resolved.Decision != "selected" || !reflect.DeepEqual(resolved.Roles, []Role{RoleCriticalBoundary}) {
 		t.Fatalf("resolved=%#v err=%v", resolved, err)
@@ -79,9 +74,9 @@ func TestTriageCanOnlyAddAllowlistedRolesOnce(t *testing.T) {
 
 func TestTargetedReverificationKeepsMandatoryFloorWithoutBroadTriage(t *testing.T) {
 	facts, _ := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"internal/auth/session.go"}, true, false)
-	plan, _ := ReviewPolicy(facts, []Role{RoleBrowserUI, RolePerformance, RoleCriticalBoundary})
-	if !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RolePerformance}) {
-		t.Fatalf("initial requested plan=%#v", plan)
+	plan, _ := ReviewPolicy(facts)
+	if !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority}) {
+		t.Fatalf("initial mandatory plan=%#v", plan)
 	}
 	originalRoles := append([]Role(nil), plan.Roles...)
 	originalReasons := append([]Reason(nil), plan.Reasons...)

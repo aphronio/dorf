@@ -10,17 +10,53 @@ application decision; reviewer prose is retained as claim Evidence and never sat
 diff between the admitted starting Revision and the current clean full commit. The current
 `.dorf.toml` may declare `review.performance = true`; this can only add review. Green documentation-
 only changes select an explicit `no-review` result. Browser/UI, authentication/authority, and
-declared-performance facts add their mandatory allowlisted Roles. An implementation-requested Role
-is unioned with that floor and attributed to the original implementation AgentRun. Unknown paths
-admit exactly one `review-triage` AgentRun, whose bounded JSON result may only add allowlisted Roles.
+declared-performance facts add their mandatory allowlisted Roles. Unknown paths admit exactly one
+`review-triage` AgentRun, whose bounded JSON result may only add allowlisted Roles. Implementation
+prose is not policy input, and there is no optional-request path.
 
-After exact-Revision Checks are independently verified, the Job durably waits in
-`review-activation`. The orchestrator invokes `dorf review activate` with the implementation
-AgentRun's allowlisted requests, or with no requested Roles to bind an explicit empty set. That
-activation and attribution are persisted atomically before policy evaluation. The first policy
-result and its digest are atomic for `(Job, Revision)`; a retry either observes the same activation
-and result or stops on conflict. Invalid or unsafe requested Roles block visibly. No-review is a
-final persisted plan, not the absence of review rows.
+After exact-Revision Checks are independently verified, their transaction creates the pending plan
+for that Revision and moves the Job directly to `review-planning`. The admitted Absurd Job task
+computes and persists the first policy result and digest atomically for `(Job, Revision)`.
+Redelivery observes the same plan and stable AgentRuns. No-review is a final persisted plan, not the
+absence of review rows, and immediately makes the Revision ready for publication.
+
+## Durable continuation and authority stop
+
+The original admitted Job task is the only phase driver. It applies policy, executes triage or
+selected reviews, admits one material finding through the existing FIFO to the original Session,
+observes repair, recommits, reruns exact-Revision Checks, and repeats targeted policy. At `ready`,
+that same task idempotently schedules the existing exact-Revision publication task. Both tasks use
+the existing `dorf_jobs` Absurd queue and ordinary polling worker; there is no resident
+orchestration process or second queue.
+
+```mermaid
+flowchart TD
+    Client["Client admits one Job"] --> JobTask["Admitted Job task"]
+    JobTask --> Checks["Exact-Revision Checks + Evidence"]
+    Checks --> Plan["Persist deterministic ReviewPolicy plan"]
+    Plan -->|"selected"| Reviews["Stable Revision-bound review AgentRuns"]
+    Plan -->|"no review"| Ready["Exact Revision ready"]
+    Reviews --> Findings{"One material finding?"}
+    Findings -->|"yes"| FIFO["Durable repair message to original Session"]
+    FIFO --> Checks
+    Findings -->|"no"| Ready
+    Ready --> PublicationTask["Existing exact-Revision publication task"]
+    PublicationTask --> Proposal["One GitHub PR proposal"]
+    Proposal --> Authority{"External accepted, rejected, or abandoned authority"}
+    Authority --> CleanupTask["Existing deterministic cleanup task"]
+```
+
+Publication is the stop boundary: Dorf does not merge the PR, infer acceptance or rejection, or
+clean a live proposal. `dorf outcome JOB_ID accepted|rejected|abandoned` records only a matching
+authoritative GitHub observation (or explicit abandonment) and then schedules the existing cleanup
+task. Inspection reports `self-advancing`, `external-authority`, `attention`,
+`automatic-cleanup`, or `terminal` so a caller can distinguish admitted work from a real stop.
+`dorf publication retry JOB_ID --revision EXACT_OID` is limited to an already-scheduled exhausted
+publication or a visible `publication-blocked` condition after its concrete external cause is
+repaired; it cannot activate an ordinary ready Revision. An explicit `dorf cleanup JOB_ID` may end
+resources for a pre-proposal `publication-blocked` Job only while its exact pull-request Action is
+still definitively pending. An uncertain Action requires bounded publication retry first; published
+and stale stored proposals remain protected until an authoritative outcome is recorded.
 
 ## Native and Evidence boundaries
 
@@ -74,34 +110,24 @@ Actions. Original implementation route/Sandbox cleanup remains separate. Plans, 
 observations, latency, usage availability, yield, adjudication, resource ownership, and cleanup
 facts remain retained.
 
-## Existing-Job dogfood activation
+## Executable inspection
 
-The narrow activation command consumes the durable `review-activation` boundary reached after
-exact-Revision Checks. It verifies the current Check Evidence blobs before changing the phase,
-persists the implementation request once, and runs the existing Job synchronously under its Job
-fence. It does not create a Job, branch, Sandbox, or implementation Session.
-
-After rebuilding and applying the final review-policy schema through `007_review_policy.sql` (migration 007), use the exact identifiers printed by
-`dorf inspect --json JOB_ID`:
+Migration 011 removes `review-activation` from the greenfield phase constraint and drops the
+obsolete optional-request columns. It deliberately does not convert or wake pre-#82 Jobs. Issue
+#38 may squash the greenfield migration chain at cutover. `--once` remains a polling and fault-proof
+surface; repeat it to drain whichever existing durable task is eligible:
 
 ```bash
 go build -o .dorf/bin/dorf ./cmd/dorf
 .dorf/bin/dorf migrate
-.dorf/bin/dorf review activate --revision EXACT_FULL_COMMIT_OID --requested-role critical-boundary JOB_ID
-```
-
-Omit `--requested-role` unless the implementation AgentRun requested that additional allowlisted
-Role. `--requested-by-agent-run ORIGINAL_IMPLEMENTATION_AGENT_RUN_ID` is optional; when omitted,
-Dorf resolves and verifies the original completed implementation AgentRun. On controller loss,
-rerun the byte-identical activation command. A changed Revision, requested Role set, or attribution
-conflicts instead of creating new identity.
-
-Then inspect retained claims versus observations and independently verify Evidence:
-
-```bash
+.dorf/bin/dorf worker --once
+.dorf/bin/dorf worker --once
 .dorf/bin/dorf inspect --json JOB_ID
 .dorf/bin/dorf evidence verify JOB_ID
 ```
 
-The issue's real Incus/Codex interruption, material-finding repair, measurements, and cleanup remain
-dogfood evidence; unit or PostgreSQL row state does not substitute for that terminal.
+The exact number of `--once` calls depends on which task is eligible; a resident `dorf worker`
+performs the same polling without becoming workflow authority. Process loss at planning, reviewer
+submission, repair admission, publication scheduling, or external publication is recovered from
+the persisted Job phase, stable identity, Action receipt, and Absurd task state. Unit or PostgreSQL
+row state does not substitute for the real Incus/Codex/GitHub terminal.

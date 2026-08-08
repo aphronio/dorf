@@ -25,6 +25,7 @@ import (
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	publicationapi "github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -211,6 +212,16 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 			if !status.Signaled() || status.Signal() != syscall.SIGKILL {
 				t.Fatalf("worker was not lost with SIGKILL: %v output=%s", err, output.String())
 			}
+			if point == spine.BarrierPullRequestAccepted {
+				proposal, proposalErr := store.Proposal(ctx, job.ID)
+				_, retainedPull, actionErr := store.PublicationActions(ctx, job.ID, job.Revision)
+				if proposalErr != nil || actionErr != nil || proposal != nil || retainedPull.State != spine.ActionUncertain {
+					t.Fatalf("lost accepted PR proposal=%#v pull=%#v errors=%v/%v", proposal, retainedPull, proposalErr, actionErr)
+				}
+				if _, err := workflow.ScheduleCleanup(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "bounded publication retry") {
+					t.Fatalf("uncertain pull cleanup error=%v", err)
+				}
+			}
 
 			// The proof barrier shortens the live Absurd lease to ten seconds.
 			time.Sleep(11 * time.Second)
@@ -286,7 +297,7 @@ func preparePublicationFaultJob(t *testing.T, db *sql.DB, store postgres.Store, 
 	if _, err := db.ExecContext(ctx, `update dorf.checks set evidence_id=$2 where id=$1`, checkID, evidenceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,requested_roles,finalized_at) values($1,$2,'final',$3,'[]'::jsonb,$4)`, job.ID, job.Revision, `{"decision":"no-review","roles":[],"reasons":[]}`, now); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,finalized_at) values($1,$2,'final',$3,$4)`, job.ID, job.Revision, `{"decision":"no-review","roles":[],"reasons":[]}`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {

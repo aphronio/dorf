@@ -39,7 +39,7 @@ be understood.
 
 | Fact | Authority |
 | --- | --- |
-| Job goal, lifecycle, current Revision, Session binding, inbox order, requested Role, and terminal outcome | Dorf-owned PostgreSQL tables |
+| Job goal, lifecycle, current Revision, Session binding, inbox order, selected ReviewPlan, and terminal outcome | Dorf-owned PostgreSQL tables |
 | Task claims, runs, checkpoints, retry schedule, sleeps, and wake events | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, native tool items, and resumable conversation identifier | The selected agent harness |
 | Mutable checkout, running processes, and local build output | The Job's Sandbox |
@@ -82,9 +82,9 @@ the unavoidable boundary where an external system succeeds and its response is l
 ## Review composition
 
 Review is selected, not ritualized. A pure Go `ReviewPolicy(ChangeFacts) -> ReviewPlan` starts with
-explicit rules. Mandatory rules cannot be suppressed by an agent. An implementation AgentRun may
-request additional review. Unknown classifications may invoke one bounded `ReviewTriage` AgentRun;
-there is no general Coordinator Agent because the durable Job already coordinates mechanics.
+explicit rules. Mandatory rules cannot be suppressed or extended by implementation prose. Unknown
+classifications may invoke one bounded `ReviewTriage` AgentRun; there is no general Coordinator
+Agent because the durable Job already coordinates mechanics.
 
 Each selected review is an AgentRun against an immutable Revision. Read-only reviews may run in
 parallel when their capabilities and evidence are independent. Findings return to the original

@@ -153,6 +153,11 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 		_ = s.Store.UncertainAction(ctx, pullAction.ID)
 		return err
 	}
+	if len(pulls) > 0 {
+		if err := s.Store.UncertainAction(ctx, pullAction.ID); err != nil {
+			return err
+		}
+	}
 	stored, err := s.Store.Proposal(ctx, job.ID)
 	if err != nil {
 		return err
@@ -165,6 +170,9 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 	validationProposal := stored
 	switch pullDecision {
 	case "create":
+		if err := s.Store.UncertainAction(ctx, pullAction.ID); err != nil {
+			return err
+		}
 		pull, err = s.GitHub.CreatePullRequest(ctx, authority, title, body, job.Branch, job.BaseBranch)
 		mutated = err == nil
 	case "update":
@@ -176,7 +184,6 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 	case "adopt":
 	}
 	if err != nil {
-		_ = s.Store.UncertainAction(ctx, pullAction.ID)
 		return err
 	}
 	if err := validatePull(job, pull, validationProposal, title); err != nil {

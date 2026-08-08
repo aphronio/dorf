@@ -28,7 +28,8 @@ sequencing, setup, policy facts, Git operations, checks, evidence hashing, publi
 cleanup are code-owned. Agents are reserved for implementation, ambiguity, triage, review, and
 other judgment.
 
-An agent may request more scrutiny but cannot waive a deterministic safety or review rule.
+Review authority comes from deterministic mandatory policy plus bounded triage for an unknown
+classification. Agent prose is not policy input and cannot waive or add a safety or review rule.
 
 ## Disposable developer workstations
 
