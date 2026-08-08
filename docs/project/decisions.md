@@ -940,7 +940,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D047 — Replace the Python runtime with a greenfield Go and Absurd system
 
-- **Status:** Accepted greenfield direction — 2026-08-06
+- **Status:** Accepted greenfield direction — 2026-08-06; review authority simplified 2026-08-08
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
@@ -955,10 +955,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   already express.
 - **Review policy:** Start with a pure deterministic classifier over observed change facts. Mandatory
   rules select security, browser, performance, or other bounded review Roles when their explicit
-  conditions match; documentation-only changes with green Checks may select none. An implementation
-  AgentRun may request more review. Only an unknown classification may invoke one bounded semantic
-  triage AgentRun. The durable Job coordinates mechanics, so there is no default Coordinator Agent
-  and no review-after-every-change ritual.
+  conditions match; documentation-only changes with green Checks may select none. Only an unknown
+  classification may invoke one bounded semantic triage AgentRun. Implementation prose is not a
+  policy input, and there is no optional-request mechanism. The durable Job coordinates mechanics,
+  so there is no default Coordinator Agent and no review-after-every-change ritual.
 - **Replacement strategy:** Build vertical slices on a `greenfield` integration branch. Each slice
   must reach the smallest real Incus, Codex, repository, and GitHub terminal it claims, then delete
   the Python component and implementation-coupled tests it replaces. The old implementation is
@@ -997,4 +997,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Absurd cannot survive the real crash and redelivery terminals, its evolution
   or license makes self-hosting unsuitable, multi-region or high-volume hosted operation requires a
   more mature distributed control plane, a second concrete language or Agent runner proves a
-  smaller stable seam, or a real cross-Job identity requirement earns `Worker`.
+  smaller stable seam, a real cross-Job identity requirement earns `Worker`, or repeated dogfood
+  identifies a concrete authoritative input that deterministic facts plus bounded triage cannot
+  express and that justifies a structured additional-review contract rather than parsing agent
+  prose.

@@ -414,11 +414,6 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, true, nil
 	case "review-planning", "review-triage", "reviewing":
 		return s.advanceReview(ctx, job)
-	case "review-activation":
-		// Exact-Revision Checks are proven. The orchestrator must now bind the
-		// implementation-requested allowlisted Roles, including an explicit
-		// empty set, before the atomic policy result can be computed.
-		return RunIdle, false, nil
 	default:
 		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
 	}

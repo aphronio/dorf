@@ -6,6 +6,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -43,6 +44,13 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
+			job, err := store.Job(ctx, params.JobID)
+			if err != nil {
+				return Result{}, err
+			}
+			if err := continuePublication(ctx, store, client, service.Barrier, job); err != nil {
+				return Result{}, err
+			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
@@ -59,6 +67,18 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		}
 		return Result{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func continuePublication(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, job spine.Job) error {
+	needsSchedule := job.WorkflowPhase == "ready" ||
+		(job.WorkflowPhase == "publishing" || job.WorkflowPhase == "published") && job.PublicationTaskID == ""
+	if !needsSchedule {
+		return nil
+	}
+	if _, _, _, err := publication.Schedule(ctx, store, client, barrier, job.ID, job.Revision); err != nil {
+		return fmt.Errorf("continue exact-Revision publication: %w", err)
+	}
+	return nil
 }
 
 func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewJob) (spine.Job, bool, error) {
@@ -129,6 +149,15 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if job.CleanupState == spine.CleanupComplete {
 			result = job
 			return nil
+		}
+		if job.WorkflowPhase == "publishing" || job.WorkflowPhase == "publication-blocked" || job.WorkflowPhase == "published" {
+			outcome, err := store.Outcome(ctx, job.ID)
+			if err != nil {
+				return err
+			}
+			if outcome == nil {
+				return fmt.Errorf("cleanup cannot cancel or remove a live publication without a recorded accepted, rejected, or explicitly abandoned outcome")
+			}
 		}
 		if err := store.CloseAdmission(ctx, jobID); err != nil {
 			return err

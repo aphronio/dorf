@@ -36,7 +36,7 @@ func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bo
 	}
 	switch job.WorkflowPhase {
 	case "review-planning":
-		activation, err := store.ReviewPlan(ctx, job.ID, job.Revision)
+		record, err := store.ReviewPlan(ctx, job.ID, job.Revision)
 		if err != nil {
 			return RunIdle, false, err
 		}
@@ -44,11 +44,7 @@ func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bo
 		if err != nil {
 			return s.blockReview(ctx, job.ID, "deterministic ChangeFacts failed: "+err.Error())
 		}
-		requested := activation.RequestedRoles
-		if job.ReviewRepairCount == 1 {
-			requested = nil
-		}
-		plan, err := policy.ReviewPolicy(facts, requested)
+		plan, err := policy.ReviewPolicy(facts)
 		if err != nil {
 			return s.blockReview(ctx, job.ID, "mandatory ReviewPolicy rejected input: "+err.Error())
 		}
@@ -62,8 +58,8 @@ func (s Service) advanceReview(ctx context.Context, job Job) (RunDisposition, bo
 				return s.blockReview(ctx, job.ID, err.Error())
 			}
 		}
-		activation.Facts, activation.Initial, activation.Final = facts, plan, plan
-		if err := store.RecordReviewPolicy(ctx, activation); err != nil {
+		record.Facts, record.Initial, record.Final = facts, plan, plan
+		if err := store.RecordReviewPolicy(ctx, record); err != nil {
 			return RunIdle, false, err
 		}
 		return RunIdle, true, nil
