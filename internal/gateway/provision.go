@@ -42,9 +42,24 @@ func (g Gateway) Provision(ctx context.Context, bind string) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return fmt.Errorf("the supported Provider Gateway binary is Linux x86_64 only")
 	}
+	bridgeAddresses := []net.Addr(nil)
 	parsed := net.ParseIP(strings.TrimSpace(bind))
-	if parsed == nil || parsed.To4() == nil || parsed.IsUnspecified() || parsed.IsMulticast() || parsed.IsLinkLocalUnicast() {
-		return fmt.Errorf("provider bind address must be one local IPv4 address")
+	if parsed != nil && parsed.To4() != nil && !parsed.IsLoopback() {
+		if strings.TrimSpace(g.PrivateBridge) == "" {
+			return fmt.Errorf("non-loopback provider bind requires the configured private Incus bridge")
+		}
+		bridge, err := net.InterfaceByName(g.PrivateBridge)
+		if err != nil {
+			return fmt.Errorf("inspect private Incus bridge %s: %w", g.PrivateBridge, err)
+		}
+		bridgeAddresses, err = bridge.Addrs()
+		if err != nil {
+			return fmt.Errorf("inspect private Incus bridge %s addresses: %w", g.PrivateBridge, err)
+		}
+	}
+	normalizedBind, allowRemote, err := validateProviderBind(bind, bridgeAddresses)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(g.StatePath, 0o700); err != nil {
 		return err
@@ -72,7 +87,7 @@ func (g Gateway) Provision(ctx context.Context, bind string) error {
 		if err != nil || !strings.Contains(string(help), BackendVersion) {
 			return fmt.Errorf("Provider Gateway executable is not pinned version %s", BackendVersion)
 		}
-		if err := g.writeBrokerConfig(bind); err != nil {
+		if err := g.writeBrokerConfig(normalizedBind, allowRemote); err != nil {
 			return err
 		}
 		if g.probeBroker(ctx) == nil {
@@ -86,6 +101,33 @@ func (g Gateway) Provision(ctx context.Context, bind string) error {
 		}
 		return g.startBroker(ctx, executable)
 	})
+}
+
+func validateProviderBind(bind string, bridgeAddresses []net.Addr) (string, bool, error) {
+	parsed := net.ParseIP(strings.TrimSpace(bind))
+	if parsed == nil || parsed.To4() == nil || parsed.IsUnspecified() || parsed.IsMulticast() || parsed.IsLinkLocalUnicast() {
+		return "", false, fmt.Errorf("provider bind address must be loopback or the configured private Incus bridge IPv4")
+	}
+	parsed = parsed.To4()
+	if parsed.IsLoopback() {
+		return parsed.String(), false, nil
+	}
+	if !parsed.IsPrivate() {
+		return "", false, fmt.Errorf("provider bind address must not expose the broker on a public interface")
+	}
+	for _, address := range bridgeAddresses {
+		var candidate net.IP
+		switch value := address.(type) {
+		case *net.IPNet:
+			candidate = value.IP
+		case *net.IPAddr:
+			candidate = value.IP
+		}
+		if candidate != nil && candidate.To4() != nil && candidate.Equal(parsed) {
+			return parsed.String(), true, nil
+		}
+	}
+	return "", false, fmt.Errorf("provider bind address is not assigned to the configured private Incus bridge")
 }
 
 func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authorize func(string, string)) error {
@@ -312,7 +354,7 @@ func (g Gateway) connections() ([]connection, error) {
 	return records, nil
 }
 
-func (g Gateway) writeBrokerConfig(bind string) error {
+func (g Gateway) writeBrokerConfig(bind string, allowRemote bool) error {
 	auth, err := g.readAuthority()
 	if err != nil {
 		return err
@@ -329,7 +371,7 @@ func (g Gateway) writeBrokerConfig(bind string) error {
 	for _, route := range routes {
 		lines = append(lines, fmt.Sprintf("  - %q", route.APIKey))
 	}
-	lines = append(lines, "remote-management:", fmt.Sprintf("  allow-remote: %t", bind != "127.0.0.1"), fmt.Sprintf("  secret-key: %q", auth.ManagementKey), "  disable-control-panel: true", "debug: false", "logging-to-file: false", "usage-statistics-enabled: false")
+	lines = append(lines, "remote-management:", fmt.Sprintf("  allow-remote: %t", allowRemote), fmt.Sprintf("  secret-key: %q", auth.ManagementKey), "  disable-control-panel: true", "debug: false", "logging-to-file: false", "usage-statistics-enabled: false")
 	for _, record := range connections {
 		if record.Provider != "openai" || record.AuthMode != "api_key" {
 			continue

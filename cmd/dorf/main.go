@@ -216,7 +216,7 @@ func providerCommand(ctx context.Context, cfg config.Config, args []string, stdo
 		}
 		*bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
 	}
-	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	g := gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: cfg.IncusNetwork}
 	if err := g.ConnectChatGPT(ctx, *name, *bind, func(url, code string) {
 		fmt.Fprintf(stdout, "Open %s and enter %s\n", url, code)
 	}); err != nil {
