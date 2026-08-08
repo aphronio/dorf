@@ -1296,18 +1296,38 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='submitted',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {
 		return err
 	}
+	if outcome != "" {
+		if _, err := tx.ExecContext(ctx, `
+			update dorf.agent_runs accepted
+			set native_outcome=$3,updated_at=clock_timestamp()
+			from dorf.job_messages message,dorf.agent_runs source
+			where source.id=$1 and accepted.id<>source.id
+			  and accepted.job_id=source.job_id and accepted.session_id=source.session_id
+			  and accepted.message_id=message.id and message.delivery_intent='steer'
+			  and message.steer_target_turn_id=$2 and accepted.native_turn_id=$2
+			  and accepted.state='completed' and accepted.native_outcome is null`, runID, turnID, outcome); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
-func (s Store) BindNativeSteer(ctx context.Context, runID, turnID string) error {
+func (s Store) BindNativeSteer(ctx context.Context, runID, turnID, status string) error {
+	outcome := ""
+	if status == "completed" || status == "failed" || status == "interrupted" {
+		outcome = status
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state='completed',native_outcome=null,attention=null,finished_at=coalesce(finished_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID).Scan(&actionID); err != nil {
+	var actionID, persistedOutcome string
+	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state='completed',native_outcome=coalesce(native_outcome,nullif($3,'')),attention=null,finished_at=coalesce(finished_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id,coalesce(native_outcome,'')`, runID, turnID, outcome).Scan(&actionID, &persistedOutcome); err != nil {
 		return err
+	}
+	if outcome != "" && persistedOutcome != outcome {
+		return fmt.Errorf("AgentRun %s native outcome %s conflicts with observed %s", runID, persistedOutcome, outcome)
 	}
 	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='steered',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {
 		return err

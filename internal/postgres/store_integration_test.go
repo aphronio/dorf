@@ -283,7 +283,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	if err := store.BeginTurnSubmission(ctx, delivery.AgentRun.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BindNativeSteer(ctx, delivery.AgentRun.ID, activeTurnID); err != nil {
+	if err := store.BindNativeSteer(ctx, delivery.AgentRun.ID, activeTurnID, "inProgress"); err != nil {
 		t.Fatal(err)
 	}
 	messages, err := store.Messages(ctx, job.ID)
@@ -297,6 +297,82 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
 	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: other.ID, CallerID: "invalid-steer", Input: "cannot target", Intent: spine.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular native turn") {
 		t.Fatalf("steer without active turn error=%v", err)
+	}
+}
+
+func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			_, store, _ := testDatabase(t)
+			ctx := context.Background()
+			job, sessionID := prepareTransportIntegrationJob(t, store, "shared-steer-outcome-"+status)
+			target, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || target == nil {
+				t.Fatalf("target delivery=%#v err=%v", target, err)
+			}
+			if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, target.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			targetTurnID := "turn-shared-" + job.ID
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
+				t.Fatal(err)
+			}
+			first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "first-shared-steer", Input: "first accepted shared input", Intent: spine.MessageSteer})
+			if err != nil || !created {
+				t.Fatalf("first steer=%#v created=%v err=%v", first, created, err)
+			}
+			second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second-shared-steer", Input: "second accepted shared input", Intent: spine.MessageSteer})
+			if err != nil || !created {
+				t.Fatalf("second steer=%#v created=%v err=%v", second, created, err)
+			}
+			firstDelivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || firstDelivery == nil || firstDelivery.Message.ID != first.ID {
+				t.Fatalf("first steer delivery=%#v err=%v", firstDelivery, err)
+			}
+			if err := store.PrepareAgentRun(ctx, firstDelivery.AgentRun.ID, targetTurnID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, firstDelivery.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, firstDelivery.AgentRun.ID, targetTurnID, "inProgress"); err != nil {
+				t.Fatal(err)
+			}
+			secondDelivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || secondDelivery == nil || secondDelivery.Message.ID != second.ID {
+				t.Fatalf("second steer delivery=%#v err=%v", secondDelivery, err)
+			}
+			if err := store.PrepareAgentRun(ctx, secondDelivery.AgentRun.ID, targetTurnID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, secondDelivery.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, secondDelivery.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, firstDelivery.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := store.Messages(ctx, job.ID)
+			if err != nil || len(messages) != 3 {
+				t.Fatalf("messages=%#v err=%v", messages, err)
+			}
+			for index, message := range messages[1:] {
+				if message.Intent != spine.MessageSteer || message.TargetTurnID != targetTurnID || message.NativeTurnID != targetTurnID || message.NativeOutcome != status || message.State != spine.AgentRunCompleted {
+					t.Fatalf("shared steer %d=%#v", index+1, message)
+				}
+			}
+		})
 	}
 }
 

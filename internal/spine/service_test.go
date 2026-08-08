@@ -163,6 +163,61 @@ func TestSteerAcceptanceRecoversAfterAcknowledgementBeforeBind(t *testing.T) {
 	}
 }
 
+func TestSharedSteerPersistsEveryTerminalTargetOutcome(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			base := newMemoryStore()
+			store := &steeringMemoryStore{memoryStore: base}
+			job := testJob()
+			job.SessionID = "session-1"
+			store.jobs[job.ID] = job
+			targetTurnID := "turn-shared"
+			target := Message{ID: MessageID(job.ID, "target"), JobID: job.ID, CallerID: "target", Sequence: 1, Input: "target input", Intent: MessageFollow}
+			targetRun := AgentRun{ID: AgentRunID(target.ID), JobID: job.ID, MessageID: target.ID, ActionID: TurnActionID(target.ID), SessionID: job.SessionID, State: AgentRunActive, NativeTurnID: targetTurnID}
+			steer := Message{ID: MessageID(job.ID, "steer-outcome"), JobID: job.ID, CallerID: "steer-outcome", Sequence: 2, Input: "accepted shared input", Intent: MessageSteer, TargetTurnID: targetTurnID}
+			steerRun := AgentRun{ID: AgentRunID(steer.ID), JobID: job.ID, MessageID: steer.ID, ActionID: TurnActionID(steer.ID), SessionID: job.SessionID, State: AgentRunPending}
+			store.messages[job.ID] = []Message{target, steer}
+			store.runs[targetRun.ID], store.runs[steerRun.ID] = targetRun, steerRun
+			store.actions[targetRun.ActionID] = Action{ID: targetRun.ActionID, JobID: job.ID, MessageID: target.ID, Kind: ActionTurnStart, State: ActionSucceeded, ExternalID: targetTurnID}
+			store.actions[steerRun.ActionID] = Action{ID: steerRun.ActionID, JobID: job.ID, MessageID: steer.ID, Kind: ActionTurnStart, State: ActionPending}
+			externals := &steeringFakeExternals{fakeExternals: newFakeExternals()}
+			externals.turns = []NativeTurn{{ID: targetTurnID, Status: "inProgress"}}
+			service := Service{Store: store, Externals: externals}
+			if progressed, err := service.deliverSteer(context.Background(), job, Delivery{Message: steer, AgentRun: steerRun}); err != nil || !progressed {
+				t.Fatalf("steer acceptance progressed=%v err=%v", progressed, err)
+			}
+			accepted := store.runs[steerRun.ID]
+			if accepted.NativeTurnID != targetTurnID || accepted.NativeOutcome != "" || accepted.State != AgentRunCompleted {
+				t.Fatalf("accepted steer=%#v", accepted)
+			}
+			externals.turns[0].Status = status
+			if err := store.BindNativeTurn(context.Background(), targetRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			propagated := store.runs[steerRun.ID]
+			if propagated.NativeOutcome != status || propagated.State != AgentRunCompleted {
+				t.Fatalf("propagated steer=%#v", propagated)
+			}
+
+			propagated.NativeOutcome = ""
+			store.runs[steerRun.ID] = propagated
+			if progressed, err := service.deliver(context.Background(), job, Delivery{Message: steer, AgentRun: propagated}); err != nil || !progressed {
+				t.Fatalf("terminal-history reconciliation progressed=%v err=%v", progressed, err)
+			}
+			if err := store.BindNativeTurn(context.Background(), targetRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if progressed, err := service.deliver(context.Background(), job, Delivery{Message: steer, AgentRun: store.runs[steerRun.ID]}); err != nil || !progressed {
+				t.Fatalf("idempotent steer replay progressed=%v err=%v", progressed, err)
+			}
+			final := store.runs[steerRun.ID]
+			if final.ID != steerRun.ID || final.ActionID != steerRun.ActionID || final.NativeTurnID != targetTurnID || final.NativeOutcome != status || len(externals.steered) != 1 || len(externals.submittedSequences()) != 0 {
+				t.Fatalf("final steer=%#v steers=%v starts=%v", final, externals.steered, externals.submittedSequences())
+			}
+		})
+	}
+}
+
 func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -640,7 +695,7 @@ type memoryStore struct {
 
 type steeringMemoryStore struct{ *memoryStore }
 
-func (s *steeringMemoryStore) BindNativeSteer(_ context.Context, runID, turnID string) error {
+func (s *steeringMemoryStore) BindNativeSteer(_ context.Context, runID, turnID, status string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run := s.runs[runID]
@@ -648,6 +703,12 @@ func (s *steeringMemoryStore) BindNativeSteer(_ context.Context, runID, turnID s
 		return errors.New("steer native turn conflict")
 	}
 	run.NativeTurnID, run.State = turnID, AgentRunCompleted
+	if terminalNative(status) {
+		if run.NativeOutcome != "" && run.NativeOutcome != status {
+			return errors.New("steer native outcome conflict")
+		}
+		run.NativeOutcome = status
+	}
 	s.runs[runID] = run
 	action := s.actions[run.ActionID]
 	action.State, action.ExternalID, action.Outcome = ActionSucceeded, turnID, "steered"
@@ -797,6 +858,15 @@ func (s *memoryStore) BindNativeTurn(_ context.Context, runID, turnID, status st
 		run.Attention = "native turn " + turnID + " has unsupported status \"" + status + "\""
 	}
 	s.runs[runID] = run
+	if terminalNative(status) {
+		for _, message := range s.messages[run.JobID] {
+			accepted := s.runs[AgentRunID(message.ID)]
+			if accepted.ID != runID && message.Intent == MessageSteer && message.TargetTurnID == turnID && accepted.NativeTurnID == turnID && accepted.State == AgentRunCompleted && accepted.NativeOutcome == "" {
+				accepted.NativeOutcome = status
+				s.runs[accepted.ID] = accepted
+			}
+		}
+	}
 	action := s.actions[run.ActionID]
 	action.State, action.ExternalID = ActionSucceeded, turnID
 	s.actions[run.ActionID] = action

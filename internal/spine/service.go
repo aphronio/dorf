@@ -43,7 +43,7 @@ type Externals interface {
 }
 
 type steeringStore interface {
-	BindNativeSteer(context.Context, string, string) error
+	BindNativeSteer(context.Context, string, string, string) error
 }
 
 type steeringExternals interface {
@@ -668,7 +668,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	}
 	reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 	if reconciliation.Classification == "completed" {
-		return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
+		return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
@@ -701,7 +701,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 		}
 		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
 		if reconciled.Classification == "completed" {
-			return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
+			return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
@@ -720,7 +720,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 		return false, err
 	}
-	return true, store.BindNativeSteer(ctx, run.ID, acceptedTurnID)
+	return true, store.BindNativeSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
 }
 
 func (s Service) reach(ctx context.Context, point string, delivery Delivery) error {
@@ -863,7 +863,7 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 			if !ok {
 				return cleanupBlocked(*delivery, "store does not support native turn steering")
 			}
-			return store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
+			return store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 		case "no-submit":
 			return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after native history proved it was not accepted")
 		case "target-terminal":
