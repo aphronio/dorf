@@ -286,7 +286,7 @@ func preparePublicationFaultJob(t *testing.T, db *sql.DB, store postgres.Store, 
 	if _, err := db.ExecContext(ctx, `update dorf.checks set evidence_id=$2 where id=$1`, checkID, evidenceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,requested_roles,finalized_at) values($1,$2,'final',$3,'[]'::jsonb,$4)`, job.ID, job.Revision, `{"decision":"no-review","roles":[],"reasons":[]}`, now); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,finalized_at) values($1,$2,'final',$3,$4)`, job.ID, job.Revision, `{"decision":"no-review","roles":[],"reasons":[]}`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {

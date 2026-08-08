@@ -146,6 +146,36 @@ func TestReviewPhasesAdvanceBeforeImplementationFIFO(t *testing.T) {
 	}
 }
 
+func TestReviewPlanningAutomaticallyAppliesPersistedPolicyInput(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		paths    []string
+		decision string
+		roles    []policy.Role
+	}{
+		{name: "no review", paths: []string{"docs/flow.md"}, decision: "no-review"},
+		{name: "selected review", paths: []string{"internal/auth/session.go"}, decision: "selected", roles: []policy.Role{policy.RoleAuthAuthority}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			base := newMemoryStore()
+			job := testJob()
+			job.WorkflowPhase = "review-planning"
+			base.jobs[job.ID] = job
+			store := newReviewDecisionStore(base)
+			store.plan = ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, State: "pending"}
+			facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), job.Revision, test.paths, true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			externals := &reviewDispatchExternals{fakeExternals: newFakeExternals(), facts: facts}
+			disposition, progressed, err := (Service{Store: store, Externals: externals}).advanceReview(context.Background(), job)
+			if err != nil || disposition != RunIdle || !progressed || store.recordedPolicy.Initial.Decision != test.decision || !reflect.DeepEqual(store.recordedPolicy.Initial.Roles, test.roles) {
+				t.Fatalf("disposition=%s progressed=%t policy=%#v err=%v", disposition, progressed, store.recordedPolicy.Initial, err)
+			}
+		})
+	}
+}
+
 func TestRepairPlanningUsesMandatoryFloorAndAffectedTargetsOnly(t *testing.T) {
 	base := newMemoryStore()
 	job := testJob()
@@ -153,10 +183,7 @@ func TestRepairPlanningUsesMandatoryFloorAndAffectedTargetsOnly(t *testing.T) {
 	job.ReviewRepairCount = 1
 	base.jobs[job.ID] = job
 	store := newReviewDecisionStore(base)
-	store.plan = ReviewPlanRecord{
-		JobID: job.ID, Revision: job.Revision, State: "pending",
-		RequestedRoles: []policy.Role{policy.RoleBrowserUI, policy.RolePerformance, policy.RoleCriticalBoundary},
-	}
+	store.plan = ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, State: "pending"}
 	store.repairTargets = []policy.Role{policy.RoleCriticalBoundary}
 	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), job.Revision, []string{"internal/auth/session.go"}, true, false)
 	if err != nil {
@@ -174,11 +201,6 @@ func TestRepairPlanningUsesMandatoryFloorAndAffectedTargetsOnly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(store.recordedPolicy.Initial.Roles, wantRoles) || !reflect.DeepEqual(store.recordedPolicy.Initial.Reasons, wantReasons) {
 		t.Fatalf("repair policy=%#v want Roles=%v Reasons=%v without triage", store.recordedPolicy.Initial, wantRoles, wantReasons)
-	}
-	for _, reason := range store.recordedPolicy.Initial.Reasons {
-		if reason.Source == "implementation-request" {
-			t.Fatalf("repair retained optional provenance: %#v", store.recordedPolicy.Initial.Reasons)
-		}
 	}
 }
 
@@ -214,9 +236,6 @@ func (s *reviewDecisionStore) NextDelivery(ctx context.Context, jobID, sessionID
 }
 func (s *reviewDecisionStore) MarkChecksVerified(context.Context, string, string, []string) error {
 	return nil
-}
-func (s *reviewDecisionStore) ActivateReview(context.Context, ReviewActivation) (ReviewPlanRecord, bool, error) {
-	return ReviewPlanRecord{}, false, nil
 }
 func (s *reviewDecisionStore) ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error) {
 	return s.plan, s.planErr
@@ -875,9 +894,6 @@ func (s *reviewRecoveryStore) CompleteAction(_ context.Context, id string, recei
 
 func (s *reviewRecoveryStore) MarkChecksVerified(context.Context, string, string, []string) error {
 	return nil
-}
-func (s *reviewRecoveryStore) ActivateReview(context.Context, ReviewActivation) (ReviewPlanRecord, bool, error) {
-	return ReviewPlanRecord{}, false, nil
 }
 func (s *reviewRecoveryStore) ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error) {
 	return ReviewPlanRecord{}, nil

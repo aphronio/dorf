@@ -86,9 +86,9 @@ func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, 
 	}, nil
 }
 
-// Plan is pure and deterministic. Requested roles can only add allowlisted
-// review; they cannot remove the mandatory floor.
-func ReviewPolicy(facts ChangeFacts, requested []Role) (ReviewPlan, error) {
+// ReviewPolicy is pure and deterministic. Explicit facts select the mandatory
+// review floor; only AddTriage may add Roles for an unknown classification.
+func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 	if !facts.ChecksGreen || facts.Revision == "" || facts.BaseRevision == "" || len(facts.Paths) == 0 {
 		return ReviewPlan{}, fmt.Errorf("incomplete ChangeFacts cannot select review")
 	}
@@ -108,12 +108,6 @@ func ReviewPolicy(facts ChangeFacts, requested []Role) (ReviewPlan, error) {
 	}
 	if facts.DeclaredPerformance {
 		add(RolePerformance, "mandatory", "repository declared performance-sensitive change")
-	}
-	for _, role := range requested {
-		if !Allowed(role) {
-			return ReviewPlan{}, fmt.Errorf("implementation requested invalid or unsafe review Role %q", role)
-		}
-		add(role, "implementation-request", "implementation AgentRun requested additional review")
 	}
 	roles := make([]Role, 0, len(selected))
 	for role := range selected {

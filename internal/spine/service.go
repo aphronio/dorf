@@ -136,6 +136,12 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	if !job.AdmissionOpen {
 		return RunClosed, nil
 	}
+	switch job.WorkflowPhase {
+	case "ready", "publishing", "published":
+		// The admitted Job task owns ready-to-publication reconciliation
+		// outside the coding spine, then waits for external outcome authority.
+		return RunIdle, nil
+	}
 	if err := s.Store.StartRun(ctx, jobID); err != nil {
 		return RunIdle, err
 	}
@@ -414,11 +420,6 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, true, nil
 	case "review-planning", "review-triage", "reviewing":
 		return s.advanceReview(ctx, job)
-	case "review-activation":
-		// Exact-Revision Checks are proven. The orchestrator must now bind the
-		// implementation-requested allowlisted Roles, including an explicit
-		// empty set, before the atomic policy result can be computed.
-		return RunIdle, false, nil
 	default:
 		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
 	}

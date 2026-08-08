@@ -12,27 +12,18 @@ const (
 	ReviewReadOnlyCapability = "immutable-read-only"
 )
 
-type ReviewActivation struct {
-	JobID            string        `json:"job_id"`
-	Revision         string        `json:"revision"`
-	RequestedRoles   []policy.Role `json:"requested_roles"`
-	RequestedByRunID string        `json:"requested_by_agent_run_id,omitempty"`
-}
-
 type ReviewPlanRecord struct {
-	JobID            string             `json:"job_id"`
-	Revision         string             `json:"revision"`
-	State            string             `json:"state"`
-	Facts            policy.ChangeFacts `json:"facts"`
-	Initial          policy.ReviewPlan  `json:"initial_policy"`
-	Final            policy.ReviewPlan  `json:"final_plan"`
-	PolicyDigest     string             `json:"policy_digest,omitempty"`
-	RequestedRoles   []policy.Role      `json:"requested_roles"`
-	RequestedByRunID string             `json:"requested_by_agent_run_id,omitempty"`
-	TriageRunID      string             `json:"triage_agent_run_id,omitempty"`
-	TriageRationale  string             `json:"triage_rationale,omitempty"`
-	CreatedAt        time.Time          `json:"created_at,omitempty"`
-	FinalizedAt      time.Time          `json:"finalized_at,omitempty"`
+	JobID           string             `json:"job_id"`
+	Revision        string             `json:"revision"`
+	State           string             `json:"state"`
+	Facts           policy.ChangeFacts `json:"facts"`
+	Initial         policy.ReviewPlan  `json:"initial_policy"`
+	Final           policy.ReviewPlan  `json:"final_plan"`
+	PolicyDigest    string             `json:"policy_digest,omitempty"`
+	TriageRunID     string             `json:"triage_agent_run_id,omitempty"`
+	TriageRationale string             `json:"triage_rationale,omitempty"`
+	CreatedAt       time.Time          `json:"created_at,omitempty"`
+	FinalizedAt     time.Time          `json:"finalized_at,omitempty"`
 }
 
 type ReviewFinding struct {
@@ -92,7 +83,6 @@ type reviewObservationArtifact struct {
 
 type ReviewStore interface {
 	MarkChecksVerified(context.Context, string, string, []string) error
-	ActivateReview(context.Context, ReviewActivation) (ReviewPlanRecord, bool, error)
 	ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error)
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)

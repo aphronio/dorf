@@ -25,7 +25,6 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	"github.com/aphronio/dorf/internal/publication"
-	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -80,8 +79,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
-	case "review":
-		return reviewCommand(ctx, store, service, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "publication":
 		return publicationCommand(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
 	case "outcome":
@@ -134,7 +131,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 010_job_outcomes_cleanup.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 011_self_advancing_workflow.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -345,11 +342,12 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	continuation := continuationFor(job, outcome, runEvidence, publicationEvidence, cleanupEvidence)
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  gateway state: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.ProviderGatewayState), empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  gateway state: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.ProviderGatewayState), empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -403,7 +401,7 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 		if plan.Revision == job.Revision {
 			scope = "current"
 		}
-		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v requested=%v requested-by=%s digest=%s\n", scope, plan.Revision, plan.State, plan.Final.Decision, plan.Final.Roles, plan.RequestedRoles, empty(plan.RequestedByRunID), empty(plan.PolicyDigest))
+		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v digest=%s\n", scope, plan.Revision, plan.State, plan.Final.Decision, plan.Final.Roles, empty(plan.PolicyDigest))
 		for _, reason := range plan.Final.Reasons {
 			fmt.Fprintf(stdout, "    reason %s [%s]: %s\n", reason.Role, reason.Source, reason.Detail)
 		}
@@ -427,85 +425,6 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 			verification = "INVALID: " + err.Error()
 		}
 		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d provenance=%s producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Provenance, record.Producer, empty(record.Revision), verification)
-	}
-	return nil
-}
-
-type roleFlags []policy.Role
-
-func (r *roleFlags) String() string {
-	values := make([]string, 0, len(*r))
-	for _, role := range *r {
-		values = append(values, string(role))
-	}
-	return strings.Join(values, ",")
-}
-
-func (r *roleFlags) Set(value string) error {
-	*r = append(*r, policy.Role(strings.TrimSpace(value)))
-	return nil
-}
-
-func reviewCommand(ctx context.Context, store postgres.Store, service spine.Service, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "activate" {
-		return fmt.Errorf("review requires: activate JOB_ID --revision EXACT_OID [--requested-role ROLE]")
-	}
-	set := flag.NewFlagSet("review activate", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	revision := set.String("revision", "", "exact committed Revision already proven by Checks")
-	requestedBy := set.String("requested-by-agent-run", "", "original implementation AgentRun that requested additional review")
-	var roles roleFlags
-	set.Var(&roles, "requested-role", "allowlisted additional Role requested by the implementation AgentRun (repeatable)")
-	if err := set.Parse(args[1:]); err != nil {
-		return err
-	}
-	if set.NArg() != 1 || !postgres.ValidRevision(*revision) {
-		return fmt.Errorf("review activate requires one Job ID and --revision with a lowercase full commit OID")
-	}
-	job, err := store.Job(ctx, set.Arg(0))
-	if err != nil {
-		return err
-	}
-	if job.Revision != *revision {
-		return fmt.Errorf("activation Revision %s conflicts with Job current Revision %s", *revision, job.Revision)
-	}
-	declared, err := store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	checks, err := store.Checks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	records, err := store.Evidence(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if _, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
-		return fmt.Errorf("review activation requires independently verified exact-Revision Check Evidence: %w", err)
-	}
-	activation, created, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: *revision, RequestedRoles: []policy.Role(roles), RequestedByRunID: *requestedBy})
-	if err != nil {
-		return err
-	}
-	disposition, err := service.RunUntilIdle(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	job, err = store.Job(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	plan, planErr := store.ReviewPlan(ctx, job.ID, job.Revision)
-	runs, runsErr := store.AllReviewRuns(ctx, job.ID)
-	if planErr != nil || runsErr != nil {
-		return errors.Join(planErr, runsErr)
-	}
-	if err := writeJSON(stdout, map[string]any{"job_id": job.ID, "revision": job.Revision, "activation_created": created, "activation": activation, "plan": plan, "review_agent_runs": runs, "workflow_phase": job.WorkflowPhase, "disposition": disposition}); err != nil {
-		return err
-	}
-	if disposition == spine.RunBlocked || job.WorkflowPhase == "blocked" {
-		return fmt.Errorf("review workflow stopped visibly: %s", job.WorkflowAttention)
 	}
 	return nil
 }
@@ -576,18 +495,28 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 }
 
 func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "publish" {
-		return fmt.Errorf("publication requires: publish JOB_ID --revision EXACT_OID")
+	if len(args) == 0 || args[0] != "retry" {
+		return fmt.Errorf("publication requires: retry JOB_ID --revision EXACT_OID")
 	}
-	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	set := flag.NewFlagSet("publication retry", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	revision := set.String("revision", "", "exact ready Revision")
-	jobID, err := parsePublicationTarget(set, args[1:], "publication publish")
+	revision := set.String("revision", "", "exact publication Revision requiring retry")
+	jobID, err := parsePublicationTarget(set, args[1:], "publication retry")
 	if err != nil {
 		return err
 	}
 	if !postgres.ValidRevision(*revision) {
-		return fmt.Errorf("publication publish requires one Job ID and --revision with a lowercase full commit OID")
+		return fmt.Errorf("publication retry requires one Job ID and --revision with a lowercase full commit OID")
+	}
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if job.Revision != *revision {
+		return fmt.Errorf("publication retry Revision %s conflicts with Job current Revision %s", *revision, job.Revision)
+	}
+	if job.WorkflowPhase != "publishing" && job.WorkflowPhase != "publication-blocked" {
+		return fmt.Errorf("publication retry requires an already-scheduled or visibly blocked publication, not workflow phase %s", job.WorkflowPhase)
 	}
 	params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
 	if err != nil {
@@ -672,6 +601,49 @@ func openClosed(open bool) string {
 	}
 	return "closed"
 }
+
+type continuationStatus struct {
+	Mode   string `json:"mode"`
+	Actor  string `json:"actor"`
+	Detail string `json:"detail"`
+}
+
+func continuationFor(job spine.Job, outcome *spine.JobOutcome, run postgres.TaskEvidence, publications []postgres.PublicationTaskEvidence, cleanup postgres.TaskEvidence) continuationStatus {
+	if job.CleanupState == spine.CleanupComplete {
+		return continuationStatus{Mode: "terminal", Actor: "none", Detail: "authoritative outcome and exact deterministic cleanup are complete"}
+	}
+	if outcome != nil {
+		if job.CleanupState == spine.CleanupPending || job.CleanupTaskID == "" {
+			return continuationStatus{Mode: "attention", Actor: "outcome caller", Detail: "outcome is recorded but cleanup scheduling was interrupted; repeat the identical outcome command"}
+		}
+		if cleanup.State == "failed" || cleanup.State == "cancelled" || cleanup.State == "missing" {
+			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the deterministic cleanup task is terminal without completing exact cleanup"}
+		}
+		return continuationStatus{Mode: "automatic-cleanup", Actor: "Dorf cleanup task", Detail: "the recorded external outcome authorizes only deterministic cleanup; Dorf does not merge or infer another outcome"}
+	}
+	switch job.WorkflowPhase {
+	case "published":
+		if job.PublicationTaskID == "" {
+			if run.State == "failed" || run.State == "cancelled" || run.State == "missing" {
+				return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the proposal was observed but publication-task attachment recovery lost its admitted Job task"}
+			}
+			return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "the exact proposal is observed and the admitted Job task is reconciling its publication-task attachment"}
+		}
+		return continuationStatus{Mode: "external-authority", Actor: "GitHub owner", Detail: "proposal is live; record accepted, rejected, or explicitly abandoned only after observing that authority"}
+	case "blocked", "publication-blocked":
+		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "durable attention must be resolved; no orchestration agent is silently advancing this Job"}
+	}
+	for _, task := range publications {
+		if task.Current && (task.State == "failed" || task.State == "cancelled") {
+			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the exact publication task exhausted or was cancelled; repair the cause and use the bounded publication retry"}
+		}
+	}
+	if job.AdmissionOpen && (run.State == "failed" || run.State == "cancelled" || run.State == "missing") {
+		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the admitted Job task is terminal before the workflow reached its authority boundary"}
+	}
+	return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "persisted Job phase and Absurd tasks continue checks, review, repair, and exact-Revision publication"}
+}
+
 func queuedState(state spine.AgentRunState) string {
 	if state == "" {
 		return "queued"
@@ -748,6 +720,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|publication|outcome|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|publication|outcome|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

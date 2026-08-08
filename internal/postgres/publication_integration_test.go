@@ -27,7 +27,7 @@ func publicationInput(key string) postgres.NewJob {
 	}
 }
 
-func TestMigration009PreservesHistoricalReviewWorkspaceDeleteAndAddsPublicationKinds(t *testing.T) {
+func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -93,6 +93,9 @@ func TestMigration009PreservesHistoricalReviewWorkspaceDeleteAndAddsPublicationK
 	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'publication-upgrade','preserve historical review cleanup','https://github.com/aphronio/dorf.git',$2,$2,'dorf/publication-upgrade','primary','gpt-5.6-sol','high')`, jobID, revision); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-activation' where id=$1`, jobID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values('action-review-workspace-delete',$1,'review-workspace-delete','succeeded','historical-review-run')`, jobID); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +130,21 @@ func TestMigration009PreservesHistoricalReviewWorkspaceDeleteAndAddsPublicationK
 	}
 	if !outcomeTable || !legacyLocatorNull {
 		t.Fatalf("010 upgrade outcome table=%t legacy locator nullable=%t", outcomeTable, legacyLocatorNull)
+	}
+	var migrationApplied, optionalColumnsRemain bool
+	var phaseConstraint string
+	var workflowPhase, reviewPlanState string
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='011_self_advancing_workflow.sql'),exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='review_plans' and column_name in ('requested_roles','requested_by_run_id'))`).Scan(&migrationApplied, &optionalColumnsRemain); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select pg_get_constraintdef(oid) from pg_constraint where conrelid='dorf.jobs'::regclass and conname='jobs_workflow_phase_check'`).Scan(&phaseConstraint); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select j.workflow_phase,p.state from dorf.jobs j join dorf.review_plans p on p.job_id=j.id and p.revision=j.revision where j.id=$1`, jobID).Scan(&workflowPhase, &reviewPlanState); err != nil {
+		t.Fatal(err)
+	}
+	if !migrationApplied || optionalColumnsRemain || strings.Contains(phaseConstraint, "review-activation") || !strings.Contains(phaseConstraint, "review-planning") || workflowPhase != "review-planning" || reviewPlanState != "pending" {
+		t.Fatalf("011 applied=%t optional columns=%t phase constraint=%s upgraded phase=%s plan=%s", migrationApplied, optionalColumnsRemain, phaseConstraint, workflowPhase, reviewPlanState)
 	}
 }
 
@@ -274,6 +292,22 @@ func TestCleanupSettlesOnlyItsExactAttachedPublicationAndOrdinaryTasks(t *testin
 	}
 	target, targetPublication := prepare("target")
 	sentinel, sentinelPublication := prepare("sentinel")
+	if _, err := workflow.ScheduleCleanup(ctx, store, client, target.ID); err == nil || !strings.Contains(err.Error(), "without a recorded accepted, rejected, or explicitly abandoned outcome") {
+		t.Fatalf("live proposal cleanup error=%v", err)
+	}
+	targetProposal, err := store.Proposal(ctx, target.ID)
+	if err != nil || targetProposal == nil {
+		t.Fatalf("target proposal=%#v err=%v", targetProposal, err)
+	}
+	if _, created, err := store.RecordOutcome(ctx, spine.JobOutcome{
+		JobID: target.ID, Kind: spine.OutcomeAbandoned, Repository: targetProposal.Repository,
+		InstallationID: targetProposal.InstallationID, BaseBranch: targetProposal.BaseBranch,
+		HeadBranch: targetProposal.HeadBranch, Number: targetProposal.Number, URL: targetProposal.URL,
+		ProposedRevision: targetProposal.ProposedRevision, ObservedHead: targetProposal.ProposedRevision,
+		ObservedState: "open", ObservedAt: time.Now().UTC(),
+	}); err != nil || !created {
+		t.Fatalf("explicit abandonment created=%t err=%v", created, err)
+	}
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, target.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -319,6 +353,24 @@ func TestCleanupUsesAbsurdRunStateInsteadOfHistoricalClaimMetadata(t *testing.T)
 		_, publicationTaskID, created, err := publicationapi.Schedule(ctx, store, client, nil, job.ID, job.Revision)
 		if err != nil || !created {
 			t.Fatalf("publication %s task=%s created=%t err=%v", label, publicationTaskID, created, err)
+		}
+		push, pull, err := store.PublicationActions(ctx, job.ID, job.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordPush(ctx, push.ID, job.Revision); err != nil {
+			t.Fatal(err)
+		}
+		number := int64(45)
+		if label == "nonterminal" {
+			number = 46
+		}
+		proposal := spine.GitHubProposal{JobID: job.ID, Repository: input.GitHubRepository, InstallationID: input.GitHubInstallation, BaseBranch: input.BaseBranch, HeadBranch: input.Branch, Number: number, URL: fmt.Sprintf("https://github.com/aphronio/dorf/pull/%d", number), ProposedRevision: job.Revision, ObservedRemoteHead: job.Revision, BodyDigest: strings.Repeat("5", 64)}
+		if err := store.RecordProposal(ctx, pull.ID, proposal); err != nil {
+			t.Fatal(err)
+		}
+		if _, created, err := store.RecordOutcome(ctx, spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, Repository: proposal.Repository, InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch, HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL, ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision, ObservedState: "open", ObservedAt: time.Now().UTC()}); err != nil || !created {
+			t.Fatalf("record abandonment created=%t err=%v", created, err)
 		}
 		cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
 		if err != nil {
