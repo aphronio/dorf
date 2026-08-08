@@ -25,6 +25,7 @@ import (
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	publicationapi "github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -210,6 +211,16 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 			}
 			if !status.Signaled() || status.Signal() != syscall.SIGKILL {
 				t.Fatalf("worker was not lost with SIGKILL: %v output=%s", err, output.String())
+			}
+			if point == spine.BarrierPullRequestAccepted {
+				proposal, proposalErr := store.Proposal(ctx, job.ID)
+				_, retainedPull, actionErr := store.PublicationActions(ctx, job.ID, job.Revision)
+				if proposalErr != nil || actionErr != nil || proposal != nil || retainedPull.State != spine.ActionUncertain {
+					t.Fatalf("lost accepted PR proposal=%#v pull=%#v errors=%v/%v", proposal, retainedPull, proposalErr, actionErr)
+				}
+				if _, err := workflow.ScheduleCleanup(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "bounded publication retry") {
+					t.Fatalf("uncertain pull cleanup error=%v", err)
+				}
 			}
 
 			// The proof barrier shortens the live Absurd lease to ten seconds.

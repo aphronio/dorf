@@ -259,6 +259,10 @@ func TestPreProposalPublicationBlockedAllowsExplicitCleanupWithoutOutcome(t *tes
 	if err := store.BlockPublication(ctx, job.ID, job.Revision, "pre-proposal failure"); err != nil {
 		t.Fatal(err)
 	}
+	_, pull, err := store.PublicationActions(ctx, job.ID, job.Revision)
+	if err != nil || pull.State != spine.ActionPending {
+		t.Fatalf("pre-proposal pull Action=%#v err=%v", pull, err)
+	}
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
 	if err != nil {
 		t.Fatal(err)

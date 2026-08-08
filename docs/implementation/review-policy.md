@@ -54,7 +54,8 @@ task. Inspection reports `self-advancing`, `external-authority`, `attention`,
 `dorf publication retry JOB_ID --revision EXACT_OID` is limited to an already-scheduled exhausted
 publication or a visible `publication-blocked` condition after its concrete external cause is
 repaired; it cannot activate an ordinary ready Revision. An explicit `dorf cleanup JOB_ID` may end
-resources for a pre-proposal `publication-blocked` Job without recording an outcome; published
+resources for a pre-proposal `publication-blocked` Job only while its exact pull-request Action is
+still definitively pending. An uncertain Action requires bounded publication retry first; published
 and stale stored proposals remain protected until an authoritative outcome is recorded.
 
 ## Native and Evidence boundaries

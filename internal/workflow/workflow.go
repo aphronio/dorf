@@ -163,6 +163,14 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 				if outcome == nil {
 					return fmt.Errorf("cleanup cannot cancel or remove a stored GitHub proposal without a recorded accepted, rejected, or explicitly abandoned outcome")
 				}
+			} else {
+				_, pull, err := store.PublicationActions(ctx, job.ID, job.Revision)
+				if err != nil {
+					return fmt.Errorf("cleanup requires bounded publication retry to reconcile the exact pull-request Action: %w", err)
+				}
+				if pull.State != spine.ActionPending {
+					return fmt.Errorf("cleanup cannot proceed while the exact pull-request Action is %s; use the bounded publication retry to reconcile and record any exposed proposal first", pull.State)
+				}
 			}
 		}
 		if err := store.CloseAdmission(ctx, jobID); err != nil {
