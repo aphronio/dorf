@@ -11,12 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from dorf.github_app import (
-    GitHubAppConfigError,
-    GitHubAppVerificationError,
-    GitHubRepositoryClient,
-    GitHubRepositoryError,
-)
+from dorf.github_app import GitHubRepositoryClient
 from dorf.runtime import JobBinding
 
 from .coding_dossier import (
@@ -1307,23 +1302,3 @@ def job_head_is_ahead(
 
 def git_command_message(result: subprocess.CompletedProcess[str]) -> str:
     return result.stderr.strip() or result.stdout.strip() or "command failed"
-
-
-def github_remote_head(
-    job: CodingJob,
-    *,
-    github_client: Callable[[], GitHubRepositoryClient] | None = None,
-) -> tuple[str | None, str | None]:
-    repo_full_name = job.metadata.get("github_repo")
-    if not repo_full_name:
-        return None, "Job metadata is missing github_repo"
-    try:
-        if github_client is None:
-            return None, "GitHub client is unavailable"
-        client = github_client()
-        return client.get_branch_sha(
-            repo_full_name,
-            job.job_branch,
-        ), None
-    except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
-        return None, str(error)

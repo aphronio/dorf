@@ -193,13 +193,9 @@ def make_coding_job(tmp_path: Path):
 class GitHubClient:
     def __init__(self) -> None:
         self.comments = []
-        self.branch_sha = "b" * 40
 
     def add_pull_request_comment(self, repo, number, body):
         self.comments.append(body)
-
-    def get_branch_sha(self, repo, branch):
-        return self.branch_sha
 
     def get_pull_request(self, repo, number):
         return {"number": number, "state": "open", "head": {"sha": "b" * 40}}

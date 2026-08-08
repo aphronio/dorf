@@ -333,11 +333,11 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	publicationEvidence, err := store.TaskEvidence(ctx, job.PublicationTaskID)
+	publicationEvidence, err := store.PublicationTaskHistory(ctx, job)
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publication": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
@@ -361,8 +361,8 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
 	}
-	if publicationEvidence.TaskID != "" {
-		fmt.Fprintf(stdout, "  Absurd publication: %s state=%s attempts=%d checkpoints=%d\n", publicationEvidence.TaskID, publicationEvidence.State, publicationEvidence.Attempts, publicationEvidence.Checkpoints)
+	for _, task := range publicationEvidence {
+		fmt.Fprintf(stdout, "  Absurd publication: %s key=%s generation=%d state=%s attempts=%d checkpoints=%d current=%t\n", task.TaskID, task.IdempotencyKey, task.Attempt, task.State, task.Attempts, task.Checkpoints, task.Current)
 	}
 	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
 	for _, message := range messages {

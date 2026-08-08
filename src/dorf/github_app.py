@@ -234,19 +234,6 @@ class GitHubRepositoryClient:
         self.token = token
         self.api_url = api_url.rstrip("/")
 
-    def get_branch_sha(self, repo_full_name: str, branch: str) -> str:
-        payload = self._request_json(
-            "GET",
-            f"/repos/{repo_full_name}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}",
-        )
-        obj = payload.get("object")
-        if not isinstance(obj, dict):
-            raise GitHubRepositoryError("GitHub branch response did not include an object")
-        sha = obj.get("sha")
-        if not isinstance(sha, str) or not sha:
-            raise GitHubRepositoryError("GitHub branch response did not include a SHA")
-        return sha
-
     def get_issue(self, repo_full_name: str, issue_number: int) -> GitHubIssue:
         payload = self._request_json("GET", f"/repos/{repo_full_name}/issues/{issue_number}")
         if not isinstance(payload, dict):
@@ -296,59 +283,6 @@ class GitHubRepositoryClient:
 
     def get_pull_request(self, repo_full_name: str, pull_number: int) -> dict[str, Any]:
         return self._request_json("GET", f"/repos/{repo_full_name}/pulls/{pull_number}")
-
-    def mark_pull_request_ready(self, repo_full_name: str, pull_number: int) -> None:
-        pull = self.get_pull_request(repo_full_name, pull_number)
-        if pull.get("draft") is not True:
-            return
-        node_id = pull.get("node_id")
-        if not isinstance(node_id, str) or not node_id:
-            return
-        self._request_json(
-            "POST",
-            "/graphql",
-            body={
-                "query": (
-                    "mutation($id: ID!) { "
-                    "markPullRequestReadyForReview(input: {pullRequestId: $id}) { "
-                    "pullRequest { number } } }"
-                ),
-                "variables": {"id": node_id},
-            },
-        )
-
-    def mark_pull_request_draft(self, repo_full_name: str, pull_number: int) -> None:
-        pull = self.get_pull_request(repo_full_name, pull_number)
-        if pull.get("draft") is True:
-            return
-        node_id = pull.get("node_id")
-        if not isinstance(node_id, str) or not node_id:
-            raise GitHubRepositoryError(
-                f"Pull request {pull_number} did not include a GraphQL node ID"
-            )
-        response = self._request_json(
-            "POST",
-            "/graphql",
-            body={
-                "query": (
-                    "mutation($id: ID!) { "
-                    "convertPullRequestToDraft(input: {pullRequestId: $id}) { "
-                    "pullRequest { number } } }"
-                ),
-                "variables": {"id": node_id},
-            },
-        )
-        data = response.get("data") if isinstance(response, dict) else None
-        converted = data.get("convertPullRequestToDraft") if isinstance(data, dict) else None
-        if (
-            not isinstance(response, dict)
-            or response.get("errors")
-            or not isinstance(converted, dict)
-            or not converted.get("pullRequest")
-        ):
-            raise GitHubRepositoryError(
-                f"GitHub did not convert pull request {pull_number} to draft"
-            )
 
     def add_pull_request_comment(self, repo_full_name: str, pr_number: int, body: str) -> None:
         self._request_json(

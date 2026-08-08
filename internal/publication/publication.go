@@ -21,7 +21,7 @@ import (
 type GitHub interface {
 	RemoteHead(context.Context, githubapi.Authority, string) (string, bool, error)
 	PushToken(context.Context, githubapi.Authority) (string, error)
-	PullRequests(context.Context, githubapi.Authority, string, string, string) ([]githubapi.PullRequest, error)
+	PullRequests(context.Context, githubapi.Authority, string, string) ([]githubapi.PullRequest, error)
 	CreatePullRequest(context.Context, githubapi.Authority, string, string, string, string) (githubapi.PullRequest, error)
 	UpdatePullRequest(context.Context, githubapi.Authority, int64, string, string, string) (githubapi.PullRequest, error)
 }
@@ -148,7 +148,7 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 		}
 	}
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
-	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch, job.BaseBranch)
+	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch)
 	if err != nil {
 		_ = s.Store.UncertainAction(ctx, pullAction.ID)
 		return err
@@ -157,16 +157,20 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 	if err != nil {
 		return err
 	}
-	pullDecision, pull, err := planPull(job, pulls, stored, body)
+	pullDecision, pull, err := planPull(job, pulls, stored, title, body)
 	if err != nil {
 		return s.block(ctx, job, err.Error())
 	}
 	mutated := false
+	validationProposal := stored
 	switch pullDecision {
 	case "create":
 		pull, err = s.GitHub.CreatePullRequest(ctx, authority, title, body, job.Branch, job.BaseBranch)
 		mutated = err == nil
 	case "update":
+		if validationProposal == nil {
+			validationProposal = &spine.GitHubProposal{Number: pull.Number}
+		}
 		pull, err = s.GitHub.UpdatePullRequest(ctx, authority, pull.Number, title, body, job.BaseBranch)
 		mutated = err == nil
 	case "adopt":
@@ -175,7 +179,7 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 		_ = s.Store.UncertainAction(ctx, pullAction.ID)
 		return err
 	}
-	if err := validatePull(job, pull, stored); err != nil {
+	if err := validatePull(job, pull, validationProposal, title); err != nil {
 		return s.block(ctx, job, err.Error())
 	}
 	if pull.Body != body {
@@ -203,21 +207,21 @@ func planPush(present bool, remote, revision, relation string) (string, error) {
 	return "", &AttentionError{Reason: fmt.Sprintf("remote head %s is %s relative to exact Revision %s; refusing force or rewrite", remote, relation, revision)}
 }
 
-func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHubProposal, body string) (string, githubapi.PullRequest, error) {
+func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHubProposal, title, body string) (string, githubapi.PullRequest, error) {
 	if len(pulls) > 1 {
-		return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("GitHub has %d open pull requests for exact repository + head + base identity", len(pulls))}
+		return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("GitHub has %d pull requests across states or bases for the exact Job head; refusing duplicate publication", len(pulls))}
 	}
 	if len(pulls) == 0 {
 		if stored != nil {
-			return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("recorded pull request #%d is no longer the unique open repository + head + base proposal", stored.Number)}
+			return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("recorded pull request #%d is no longer discoverable for the exact Job head", stored.Number)}
 		}
 		return "create", githubapi.PullRequest{}, nil
 	}
 	pull := pulls[0]
-	if err := validatePull(job, pull, stored); err != nil {
+	if err := validatePullIdentity(job, pull, stored); err != nil {
 		return "", githubapi.PullRequest{}, err
 	}
-	if pull.Body != body {
+	if pull.Title != title || pull.Body != body {
 		return "update", pull, nil
 	}
 	return "adopt", pull, nil
@@ -237,15 +241,31 @@ func (s Service) reach(ctx context.Context, point, jobID, identity string) error
 	return barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func validatePull(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
+func validatePullIdentity(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
 	if pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.Number < 1 || pull.URL == "" {
 		return &AttentionError{Reason: "GitHub pull request conflicts with exact repository + head + base identity"}
+	}
+	if pull.State != "open" {
+		return &AttentionError{Reason: fmt.Sprintf("GitHub pull request #%d for the exact Job head is %s; refusing to create a replacement", pull.Number, pull.State)}
+	}
+	if pull.Draft {
+		return &AttentionError{Reason: fmt.Sprintf("GitHub pull request #%d is draft; direct REST publication cannot prove ready state", pull.Number)}
 	}
 	if pull.HeadSHA != job.Revision {
 		return &AttentionError{Reason: fmt.Sprintf("GitHub pull request head Revision %s conflicts with exact proposed Revision %s", pull.HeadSHA, job.Revision)}
 	}
 	if stored != nil && stored.Number != pull.Number {
 		return &AttentionError{Reason: fmt.Sprintf("recorded pull request #%d conflicts with discovered pull request #%d", stored.Number, pull.Number)}
+	}
+	return nil
+}
+
+func validatePull(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal, title string) error {
+	if err := validatePullIdentity(job, pull, stored); err != nil {
+		return err
+	}
+	if pull.Title != title {
+		return &AttentionError{Reason: "GitHub pull-request response did not retain the exact projected title"}
 	}
 	return nil
 }
@@ -257,7 +277,7 @@ func Title(goal string) string {
 		line = "Dorf coding Job"
 	}
 	if len(line) > 120 {
-		line = strings.TrimSpace(line[:120])
+		line = strings.TrimSpace(truncateUTF8(line, 120))
 	}
 	return line
 }
@@ -311,11 +331,18 @@ func projectGoal(goal string) string {
 	if len(goal) <= limit {
 		return goal
 	}
+	return strings.TrimSpace(truncateUTF8(goal, limit)) + "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
+}
+
+func truncateUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
 	end := limit
-	for end > 0 && !utf8.RuneStart(goal[end]) {
+	for end > 0 && !utf8.RuneStart(value[end]) {
 		end--
 	}
-	return strings.TrimSpace(goal[:end]) + "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
+	return value[:end]
 }
 
 type GitRepository struct {
@@ -340,6 +367,9 @@ func (r GitRepository) Relation(ctx context.Context, job spine.Job, remote strin
 	if behind.ExitCode == 0 {
 		return "behind", nil
 	}
+	if behind.ExitCode != 1 {
+		return "", fmt.Errorf("classify remote head ancestry: git merge-base exited %d: %s", behind.ExitCode, boundedStderr(behind.Stderr))
+	}
 	ahead, err := r.Sandbox.Exec(ctx, name, nil, "git", "-C", r.Workspace, "merge-base", "--is-ancestor", job.Revision, remote)
 	if err != nil {
 		return "", err
@@ -347,7 +377,22 @@ func (r GitRepository) Relation(ctx context.Context, job spine.Job, remote strin
 	if ahead.ExitCode == 0 {
 		return "ahead", nil
 	}
+	if ahead.ExitCode != 1 {
+		return "", fmt.Errorf("classify exact Revision ancestry: git merge-base exited %d: %s", ahead.ExitCode, boundedStderr(ahead.Stderr))
+	}
 	return "divergent", nil
+}
+
+func boundedStderr(stderr string) string {
+	const limit = 512
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		return "no stderr"
+	}
+	if len(detail) > limit {
+		return truncateUTF8(detail, limit) + " [truncated]"
+	}
+	return detail
 }
 
 func (r GitRepository) Push(ctx context.Context, job spine.Job, token string) error {

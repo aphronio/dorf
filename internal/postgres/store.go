@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +74,16 @@ type TaskEvidence struct {
 	State       string `json:"state"`
 	Attempts    int    `json:"attempts"`
 	Checkpoints int    `json:"checkpoints"`
+}
+
+type PublicationTaskEvidence struct {
+	TaskID         string `json:"task_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	State          string `json:"state"`
+	Attempts       int    `json:"attempts"`
+	Checkpoints    int    `json:"checkpoints"`
+	Attempt        int    `json:"publication_attempt"`
+	Current        bool   `json:"current"`
 }
 
 func (s Store) BootstrapAbsurd(ctx context.Context, schema []byte) error {
@@ -1597,6 +1608,48 @@ func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, e
 		return TaskEvidence{TaskID: taskID, State: "missing"}, nil
 	}
 	return evidence, err
+}
+
+// PublicationTaskHistory projects retained Absurd authority for every exact
+// publication generation of the Job's current Revision.
+func (s Store) PublicationTaskHistory(ctx context.Context, job spine.Job) ([]PublicationTaskEvidence, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		select t.task_id::text,t.idempotency_key,t.state,t.attempts,
+		       coalesce(t.params->>'attempt',''),count(c.task_id)
+		from absurd.t_dorf_jobs t
+		left join absurd.c_dorf_jobs c on c.task_id=t.task_id
+		where t.task_name=$1 and t.params->>'job_id'=$2 and t.params->>'revision'=$3
+		  and t.max_attempts=$4
+		group by t.task_id,t.idempotency_key,t.state,t.attempts,t.params
+		order by t.idempotency_key,t.task_id`, PublicationTaskName, job.ID, job.Revision, PublicationTaskMaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []PublicationTaskEvidence
+	for rows.Next() {
+		var item PublicationTaskEvidence
+		var attempt string
+		if err := rows.Scan(&item.TaskID, &item.IdempotencyKey, &item.State, &item.Attempts, &attempt, &item.Checkpoints); err != nil {
+			return nil, err
+		}
+		item.Attempt, err = strconv.Atoi(attempt)
+		if err != nil || item.Attempt < 0 || item.IdempotencyKey != PublicationTaskKey(job.ID, job.Revision, item.Attempt) {
+			return nil, fmt.Errorf("Absurd task %s has ambiguous publication generation authority", item.TaskID)
+		}
+		item.Current = item.TaskID == job.PublicationTaskID && item.Attempt == job.PublicationAttempt
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Attempt != result[j].Attempt {
+			return result[i].Attempt < result[j].Attempt
+		}
+		return result[i].TaskID < result[j].TaskID
+	})
+	return result, nil
 }
 
 func expectOne(result sql.Result, err error) error {

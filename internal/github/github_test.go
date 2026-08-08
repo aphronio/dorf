@@ -98,7 +98,14 @@ func TestEachGitHubAuthorityReadAndMutationMintsRepositoryPermissionTogether(t *
 		case request.URL.Path == "/repos/aphronio/dorf/pulls" && request.Method == http.MethodPost:
 			var body map[string]any
 			_ = json.NewDecoder(request.Body).Decode(&body)
-			_, _ = w.Write([]byte(`{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"body","head":{"ref":"dorf/issue-43","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
+			_, _ = w.Write([]byte(`{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","title":"title","state":"open","draft":false,"body":"body","head":{"ref":"dorf/issue-43","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
+		case request.URL.Path == "/repos/aphronio/dorf/pulls/7" && request.Method == http.MethodPatch:
+			var body map[string]any
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if body["title"] != "refreshed title" || body["body"] != "refreshed body" || body["base"] != "greenfield" {
+				t.Fatalf("update body=%#v", body)
+			}
+			_, _ = w.Write([]byte(`{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","title":"refreshed title","state":"open","draft":false,"body":"refreshed body","head":{"ref":"dorf/issue-43","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
 		default:
 			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
 		}
@@ -118,13 +125,17 @@ func TestEachGitHubAuthorityReadAndMutationMintsRepositoryPermissionTogether(t *
 	if _, err := client.PushToken(context.Background(), authority); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PullRequests(context.Background(), authority, "aphronio", "dorf/issue-43", "greenfield"); err != nil {
+	if _, err := client.PullRequests(context.Background(), authority, "aphronio", "dorf/issue-43"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.CreatePullRequest(context.Background(), authority, "title", "body", "dorf/issue-43", "greenfield"); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"aphronio/dorf:contents:read", "aphronio/dorf:contents:write", "aphronio/dorf:pull_requests:read", "aphronio/dorf:pull_requests:write"}
+	updated, err := client.UpdatePullRequest(context.Background(), authority, 7, "refreshed title", "refreshed body", "greenfield")
+	if err != nil || updated.Title != "refreshed title" || updated.Body != "refreshed body" || updated.State != "open" || updated.Draft {
+		t.Fatalf("updated pull request=%#v err=%v", updated, err)
+	}
+	want := []string{"aphronio/dorf:contents:read", "aphronio/dorf:contents:write", "aphronio/dorf:pull_requests:read", "aphronio/dorf:pull_requests:write", "aphronio/dorf:pull_requests:write"}
 	if strings.Join(scopes, "|") != strings.Join(want, "|") {
 		t.Fatalf("scopes=%v want=%v", scopes, want)
 	}
@@ -136,14 +147,19 @@ func TestEachGitHubAuthorityReadAndMutationMintsRepositoryPermissionTogether(t *
 func TestPullRequestLookupRetainsZeroOneAndMultipleExactCandidates(t *testing.T) {
 	for name, payload := range map[string]string{
 		"zero":     `[]`,
-		"one":      `[{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
-		"multiple": `[{"number":7,"html_url":"u7","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}},{"number":8,"html_url":"u8","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
+		"one":      `[{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","title":"title","state":"closed","draft":false,"body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"wrong-base"}}]`,
+		"multiple": `[{"number":7,"html_url":"u7","title":"title","state":"open","draft":false,"body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}},{"number":8,"html_url":"u8","title":"title","state":"closed","draft":true,"body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"other"}}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(payload)) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Query().Get("state") != "all" || request.URL.Query().Get("head") != "aphronio:dorf/head" || request.URL.Query().Has("base") {
+					t.Fatalf("lost-response discovery query=%s", request.URL.RawQuery)
+				}
+				_, _ = w.Write([]byte(payload))
+			}))
 			defer server.Close()
 			client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(context.Context, Authority, string, string) (string, error) { return "ephemeral", nil }}
-			pulls, err := client.PullRequests(context.Background(), Authority{"aphronio/dorf", "42"}, "aphronio", "dorf/head", "greenfield")
+			pulls, err := client.PullRequests(context.Background(), Authority{"aphronio/dorf", "42"}, "aphronio", "dorf/head")
 			if err != nil || len(pulls) != map[string]int{"zero": 0, "one": 1, "multiple": 2}[name] {
 				t.Fatalf("pulls=%#v err=%v", pulls, err)
 			}
@@ -158,6 +174,8 @@ func TestPullRequestResponseRequiresExactHeadSHA(t *testing.T) {
 	var payload pullPayload
 	payload.Number = 7
 	payload.HTMLURL = "https://github.com/aphronio/dorf/pull/7"
+	payload.Title = "title"
+	payload.State = "open"
 	payload.Head.Ref = "dorf/head"
 	payload.Head.Repo.FullName = "aphronio/dorf"
 	payload.Base.Ref = "greenfield"

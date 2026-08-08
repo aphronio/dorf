@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -47,7 +46,7 @@ func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, 
 			return err
 		}
 		params = Params{JobID: job.ID, Revision: job.Revision, Attempt: job.PublicationAttempt}
-		if job.WorkflowPhase == "published" || !spawn {
+		if !spawn {
 			taskID = job.PublicationTaskID
 			return nil
 		}
@@ -64,11 +63,6 @@ func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, 
 			return err
 		}
 		if err := store.AttachPublicationTask(ctx, job.ID, job.Revision, job.PublicationAttempt, spawned.TaskID); err != nil {
-			if spawned.Created {
-				if cancelErr := client.CancelTask(ctx, config.QueueName, spawned.TaskID); cancelErr != nil {
-					return fmt.Errorf("attach exact-Revision publication task: %w; cancel unattached task %s: %v", err, spawned.TaskID, cancelErr)
-				}
-			}
 			return fmt.Errorf("attach exact-Revision publication task: %w", err)
 		}
 		return nil

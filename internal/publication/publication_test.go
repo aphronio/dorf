@@ -80,6 +80,21 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 	}
 }
 
+func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testing.T) {
+	calls := 0
+	repository := GitRepository{Workspace: "/workspace/job", Sandbox: incus.Sandbox{Runner: sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
+		calls++
+		if calls == 1 {
+			return incus.Result{ExitCode: 0}, nil
+		}
+		return incus.Result{ExitCode: 128, Stderr: strings.Repeat("fatal ancestry failure ", 80)}, nil
+	})}}
+	_, err := repository.Relation(context.Background(), spine.Job{ID: "job", Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
+	if err == nil || !strings.Contains(err.Error(), "exited 128") || !strings.Contains(err.Error(), "[truncated]") || len(err.Error()) > 620 {
+		t.Fatalf("merge-base operational error=%q", err)
+	}
+}
+
 func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-1", Goal: "Implement durable publication", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
@@ -135,20 +150,21 @@ func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *test
 			if decoded.Body != body || BodyDigest(decoded.Body) != digest {
 				t.Fatal("JSON request text or digest differs from the local deterministic body")
 			}
-			pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: decoded.Body}
-			if decision, _, err := planPull(job, nil, nil, body); err != nil || decision != "create" {
+			title := Title(job.Goal)
+			pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: decoded.Body}
+			if decision, _, err := planPull(job, nil, nil, title, body); err != nil || decision != "create" {
 				t.Fatalf("initial decision=%s err=%v", decision, err)
 			}
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, nil, body); err != nil || decision != "adopt" {
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, nil, title, body); err != nil || decision != "adopt" {
 				t.Fatalf("create reconciliation=%s err=%v", decision, err)
 			}
 			pull.Body = "stale body"
 			stored := &spine.GitHubProposal{Number: pull.Number}
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, body); err != nil || decision != "update" {
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, title, body); err != nil || decision != "update" {
 				t.Fatalf("refresh decision=%s err=%v", decision, err)
 			}
 			pull.Body = decoded.Body
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, body); err != nil || decision != "adopt" {
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, title, body); err != nil || decision != "adopt" {
 				t.Fatalf("update reconciliation=%s err=%v", decision, err)
 			}
 		})
@@ -158,29 +174,37 @@ func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *test
 func TestPullRequestExactIdentityAllowsOneAndRejectsConflicts(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
-	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: "aphronio/dorf", Head: "dorf/head", HeadSHA: revision, Base: "greenfield", Body: "body"}
-	if err := validatePull(job, exact, nil); err != nil {
+	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: "title", State: "open", Repository: "aphronio/dorf", Head: "dorf/head", HeadSHA: revision, Base: "greenfield", Body: "body"}
+	if err := validatePull(job, exact, nil, exact.Title); err != nil {
 		t.Fatal(err)
 	}
 	stored := &spine.GitHubProposal{Number: 43}
-	if err := validatePull(job, exact, stored); err != nil {
+	if err := validatePull(job, exact, stored, exact.Title); err != nil {
 		t.Fatal(err)
 	}
+	repositoryConflict := exact
+	repositoryConflict.Repository = "other/repo"
+	headConflict := exact
+	headConflict.Head = "other"
+	shaConflict := exact
+	shaConflict.HeadSHA = strings.Repeat("b", 40)
+	baseConflict := exact
+	baseConflict.Base = "main"
 	for name, conflict := range map[string]githubapi.PullRequest{
-		"repository": {Number: 43, URL: exact.URL, Repository: "other/repo", Head: exact.Head, HeadSHA: exact.HeadSHA, Base: exact.Base},
-		"head":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: "other", HeadSHA: exact.HeadSHA, Base: exact.Base},
-		"head SHA":   {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: exact.Head, HeadSHA: strings.Repeat("b", 40), Base: exact.Base},
-		"base":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: exact.Head, HeadSHA: exact.HeadSHA, Base: "main"},
+		"repository": repositoryConflict,
+		"head":       headConflict,
+		"head SHA":   shaConflict,
+		"base":       baseConflict,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := validatePull(job, conflict, stored); err == nil {
+			if err := validatePull(job, conflict, stored, exact.Title); err == nil {
 				t.Fatal("identity conflict was accepted")
 			}
 		})
 	}
 	other := *stored
 	other.Number = 44
-	if err := validatePull(job, exact, &other); err == nil {
+	if err := validatePull(job, exact, &other, exact.Title); err == nil {
 		t.Fatal("different recorded PR identity was adopted")
 	}
 }
@@ -209,24 +233,69 @@ func TestPushRecoveryAdoptsEqualPushesMissingOrBehindAndBlocksUnsafeHistory(t *t
 
 func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testing.T) {
 	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
-	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
-	if decision, _, err := planPull(job, nil, nil, exact.Body); err != nil || decision != "create" {
+	title := "exact title"
+	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
+	if decision, _, err := planPull(job, nil, nil, title, exact.Body); err != nil || decision != "create" {
 		t.Fatalf("zero decision=%s err=%v", decision, err)
 	}
-	if decision, _, err := planPull(job, []githubapi.PullRequest{exact}, nil, exact.Body); err != nil || decision != "adopt" {
+	if decision, _, err := planPull(job, []githubapi.PullRequest{exact}, nil, title, exact.Body); err != nil || decision != "adopt" {
 		t.Fatalf("lost-create adoption=%s err=%v", decision, err)
 	}
 	stale := exact
 	stale.Body = "old body"
 	stored := &spine.GitHubProposal{Number: 43}
-	if decision, pull, err := planPull(job, []githubapi.PullRequest{stale}, stored, exact.Body); err != nil || decision != "update" || pull.Number != 43 {
+	if decision, pull, err := planPull(job, []githubapi.PullRequest{stale}, stored, title, exact.Body); err != nil || decision != "update" || pull.Number != 43 {
 		t.Fatalf("same-PR refresh=%s pull=%#v err=%v", decision, pull, err)
 	}
-	if _, _, err := planPull(job, []githubapi.PullRequest{exact, exact}, stored, exact.Body); err == nil {
+	if _, _, err := planPull(job, []githubapi.PullRequest{exact, exact}, stored, title, exact.Body); err == nil {
 		t.Fatal("duplicate exact-identity PRs did not block")
 	}
-	if _, _, err := planPull(job, nil, stored, exact.Body); err == nil {
+	if _, _, err := planPull(job, nil, stored, title, exact.Body); err == nil {
 		t.Fatal("missing recorded PR was silently recreated")
+	}
+}
+
+func TestPullRecoveryBlocksClosedWrongBaseAndDraftButRefreshesTitle(t *testing.T) {
+	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
+	title := "exact title"
+	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
+	for name, mutate := range map[string]func(*githubapi.PullRequest){
+		"closed":     func(pull *githubapi.PullRequest) { pull.State = "closed" },
+		"wrong base": func(pull *githubapi.PullRequest) { pull.Base = "main" },
+		"draft":      func(pull *githubapi.PullRequest) { pull.Draft = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := exact
+			mutate(&candidate)
+			if decision, _, err := planPull(job, []githubapi.PullRequest{candidate}, nil, title, exact.Body); err == nil || decision != "" {
+				t.Fatalf("conflicting candidate decision=%q err=%v", decision, err)
+			}
+		})
+	}
+	staleTitle := exact
+	staleTitle.Title = "old title"
+	if decision, pull, err := planPull(job, []githubapi.PullRequest{staleTitle}, nil, title, exact.Body); err != nil || decision != "update" || pull.Number != exact.Number {
+		t.Fatalf("title refresh decision=%q pull=%#v err=%v", decision, pull, err)
+	}
+	if err := validatePull(job, exact, nil, title); err != nil {
+		t.Fatalf("refreshed exact title was not accepted: %v", err)
+	}
+}
+
+func TestTitlePreservesUTF8At120ByteBudget(t *testing.T) {
+	for _, test := range []struct {
+		name, goal, want string
+	}{
+		{"multibyte crosses boundary", strings.Repeat("a", 119) + "界tail", strings.Repeat("a", 119)},
+		{"ASCII exact boundary", strings.Repeat("a", 120), strings.Repeat("a", 120)},
+		{"short Unicode", "修复 publication 🙂", "修复 publication 🙂"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := Title(test.goal)
+			if got != test.want || !utf8.ValidString(got) || len(got) > 120 {
+				t.Fatalf("title=%q bytes=%d valid=%t want=%q", got, len(got), utf8.ValidString(got), test.want)
+			}
+		})
 	}
 }
 
@@ -236,8 +305,9 @@ func TestPublicationTaskRetryAdoptsPreviouslyAcceptedExternalEffects(t *testing.
 		t.Fatalf("accepted push decision=%s err=%v", decision, err)
 	}
 	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
-	pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: "exact body"}
-	if decision, adopted, err := planPull(job, []githubapi.PullRequest{pull}, nil, pull.Body); err != nil || decision != "adopt" || adopted.Number != pull.Number {
+	title := "exact title"
+	pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: "exact body"}
+	if decision, adopted, err := planPull(job, []githubapi.PullRequest{pull}, nil, title, pull.Body); err != nil || decision != "adopt" || adopted.Number != pull.Number {
 		t.Fatalf("accepted pull request decision=%s pull=%#v err=%v", decision, adopted, err)
 	}
 }

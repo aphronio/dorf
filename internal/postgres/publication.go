@@ -111,6 +111,10 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		err := tx.QueryRowContext(ctx, `select proposed_revision from dorf.github_proposals where job_id=$1`, jobID).Scan(&proposed)
 		if err == nil && proposed == revision {
 			alreadyPublished = true
+			// The deterministic task may have won the Job fence and completed
+			// after Spawn but before its ID was attached. Re-adopt that same
+			// attempt key without reopening publication.
+			spawn = taskID == ""
 		} else {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("published Job is not stale at a later exact ready Revision")
 		}
@@ -120,7 +124,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	default:
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", phase)
 	}
-	if spawn {
+	if spawn && !alreadyPublished {
 		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='publishing',workflow_attention=null,publication_attempt=$2,publication_task_id=null where id=$1`, jobID, attempt); err != nil {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 		}
@@ -137,7 +141,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
 	job, err := s.Job(ctx, jobID)
-	return job, push, pull, spawn && !alreadyPublished, err
+	return job, push, pull, spawn, err
 }
 
 const publicationTaskQuery = `select t.task_id::text,t.task_name,t.state,

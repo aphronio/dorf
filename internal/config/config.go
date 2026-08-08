@@ -44,7 +44,7 @@ func Load() (Config, error) {
 		AppServerPort:    4500,
 		TurnTimeout:      45 * time.Minute,
 		EvidenceRoot:     value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
-		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "config.json")),
+		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
 		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
 		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
 	}

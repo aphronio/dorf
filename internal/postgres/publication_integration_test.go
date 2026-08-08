@@ -265,9 +265,126 @@ func TestPostgresExhaustedPublicationTaskAdvancesOneGenerationConcurrentlyAndPre
 	if err != nil || job.PublicationAttempt != initial.Attempt+1 || job.PublicationTaskID != nextTaskID || job.WorkflowPhase != "publishing" {
 		t.Fatalf("advanced Job=%#v err=%v", job, err)
 	}
+	history, err := store.PublicationTaskHistory(ctx, job)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("publication task history=%#v err=%v", history, err)
+	}
+	if history[0].TaskID != initialTaskID || history[0].IdempotencyKey != oldKey || history[0].State != "failed" || history[0].Attempts != postgres.PublicationTaskMaxAttempts || history[0].Attempt != initial.Attempt || history[0].Current {
+		t.Fatalf("retained exhausted generation=%#v", history[0])
+	}
+	if history[1].TaskID != nextTaskID || history[1].IdempotencyKey != nextKey || history[1].Attempt != initial.Attempt+1 || !history[1].Current {
+		t.Fatalf("current publication generation=%#v", history[1])
+	}
 	again, againTaskID, againCreated, err := publicationapi.Schedule(ctx, store, client, nil, job.ID, input.Revision)
 	if err != nil || againCreated || again.Attempt != initial.Attempt+1 || againTaskID != nextTaskID {
 		t.Fatalf("new active replay=%#v task=%s created=%v err=%v", again, againTaskID, againCreated, err)
+	}
+}
+
+func TestPostgresPublicationSpawnBeforeAttachWorkerWinIsAdoptedAfterPublished(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	publicationapi.Register(client, publicationapi.Service{Store: store})
+	input := publicationInput(fmt.Sprintf("publication-worker-win-%d", time.Now().UnixNano()))
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	barrier := &oneShotPublicationScheduleBarrier{point: spine.BarrierPublicationSpawn}
+	params, taskID, created, err := publicationapi.Schedule(ctx, store, client, barrier, job.ID, input.Revision)
+	if err == nil || !created || taskID == "" || params.Attempt != 0 {
+		t.Fatalf("spawn loss params=%#v task=%s created=%v err=%v", params, taskID, created, err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, taskID) })
+	push, pull, err := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPush(ctx, push.ID, input.Revision); err != nil {
+		t.Fatal(err)
+	}
+	proposal := spine.GitHubProposal{JobID: job.ID, Repository: input.GitHubRepository, InstallationID: input.GitHubInstallation, BaseBranch: input.BaseBranch, HeadBranch: input.Branch, Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", ProposedRevision: input.Revision, ObservedRemoteHead: input.Revision, BodyDigest: strings.Repeat("1", 64)}
+	if err := store.RecordProposal(ctx, pull.ID, proposal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.r_dorf_jobs r set state='completed',attempt=1 from absurd.t_dorf_jobs t where t.task_id=$1::uuid and r.run_id=t.last_attempt_run and r.task_id=t.task_id`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.t_dorf_jobs set state='completed',attempts=1 where task_id=$1::uuid`, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, recoveredTaskID, recoveredCreated, err := publicationapi.Schedule(ctx, store, client, nil, job.ID, input.Revision)
+	if err != nil || recoveredCreated || recovered.Attempt != params.Attempt || recoveredTaskID != taskID {
+		t.Fatalf("published adoption params=%#v task=%s created=%v err=%v", recovered, recoveredTaskID, recoveredCreated, err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "published" || job.PublicationTaskID != taskID || job.PublicationAttempt != params.Attempt {
+		t.Fatalf("published attachment Job=%#v err=%v", job, err)
+	}
+	history, err := store.PublicationTaskHistory(ctx, job)
+	if err != nil || len(history) != 1 || !history[0].Current || history[0].State != "completed" || history[0].TaskID != taskID {
+		t.Fatalf("completed publication evidence=%#v err=%v", history, err)
+	}
+	var tasks, proposals, actions int
+	if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&tasks); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select count(*) from dorf.github_proposals where job_id=$1`, job.ID).Scan(&proposals); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select count(*) from dorf.actions where job_id=$1 and scope_key=$2 and kind in ('repository-push','github-pull-request')`, job.ID, input.Revision).Scan(&actions); err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 1 || proposals != 1 || actions != 2 {
+		t.Fatalf("worker-win recovery tasks=%d proposals=%d actions=%d", tasks, proposals, actions)
+	}
+}
+
+type cancelPublicationAttachContext struct{ cancel context.CancelFunc }
+
+func (b cancelPublicationAttachContext) ReachWorkflow(_ context.Context, point, _, _ string) error {
+	if point == spine.BarrierPublicationSpawn {
+		b.cancel()
+	}
+	return nil
+}
+
+func TestPostgresPublicationTransientAttachFailureRetainsAttemptTask(t *testing.T) {
+	db, store, client := testDatabase(t)
+	publicationapi.Register(client, publicationapi.Service{Store: store})
+	input := publicationInput(fmt.Sprintf("publication-attach-transient-%d", time.Now().UnixNano()))
+	job, created, err := store.Admit(context.Background(), input)
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	if _, err := db.ExecContext(context.Background(), `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, cancel := context.WithCancel(context.Background())
+	params, taskID, created, err := publicationapi.Schedule(firstCtx, store, client, cancelPublicationAttachContext{cancel: cancel}, job.ID, input.Revision)
+	if err == nil || !created || taskID == "" || params.Attempt != 0 {
+		t.Fatalf("transient attach params=%#v task=%s created=%v err=%v", params, taskID, created, err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, taskID) })
+	evidence, err := store.TaskEvidence(context.Background(), taskID)
+	if err != nil || evidence.State == "cancelled" || evidence.State == "missing" {
+		t.Fatalf("attach error poisoned task=%#v err=%v", evidence, err)
+	}
+	job, err = store.Job(context.Background(), job.ID)
+	if err != nil || job.WorkflowPhase != "publishing" || job.PublicationTaskID != "" || job.PublicationAttempt != params.Attempt {
+		t.Fatalf("unattached Job=%#v err=%v", job, err)
+	}
+	recovered, recoveredTaskID, recoveredCreated, err := publicationapi.Schedule(context.Background(), store, client, nil, job.ID, input.Revision)
+	if err != nil || recoveredCreated || recovered.Attempt != params.Attempt || recoveredTaskID != taskID {
+		t.Fatalf("same-key attach retry params=%#v task=%s created=%v err=%v", recovered, recoveredTaskID, recoveredCreated, err)
+	}
+	job, err = store.Job(context.Background(), job.ID)
+	if err != nil || job.PublicationTaskID != taskID {
+		t.Fatalf("recovered attachment Job=%#v err=%v", job, err)
 	}
 }
 

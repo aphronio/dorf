@@ -39,6 +39,9 @@ type Authority struct {
 type PullRequest struct {
 	Number     int64
 	URL        string
+	Title      string
+	State      string
+	Draft      bool
 	Repository string
 	Head       string
 	HeadSHA    string
@@ -137,12 +140,12 @@ func (c Client) PushToken(ctx context.Context, authority Authority) (string, err
 	return c.mint(ctx, authority, "contents", "write")
 }
 
-func (c Client) PullRequests(ctx context.Context, authority Authority, owner, head, base string) ([]PullRequest, error) {
+func (c Client) PullRequests(ctx context.Context, authority Authority, owner, head string) ([]PullRequest, error) {
 	token, err := c.mint(ctx, authority, "pull_requests", "read")
 	if err != nil {
 		return nil, err
 	}
-	query := url.Values{"state": {"open"}, "head": {owner + ":" + head}, "base": {base}, "per_page": {"100"}}
+	query := url.Values{"state": {"all"}, "head": {owner + ":" + head}, "per_page": {"100"}}
 	var payload []pullPayload
 	_, err = c.request(ctx, token, http.MethodGet, "/repos/"+authority.Repository+"/pulls?"+query.Encode(), nil, &payload)
 	if err != nil {
@@ -182,6 +185,9 @@ func (c Client) mutatePull(ctx context.Context, authority Authority, method, end
 type pullPayload struct {
 	Number  int64  `json:"number"`
 	HTMLURL string `json:"html_url"`
+	Title   string `json:"title"`
+	State   string `json:"state"`
+	Draft   bool   `json:"draft"`
 	Body    string `json:"body"`
 	Head    struct {
 		Ref  string `json:"ref"`
@@ -196,10 +202,10 @@ type pullPayload struct {
 }
 
 func (p pullPayload) pullRequest() (PullRequest, error) {
-	if p.Number < 1 || p.HTMLURL == "" || p.Head.Ref == "" || !fullOID(p.Head.SHA) || p.Head.Repo.FullName == "" || p.Base.Ref == "" {
+	if p.Number < 1 || p.HTMLURL == "" || p.Title == "" || p.State == "" || p.Head.Ref == "" || !fullOID(p.Head.SHA) || p.Head.Repo.FullName == "" || p.Base.Ref == "" {
 		return PullRequest{}, fmt.Errorf("GitHub pull-request response omitted exact identity")
 	}
-	return PullRequest{Number: p.Number, URL: p.HTMLURL, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, HeadSHA: p.Head.SHA, Base: p.Base.Ref, Body: p.Body}, nil
+	return PullRequest{Number: p.Number, URL: p.HTMLURL, Title: p.Title, State: p.State, Draft: p.Draft, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, HeadSHA: p.Head.SHA, Base: p.Base.Ref, Body: p.Body}, nil
 }
 
 func (c Client) mint(ctx context.Context, authority Authority, permission, level string) (string, error) {
