@@ -1584,14 +1584,7 @@ func requireTerminalJobTask(ctx context.Context, tx *sql.Tx, taskID, taskName, j
 	if state != "completed" && state != "failed" && state != "cancelled" {
 		return fmt.Errorf("task %s is %s", taskID, state)
 	}
-	var live int
-	if err := tx.QueryRowContext(ctx, `select count(*) from absurd.r_dorf_jobs where task_id=$1::uuid and (state not in ('completed','failed','cancelled') or claimed_by is not null or claim_expires_at is not null)`, taskID).Scan(&live); err != nil {
-		return err
-	}
-	if live != 0 {
-		return fmt.Errorf("task %s retains %d live run claims", taskID, live)
-	}
-	return nil
+	return requireNoLiveTaskRuns(ctx, tx, taskID)
 }
 
 func requireTerminalPublicationTask(ctx context.Context, tx *sql.Tx, taskID, jobID string) error {
@@ -1610,8 +1603,12 @@ func requireTerminalPublicationTask(ctx context.Context, tx *sql.Tx, taskID, job
 	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
 		return fmt.Errorf("task %s is %s", taskID, task.State)
 	}
+	return requireNoLiveTaskRuns(ctx, tx, taskID)
+}
+
+func requireNoLiveTaskRuns(ctx context.Context, tx *sql.Tx, taskID string) error {
 	var live int
-	if err := tx.QueryRowContext(ctx, `select count(*) from absurd.r_dorf_jobs where task_id=$1::uuid and (state not in ('completed','failed','cancelled') or claimed_by is not null or claim_expires_at is not null)`, taskID).Scan(&live); err != nil {
+	if err := tx.QueryRowContext(ctx, `select count(*) from absurd.r_dorf_jobs where task_id=$1::uuid and state not in ('completed','failed','cancelled')`, taskID).Scan(&live); err != nil {
 		return err
 	}
 	if live != 0 {
@@ -1758,7 +1755,7 @@ func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, e
 	var evidence TaskEvidence
 	err := s.DB.QueryRowContext(ctx, `select t.task_id::text,t.state,t.attempts,
 		(select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
-		(select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and (r.state='running' or r.claimed_by is not null or r.claim_expires_at is not null))
+		(select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
 		from absurd.t_dorf_jobs t where t.task_id=$1::uuid`, taskID).Scan(&evidence.TaskID, &evidence.State, &evidence.Attempts, &evidence.Checkpoints, &evidence.LiveClaims)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TaskEvidence{TaskID: taskID, State: "missing"}, nil
@@ -1773,7 +1770,7 @@ func (s Store) PublicationTaskHistory(ctx context.Context, job spine.Job) ([]Pub
 		select t.task_id::text,t.idempotency_key,t.state,t.attempts,
 		       coalesce(t.params->>'attempt',''),
 		       (select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
-		       (select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and (r.state='running' or r.claimed_by is not null or r.claim_expires_at is not null))
+		       (select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
 		from absurd.t_dorf_jobs t
 		where t.task_name=$1 and t.params->>'job_id'=$2 and t.params->>'revision'=$3
 		  and t.max_attempts=$4

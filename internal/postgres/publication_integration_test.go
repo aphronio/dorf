@@ -302,6 +302,81 @@ func TestCleanupSettlesOnlyItsExactAttachedPublicationAndOrdinaryTasks(t *testin
 	}
 }
 
+func TestCleanupUsesAbsurdRunStateInsteadOfHistoricalClaimMetadata(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	publicationapi.Register(client, publicationapi.Service{Store: store})
+	prepare := func(label string) (spine.Job, string) {
+		input := publicationInput(fmt.Sprintf("cleanup-run-liveness-%s-%d", label, time.Now().UnixNano()))
+		input.Branch = "dorf/cleanup-run-liveness-" + label
+		job, created, err := workflow.Admit(ctx, store, client, input)
+		if err != nil || !created {
+			t.Fatalf("admit %s created=%t err=%v", label, created, err)
+		}
+		if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		_, publicationTaskID, created, err := publicationapi.Schedule(ctx, store, client, nil, job.ID, job.Revision)
+		if err != nil || !created {
+			t.Fatalf("publication %s task=%s created=%t err=%v", label, publicationTaskID, created, err)
+		}
+		cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CleanupTaskID) })
+		return cleaning, publicationTaskID
+	}
+	setRun := func(taskID, state string, retainClaim bool) {
+		claimedBy, lease := any(nil), any(nil)
+		if retainClaim {
+			claimedBy, lease = "historical-worker", time.Now().UTC().Add(time.Hour)
+		}
+		result, err := db.ExecContext(ctx, `update absurd.r_dorf_jobs set state=$2,claimed_by=$3,claim_expires_at=$4 where task_id=$1::uuid`, taskID, state, claimedBy, lease)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows == 0 {
+			t.Fatalf("task %s run update rows=%d err=%v", taskID, rows, err)
+		}
+	}
+
+	terminal, terminalPublication := prepare("terminal-history")
+	setRun(terminal.TaskID, "failed", true)
+	setRun(terminalPublication, "cancelled", true)
+	ordinaryEvidence, err := store.TaskEvidence(ctx, terminal.TaskID)
+	if err != nil || ordinaryEvidence.LiveClaims != 0 {
+		t.Fatalf("terminal ordinary task evidence=%#v err=%v", ordinaryEvidence, err)
+	}
+	publicationEvidence, err := store.PublicationTaskHistory(ctx, terminal)
+	if err != nil || len(publicationEvidence) != 1 || publicationEvidence[0].LiveClaims != 0 {
+		t.Fatalf("terminal publication evidence=%#v err=%v", publicationEvidence, err)
+	}
+	if err := store.CompleteCleanup(ctx, terminal.ID); err != nil {
+		t.Fatalf("terminal historical claim metadata blocked cleanup: %v", err)
+	}
+	for _, taskID := range []string{terminal.TaskID, terminalPublication} {
+		var total, retained int
+		if err := db.QueryRowContext(ctx, `select count(*),count(*) filter(where claimed_by='historical-worker' and claim_expires_at is not null) from absurd.r_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&total, &retained); err != nil {
+			t.Fatal(err)
+		}
+		if total == 0 || retained != total {
+			t.Fatalf("cleanup rewrote historical claimant/lease metadata for task %s: retained=%d total=%d", taskID, retained, total)
+		}
+	}
+
+	live, livePublication := prepare("nonterminal")
+	setRun(live.TaskID, "running", false)
+	if err := store.CompleteCleanup(ctx, live.ID); err == nil || !strings.Contains(err.Error(), "ordinary Job task") || !strings.Contains(err.Error(), "live run claims") {
+		t.Fatalf("nonterminal ordinary run cleanup error=%v", err)
+	}
+	setRun(live.TaskID, "failed", true)
+	setRun(livePublication, "sleeping", false)
+	if err := store.CompleteCleanup(ctx, live.ID); err == nil || !strings.Contains(err.Error(), "attached publication task") || !strings.Contains(err.Error(), "live run claims") {
+		t.Fatalf("nonterminal publication run cleanup error=%v", err)
+	}
+}
+
 func TestPostgresExhaustedPublicationTaskAdvancesOneGenerationConcurrentlyAndPreservesActions(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
