@@ -52,6 +52,21 @@ func TestRepositoryProofBarrierRequiresIssue37PhraseAndExactJob(t *testing.T) {
 	}
 }
 
+func TestResolutionProofBarrierRequiresIssue47PhraseAndExactMessage(t *testing.T) {
+	t.Setenv("DORF_PROOF_FAULT_BARRIER", "after-resolution-receipt")
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", resolutionEnablePhrase)
+	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "BARRIER_MESSAGE") {
+		t.Fatalf("missing exact message error=%v", err)
+	}
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_MESSAGE", "message-exact")
+	barrier, err := FromEnv()
+	if err != nil || barrier == nil {
+		t.Fatalf("resolution barrier=%v err=%v", barrier, err)
+	}
+}
+
 func TestProofBarrierRecoveryAcceptsOnlyExactBoundedPayload(t *testing.T) {
 	dir := t.TempDir()
 	barrier := Barrier{Point: spine.BarrierCommitCreated, JobID: "job-exact", Dir: dir, Wait: time.Second, Lease: 2 * time.Second}

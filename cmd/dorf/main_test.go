@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -21,6 +26,7 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 		{"uncertain", spine.MessageView{Message: spine.Message{Sequence: 1}, State: spine.AgentRunUncertain, Attention: "two native turns appeared"}, nil, []string{"genuinely uncertain", "stopped without resubmission", "two native turns"}},
 		{"blocked queued", spine.MessageView{Message: spine.Message{Sequence: 2}, State: spine.AgentRunPending, BlockingSeq: 1, BlockingReason: "failed: native failure"}, nil, []string{"queued", "blocked by sequence 1", "native failure"}},
 		{"waiting active", spine.MessageView{Message: spine.Message{Sequence: 2}, State: spine.AgentRunPending}, []spine.MessageView{{Message: spine.Message{Sequence: 1}, State: spine.AgentRunActive}}, []string{"queued", "waiting behind sequence 1", "active"}},
+		{"resolved loss", spine.MessageView{Message: spine.Message{Sequence: 1}, State: spine.AgentRunFailed, NativeTurnID: "turn-failed", Resolution: &spine.MessageResolution{ID: "resolution-1", Decision: spine.ResolutionAcknowledgeLoss, Authority: "owner", ReservedWakeSequence: 3}, Settled: true}, nil, []string{"native turn failed", "resolved=acknowledge-loss", "resolution-1", "wake=3"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -31,6 +37,23 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestResolveMessageCLIRequiresReasonFileAndRejectsInvalidDecisionBeforeMutation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := resolveMessage(context.Background(), postgres.Store{}, nil, nil, []string{"diagnose", "--job", "job-only"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "requires --job and --message") {
+		t.Fatalf("incomplete diagnosis error=%v", err)
+	}
+	if err := resolveMessage(context.Background(), postgres.Store{}, nil, nil, []string{"resolve", "--job", "job-1", "--message", "message-1", "--decision", "retry", "--authority", "owner", "--dry-run"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "requires a file") {
+		t.Fatalf("missing reason-file error=%v", err)
+	}
+	reasonPath := filepath.Join(t.TempDir(), "reason.txt")
+	if err := os.WriteFile(reasonPath, []byte("complete operator reason\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveMessage(context.Background(), postgres.Store{}, nil, nil, []string{"resolve", "--job", "job-1", "--message", "message-1", "--decision", "blind-retry", "--authority", "owner", "--reason-file", reasonPath, "--dry-run"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "invalid message resolution decision") {
+		t.Fatalf("invalid decision error=%v", err)
 	}
 }
 

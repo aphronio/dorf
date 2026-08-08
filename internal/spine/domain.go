@@ -94,6 +94,45 @@ type Message struct {
 	Input    string `json:"input"`
 }
 
+type MessageResolutionDecision string
+
+const (
+	ResolutionRetry           MessageResolutionDecision = "retry"
+	ResolutionAcknowledgeLoss MessageResolutionDecision = "acknowledge-loss"
+	ResolutionAbandon         MessageResolutionDecision = "abandon"
+)
+
+type MessageResolution struct {
+	ID                   string                    `json:"id"`
+	JobID                string                    `json:"job_id"`
+	MessageID            string                    `json:"message_id"`
+	Decision             MessageResolutionDecision `json:"decision"`
+	Authority            string                    `json:"authority"`
+	Reason               string                    `json:"reason"`
+	ReservedWakeSequence int64                     `json:"reserved_wake_sequence,omitempty"`
+	ResolvedAt           time.Time                 `json:"resolved_at"`
+}
+
+type MessageResolutionDiagnosis struct {
+	JobID                string                      `json:"job_id"`
+	Message              Message                     `json:"message"`
+	AgentRun             AgentRun                    `json:"agent_run"`
+	Action               ActionDiagnosis             `json:"action"`
+	NativeSessionID      string                      `json:"native_session_id,omitempty"`
+	NativeTurnID         string                      `json:"native_turn_id,omitempty"`
+	NativeOutcome        string                      `json:"native_outcome,omitempty"`
+	ReconciliationReason string                      `json:"reconciliation_reason"`
+	SafeDecisions        []MessageResolutionDecision `json:"safe_decisions"`
+	Resolution           *MessageResolution          `json:"resolution,omitempty"`
+}
+
+type ActionDiagnosis struct {
+	ID      string      `json:"id"`
+	Kind    ActionKind  `json:"kind"`
+	State   ActionState `json:"state"`
+	Outcome string      `json:"outcome,omitempty"`
+}
+
 type AgentRun struct {
 	ID                   string        `json:"id"`
 	JobID                string        `json:"job_id"`
@@ -142,13 +181,15 @@ type Delivery struct {
 
 type MessageView struct {
 	Message
-	AgentRunID     string        `json:"agent_run_id,omitempty"`
-	State          AgentRunState `json:"state,omitempty"`
-	NativeTurnID   string        `json:"native_turn_id,omitempty"`
-	NativeOutcome  string        `json:"native_outcome,omitempty"`
-	Attention      string        `json:"attention,omitempty"`
-	BlockingSeq    int64         `json:"blocking_sequence,omitempty"`
-	BlockingReason string        `json:"blocking_reason,omitempty"`
+	AgentRunID     string             `json:"agent_run_id,omitempty"`
+	State          AgentRunState      `json:"state,omitempty"`
+	NativeTurnID   string             `json:"native_turn_id,omitempty"`
+	NativeOutcome  string             `json:"native_outcome,omitempty"`
+	Attention      string             `json:"attention,omitempty"`
+	BlockingSeq    int64              `json:"blocking_sequence,omitempty"`
+	BlockingReason string             `json:"blocking_reason,omitempty"`
+	Resolution     *MessageResolution `json:"resolution,omitempty"`
+	Settled        bool               `json:"settled"`
 }
 
 type Action struct {
@@ -249,6 +290,10 @@ func MessageID(jobID, callerID string) string {
 
 func AgentRunID(messageID string) string {
 	return "agent-run-" + digest(messageID+"\x00implement", 24)
+}
+
+func MessageResolutionID(jobID, messageID string) string {
+	return "message-resolution-" + digest(jobID+"\x00"+messageID, 24)
 }
 
 func ReviewAgentRunID(jobID, revision, role string) string {

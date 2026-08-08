@@ -11,8 +11,11 @@ import (
 )
 
 const (
-	RunTaskName     = postgres.MessageTaskName
-	CleanupTaskName = "dorf-job-cleanup-v2"
+	RunTaskName                    = postgres.MessageTaskName
+	CleanupTaskName                = "dorf-job-cleanup-v2"
+	BarrierBeforeResolutionReceipt = "before-resolution-receipt"
+	BarrierAfterResolutionReceipt  = "after-resolution-receipt"
+	BarrierAfterResolutionWake     = "after-resolution-wake"
 )
 
 type Params struct {
@@ -99,6 +102,47 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same caller ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
+}
+
+type ResolutionFaultBarrier interface {
+	ReachResolution(context.Context, string, spine.MessageResolution) error
+}
+
+func ResolveMessage(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.MessageResolutionInput, barriers ...ResolutionFaultBarrier) (spine.MessageResolution, bool, error) {
+	var barrier ResolutionFaultBarrier
+	if len(barriers) > 0 {
+		barrier = barriers[0]
+	}
+	if barrier != nil {
+		_, proposed, err := store.PlanMessageResolution(ctx, input)
+		if err != nil {
+			return spine.MessageResolution{}, false, err
+		}
+		if err := barrier.ReachResolution(ctx, BarrierBeforeResolutionReceipt, proposed); err != nil {
+			return spine.MessageResolution{}, false, err
+		}
+	}
+	resolution, created, err := store.ResolveMessage(ctx, input)
+	if err != nil {
+		return spine.MessageResolution{}, false, err
+	}
+	if barrier != nil {
+		if err := barrier.ReachResolution(ctx, BarrierAfterResolutionReceipt, resolution); err != nil {
+			return resolution, created, err
+		}
+	}
+	if resolution.ReservedWakeSequence == 0 {
+		return resolution, created, nil
+	}
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(resolution.JobID, resolution.ReservedWakeSequence), Wake{JobID: resolution.JobID, Sequence: resolution.ReservedWakeSequence}); err != nil {
+		return resolution, created, fmt.Errorf("resolution %s committed, but wake %d failed; retry the byte-identical decision, authority, and reason: %w", resolution.ID, resolution.ReservedWakeSequence, err)
+	}
+	if barrier != nil {
+		if err := barrier.ReachResolution(ctx, BarrierAfterResolutionWake, resolution); err != nil {
+			return resolution, created, err
+		}
+	}
+	return resolution, created, nil
 }
 
 // RetrySetup atomically records a new setup Action generation and its FIFO
