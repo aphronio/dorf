@@ -104,6 +104,11 @@ func TestInspectionDistinguishesAutomaticContinuationFromExternalAuthority(t *te
 	if got := continuationFor(job, outcome, run, nil, postgres.TaskEvidence{State: "completed"}); got.Mode != "terminal" {
 		t.Fatalf("clean continuation=%#v", got)
 	}
+	job.WorkflowPhase = "publication-blocked"
+	want := continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
+	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{State: "completed"}); got != want {
+		t.Fatalf("clean no-outcome continuation=%#v want=%#v", got, want)
+	}
 }
 
 func TestInspectionExposesFailedDurableContinuationAsAttention(t *testing.T) {

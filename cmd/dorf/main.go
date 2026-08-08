@@ -610,6 +610,9 @@ type continuationStatus struct {
 
 func continuationFor(job spine.Job, outcome *spine.JobOutcome, run postgres.TaskEvidence, publications []postgres.PublicationTaskEvidence, cleanup postgres.TaskEvidence) continuationStatus {
 	if job.CleanupState == spine.CleanupComplete {
+		if outcome == nil {
+			return continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
+		}
 		return continuationStatus{Mode: "terminal", Actor: "none", Detail: "authoritative outcome and exact deterministic cleanup are complete"}
 	}
 	if outcome != nil {
