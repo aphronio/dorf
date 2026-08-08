@@ -240,6 +240,320 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 }
 
+func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, sessionID := prepareTransportIntegrationJob(t, store, "explicit-steer")
+	active, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || active == nil {
+		t.Fatalf("initial delivery=%#v err=%v", active, err)
+	}
+	if err := store.PrepareAgentRun(ctx, active.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, active.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	activeTurnID := "turn-active-" + job.ID
+	if err := store.BindNativeTurn(ctx, active.AgentRun.ID, activeTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+
+	steerInput := postgres.NewMessage{JobID: job.ID, CallerID: "operator-steer", Input: "correct the active work", Intent: spine.MessageSteer}
+	steer, created, err := store.AdmitMessage(ctx, steerInput)
+	if err != nil || !created || steer.Intent != spine.MessageSteer || steer.TargetTurnID != activeTurnID {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	repeated, created, err := store.AdmitMessage(ctx, steerInput)
+	if err != nil || created || repeated != steer {
+		t.Fatalf("idempotent steer=%#v created=%v err=%v", repeated, created, err)
+	}
+	changed := steerInput
+	changed.Intent = spine.MessageFollow
+	if _, _, err := store.AdmitMessage(ctx, changed); err == nil {
+		t.Fatal("same caller identity accepted a changed delivery intent")
+	}
+	delivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || delivery == nil || delivery.Message.ID != steer.ID || delivery.AgentRun.SessionID != sessionID {
+		t.Fatalf("steer delivery=%#v err=%v", delivery, err)
+	}
+	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, activeTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, delivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeSteer(ctx, delivery.AgentRun.ID, activeTurnID, "inProgress"); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil || len(messages) != 2 || !messages[1].Delivered || messages[1].NativeTurnID != activeTurnID || messages[1].Intent != spine.MessageSteer {
+		t.Fatalf("steer messages=%#v err=%v", messages, err)
+	}
+	next, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || next == nil || next.Message.ID != active.Message.ID || next.AgentRun.NativeTurnID != activeTurnID {
+		t.Fatalf("active follow after steer=%#v err=%v", next, err)
+	}
+	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: other.ID, CallerID: "invalid-steer", Input: "cannot target", Intent: spine.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular native turn") {
+		t.Fatalf("steer without active turn error=%v", err)
+	}
+}
+
+func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			_, store, _ := testDatabase(t)
+			ctx := context.Background()
+			job, sessionID := prepareTransportIntegrationJob(t, store, "shared-steer-outcome-"+status)
+			target, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || target == nil {
+				t.Fatalf("target delivery=%#v err=%v", target, err)
+			}
+			if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, target.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			targetTurnID := "turn-shared-" + job.ID
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
+				t.Fatal(err)
+			}
+			first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "first-shared-steer", Input: "first accepted shared input", Intent: spine.MessageSteer})
+			if err != nil || !created {
+				t.Fatalf("first steer=%#v created=%v err=%v", first, created, err)
+			}
+			second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second-shared-steer", Input: "second accepted shared input", Intent: spine.MessageSteer})
+			if err != nil || !created {
+				t.Fatalf("second steer=%#v created=%v err=%v", second, created, err)
+			}
+			firstDelivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || firstDelivery == nil || firstDelivery.Message.ID != first.ID {
+				t.Fatalf("first steer delivery=%#v err=%v", firstDelivery, err)
+			}
+			if err := store.PrepareAgentRun(ctx, firstDelivery.AgentRun.ID, targetTurnID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, firstDelivery.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, firstDelivery.AgentRun.ID, targetTurnID, "inProgress"); err != nil {
+				t.Fatal(err)
+			}
+			secondDelivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || secondDelivery == nil || secondDelivery.Message.ID != second.ID {
+				t.Fatalf("second steer delivery=%#v err=%v", secondDelivery, err)
+			}
+			if err := store.PrepareAgentRun(ctx, secondDelivery.AgentRun.ID, targetTurnID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, secondDelivery.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, secondDelivery.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeSteer(ctx, firstDelivery.AgentRun.ID, targetTurnID, status); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := store.Messages(ctx, job.ID)
+			if err != nil || len(messages) != 3 {
+				t.Fatalf("messages=%#v err=%v", messages, err)
+			}
+			for index, message := range messages[1:] {
+				if message.Intent != spine.MessageSteer || message.TargetTurnID != targetTurnID || message.NativeTurnID != targetTurnID || message.NativeOutcome != status || message.State != spine.AgentRunCompleted {
+					t.Fatalf("shared steer %d=%#v", index+1, message)
+				}
+			}
+		})
+	}
+}
+
+func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, sessionID := prepareTransportIntegrationJob(t, store, "steer-terminal-fallback")
+	target, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, target.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "terminal-race-steer", Input: "preserve exact durable input", Intent: spine.MessageSteer})
+	if err != nil || !created || steer.TargetTurnID != targetTurnID {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || fallback == nil || fallback.Message.ID != steer.ID || fallback.AgentRun.ID != spine.AgentRunID(steer.ID) {
+		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
+	}
+	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, targetTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, fallback.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	actualTurnID := "turn-fallback-" + job.ID
+	if err := store.BindNativeTurn(ctx, fallback.AgentRun.ID, actualTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "later-follow", Input: "later FIFO delivery"})
+	if err != nil || !created {
+		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
+	}
+	active, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || active == nil || active.Message.ID != steer.ID || active.AgentRun.NativeTurnID != actualTurnID {
+		t.Fatalf("active fallback selection=%#v err=%v", active, err)
+	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil || len(messages) != 3 {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+	if messages[1].Intent != spine.MessageSteer || messages[1].TargetTurnID != targetTurnID || messages[1].NativeTurnID != actualTurnID || messages[2].BlockingSeq != steer.Sequence {
+		t.Fatalf("fallback projection=%#v later=%#v", messages[1], messages[2])
+	}
+	if err := store.BindNativeTurn(ctx, fallback.AgentRun.ID, actualTurnID, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || next == nil || next.Message.ID != later.ID || next.AgentRun.SessionID != sessionID {
+		t.Fatalf("later delivery=%#v err=%v", next, err)
+	}
+	messages, err = store.Messages(ctx, job.ID)
+	if err != nil || messages[1].State != spine.AgentRunFailed || messages[1].NativeOutcome != "failed" || messages[1].TargetTurnID != targetTurnID {
+		t.Fatalf("terminal fallback evidence=%#v err=%v", messages[1], err)
+	}
+}
+
+func TestAcceptedTerminalTurnAllowsSameSessionFollowFIFO(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			_, store, _ := testDatabase(t)
+			ctx := context.Background()
+			job, sessionID := prepareTransportIntegrationJob(t, store, "terminal-follow-"+status)
+			first, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || first == nil {
+				t.Fatalf("first=%#v err=%v", first, err)
+			}
+			if err := store.PrepareAgentRun(ctx, first.AgentRun.ID, ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, first.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			turnID := "turn-first-" + job.ID
+			if err := store.BindNativeTurn(ctx, first.AgentRun.ID, turnID, "running"); err != nil {
+				t.Fatal(err)
+			}
+			follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "queued-follow", Input: "continue after the accepted outcome"})
+			if err != nil || !created || follow.Intent != spine.MessageFollow {
+				t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
+			}
+			stillActive, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || stillActive == nil || stillActive.Message.ID != first.Message.ID {
+				t.Fatalf("FIFO crossed active turn: delivery=%#v err=%v", stillActive, err)
+			}
+			if err := store.BindNativeTurn(ctx, first.AgentRun.ID, turnID, status); err != nil {
+				t.Fatal(err)
+			}
+			next, err := store.NextDelivery(ctx, job.ID, sessionID)
+			if err != nil || next == nil || next.Message.ID != follow.ID || next.AgentRun.SessionID != sessionID {
+				t.Fatalf("follow after %s=%#v err=%v", status, next, err)
+			}
+			if err := store.PrepareAgentRun(ctx, next.AgentRun.ID, turnID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BeginTurnSubmission(ctx, next.AgentRun.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.BindNativeTurn(ctx, next.AgentRun.ID, "turn-follow-"+job.ID, "completed"); err != nil {
+				t.Fatal(err)
+			}
+			messages, err := store.Messages(ctx, job.ID)
+			if err != nil || len(messages) != 2 || messages[0].NativeOutcome != status || !messages[0].Delivered || messages[1].State != spine.AgentRunCompleted {
+				t.Fatalf("preserved %s then follow=%#v err=%v", status, messages, err)
+			}
+		})
+	}
+}
+
+func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeCommit(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, sessionID := prepareTransportIntegrationJob(t, store, "failed-commit-gate")
+	first, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || first == nil {
+		t.Fatalf("first=%#v err=%v", first, err)
+	}
+	if err := store.PrepareAgentRun(ctx, first.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, first.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	firstTurnID := "turn-failed-" + job.ID
+	if err := store.BindNativeTurn(ctx, first.AgentRun.ID, firstTurnID, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if action, started, err := store.BeginCommit(ctx, job.ID, job.Revision); err != nil || started || action.ID != "" {
+		t.Fatalf("failed accepted turn crossed commit gate: action=%#v started=%v err=%v", action, started, err)
+	}
+	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "successful-follow", Input: "finish the coding workflow"})
+	if err != nil || !created {
+		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
+	}
+	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-success-"+job.ID)
+	if action, started, err := store.BeginCommit(ctx, job.ID, job.Revision); err != nil || !started || action.ID == "" {
+		t.Fatalf("successful later follow did not open commit gate: action=%#v started=%v err=%v", action, started, err)
+	}
+}
+
+func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label string) (spine.Job, string) {
+	t.Helper()
+	ctx := context.Background()
+	revision := strings.Repeat("a", 40)
+	key := fmt.Sprintf("%s-%d", label, time.Now().UnixNano())
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "transport proof", Repository: "https://github.com/aphronio/dorf.git", Revision: revision, Branch: "dorf/" + label, ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high"})
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	setup, err := store.BeginSetup(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSetup(ctx, setup.ID, integrationEvidence(setup.ID, "repository-setup", setup.ID, "", revision, "7"), spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./focused"}}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session-" + job.ID
+	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	return job, sessionID
+}
+
 func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -1376,6 +1690,98 @@ func (e *integrationExternals) effectKinds() []spine.ActionKind {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]spine.ActionKind(nil), e.effects...)
+}
+
+func TestMigration008UpgradesApplied001Through007(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	sourceConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminConfig := sourceConfig.Copy()
+	adminConfig.Database = "postgres"
+	admin, err := sql.Open("pgx", adminConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+	databaseName := fmt.Sprintf("dorf_delivery_upgrade_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(context.Background(), `create database `+pgx.Identifier{databaseName}.Sanitize()+` template `+pgx.Identifier{sourceConfig.Database}.Sanitize()); err != nil {
+		t.Fatalf("create isolated delivery upgrade database: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.ExecContext(context.Background(), `select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid<>pg_backend_pid()`, databaseName); err != nil {
+			t.Errorf("terminate isolated delivery upgrade connections: %v", err)
+		}
+		if _, err := admin.ExecContext(context.Background(), `drop database `+pgx.Identifier{databaseName}.Sanitize()); err != nil {
+			t.Errorf("drop isolated delivery upgrade database: %v", err)
+		}
+	})
+	upgradeConfig := sourceConfig.Copy()
+	upgradeConfig.Database = databaseName
+	db, err := sql.Open("pgx", upgradeConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
+		t.Fatal(err)
+	}
+	prior := []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql"}
+	for _, name := range prior {
+		contents, err := os.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, string(contents)); err != nil {
+			t.Fatalf("apply prior migration %s: %v", name, err)
+		}
+		if _, err := db.ExecContext(ctx, `insert into dorf.schema_migrations(name) values($1)`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deliveryColumn bool
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='job_messages' and column_name='delivery_intent')`).Scan(&deliveryColumn); err != nil {
+		t.Fatal(err)
+	}
+	if deliveryColumn {
+		t.Fatal("delivery schema was already present after recorded migrations 001 through 007")
+	}
+	jobID := "job-delivery-upgrade"
+	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'delivery-upgrade','upgrade delivery schema','https://github.com/aphronio/dorf.git',$2,$2,'dorf/delivery-upgrade','primary','gpt-5.6-sol','high')`, jobID, strings.Repeat("a", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values('message-delivery-upgrade',$1,'existing-message',1,'preserve me')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	store := postgres.Store{DB: db}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var intent, target string
+	if err := db.QueryRowContext(ctx, `select delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where id='message-delivery-upgrade'`).Scan(&intent, &target); err != nil {
+		t.Fatal(err)
+	}
+	if intent != string(spine.MessageFollow) || target != "" {
+		t.Fatalf("upgraded existing message intent=%q target=%q", intent, target)
+	}
+	var migrationApplied, nativeTurnUnique bool
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='008_message_delivery.sql'),exists(select 1 from pg_constraint where conrelid='dorf.agent_runs'::regclass and conname='agent_runs_native_turn_id_key')`).Scan(&migrationApplied, &nativeTurnUnique); err != nil {
+		t.Fatal(err)
+	}
+	if !migrationApplied || nativeTurnUnique {
+		t.Fatalf("migration applied=%v old native-turn uniqueness retained=%v", migrationApplied, nativeTurnUnique)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer' where id='message-delivery-upgrade'`); err == nil {
+		t.Fatal("delivery target invariant allowed steer without an exact target")
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer',steer_target_turn_id='turn-active' where id='message-delivery-upgrade'`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {

@@ -264,6 +264,10 @@ func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spin
 	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.SessionID, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
 }
 
+func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {
+	return e.Agent.SteerTurn(ctx, e.Sandbox.Name(job.ID), delivery.AgentRun.SessionID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
+}
+
 func (e Externals) AgentWait(ctx context.Context, job spine.Job, sessionID, turnID string) (spine.NativeTurn, error) {
 	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID, turnID)
 }

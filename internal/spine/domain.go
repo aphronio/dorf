@@ -87,12 +87,21 @@ type Job struct {
 }
 
 type Message struct {
-	ID       string `json:"id"`
-	JobID    string `json:"job_id"`
-	CallerID string `json:"caller_id"`
-	Sequence int64  `json:"sequence"`
-	Input    string `json:"input"`
+	ID           string                `json:"id"`
+	JobID        string                `json:"job_id"`
+	CallerID     string                `json:"caller_id"`
+	Sequence     int64                 `json:"sequence"`
+	Input        string                `json:"input"`
+	Intent       MessageDeliveryIntent `json:"intent"`
+	TargetTurnID string                `json:"target_turn_id,omitempty"`
 }
+
+type MessageDeliveryIntent string
+
+const (
+	MessageFollow MessageDeliveryIntent = "follow"
+	MessageSteer  MessageDeliveryIntent = "steer"
+)
 
 type AgentRun struct {
 	ID                   string        `json:"id"`
@@ -149,6 +158,7 @@ type MessageView struct {
 	Attention      string        `json:"attention,omitempty"`
 	BlockingSeq    int64         `json:"blocking_sequence,omitempty"`
 	BlockingReason string        `json:"blocking_reason,omitempty"`
+	Delivered      bool          `json:"delivered"`
 }
 
 type Action struct {
@@ -223,14 +233,15 @@ type Receipt struct {
 }
 
 type NativeTurn struct {
-	ID                string `json:"id"`
-	Status            string `json:"status"`
-	Output            string `json:"output,omitempty"`
-	InputTokens       int64  `json:"input_tokens,omitempty"`
-	CachedInputTokens int64  `json:"cached_input_tokens,omitempty"`
-	OutputTokens      int64  `json:"output_tokens,omitempty"`
-	CostMicrousd      int64  `json:"cost_microusd,omitempty"`
-	UsageAvailable    bool   `json:"usage_available"`
+	ID                 string   `json:"id"`
+	Status             string   `json:"status"`
+	AcceptedMessageIDs []string `json:"accepted_message_ids,omitempty"`
+	Output             string   `json:"output,omitempty"`
+	InputTokens        int64    `json:"input_tokens,omitempty"`
+	CachedInputTokens  int64    `json:"cached_input_tokens,omitempty"`
+	OutputTokens       int64    `json:"output_tokens,omitempty"`
+	CostMicrousd       int64    `json:"cost_microusd,omitempty"`
+	UsageAvailable     bool     `json:"usage_available"`
 }
 
 type Reconciliation struct {

@@ -123,7 +123,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 007_review_policy.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 008_message_delivery.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -183,6 +183,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	jobID := set.String("job", "", "existing Job ID")
 	callerID := set.String("id", "", "stable caller message identity")
 	inputFile := set.String("input-file", "", "path containing the complete message input")
+	intent := set.String("intent", string(spine.MessageFollow), "harness delivery intent: follow or steer")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -190,11 +191,24 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input})
+	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input, Intent: spine.MessageDeliveryIntent(*intent)})
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "created": created, "accepted": true})
+	delivery := "queued"
+	var blockingSequence int64
+	var blockingReason string
+	views, err := store.Messages(ctx, accepted.JobID)
+	if err != nil {
+		return err
+	}
+	for _, view := range views {
+		if view.ID == accepted.ID && view.BlockingSeq > 0 {
+			delivery, blockingSequence, blockingReason = "blocked", view.BlockingSeq, view.BlockingReason
+			break
+		}
+	}
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": delivery, "blocking_sequence": blockingSequence, "blocking_reason": blockingReason})
 }
 
 func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -581,17 +595,33 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	case spine.AgentRunSubmitting:
 		detail = "queued; delivery reconciliation is in progress"
 	case spine.AgentRunActive:
-		detail = "active native turn"
+		if message.Intent == spine.MessageSteer && message.NativeTurnID != message.TargetTurnID {
+			detail = "active native turn started after the requested steer target became terminal"
+		} else {
+			detail = "active native turn"
+		}
 	case spine.AgentRunCompleted:
-		detail = "terminal: native turn completed"
+		if message.Intent == spine.MessageSteer {
+			if message.NativeTurnID == message.TargetTurnID {
+				detail = "delivered: steer accepted by the active native turn"
+			} else {
+				detail = "terminal: native turn started after the requested steer target became terminal"
+			}
+		} else {
+			detail = "terminal: native turn completed"
+		}
 	case spine.AgentRunFailed:
 		if message.NativeTurnID == "" {
-			detail = "terminal locally: delivery ended before any native turn was submitted; later FIFO input is blocked"
+			if strings.HasPrefix(message.Attention, "cleanup closed") {
+				detail = "cleanup closed this input after history proved no native acceptance"
+			} else {
+				detail = "native delivery was not accepted; the same stable input remains retryable"
+			}
 		} else {
-			detail = "terminal: native turn failed; later FIFO input is blocked"
+			detail = "terminal: native turn failed"
 		}
 	case spine.AgentRunInterrupted:
-		detail = "terminal: native turn was interrupted; later FIFO input is blocked"
+		detail = "terminal: native turn was interrupted"
 	case spine.AgentRunUncertain:
 		detail = "genuinely uncertain; delivery stopped without resubmission"
 	default:
@@ -600,8 +630,14 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	if message.NativeTurnID != "" {
 		detail += fmt.Sprintf("; native=%s outcome=%s", message.NativeTurnID, empty(message.NativeOutcome))
 	}
+	if message.Intent == spine.MessageSteer && message.TargetTurnID != "" && message.NativeTurnID != "" && message.NativeTurnID != message.TargetTurnID {
+		detail += "; requested steer target=" + message.TargetTurnID
+	}
 	if message.Attention != "" {
 		detail += "; reason: " + message.Attention
+	}
+	if !message.Delivered && (message.State == spine.AgentRunFailed || message.State == spine.AgentRunInterrupted || message.State == spine.AgentRunUncertain) {
+		detail += "; later FIFO input is blocked"
 	}
 	if message.BlockingSeq > 0 {
 		return detail + fmt.Sprintf("; blocked by sequence %d (%s)", message.BlockingSeq, message.BlockingReason)
@@ -611,7 +647,7 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 			if earlier.Sequence >= message.Sequence {
 				break
 			}
-			if earlier.State != spine.AgentRunCompleted {
+			if !earlier.Delivered || earlier.State == spine.AgentRunActive || earlier.State == spine.AgentRunUncertain {
 				return detail + fmt.Sprintf("; waiting behind sequence %d (%s)", earlier.Sequence, queuedState(earlier.State))
 			}
 		}

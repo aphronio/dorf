@@ -130,6 +130,9 @@ func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActiva
 	if reviewRepairCount == 1 && len(roles) > 0 {
 		return spine.ReviewPlanRecord{}, false, fmt.Errorf("repaired Revision review activation cannot replay optional requested Roles")
 	}
+	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, activation.JobID); err != nil {
+		return spine.ReviewPlanRecord{}, false, fmt.Errorf("review activation compatibility diagnosis: %w", err)
+	}
 	requestedBy := strings.TrimSpace(activation.RequestedByRunID)
 	if len(roles) > 0 {
 		original, err := implementationRunID(ctx, tx, activation.JobID)
@@ -167,6 +170,10 @@ func (s Store) ActivateReview(ctx context.Context, activation spine.ReviewActiva
 		}
 	} else if phase == "review-activation" {
 		return spine.ReviewPlanRecord{}, false, fmt.Errorf("persisted review activation did not advance atomically")
+	} else if phase == "blocked" && stored.State == "pending" {
+		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-planning',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='blocked'`, activation.JobID, revision)); err != nil {
+			return spine.ReviewPlanRecord{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.ReviewPlanRecord{}, false, err
@@ -715,7 +722,7 @@ func (s Store) AdmitReviewRepair(ctx context.Context, jobID, findingRunID string
 	}
 	callerID := "dorf:review-repair:1"
 	var existing spine.Message
-	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, jobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input)
+	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input,delivery_intent from dorf.job_messages where job_id=$1 and caller_id=$2`, jobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input, &existing.Intent)
 	if err == nil {
 		if source != findingRunID {
 			return spine.Message{}, false, fmt.Errorf("review repair is already bound to another finding")
@@ -740,12 +747,15 @@ func (s Store) AdmitReviewRepair(ctx context.Context, jobID, findingRunID string
 	if phase != "reviewing" || count != 0 || !material || adjudication != "pending" || materialCount != 1 {
 		return spine.Message{}, false, fmt.Errorf("exactly one unsettled material finding is required for the bounded review repair")
 	}
-	var sequence int64
-	if err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, jobID).Scan(&sequence); err != nil {
+	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, jobID); err != nil {
+		return spine.Message{}, false, fmt.Errorf("review repair admission blocked: %w", err)
+	}
+	sequence, err := allocateMessageSequenceTx(ctx, tx, jobID)
+	if err != nil {
 		return spine.Message{}, false, err
 	}
 	input := fmt.Sprintf("Adjudicate the single material %s review claim for exact Revision %s. Claim Evidence %s. Summary: %s. Rationale: %s. If valid, make only the focused repair in the original implementation workspace. If it is a false positive, leave the checkout byte-clean and explain why. Do not commit; return control to Dorf for observed Git and targeted verification.", role, revision, evidenceID, summary, rationale)
-	message := spine.Message{ID: spine.MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: sequence, Input: input}
+	message := spine.Message{ID: spine.MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, jobID, callerID, sequence, input); err != nil {
 		return spine.Message{}, false, err
 	}
