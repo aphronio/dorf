@@ -151,6 +151,9 @@ func (c Client) PullRequests(ctx context.Context, authority Authority, owner, he
 	if err != nil {
 		return nil, err
 	}
+	if payload == nil {
+		return nil, fmt.Errorf("GitHub pull-request discovery response omitted a JSON array")
+	}
 	result := make([]PullRequest, 0, len(payload))
 	for _, item := range payload {
 		pr, err := item.pullRequest()
@@ -292,8 +295,7 @@ func (c Client) request(ctx context.Context, token, method, endpoint string, bod
 		return response.StatusCode, fmt.Errorf("GitHub REST %s %s failed with status %d", method, endpoint, response.StatusCode)
 	}
 	if output != nil && len(contents) != 0 {
-		decoder := json.NewDecoder(bytes.NewReader(contents))
-		if err := decoder.Decode(output); err != nil {
+		if err := json.Unmarshal(contents, output); err != nil {
 			return response.StatusCode, fmt.Errorf("decode GitHub REST response: %w", err)
 		}
 	}

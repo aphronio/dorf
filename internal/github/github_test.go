@@ -170,6 +170,32 @@ func TestPullRequestLookupRetainsZeroOneAndMultipleExactCandidates(t *testing.T)
 	}
 }
 
+func TestPullRequestLookupRejectsEmptyWhitespaceAndMalformedSuccessBodies(t *testing.T) {
+	for name, payload := range map[string]string{
+		"empty":      "",
+		"whitespace": " \n\t ",
+		"malformed":  "[",
+		"trailing":   "[] trailing",
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				requests++
+				if request.Method != http.MethodGet {
+					t.Fatalf("invalid discovery triggered mutation %s %s", request.Method, request.URL.Path)
+				}
+				_, _ = w.Write([]byte(payload))
+			}))
+			defer server.Close()
+			client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(context.Context, Authority, string, string) (string, error) { return "ephemeral", nil }}
+			pulls, err := client.PullRequests(context.Background(), Authority{"aphronio/dorf", "42"}, "aphronio", "dorf/head")
+			if err == nil || pulls != nil || requests != 1 || len(err.Error()) > 512 {
+				t.Fatalf("pulls=%#v requests=%d bounded error=%v", pulls, requests, err)
+			}
+		})
+	}
+}
+
 func TestPullRequestResponseRequiresExactHeadSHA(t *testing.T) {
 	var payload pullPayload
 	payload.Number = 7
