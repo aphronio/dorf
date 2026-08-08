@@ -71,6 +71,25 @@ func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
 	}
 }
 
+func TestCleanupProofBarriersRequireIssue39Phrase(t *testing.T) {
+	for _, point := range []string{spine.BarrierReviewerRouteRevoked, spine.BarrierReviewerSandboxDeleted, spine.BarrierMainRouteRevoked, spine.BarrierMainSandboxDeleted} {
+		t.Run(point, func(t *testing.T) {
+			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", publicationEnablePhrase)
+			if _, err := FromEnv(); err == nil {
+				t.Fatal("publication proof phrase enabled cleanup barrier")
+			}
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", cleanupEnablePhrase)
+			barrier, err := FromEnv()
+			if err != nil || barrier == nil {
+				t.Fatalf("barrier=%v err=%v", barrier, err)
+			}
+		})
+	}
+}
+
 func TestPublicationSchedulingBarrierDoesNotRequireTaskContext(t *testing.T) {
 	dir := t.TempDir()
 	barrier := Barrier{Point: spine.BarrierPublicationBegin, JobID: "job-exact", Dir: dir, Wait: time.Second}

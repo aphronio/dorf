@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/aphronio/dorf/internal/codex"
@@ -23,6 +24,15 @@ type Externals struct {
 
 func (e Externals) repository() repository.Manager {
 	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
+}
+
+func (e Externals) gateway(job spine.Job) (gateway.Gateway, error) {
+	if !filepath.IsAbs(job.ProviderGatewayState) {
+		return gateway.Gateway{}, fmt.Errorf("Job %s has no recorded absolute Provider Gateway state locator", job.ID)
+	}
+	g := e.Gateway
+	g.StatePath = filepath.Clean(job.ProviderGatewayState)
+	return g, nil
 }
 
 func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
@@ -132,7 +142,11 @@ func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spi
 	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
 		return spine.Receipt{}, err
 	}
-	baseURL, err := e.Gateway.BaseURL()
+	gatewayClient, err := e.gateway(job)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	baseURL, err := gatewayClient.BaseURL()
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -143,7 +157,7 @@ func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spi
 	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
 		return spine.Receipt{}, err
 	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "review:"+run.ID, action.ID)
+	route, err := gatewayClient.ReconcileCreate(ctx, job.ProviderConnection, "review:"+run.ID, action.ID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -179,7 +193,16 @@ func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spi
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	id, err := e.Gateway.Revoke(ctx, "review:"+run.ID)
+	gatewayClient, err := e.gateway(job)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	id := ""
+	if run.ReviewerRouteID == "" {
+		id, err = gatewayClient.Revoke(ctx, "review:"+run.ID)
+	} else {
+		id, err = gatewayClient.RevokeExact(ctx, "review:"+run.ID, run.ReviewerRouteID)
+	}
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -227,7 +250,11 @@ func reviewEffort(role, implementationEffort string) string {
 }
 
 func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
-	baseURL, err := e.Gateway.BaseURL()
+	gatewayClient, err := e.gateway(job)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	baseURL, err := gatewayClient.BaseURL()
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -238,7 +265,7 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
 		return spine.Receipt{}, err
 	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "sandbox:"+job.ID, action.ID)
+	route, err := gatewayClient.ReconcileCreate(ctx, job.ProviderConnection, "sandbox:"+job.ID, action.ID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -273,18 +300,28 @@ func (e Externals) AgentWait(ctx context.Context, job spine.Job, sessionID, turn
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	id, err := e.Gateway.Revoke(ctx, "sandbox:"+job.ID)
+	if job.RouteID == "" {
+		return spine.Receipt{}, fmt.Errorf("main route cleanup has no recorded exact route ID")
+	}
+	gatewayClient, err := e.gateway(job)
+	if err != nil {
+		return spine.Receipt{}, err
+	}
+	id, err := gatewayClient.RevokeExact(ctx, "sandbox:"+job.ID, job.RouteID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
 	_ = e.Sandbox.RemoveRoute(ctx, e.Sandbox.Name(job.ID))
-	return spine.Receipt{ExternalID: id}, nil
+	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
 }
 
 func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	name := e.Sandbox.Name(job.ID)
+	name := job.SandboxID
+	if name == "" {
+		return spine.Receipt{}, fmt.Errorf("main Sandbox cleanup has no recorded exact Incus name")
+	}
 	err := e.Sandbox.Delete(ctx, name)
-	return spine.Receipt{ExternalID: name}, err
+	return spine.Receipt{ExternalID: name, Outcome: "deleted"}, err
 }
 
 func requireBridgeRoute(baseURL, bridgeIPv4 string) error {

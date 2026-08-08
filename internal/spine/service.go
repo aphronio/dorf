@@ -26,6 +26,7 @@ type Store interface {
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
 	NativeMutationDelivery(context.Context, string) (*Delivery, error)
+	SetCleanupAttention(context.Context, string, string) error
 	CompleteCleanup(context.Context, string) error
 }
 
@@ -80,16 +81,20 @@ const (
 )
 
 const (
-	BarrierBeforeSubmit          = "before-submit"
-	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
-	BarrierNativeActive          = "native-active"
-	BarrierSetupComplete         = "setup-complete-before-record"
-	BarrierCommitCreated         = "commit-created-before-record"
-	BarrierCheckExited           = "check-exited-before-record"
-	BarrierPushAccepted          = "push-accepted-before-record"
-	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
-	BarrierPublicationBegin      = "publication-begin-committed-before-spawn"
-	BarrierPublicationSpawn      = "publication-task-spawned-before-attach"
+	BarrierBeforeSubmit           = "before-submit"
+	BarrierAfterSubmitBeforeBind  = "after-submit-before-bind"
+	BarrierNativeActive           = "native-active"
+	BarrierSetupComplete          = "setup-complete-before-record"
+	BarrierCommitCreated          = "commit-created-before-record"
+	BarrierCheckExited            = "check-exited-before-record"
+	BarrierPushAccepted           = "push-accepted-before-record"
+	BarrierPullRequestAccepted    = "pull-request-accepted-before-record"
+	BarrierPublicationBegin       = "publication-begin-committed-before-spawn"
+	BarrierPublicationSpawn       = "publication-task-spawned-before-attach"
+	BarrierReviewerRouteRevoked   = "reviewer-route-revoked-before-record"
+	BarrierReviewerSandboxDeleted = "reviewer-sandbox-deleted-before-record"
+	BarrierMainRouteRevoked       = "main-route-revoked-before-record"
+	BarrierMainSandboxDeleted     = "main-sandbox-deleted-before-record"
 )
 
 type RunDisposition string
@@ -753,66 +758,107 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		if job.AdmissionOpen {
 			return fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
 		}
-		if err := s.reconcileCleanupMutation(ctx, job); err != nil {
+		if job.CleanupState == CleanupComplete {
+			return nil
+		}
+		if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation native mutation", func() error { return s.reconcileCleanupMutation(ctx, job) }); err != nil {
 			return err
 		}
 		if reviewStore, ok := s.Store.(ReviewStore); ok {
 			runs, err := reviewStore.CleanupReviewRuns(ctx, job.ID)
 			if err != nil {
+				_ = s.Store.SetCleanupAttention(ctx, job.ID, "enumerating exact recorded reviewer resources: "+err.Error())
 				return err
 			}
 			reviewExternals, externalOK := s.Externals.(ReviewExternals)
 			if len(runs) > 0 && !externalOK {
-				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
+				err := fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
+				_ = s.Store.SetCleanupAttention(ctx, job.ID, err.Error())
+				return err
 			}
 			for _, run := range runs {
 				if run.JobID != job.ID || run.Revision == "" || run.Capability != ReviewReadOnlyCapability || run.ReviewerSandboxID != ReviewSandboxName(run.ID) || len(run.ReviewerOwnerNonce) != 64 {
-					return fmt.Errorf("cleanup cannot reconcile malformed reviewer resource for AgentRun %s", run.ID)
+					err := fmt.Errorf("cleanup cannot reconcile malformed reviewer resource for AgentRun %s", run.ID)
+					_ = s.Store.SetCleanupAttention(ctx, job.ID, err.Error())
+					return err
 				}
 				settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 				if !settled {
 					if err := reviewStore.InterruptReviewRun(ctx, run.ID, "admission closed; exact isolated reviewer resources are being reclaimed"); err != nil {
+						_ = s.Store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled reviewer AgentRun "+run.ID+": "+err.Error())
 						return err
 					}
 					run.State = AgentRunInterrupted
 				}
-				routeAction, err := reviewStore.BeginReviewRouteCleanup(ctx, run.ID)
-				if err != nil {
-					return err
-				}
-				if routeAction.State != ActionSucceeded {
+				detail := fmt.Sprintf("reconciling reviewer route %s for AgentRun %s Revision %s", emptyCleanupIdentity(run.ReviewerRouteID), run.ID, run.Revision)
+				if err := s.cleanupStep(ctx, job.ID, detail, func() error {
+					routeAction, err := reviewStore.BeginReviewRouteCleanup(ctx, run.ID)
+					if err != nil || routeAction.State == ActionSucceeded {
+						return err
+					}
 					receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run.AgentRun, routeAction)
 					if err != nil {
 						_ = s.Store.UncertainAction(ctx, routeAction.ID)
 						return fmt.Errorf("reconcile exact reviewer route for %s: %w", run.ID, err)
 					}
-					if err := s.Store.CompleteAction(ctx, routeAction.ID, receipt); err != nil {
+					if err := s.reachWorkflow(ctx, BarrierReviewerRouteRevoked, job.ID, routeAction.ID); err != nil {
 						return err
 					}
-				}
-				sandboxAction, err := reviewStore.BeginReviewSandboxCleanup(ctx, run.ID)
-				if err != nil {
+					return s.Store.CompleteAction(ctx, routeAction.ID, receipt)
+				}); err != nil {
 					return err
 				}
-				if sandboxAction.State != ActionSucceeded {
+				detail = fmt.Sprintf("reconciling reviewer Sandbox %s for AgentRun %s Revision %s", run.ReviewerSandboxID, run.ID, run.Revision)
+				if err := s.cleanupStep(ctx, job.ID, detail, func() error {
+					sandboxAction, err := reviewStore.BeginReviewSandboxCleanup(ctx, run.ID)
+					if err != nil || sandboxAction.State == ActionSucceeded {
+						return err
+					}
 					receipt, err := reviewExternals.ReviewSandboxDelete(ctx, job, run.AgentRun, sandboxAction)
 					if err != nil {
 						_ = s.Store.UncertainAction(ctx, sandboxAction.ID)
 						return fmt.Errorf("reconcile exact reviewer Sandbox %s: %w", run.ReviewerSandboxID, err)
 					}
-					if err := s.Store.CompleteAction(ctx, sandboxAction.ID, receipt); err != nil {
+					if err := s.reachWorkflow(ctx, BarrierReviewerSandboxDeleted, job.ID, sandboxAction.ID); err != nil {
 						return err
 					}
+					return s.Store.CompleteAction(ctx, sandboxAction.ID, receipt)
+				}); err != nil {
+					return err
 				}
 			}
 		}
-		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
-			if _, err := s.reconcile(ctx, job, kind); err != nil {
-				return fmt.Errorf("reconcile %s: %w", kind, err)
+		for _, step := range []struct {
+			kind   ActionKind
+			detail string
+		}{
+			{ActionRouteRevoke, fmt.Sprintf("reconciling main provider route %s", emptyCleanupIdentity(job.RouteID))},
+			{ActionSandboxDelete, fmt.Sprintf("reconciling main Sandbox %s", emptyCleanupIdentity(job.SandboxID))},
+		} {
+			if err := s.cleanupStep(ctx, job.ID, step.detail, func() error { _, err := s.reconcile(ctx, job, step.kind); return err }); err != nil {
+				return fmt.Errorf("reconcile %s: %w", step.kind, err)
 			}
 		}
-		return s.Store.CompleteCleanup(ctx, job.ID)
+		return s.cleanupStep(ctx, job.ID, "verifying no owned resource or non-cleanup Job claim remains unsettled", func() error { return s.Store.CompleteCleanup(ctx, job.ID) })
 	})
+}
+
+func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
+	if err := s.Store.SetCleanupAttention(ctx, jobID, detail); err != nil {
+		return err
+	}
+	if err := fn(); err != nil {
+		_ = s.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
+		return err
+	}
+	return nil
+}
+
+func emptyCleanupIdentity(value string) string {
+	if value == "" {
+		return "<not-recorded>"
+	}
+	return value
 }
 
 func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
@@ -955,6 +1001,17 @@ func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Recei
 	if err != nil {
 		_ = s.Store.UncertainAction(ctx, action.ID)
 		return Receipt{}, err
+	}
+	point := ""
+	if kind == ActionRouteRevoke {
+		point = BarrierMainRouteRevoked
+	} else if kind == ActionSandboxDelete {
+		point = BarrierMainSandboxDeleted
+	}
+	if point != "" {
+		if err := s.reachWorkflow(ctx, point, job.ID, action.ID); err != nil {
+			return Receipt{}, err
+		}
 	}
 	if err := s.Store.CompleteAction(ctx, action.ID, receipt); err != nil {
 		return Receipt{}, err

@@ -122,6 +122,44 @@ func (g Gateway) Revoke(ctx context.Context, consumer string) (string, error) {
 	return removedID, err
 }
 
+// RevokeExact removes only the recorded consumer/route pair. An absent
+// consumer reconciles a prior success-before-record loss; a changed identity
+// fails closed without touching any route.
+func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID string) (string, error) {
+	if strings.TrimSpace(consumer) == "" || strings.TrimSpace(expectedRouteID) == "" {
+		return "", fmt.Errorf("exact provider route revocation requires consumer and route ID")
+	}
+	removedID := "absent"
+	err := g.lock(func() error {
+		routes, err := g.readRoutes()
+		if err != nil {
+			return err
+		}
+		index := -1
+		for i, route := range routes {
+			if route.Consumer == consumer {
+				if route.ID != expectedRouteID {
+					return fmt.Errorf("provider consumer %q is bound to route %s, not recorded route %s", consumer, route.ID, expectedRouteID)
+				}
+				index = i
+			}
+			if route.ID == expectedRouteID && route.Consumer != consumer {
+				return fmt.Errorf("recorded provider route %s belongs to consumer %q, not %q", expectedRouteID, route.Consumer, consumer)
+			}
+		}
+		if index < 0 {
+			return nil
+		}
+		removedID = expectedRouteID
+		remaining := append(routes[:index:index], routes[index+1:]...)
+		if err := g.writeRoutes(remaining); err != nil {
+			return err
+		}
+		return g.activate(ctx, remaining)
+	})
+	return removedID, err
+}
+
 func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error) {
 	var found Route
 	err := g.lock(func() error {

@@ -387,6 +387,48 @@ func TestReviewerResourceCleanupIgnoresHistoricalRunsRetainsEvidenceAndIsRetrySa
 	}
 }
 
+func TestReviewerCleanupSuccessBeforeRecordBarriersRetainExactRemainingInventory(t *testing.T) {
+	for _, test := range []struct {
+		point         string
+		firstEffects  []ActionKind
+		finalEffects  []ActionKind
+		settledFirst  ActionState
+		attentionPart string
+	}{
+		{BarrierReviewerRouteRevoked, []ActionKind{ActionRouteRevoke}, []ActionKind{ActionRouteRevoke, ActionRouteRevoke, ActionSandboxDelete}, ActionPending, "reviewer route route-review-exact"},
+		{BarrierReviewerSandboxDeleted, []ActionKind{ActionRouteRevoke, ActionSandboxDelete}, []ActionKind{ActionRouteRevoke, ActionSandboxDelete, ActionSandboxDelete}, ActionSucceeded, "reviewer Sandbox"},
+	} {
+		t.Run(test.point, func(t *testing.T) {
+			base := newMemoryStore()
+			job := testJob()
+			job.AdmissionOpen, job.CleanupState = false, CleanupScheduled
+			base.jobs[job.ID] = job
+			runID := ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary))
+			run := AgentRun{ID: runID, JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", ReviewerSandboxID: ReviewSandboxName(runID), ReviewerRouteID: "route-review-exact", ReviewerOwnerNonce: strings.Repeat("a", 64), ReviewerSandboxState: "created", ReviewerRouteState: "active"}
+			store := newReviewDecisionStore(base)
+			store.cleanupReviewRuns = []ReviewRunView{{AgentRun: run}}
+			for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
+				id := ScopedActionID(job.ID, kind, runID)
+				base.actions[id] = Action{ID: id, JobID: job.ID, Kind: kind, Scope: runID, State: ActionPending}
+			}
+			externals := &reviewDispatchExternals{fakeExternals: newFakeExternals()}
+			service := Service{Store: store, Externals: externals, Barrier: &failWorkflowBarrier{point: test.point}}
+			if err := service.Cleanup(context.Background(), job.ID); !errors.Is(err, errBarrier) {
+				t.Fatalf("first cleanup error=%v", err)
+			}
+			if !reflect.DeepEqual(externals.cleanupEffects, test.firstEffects) || store.reviewCleanupAction(ActionRouteRevoke).State != test.settledFirst || !strings.Contains(base.jobs[job.ID].CleanupAttention, test.attentionPart) {
+				t.Fatalf("partial effects=%v route=%#v Job=%#v", externals.cleanupEffects, store.reviewCleanupAction(ActionRouteRevoke), base.jobs[job.ID])
+			}
+			if err := service.Cleanup(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(externals.cleanupEffects, test.finalEffects) || store.reviewCleanupAction(ActionRouteRevoke).State != ActionSucceeded || store.reviewCleanupAction(ActionSandboxDelete).State != ActionSucceeded || base.jobs[job.ID].CleanupAttention != "" {
+				t.Fatalf("converged effects=%v route=%#v sandbox=%#v Job=%#v", externals.cleanupEffects, store.reviewCleanupAction(ActionRouteRevoke), store.reviewCleanupAction(ActionSandboxDelete), base.jobs[job.ID])
+			}
+		})
+	}
+}
+
 func TestMalformedPersistedReviewerResourceBlocksCleanupBeforeEffects(t *testing.T) {
 	base := newMemoryStore()
 	job := testJob()

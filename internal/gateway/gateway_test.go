@@ -67,6 +67,39 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestExactRouteRevocationRefusesChangedIdentityAndReconcilesAbsence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": []map[string]any{{"name": "codex-private-account@example.com.json", "provider": "codex", "websockets": true}}})
+		case r.URL.Path == "/v0/management/api-keys" && r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	gateway := Gateway{StatePath: gatewayState(t, server.URL), Client: server.Client()}
+	route, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "action-exact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", "route-foreign"); err == nil {
+		t.Fatal("changed exact route identity was revoked")
+	}
+	if observed, present, err := gateway.Route(context.Background(), "sandbox:job-exact"); err != nil || !present || observed.ID != route.ID {
+		t.Fatalf("route changed after fenced refusal: route=%#v present=%t err=%v", observed, present, err)
+	}
+	removed, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID)
+	if err != nil || removed != route.ID {
+		t.Fatalf("removed=%s err=%v", removed, err)
+	}
+	removed, err = gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID)
+	if err != nil || removed != "absent" {
+		t.Fatalf("idempotent removed=%s err=%v", removed, err)
+	}
+}
+
 func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

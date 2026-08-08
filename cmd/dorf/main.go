@@ -21,6 +21,7 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
+	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	"github.com/aphronio/dorf/internal/publication"
@@ -66,7 +67,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	defer client.Close()
 	switch args[0] {
 	case "admit":
-		return admit(ctx, store, client, args[1:], stdout, stderr)
+		return admit(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "setup-retry":
@@ -83,6 +84,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return reviewCommand(ctx, store, service, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "publication":
 		return publicationCommand(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
+	case "outcome":
+		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
+		return outcomeCommand(ctx, store, client, githubClient, args[1:], stdout)
 	default:
 		_ = service
 		return usage(stderr)
@@ -130,7 +134,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 009_github_publication.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 010_job_outcomes_cleanup.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -156,7 +160,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	return nil
 }
 
-func admit(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("admit", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable caller admission identity")
@@ -180,7 +184,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	if strings.TrimSpace(*branch) == "" && strings.TrimSpace(*key) != "" {
 		*branch = "dorf/" + spine.JobID(strings.TrimSpace(*key))
 	}
-	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
+	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, ProviderConnection: *provider, ProviderGatewayState: cfg.GatewayStatePath, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
 	if err != nil {
 		return err
 	}
@@ -325,6 +329,10 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
+	outcome, err := store.Outcome(ctx, job.ID)
+	if err != nil {
+		return err
+	}
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -337,20 +345,28 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  gateway state: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.ProviderGatewayState), empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+	}
+	if job.CleanupAttention != "" {
+		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
 	if proposal == nil {
 		fmt.Fprintln(stdout, "  proposal: none")
 	} else {
 		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s remote=%s body=%s stale=%t\n", proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.ObservedRemoteHead, proposal.BodyDigest, proposal.Stale)
 	}
-	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints)
+	if outcome == nil {
+		fmt.Fprintln(stdout, "  outcome: none")
+	} else {
+		fmt.Fprintf(stdout, "  outcome: %s PR=#%d state=%s merged=%t proposed=%s observed-head=%s merge=%s observed-at=%s\n", outcome.Kind, outcome.Number, outcome.ObservedState, outcome.ObservedMerged, outcome.ProposedRevision, outcome.ObservedHead, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
+	}
+	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d live-claims=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints, runEvidence.LiveClaims)
 	if job.RunTerminalState != "" {
 		if job.RunTerminalState == "cancelled" && !job.AdmissionOpen {
 			fmt.Fprintln(stdout, "  delivery task: cancelled after admission closed for cleanup")
@@ -359,10 +375,10 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 		}
 	}
 	if cleanupEvidence.TaskID != "" {
-		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
+		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d live-claims=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints, cleanupEvidence.LiveClaims)
 	}
 	for _, task := range publicationEvidence {
-		fmt.Fprintf(stdout, "  Absurd publication: %s key=%s generation=%d state=%s attempts=%d checkpoints=%d current=%t\n", task.TaskID, task.IdempotencyKey, task.Attempt, task.State, task.Attempts, task.Checkpoints, task.Current)
+		fmt.Fprintf(stdout, "  Absurd publication: %s key=%s generation=%d state=%s attempts=%d checkpoints=%d live-claims=%d current=%t\n", task.TaskID, task.IdempotencyKey, task.Attempt, task.State, task.Attempts, task.Checkpoints, task.LiveClaims, task.Current)
 	}
 	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
 	for _, message := range messages {
@@ -580,6 +596,22 @@ func publicationCommand(ctx context.Context, store postgres.Store, client *absur
 	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "attempt": params.Attempt, "task_id": taskID, "created": created, "scheduled": true})
 }
 
+func outcomeCommand(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
+	if len(args) != 2 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("outcome requires: JOB_ID <accepted|rejected|abandoned>")
+	}
+	requested := spine.JobOutcomeKind(strings.TrimSpace(args[1]))
+	receipt, created, err := (outcomeapp.Service{Store: store, GitHub: githubClient}).Record(ctx, strings.TrimSpace(args[0]), requested)
+	if err != nil {
+		return err
+	}
+	job, err := workflow.ScheduleCleanup(ctx, store, client, receipt.JobID)
+	if err != nil {
+		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
+	}
+	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "cleanup_task_id": job.CleanupTaskID})
+}
+
 func parsePublicationTarget(set *flag.FlagSet, args []string, command string) (string, error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" || strings.HasPrefix(args[0], "-") {
 		return "", fmt.Errorf("%s requires one Job ID before its flags", command)
@@ -716,6 +748,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|publication|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|publication|outcome|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
