@@ -32,13 +32,22 @@ not execute a mutable network installer.
    image metadata, while checking the image for forbidden credentials and other required tools;
 4. admits the release source commit through the Go durable Job spine, lets its Sandbox clone the
    repository, and requires the repository's declared preparation Action to succeed;
-5. completes one real Codex app-server turn through a scoped Provider Route;
+5. completes one real Codex app-server turn through a scoped Provider Route, with an explicit
+   no-modification goal, and requires the exact starting Revision to remain current with the
+   specific `implementation produced no change` blocked outcome;
 6. records the image fingerprint, native Session/turn identity, timings, and terminal state in a
    redacted local evidence directory;
 7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
    path, with fenced Go cancellation and synchronous exact reconciliation as the failure fallback; and
 8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
    VMs and candidate alias.
+
+This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. Before
+cleanup, the validator requires exactly one uncertain repository-commit Action caused by the
+expected unchanged tree, zero Checks, zero review AgentRuns, and no proposal. Retained evidence
+labels Checks, review, and publication as not run or claimed. A different blocked Job cannot satisfy
+the proof. The separate final cutover dogfood owns exact-Revision Checks and Evidence, selected
+review, repair, publication, outcome, and cleanup.
 
 Run that proof manually with an already connected Provider Gateway name:
 
@@ -82,9 +91,9 @@ A complete draft containing the archive and manifest is published only when:
 The earlier lean `v0.1.1` release passed the historical core proof on 2026-08-04 with Codex 0.146.0. Its
 fresh probe contained Node and Codex but no Git, npm, or uv. Releases after the coding-workstation
 slice add Git and uv while retaining the same credential-free boundary; npm remains absent. The
-issue-40 candidate terminal is the durable clone-to-real-turn proof above. Deterministic Checks and
-independent review remain retained policy for their later replacement slices and are not yet
-claimed by the Go image proof. The v0.1.1
+issue-40 candidate terminal is the bounded durable clone-to-real-turn/no-change proof above.
+Deterministic Checks and independent review are not run or claimed by the Go image proof; they
+belong to the separate final cutover terminal. The v0.1.1
 published archive is 765,823,845 bytes, about 52 MiB smaller than the previous workflow-tooling
 image. Its archive and Incus fingerprint is
 `0c269e0aa0c5a765e45bb50542b64d06e6c55930b920754459643991c7349775`; the manifest digest is
