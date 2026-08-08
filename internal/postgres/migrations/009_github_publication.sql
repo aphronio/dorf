@@ -28,7 +28,7 @@ alter table dorf.jobs add constraint jobs_workflow_phase_check check (
 alter table dorf.actions drop constraint if exists actions_kind_check;
 alter table dorf.actions add constraint actions_kind_check check (kind in (
     'sandbox-create','repository-clone','repository-setup','repository-commit',
-    'repository-push','github-pull-request','review-workspace-create',
+    'repository-push','github-pull-request','review-workspace-create','review-workspace-delete',
     'provider-route-create','codex-session-start','codex-turn-start',
     'provider-route-revoke','sandbox-delete'
 ));

@@ -2,7 +2,9 @@ package postgres_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	publicationapi "github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/jackc/pgx/v5"
 )
 
 func publicationInput(key string) postgres.NewJob {
@@ -20,6 +23,98 @@ func publicationInput(key string) postgres.NewJob {
 		Revision: strings.Repeat("a", 40), Branch: "dorf/issue-43", ProviderConnection: "primary",
 		Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
 		GitHubInstallation: "42", BaseBranch: "greenfield",
+	}
+}
+
+func TestMigration009PreservesHistoricalReviewWorkspaceDeleteAndAddsPublicationKinds(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	sourceConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminConfig := sourceConfig.Copy()
+	adminConfig.Database = "postgres"
+	admin, err := sql.Open("pgx", adminConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+	databaseName := fmt.Sprintf("dorf_publication_upgrade_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(context.Background(), `create database `+pgx.Identifier{databaseName}.Sanitize()+` template `+pgx.Identifier{sourceConfig.Database}.Sanitize()); err != nil {
+		t.Fatalf("create isolated publication upgrade database: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.ExecContext(context.Background(), `select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid<>pg_backend_pid()`, databaseName); err != nil {
+			t.Errorf("terminate isolated publication upgrade connections: %v", err)
+		}
+		if _, err := admin.ExecContext(context.Background(), `drop database `+pgx.Identifier{databaseName}.Sanitize()); err != nil {
+			t.Errorf("drop isolated publication upgrade database: %v", err)
+		}
+	})
+	upgradeConfig := sourceConfig.Copy()
+	upgradeConfig.Database = databaseName
+	db, err := sql.Open("pgx", upgradeConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
+		t.Fatal(err)
+	}
+	prior := []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql"}
+	for _, name := range prior {
+		contents, err := os.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, string(contents)); err != nil {
+			t.Fatalf("apply prior migration %s: %v", name, err)
+		}
+		if _, err := db.ExecContext(ctx, `insert into dorf.schema_migrations(name) values($1)`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		alter table dorf.actions drop constraint actions_kind_check;
+		alter table dorf.actions add constraint actions_kind_check check (kind in (
+		  'sandbox-create','repository-clone','repository-setup','repository-commit',
+		  'review-workspace-create','review-workspace-delete',
+		  'provider-route-create','codex-session-start','codex-turn-start',
+		  'provider-route-revoke','sandbox-delete'
+		))`); err != nil {
+		t.Fatal(err)
+	}
+	jobID, revision := "job-publication-upgrade", strings.Repeat("a", 40)
+	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'publication-upgrade','preserve historical review cleanup','https://github.com/aphronio/dorf.git',$2,$2,'dorf/publication-upgrade','primary','gpt-5.6-sol','high')`, jobID, revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values('action-review-workspace-delete',$1,'review-workspace-delete','succeeded','historical-review-run')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	store := postgres.Store{DB: db}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var retainedKind, retainedState string
+	if err := db.QueryRowContext(ctx, `select kind,state from dorf.actions where id='action-review-workspace-delete'`).Scan(&retainedKind, &retainedState); err != nil {
+		t.Fatal(err)
+	}
+	if retainedKind != "review-workspace-delete" || retainedState != "succeeded" {
+		t.Fatalf("historical Action kind=%q state=%q", retainedKind, retainedState)
+	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values ('action-repository-push',$1,'repository-push','pending',$2),('action-github-pull-request',$1,'github-pull-request','pending',$2)`, jobID, revision); err != nil {
+		t.Fatalf("009 did not admit publication Action kinds: %v", err)
+	}
+	var kinds int
+	if err := db.QueryRowContext(ctx, `select count(*) from dorf.actions where job_id=$1 and kind in ('review-workspace-delete','repository-push','github-pull-request')`, jobID).Scan(&kinds); err != nil {
+		t.Fatal(err)
+	}
+	if kinds != 3 {
+		t.Fatalf("upgraded Action kinds=%d want=3", kinds)
 	}
 }
 
