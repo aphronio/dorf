@@ -1549,6 +1549,98 @@ func (e *integrationExternals) effectKinds() []spine.ActionKind {
 	return append([]spine.ActionKind(nil), e.effects...)
 }
 
+func TestMigration008UpgradesApplied001Through007(t *testing.T) {
+	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DORF_TEST_DATABASE_URL is not configured")
+	}
+	sourceConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminConfig := sourceConfig.Copy()
+	adminConfig.Database = "postgres"
+	admin, err := sql.Open("pgx", adminConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { admin.Close() })
+	databaseName := fmt.Sprintf("dorf_delivery_upgrade_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(context.Background(), `create database `+pgx.Identifier{databaseName}.Sanitize()+` template `+pgx.Identifier{sourceConfig.Database}.Sanitize()); err != nil {
+		t.Fatalf("create isolated delivery upgrade database: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.ExecContext(context.Background(), `select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid<>pg_backend_pid()`, databaseName); err != nil {
+			t.Errorf("terminate isolated delivery upgrade connections: %v", err)
+		}
+		if _, err := admin.ExecContext(context.Background(), `drop database `+pgx.Identifier{databaseName}.Sanitize()); err != nil {
+			t.Errorf("drop isolated delivery upgrade database: %v", err)
+		}
+	})
+	upgradeConfig := sourceConfig.Copy()
+	upgradeConfig.Database = databaseName
+	db, err := sql.Open("pgx", upgradeConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
+		t.Fatal(err)
+	}
+	prior := []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql"}
+	for _, name := range prior {
+		contents, err := os.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, string(contents)); err != nil {
+			t.Fatalf("apply prior migration %s: %v", name, err)
+		}
+		if _, err := db.ExecContext(ctx, `insert into dorf.schema_migrations(name) values($1)`, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var deliveryColumn bool
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='job_messages' and column_name='delivery_intent')`).Scan(&deliveryColumn); err != nil {
+		t.Fatal(err)
+	}
+	if deliveryColumn {
+		t.Fatal("delivery schema was already present after recorded migrations 001 through 007")
+	}
+	jobID := "job-delivery-upgrade"
+	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'delivery-upgrade','upgrade delivery schema','https://github.com/aphronio/dorf.git',$2,$2,'dorf/delivery-upgrade','primary','gpt-5.6-sol','high')`, jobID, strings.Repeat("a", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values('message-delivery-upgrade',$1,'existing-message',1,'preserve me')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	store := postgres.Store{DB: db}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var intent, target string
+	if err := db.QueryRowContext(ctx, `select delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where id='message-delivery-upgrade'`).Scan(&intent, &target); err != nil {
+		t.Fatal(err)
+	}
+	if intent != string(spine.MessageFollow) || target != "" {
+		t.Fatalf("upgraded existing message intent=%q target=%q", intent, target)
+	}
+	var migrationApplied, nativeTurnUnique bool
+	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='008_message_delivery.sql'),exists(select 1 from pg_constraint where conrelid='dorf.agent_runs'::regclass and conname='agent_runs_native_turn_id_key')`).Scan(&migrationApplied, &nativeTurnUnique); err != nil {
+		t.Fatal(err)
+	}
+	if !migrationApplied || nativeTurnUnique {
+		t.Fatalf("migration applied=%v old native-turn uniqueness retained=%v", migrationApplied, nativeTurnUnique)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer' where id='message-delivery-upgrade'`); err == nil {
+		t.Fatal("delivery target invariant allowed steer without an exact target")
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer',steer_target_turn_id='turn-active' where id='message-delivery-upgrade'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
