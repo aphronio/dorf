@@ -26,7 +26,7 @@ browser device login (once)
 │  Provider Gateway broker (CLIProxyAPI, pinned version)     │
 │  - sole holder of ChatGPT OAuth bundle, single-writer      │
 │    refresh                                                 │
-│  - serves the private Incus bridge to host + Rooms         │
+│  - serves the private Incus bridge to host + Sandboxes     │
 │  - issues per-sandbox scoped keys; startup auth probe      │
 │        ▲                    ▲                              │
 │        │ Responses/SSE      │ Responses/SSE or WebSocket   │
@@ -50,7 +50,7 @@ Concrete choices:
    `model_provider` (`base_url`, `env_key`, `wire_api = "responses"`) and injects one scoped
    broker key as the named env var. `requires_openai_auth` stays false. Responses WebSockets are
    required: ChatGPT subscription route admission fails unless the broker reports
-   `websockets = true` for the selected auth record, and every admitted Room sets
+   `websockets = true` for the selected auth record, and every admitted Sandbox sets
    `supports_websockets = true`. API-key routes do not consult the ChatGPT OAuth capability;
    CLIProxyAPI owns their provider-specific upstream transport. Sandboxes carry no
    `auth.json` and no OpenAI material; a leaked scoped key cannot reach the ChatGPT account.
@@ -64,7 +64,7 @@ Concrete choices:
    programmatic facade.
 6. **Billing-mode-agnostic route.** Identical sandbox wiring whether the selected Provider
    Connection uses a ChatGPT subscription or an OpenAI Platform API key; the choice is made when
-   connecting the provider rather than during Room provisioning.
+   connecting the provider rather than during Sandbox provisioning.
 7. **Explicit failure vocabulary.** Startup auth probe per sandbox; stale auth fails fast as
    `needs-human` with a reconnect remediation naming the Provider Connection. Broker errors are
    translated into Dorf vocabulary; the string "CLIProxyAPI" never reaches users.

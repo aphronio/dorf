@@ -22,8 +22,6 @@ Keep this file as the compact operating guide. Read deeper context only when the
 - [Decision Log](docs/project/decisions.md): accepted choices, their rationale, and reconsideration triggers;
   consult it before changing an established choice, and update it when making, revising, or reversing
   a consequential product, architecture, or technology decision.
-- [Runtime Surface](docs/project/runtime.md): legacy Python/SQLite implementation boundary retained only as
-  behavioral evidence during the greenfield replacement. It is not the target API or vocabulary.
 - [Provider Gateway](docs/project/provider-gateway.md): shared provider connections, scoped
   inference routes, local broker ownership, and the client/Sandbox composition boundary; read for
   model-provider authentication, routing, or broker work. D036 retains the durable project decision.
@@ -40,8 +38,8 @@ Keep this file as the compact operating guide. Read deeper context only when the
   Tailscale access; read for Buzz infrastructure, lifecycle, credentials, or dogfood setup.
 - [Go Job Spine](docs/implementation/go-spine.md): issue #40 local PostgreSQL/Absurd setup and exact
   Go-only Incus, Codex, redelivery, inspection, and cleanup proof commands.
-- [Release Process](docs/releasing.md): Python distribution verification, Trusted Publisher setup,
-  TestPyPI rehearsal, and production release procedure; read before package publication changes.
+- [Release Process](docs/releasing.md): Go artifact and credential-free Incus image verification and
+  publication; read before release changes.
 
 Material under `docs/research/` is archival and non-normative. Read it only when a task explicitly
 requires ecosystem comparison; it is not a source of Dorf requirements.
@@ -51,8 +49,8 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 - The coding-to-PR workflow is the only current requirements driver. Clients compose the same application
   boundary rather than creating a second Dorf workflow. Do not add
   support for hypothetical research, app-builder, deployment, swarm, provider, or other workflows.
-- The Provider Gateway is a sibling application subsystem, not a provider registry in
-  `dorf.runtime`. The ChatGPT-to-Codex route and scoped client routes are its current implementation
+- The Provider Gateway is a sibling application subsystem, not a provider registry in the durable
+  Job core. The ChatGPT-to-Codex route and scoped client routes are its current implementation
   drivers; validate each later provider and wire dialect before claiming support.
 - One coding task slice maps to one goal-backed Job, isolated Sandbox and clone, branch, and PR proposal.
   Human-requested revision continues the Job and Session. Acceptance, rejection, or abandonment is a Job
@@ -67,20 +65,17 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 
 ## Command Expectations
 
-Use `uv` for Python project commands once dependencies are installed.
-
-The existing Python commands remain the verification path until the greenfield Go module lands. On the
-greenfield implementation branch, use the Go commands declared by that branch and keep every slice runnable;
-do not make the Python CLI a compatibility gate.
+Use the Go commands declared by the repository contract and keep every slice runnable.
 
 Use the GitHub CLI (`gh`) for GitHub operations such as viewing, closing, or updating issues and pull requests. Do not use the Codex GitHub app for those operations in this repository.
 
 When creating or editing GitHub issue or PR bodies that contain Markdown backticks, write the body to a temporary file and pass it with `gh --body-file` or `gh ... --body-file`. Do not put backticked Markdown directly inside a shell command string; the shell will treat backticks as command substitution.
 
 ```bash
-uv run dorf --help
-uv run pytest
-uv run ruff check .
+go test ./...
+go vet ./...
+go build -o .dorf/bin/dorf ./cmd/dorf
+.dorf/bin/dorf version
 ```
 
 Do not add broad abstractions without a concrete second implementation or an observed workflow need.

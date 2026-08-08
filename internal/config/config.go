@@ -35,7 +35,7 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("resolve user home for provider gateway state: %w", err)
 	}
 	cfg := Config{
-		DatabaseURL:      strings.TrimSpace(os.Getenv("DORF_DATABASE_URL")),
+		DatabaseURL:      value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
 		IncusImage:       value("DORF_INCUS_IMAGE", "dorf-codex"),
 		IncusNetwork:     value("DORF_INCUS_NETWORK", "incusbr0"),
 		IncusDiskSize:    value("DORF_INCUS_DISK_SIZE", "40GiB"),
@@ -47,9 +47,6 @@ func Load() (Config, error) {
 		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
 		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
 		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
-	}
-	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DORF_DATABASE_URL is required (use a local PostgreSQL DSN; Dorf does not start Docker or use a cloud account)")
 	}
 	cfg.GatewayStatePath, err = filepath.Abs(cfg.GatewayStatePath)
 	if err != nil {

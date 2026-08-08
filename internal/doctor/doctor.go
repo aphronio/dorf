@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/gateway"
@@ -31,6 +35,17 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 		}
 		checks = append(checks, Check{Name: name, Status: "failed", Detail: detail})
 	}
+	var platformErr error
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		platformErr = fmt.Errorf("found %s/%s; supported host is linux/amd64", runtime.GOOS, runtime.GOARCH)
+	}
+	add("host-platform", platformErr, "use an x86_64 Linux host; macOS cannot host the local Incus VM daemon")
+	kvm, kvmErr := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if kvmErr == nil {
+		kvmErr = kvm.Close()
+	}
+	add("hardware-virtualization", kvmErr, "enable virtualization and grant this user read/write access to /dev/kvm")
+	add("host-capacity", HostCapacity(), "provide at least 4 GiB total memory and 20 GiB free on /")
 	add("postgresql", db.PingContext(ctx), "verify DORF_DATABASE_URL and local PostgreSQL is running")
 	var version string
 	err := db.QueryRowContext(ctx, `select absurd.get_schema_version()`).Scan(&version)
@@ -71,6 +86,33 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
 	add("provider-route-authority", err, "connect the named provider and bind the broker to the private Incus bridge")
 	return checks
+}
+
+func HostCapacity() error {
+	contents, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return fmt.Errorf("read memory capacity: %w", err)
+	}
+	var memoryKiB uint64
+	for _, line := range strings.Split(string(contents), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "MemTotal:" {
+			memoryKiB, _ = strconv.ParseUint(fields[1], 10, 64)
+			break
+		}
+	}
+	if memoryKiB < 4*1024*1024 {
+		return fmt.Errorf("total memory is %.1f GiB", float64(memoryKiB)/(1024*1024))
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs("/", &stat); err != nil {
+		return fmt.Errorf("read root filesystem capacity: %w", err)
+	}
+	free := stat.Bavail * uint64(stat.Bsize)
+	if free < 20*1024*1024*1024 {
+		return fmt.Errorf("root filesystem has %.1f GiB free", float64(free)/(1024*1024*1024))
+	}
+	return nil
 }
 
 func Ready(checks []Check) bool {

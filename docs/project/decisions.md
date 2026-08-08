@@ -662,21 +662,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   posture changes; Dorf becomes remote or multi-user (add OIDC-style sandbox identity); or the
   Droid-leg validation produces contradicting evidence.
 
-## D036 — Shared Provider Gateway for trusted clients and Dorf Rooms
+## D036 — Shared Provider Gateway for trusted clients and Dorf Sandboxes
 
-- **Status:** Accepted direction — 2026-07-29
-- **Decision:** Add `dorf.provider_gateway` as a sibling application subsystem, outside
-  `dorf.runtime`. Its programmatic `ProviderGateway` facade manages durable upstream Provider
+- **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08
+- **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
+  Job core. Its programmatic boundary manages durable upstream Provider
   Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
-  Dorf composes it for Room routes; trusted host applications may import the same facade for their
+  Dorf composes it for Sandbox routes; trusted host applications may use the same authority for their
   own model routes. Connecting through either surface reaches one backing authority, so upstream
-  subscription or API credentials are never copied into clients or Rooms. CLIProxyAPI is the first
+  subscription or API credentials are never copied into clients or Sandboxes. CLIProxyAPI is the first
   concrete daemon backend; D035 is the first validated ChatGPT-to-Codex route.
 - **Local and remote posture:** The current broker has one concrete bind address. Host-only use may
-  bind loopback; Codex Room composition binds the selected private Incus bridge address so both the
-  host and attached Rooms can reach it, never a wildcard or LAN address. An interface-scoped
+  bind loopback; Codex Sandbox composition binds the selected private Incus bridge address so both the
+  host and attached Sandboxes can reach it, never a wildcard or LAN address. An interface-scoped
   firewall rule admits the gateway port only from the bridge. Connection and route semantics do not
-  depend on that location. A real remote Room may use the same route shape through a private
+  depend on that location. A real remote Sandbox may use the same route shape through a private
   authenticated transport, but remote exposure, workload identity, and multi-user authority remain
   unimplemented until a concrete deployment requires them.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
@@ -684,17 +684,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
   concurrency behavior before advertising it. Do not add automatic pooling, fallback, quota
   scheduling, or a speculative capability matrix.
-- **Why:** Host applications and Dorf Rooms are distinct consumers of the same model-provider
+- **Why:** Host applications and Dorf Sandboxes are distinct consumers of the same model-provider
   connection. Sharing a typed facade and broker authority gives them login-once behavior without
-  coupling provider state to Worker or Job semantics, duplicating credentials, or forcing model
-  streams through the Python runtime.
+  coupling provider state to Job semantics, duplicating credentials, or forcing model streams
+  through the durable Job worker.
 - **Reconsider when:** A second broker backend proves a smaller shared interface; an actual remote
   deployment requires a network authority; a provider cannot fit connection-plus-route semantics
   without distortion; or observed multi-account pressure justifies routing policy.
 
 ## D037 — New core Rooms use a global deployment profile, never a repository contract
 
-- **Status:** Accepted and implemented for core configuration slice #172 — 2026-07-30
+- **Status:** Superseded by D047 — 2026-08-08
 - **Decision:** New caller-managed Rooms use one host-local deployment profile under the XDG config
   boundary. The profile selects the built-in Environment configuration and names the default
   Provider Connection; it contains no provider credential, route key, Room lifecycle, or Job state.
@@ -714,49 +714,48 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Provider Connections require an interactive default chooser, or a remote/multi-user authority
   makes a per-host XDG profile the wrong ownership boundary.
 
-## D038 — Official Room images are immutable GitHub Release assets
+## D038 — Official Sandbox images are immutable GitHub Release assets
 
 - **Status:** Accepted and implemented — 2026-07-31; local-first and combined product-release
-  boundaries revised during public activation — 2026-08-04
+  boundaries revised during public activation — 2026-08-04; Go artifact boundary at D047 cutover
+  — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08
 - **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
-  exactly one Incus archive and one compatibility manifest for that architecture. One repo-owned
+  exactly one Go x86_64 Linux archive/checksum and one Incus archive/compatibility manifest. One repo-owned
   local command builds from an immutable base fingerprint, selects and records the current Codex npm
   release, proves the credential boundary, and completes the real coding tracer from clone and
   repo-owned preparation through an implementation turn, checks, scoped routing,
-  content-addressed evidence, and exact cleanup. The image includes Git, uv, and the Pi tool used by
-  the separate DeepSeek diff role but removes build-only npm. The command exports the untouched candidate and
+  content-addressed evidence, and exact cleanup. The image includes Git, Go, Node, uv, and Codex but
+  removes build-only npm. The command exports the untouched candidate and
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
 - **Artifact identity:** Attach the image to the normal immutable `vX.Y.Z` Dorf product release
-  instead of creating machine-only releases in the human-facing release feed. Manifest schema 3
-  uses the x86_64 assets `dorf-codex-incus-vm-v3-x86_64.tar.gz` and
-  `dorf-codex-incus-vm-v3-x86_64.json`; it requires `environment: incus`, the complete Git, Node,
-  and uv coding-workstation inventory, and the verified pinned uv release-archive digest. The
-  schema-3 installer selects only that asset channel and rejects earlier lean image schemas. The
-  immutable v0.1.1 client continues selecting its unversioned schema-2 assets until v0.1.2 publishes
-  the new channel and package together, so both sides of the release-publication window retain a
-  valid public image without compatibility parsing. The two activation-time `room-image-*`
-  bootstrap releases are removable only after the combined release passes anonymous consumption;
-  they were removed after that `v0.1.1` terminal passed on 2026-08-04.
+  instead of creating machine-only releases in the human-facing release feed. Manifest schema 4
+  uses the x86_64 assets `dorf-codex-incus-vm-v4-x86_64.tar.gz` and
+  `dorf-codex-incus-vm-v4-x86_64.json`; it requires `environment: incus`, the complete Git, Go, Node,
+  and uv coding-workstation inventory, and verified pinned Go and uv release-archive digests. Its
+  candidate proof executes `go`, `gofmt`, and the repository's declared preparation in a fresh
+  Sandbox. Issue #38 dogfood showed that the historical schema-3 image could reach a Go repository
+  without Go installed, so the Go installer accepts only schema 4. Old pre-cutover clients and image
+  schemas are not a compatibility target.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
   enabled before the first image is promoted. The publisher records that reviewed repository
   setting in an explicit variable, requires a clean source commit already available from GitHub,
-  creates a complete draft, publishes it once, and verifies its release attestation and both assets.
+  creates a complete draft, publishes it once, and verifies its release attestation and all assets.
   The owner's provider credential remains in the local Provider Gateway; only a scoped route enters
-  a disposable validation Room, and neither enters the image or GitHub.
+  a disposable validation Sandbox, and neither enters the image or GitHub.
 - **Why:** GitHub Releases reuse the project's source authority, provide static anonymous HTTPS
   downloads, protected tags and assets, release attestations, and API-visible SHA-256 digests
   without operating a public Incus daemon or a separate image-index service. Verifying every layer
   keeps the friendly alias out of the trust boundary and lets setup converge idempotently on one
   exact local fingerprint.
 - **Why local publication:** A GitHub-hosted runner would require moving or recreating a provider
-  credential to complete the real Worker terminal, while a persistent self-hosted runner adds a
+  credential to complete the real Job terminal, while a persistent self-hosted runner adds a
   needless public-repository execution surface. The current manual release cadence does not justify
   either cost. The version-controlled command retains deterministic CI-style proof without moving
   the owner's ChatGPT subscription boundary.
 - **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
-  installer module are pre-release implementation details. Existing Rooms remain bound to the image
+  installer module are pre-release implementation details. Existing Sandboxes remain bound to the image
   they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
   for another architecture or Environment.
 - **Reconsider when:** Release size or bandwidth makes GitHub unsuitable, a second architecture
@@ -764,9 +763,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   cannot preserve the required immutability/digest guarantees, or a concrete remote Environment
   requires a different image authority. Reconsider unattended publication when a scoped
   non-personal provider credential and isolated ephemeral runner make it safer without weakening the
-  real Worker terminal.
+  real Job terminal.
 
-## D039 — Initial core setup supports only the official Room image
+## D039 — Initial core setup supports only the official Sandbox image
 
 - **Status:** Accepted for initial open-source setup — 2026-07-31
 - **Decision:** The guided core setup uses only the Dorf-published credential-free Room image.
@@ -781,36 +780,35 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D040 — Rename the product and complete namespace to Dorf
 
-- **Status:** Accepted for initial open-source distribution — 2026-08-03
-- **Decision:** Rename the product to Dorf and use `dorf` consistently for the PyPI distribution,
-  Python import package, CLI command, repository contract, local configuration and state paths,
+- **Status:** Accepted for initial open-source distribution — 2026-08-03; Python distribution
+  portion superseded by D047 — 2026-08-08
+- **Decision:** Rename the product to Dorf and use `dorf` consistently for the Go application,
+  CLI command, repository contract, local configuration and state paths,
   environment-variable prefix, image and release artifacts, and repository identity. Do not retain
   compatibility aliases or migrate private dogfood state from the former pre-release namespace.
-  The exact `dorf` distribution name was unregistered on PyPI when this decision was made; recheck
-  it immediately before the first upload because only publication reserves it.
-- **Why:** The former distribution name is owned by another PyPI organization, and the selected
-  replacement should be one coherent product identity rather than a permanent split between the
-  install name and every surface a user or integrator encounters. The project has no public release
-  or third-party compatibility commitment, so this is the least costly point for a clean cutover.
+- **Why:** The selected identity should remain coherent across the installed artifact and every
+  user-facing surface. The cutover has no old package compatibility obligation.
 - **Compatibility:** This intentionally breaks private source imports, commands, configuration,
   state paths, environment variables, image names, and integrations that used the former namespace.
   Existing dogfood resources must be ended or recreated explicitly; Dorf does not guess ownership
   of or mutate the old namespace. The `dorf` identity becomes a public compatibility concern only
   after the first release.
-- **Reconsider when:** PyPI rejects or reserves `dorf` or a credible developer-tool naming conflict
-  is discovered before publication. After publication, require a deliberate migration decision.
+- **Reconsider when:** A credible developer-tool naming conflict is discovered. After publication,
+  require a deliberate migration decision.
 
 ## D041 — Host setup is capability-first with narrow native-package recipes
 
-- **Status:** Accepted for initial open-source setup — 2026-08-04
+- **Status:** Accepted for initial open-source setup — 2026-08-04; automatic recipe narrowed to the
+  proven Ubuntu 24.04 cutover host — 2026-08-08
 - **Decision:** Accept any x86_64 Linux host whose local Incus daemon is already usable, but perform
   automatic package, service, and root-equivalent group mutations only through exact clean-host
-  validated recipes. The initial recipes are Arch Linux and Ubuntu 24.04 LTS; both use native
-  distribution packages, systemd's `incus.service`, and `incus-admin`, while all pristine daemons
+  validated recipes. The Go cutover retains Ubuntu 24.04 LTS as the automatic clean-machine recipe;
+  it uses native distribution packages, systemd's `incus.service`, and `incus-admin`, while pristine daemons
   delegate storage and private-network creation to `incus admin init --minimal`. Setup reinspects
-  real state on every run, detects a local client/daemon version mismatch left by a package update,
-  and requests approval before restarting the service. Unsupported distributions receive the
-  upstream Incus installation path and may rerun the same command afterward.
+  real state on every run and requests approval before package, service, or group mutation. Arch and
+  other distributions remain capability-first: their operator follows the upstream/native Incus
+  installation path and reruns the same readiness command afterward. This narrows the support claim
+  rather than carrying a deleted Python host recipe into the Go product.
 - **Storage default:** Retain Incus's directory-backed minimal default for the first stranger path.
   In a clean nested Ubuntu 24.04 host, three cached-VM guest-readiness samples had a 15.490-second
   median on `dir` and a 12.425-second median on a disposable loop-backed Btrfs pool. That gain does
@@ -827,7 +825,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D042 — Issue-backed coding delegation has one disposable admission proof
 
-- **Status:** Accepted for the coding-to-PR AFK slice — 2026-08-05
+- **Status:** Superseded by D047 — 2026-08-08
 - **Decision:** Before an issue-backed `start` or `afk` invocation may reserve AFK ownership, create
   a coding Job or branch, or provision a durable Worker Room, run one workflow-owned proof against
   the exact repository head and issue. Aggregate independently discoverable repository, GitHub App,
@@ -850,7 +848,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D043 — Coding acceptance is pinned at admission and proven from retained observations
 
-- **Status:** Accepted for the coding-to-PR workflow — 2026-08-05
+- **Status:** Evidence authority retained by D047; Python AFK checklist/dossier mechanics
+  superseded — 2026-08-08
 - **Decision:** Compile the pinned issue acceptance criteria plus configured repository check and
   smoke obligations into a small workflow-owned checklist when a
   coding Job is reserved. The checklist remains explicitly human-correctable as a draft until the
@@ -877,7 +876,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D044 — Missing repository authority pauses inside the original delegation
 
-- **Status:** Accepted for the GitHub App HITL slice — 2026-08-05
+- **Status:** Superseded by D047's explicit Go readiness/admission boundary — 2026-08-08
 - **Decision:** When the exact issue-backed admission proof receives GitHub's not-found response
   before it can resolve the target branch, treat that one result as absent repository selection on
   the already configured Dorf GitHub App installation. Retain one deterministic, non-secret

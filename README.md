@@ -1,151 +1,66 @@
-<picture>
-  <source media="(prefers-reduced-motion: reduce)" srcset="assets/cover.png">
-  <img alt="Workers continuing their jobs inside isolated Rooms in the Dorf village" src="assets/cover.gif">
-</picture>
-
 # Dorf
 
-**Durable AI workers on infrastructure you control.**
+Dorf is a local-first control plane that carries one coding goal durably through an isolated
+Incus Sandbox to an exact-Revision GitHub pull-request proposal.
 
-Dorf makes your coding agent a durable worker—Codex today, more harnesses over time. Give it a job,
-walk away, and come back to the same work.
+The supported product is one Go application. PostgreSQL stores Dorf facts, Absurd schedules
+durable work, Codex app-server performs bounded agent work, and Git/GitHub remain authoritative for
+the proposal. Dorf does not use Python, SQLite, a hosted durability account, or the host Docker
+socket.
 
-Each Worker gets a full development environment for its native tools and workflows. The Room keeps
-that work isolated from the rest of your infrastructure.
+## Build
 
-## Run a coding Job
-
-Install Dorf and run the one-time guided setup:
-
-```bash
-uv tool install dorf
-dorf setup
-```
-
-See [Getting started](https://github.com/aphronio/dorf/blob/main/docs/getting-started.md) for current
-prerequisites and setup details.
-
-Then create a Worker and give it one complete goal:
+Dorf currently supports x86_64 Linux hosts with a local Incus daemon. macOS cannot host the local
+Incus VM daemon and is not a supported Dorf host.
 
 ```bash
-dorf worker spawn python-developer
-
-dorf job assign build-retry-queue \
-  --to python-developer \
-  --goal "Build a small Python retry queue with tests, run them, and publish the results as evidence."
-
-dorf job wait build-retry-queue
+go build -o ./bin/dorf ./cmd/dorf
+./bin/dorf version
 ```
 
-Close the terminal while the Job runs, then return from another shell:
+Release archives contain the same static x86_64 Linux binary. See
+[Getting started](docs/getting-started.md) for PostgreSQL, Incus, the credential-free Codex image,
+Provider Gateway, GitHub App, and repository preparation.
+
+## Product model
+
+```text
+A Job changes code in a Sandbox.
+Actions and Checks do deterministic work.
+AgentRuns do judgment.
+Evidence proves claims about a Revision.
+```
+
+One admitted Job owns one isolated Sandbox and clone, branch, resumable implementation Session,
+selected review plan, exact proposal, explicit outcome, and observable cleanup. Client and worker
+processes may disappear; stable identities and external reconciliation prevent duplicate turns,
+Sandboxes, pushes, and pull requests.
+
+The main commands are:
 
 ```bash
-dorf job inspect build-retry-queue
-dorf job message build-retry-queue "Add a test for exponential backoff and publish the new results."
-dorf job wait build-retry-queue
+dorf setup --provider personal-chatgpt
+dorf doctor --provider personal-chatgpt
+dorf admit ...
+dorf worker
+dorf message --job JOB --id STABLE_ID --input-file message.txt --intent steer
+dorf inspect JOB
+dorf outcome JOB accepted|rejected|abandoned
+dorf cleanup JOB
 ```
 
-## Workers do Jobs in Rooms
+`inspect` separates agent claims from observed Actions, Checks, Revision-pinned Evidence, Absurd
+task state, GitHub proposal/outcome facts, and cleanup state.
 
-| Resource | Meaning |
-| --- | --- |
-| **Worker** | Durable identity around an agent harness |
-| **Job** | Pinned goal with its own conversation and retained evidence |
-| **Room** | Isolated environment supplied by a Room provider |
+## Development
 
-An **Assignment** records the exact Worker, Job, and Room binding for lifecycle and recovery. Most
-human-facing commands need only the Worker or Job name.
-
-Workers wrap the harnesses developers already use; they are not a replacement agent framework. The
-control plane is harness- and sandbox-provider agnostic by design. Codex and local Incus VMs are the
-only supported adapters today; other harnesses and local or cloud VM providers can fit the same
-boundaries once validated.
-
-## Why Dorf
-
-- **Leave without losing the thread.** Worker and Job identity survive the client that started them.
-- **Return to the situation, not a transcript.** Inspect state, timeline, and evidence without
-  asking the Worker to recap.
-- **Let the harness do its best work.** Give it a complete development environment and contain that
-  environment with a clear isolation boundary.
-- **Build workflows above the runtime.** Dorf owns durable execution; applications own policy,
-  acceptance, and presentation.
-
-## Alpha status
-
-Dorf is alpha software. See [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md)
-for current adapters, host requirements, and limitations.
-
-## Coding-to-PR showcase
-
-Coding-to-PR is the first application built on Dorf, not the runtime's identity. It takes a coding
-task from an isolated workspace through checks, review, follow-up, and a PR proposal.
+The repository contract is Go-only:
 
 ```bash
-dorf start "Fix the checkout timeout and add a regression test"
-# Or leave an issue running unattended:
-dorf afk 42
-dorf job inspect JOB
-dorf job inspect JOB --json  # structured outcome pulse for agents
-dorf verify JOB
-# Explicit read-only shadow review in a disposable DeepSeek/Pi Room:
-dorf verify-role JOB diff
-dorf publish JOB
+go mod download
+go test ./...
+go vet ./...
+scripts/build-release.sh dist/release
 ```
 
-New coding Jobs use the Provider Connection selected by `dorf setup`. Pass
-`--provider-connection NAME` only to intentionally override that host-local default.
-
-The official `dorf-codex` image is the coding workstation: repository preparation and checks come
-from the cloned repository's contract, while GitHub access remains a separately scoped host-side
-integration. See the
-[North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) for how it fits
-the broader runtime.
-
-## Build on Dorf
-
-Build workflow-specific applications with the experimental Python SDK. It exposes the same Worker,
-Room, Job, and Assignment controls used by the CLI; coding-to-PR is the first example.
-
-```python
-from dorf import Dorf
-
-
-def run_coding_workflow(task: str) -> str | None:
-    with Dorf.open(provider_connection="personal-chatgpt") as dorf:
-        dorf.spawn_worker("developer")
-        dorf.assign_job(
-            "implementation",
-            worker_name="developer",
-            goal=(
-                f"{task}\n\n"
-                "Acceptance:\n"
-                "- Run the repository checks.\n"
-                "- Publish the results as evidence."
-            ),
-        )
-        result = dorf.wait_for_job_input("implementation")
-        if result.outcome != "done":
-            raise RuntimeError(result.detail or result.outcome)
-        return result.response
-```
-
-The SDK is experimental and does not yet carry a third-party compatibility promise. See the
-[Runtime Surface](https://github.com/aphronio/dorf/blob/main/docs/project/runtime.md) for the current
-responsibility boundary.
-
-## Learn more
-
-- [Documentation](https://github.com/aphronio/dorf/blob/main/docs/README.md) — choose a path by
-  what you are trying to do
-- [Getting started](https://github.com/aphronio/dorf/blob/main/docs/getting-started.md) — create your
-  first Worker and Job
-- [North Star](https://github.com/aphronio/dorf/blob/main/docs/project/north-star.md) — approved
-  product direction
-- [Setup support](https://github.com/aphronio/dorf/blob/main/docs/support.md) — host support,
-  diagnostics, and troubleshooting
-- [Contributing](https://github.com/aphronio/dorf/blob/main/CONTRIBUTING.md) — development workflow
-  and DCO sign-off
-- [Security policy](https://github.com/aphronio/dorf/blob/main/SECURITY.md) — private vulnerability reporting
-
-Dorf is licensed under the [Apache License 2.0](https://github.com/aphronio/dorf/blob/main/LICENSE).
+Architecture and authority details are indexed in [docs/README.md](docs/README.md).

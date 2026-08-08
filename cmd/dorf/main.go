@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,13 +21,17 @@ import (
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	"github.com/aphronio/dorf/internal/publication"
+	releaseapp "github.com/aphronio/dorf/internal/release"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
+	"github.com/aphronio/dorf/internal/version"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -43,9 +48,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return usage(stderr)
 	}
+	if args[0] == "version" {
+		fmt.Fprintf(stdout, "dorf %s\n", version.Version)
+		return nil
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
+	}
+	if args[0] == "host" {
+		return hostCommand(ctx, args[1:], stdout, stderr)
 	}
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
@@ -58,6 +70,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return migrate(ctx, store, args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, db, cfg, args[1:], stdout, stderr)
+	case "setup":
+		return setup(ctx, store, db, cfg, args[1:], stdout, stderr)
+	case "provider":
+		return providerCommand(ctx, cfg, args[1:], stdout, stderr)
+	case "image":
+		return imageCommand(ctx, cfg, args[1:], stdout, stderr)
+	case "release-manifest":
+		return releaseManifest(args[1:], stdout, stderr)
 	}
 	client, service, err := application(db, cfg)
 	if err != nil {
@@ -90,6 +110,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+func hostCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "install" {
+		return fmt.Errorf("host requires: install [--yes]")
+	}
+	set := flag.NewFlagSet("host install", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	yes := set.Bool("yes", false, "approve the displayed Ubuntu 24.04 package, service, and group changes")
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	return hostsetup.Ubuntu(ctx, *yes, stdout, stderr)
+}
+
 func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, error) {
 	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
 	if err != nil {
@@ -119,11 +152,38 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	if *absurdSchema != "" {
-		contents, err := os.ReadFile(*absurdSchema)
+	ready, readyErr := store.AbsurdReady(ctx)
+	if readyErr != nil {
+		return readyErr
+	}
+	var contents []byte
+	var err error
+	if ready {
+		contents = nil
+	} else if *absurdSchema != "" {
+		contents, err = os.ReadFile(*absurdSchema)
 		if err != nil {
 			return fmt.Errorf("read Absurd schema: %w", err)
 		}
+	} else {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, postgres.AbsurdSchemaURL, nil)
+		if requestErr != nil {
+			return requestErr
+		}
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr != nil {
+			return fmt.Errorf("download pinned Absurd 0.5.0 schema: %w (or pass --absurd-schema)", requestErr)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("download pinned Absurd 0.5.0 schema: HTTP %d (or pass --absurd-schema)", response.StatusCode)
+		}
+		contents, err = io.ReadAll(io.LimitReader(response.Body, 4<<20))
+		if err != nil {
+			return fmt.Errorf("download pinned Absurd 0.5.0 schema: %w", err)
+		}
+	}
+	if !ready {
 		if err := store.BootstrapAbsurd(ctx, contents); err != nil {
 			return err
 		}
@@ -131,7 +191,116 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 011_self_advancing_workflow.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf schema and Absurd 0.5.0 queue dorf_jobs")
+	return nil
+}
+
+func providerCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("provider requires: connect chatgpt --name NAME [--bind INCUS_BRIDGE_IP]")
+	}
+	if args[0] != "connect" || len(args) < 2 || args[1] != "chatgpt" {
+		return fmt.Errorf("the supported provider command is: provider connect chatgpt --name NAME [--bind INCUS_BRIDGE_IP]")
+	}
+	set := flag.NewFlagSet("provider connect chatgpt", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	name := set.String("name", "personal-chatgpt", "stable Provider Connection name")
+	bind := set.String("bind", "", "exact private Incus bridge IPv4")
+	if err := set.Parse(args[2:]); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*bind) == "" {
+		result, err := (incus.CommandRunner{}).Run(ctx, "incus", nil, "network", "get", cfg.IncusNetwork, "ipv4.address")
+		if err != nil || result.ExitCode != 0 {
+			return fmt.Errorf("resolve private Incus bridge address; initialize %s or pass --bind", cfg.IncusNetwork)
+		}
+		*bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
+	}
+	g := gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: cfg.IncusNetwork}
+	if err := g.ConnectChatGPT(ctx, *name, *bind, func(url, code string) {
+		fmt.Fprintf(stdout, "Open %s and enter %s\n", url, code)
+	}); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Provider Connection ready: %s (ChatGPT subscription; broker %s on %s)\n", *name, gateway.BackendVersion, *bind)
+	return nil
+}
+
+func imageCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "install" {
+		return fmt.Errorf("image requires: install --release vX.Y.Z (or --manifest FILE --archive FILE)")
+	}
+	set := flag.NewFlagSet("image install", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	manifest := set.String("manifest", "", "verified release image manifest")
+	archive := set.String("archive", "", "matching Incus VM archive")
+	releaseTag := set.String("release", "", "immutable Dorf GitHub release tag")
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	local := *manifest != "" || *archive != ""
+	if (*releaseTag == "" && !local) || (*releaseTag != "" && local) || (local && (*manifest == "" || *archive == "")) {
+		return fmt.Errorf("image install requires exactly --release or both --manifest and --archive")
+	}
+	var installed releaseapp.Manifest
+	var err error
+	if *releaseTag != "" {
+		installed, err = releaseapp.InstallPublishedImage(ctx, *releaseTag, cfg.IncusImage)
+	} else {
+		installed, err = releaseapp.InstallImage(ctx, *manifest, *archive, cfg.IncusImage)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Official credential-free image ready: %s fingerprint=%s Codex=%s\n", cfg.IncusImage, installed.ImageFingerprint, installed.Codex.Version)
+	return nil
+}
+
+func releaseManifest(args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("release-manifest", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	archive := set.String("archive", "", "Incus export archive")
+	metadata := set.String("image-metadata", "", "candidate image metadata")
+	tag := set.String("release-tag", "", "release tag")
+	source := set.String("source-commit", "", "exact source commit")
+	validated := set.String("validated-at", "", "UTC validation time")
+	output := set.String("output", "", "manifest output path")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if err := releaseapp.CreateManifest(*archive, *metadata, *tag, *source, *validated, *output); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Release manifest ready: %s\n", *output)
+	return nil
+}
+
+func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("setup", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	connection := set.String("provider", "", "named Provider Connection")
+	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*connection) == "" {
+		return fmt.Errorf("setup requires --provider; create one with dorf provider connect")
+	}
+	migrateArgs := []string{}
+	if *absurdSchema != "" {
+		migrateArgs = append(migrateArgs, "--absurd-schema", *absurdSchema)
+	}
+	if err := migrate(ctx, store, migrateArgs, stdout, stderr); err != nil {
+		return err
+	}
+	checks := doctor.Run(ctx, db, cfg, *connection)
+	if err := json.NewEncoder(stdout).Encode(checks); err != nil {
+		return err
+	}
+	if !doctor.Ready(checks) {
+		return fmt.Errorf("setup is not converged; apply the failed check remediations and rerun this command")
+	}
+	fmt.Fprintln(stdout, "Dorf is ready: Go, PostgreSQL, Absurd, Incus, the credential-free Codex image, and Provider Gateway checks passed")
 	return nil
 }
 
@@ -139,6 +308,11 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	set := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	connection := set.String("provider", "", "named Provider Connection")
+	cloneURL := set.String("repo", "", "managed GitHub clone URL")
+	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
+	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
+	base := set.String("base", "", "explicit GitHub base branch")
+	contractPath := set.String("contract", "", "local repository contract to validate")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -146,6 +320,44 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 		return fmt.Errorf("doctor requires --provider")
 	}
 	checks := doctor.Run(ctx, db, cfg, *connection)
+	if *contractPath != "" {
+		contents, readErr := os.ReadFile(*contractPath)
+		if readErr == nil {
+			_, readErr = repository.ParseContract(string(contents))
+		}
+		detail := "ready"
+		status := "ready"
+		if readErr != nil {
+			status, detail = "failed", readErr.Error()+"; provide commands.prepare and Go-first commands.check/smoke"
+		}
+		checks = append(checks, doctor.Check{Name: "repository-contract", Status: status, Detail: detail})
+	}
+	githubValues := []string{*cloneURL, *githubRepository, *githubInstallation, *base}
+	wantsGitHub := false
+	completeGitHub := true
+	for _, value := range githubValues {
+		wantsGitHub = wantsGitHub || strings.TrimSpace(value) != ""
+		completeGitHub = completeGitHub && strings.TrimSpace(value) != ""
+	}
+	if wantsGitHub {
+		check := doctor.Check{Name: "github-repository-authority", Status: "failed"}
+		if !completeGitHub {
+			check.Detail = "--repo, --github-repo, --github-installation, and --base are required together"
+		} else if validateErr := githubapi.ValidateAuthority(*cloneURL, *githubRepository, *githubInstallation, *base, "dorf/readiness-probe"); validateErr != nil {
+			check.Detail = validateErr.Error()
+		} else {
+			client := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
+			_, exists, authorityErr := client.RemoteHead(ctx, githubapi.Authority{Repository: *githubRepository, InstallationID: *githubInstallation}, *base)
+			if authorityErr != nil {
+				check.Detail = authorityErr.Error() + "; install the Dorf GitHub App for this repository with contents and pull-request authority"
+			} else if !exists {
+				check.Detail = "base branch was not found through the configured GitHub App"
+			} else {
+				check.Status, check.Detail = "ready", "ready"
+			}
+		}
+		checks = append(checks, check)
+	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(checks); err != nil {
@@ -723,6 +935,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|publication|outcome|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|publication|outcome|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
