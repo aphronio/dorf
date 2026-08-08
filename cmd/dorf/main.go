@@ -560,44 +560,24 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 }
 
 func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("publication requires: bind JOB_ID --github-repo OWNER/REPO --github-installation ID --base BRANCH, or publish JOB_ID --revision EXACT_OID")
+	if len(args) == 0 || args[0] != "publish" {
+		return fmt.Errorf("publication requires: publish JOB_ID --revision EXACT_OID")
 	}
-	switch args[0] {
-	case "bind":
-		set := flag.NewFlagSet("publication bind", flag.ContinueOnError)
-		set.SetOutput(stderr)
-		repository := set.String("github-repo", "", "canonical lower-case GitHub owner/repository")
-		installation := set.String("github-installation", "", "GitHub App installation identity")
-		base := set.String("base", "", "explicit immutable base branch")
-		jobID, err := parsePublicationTarget(set, args[1:], "publication bind")
-		if err != nil {
-			return err
-		}
-		job, err := store.BindDogfoodPublicationAuthority(ctx, jobID, *repository, *installation, *base)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, map[string]any{"job_id": job.ID, "github_repository": job.GitHubRepository, "github_installation_id": job.GitHubInstallation, "base": job.BaseBranch, "head": job.Branch, "guarded_dogfood_bootstrap": true})
-	case "publish":
-		set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
-		set.SetOutput(stderr)
-		revision := set.String("revision", "", "exact ready Revision")
-		jobID, err := parsePublicationTarget(set, args[1:], "publication publish")
-		if err != nil {
-			return err
-		}
-		if !postgres.ValidRevision(*revision) {
-			return fmt.Errorf("publication publish requires one Job ID and --revision with a lowercase full commit OID")
-		}
-		params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "attempt": params.Attempt, "task_id": taskID, "created": created, "scheduled": true})
-	default:
-		return fmt.Errorf("publication requires bind or publish")
+	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	revision := set.String("revision", "", "exact ready Revision")
+	jobID, err := parsePublicationTarget(set, args[1:], "publication publish")
+	if err != nil {
+		return err
 	}
+	if !postgres.ValidRevision(*revision) {
+		return fmt.Errorf("publication publish requires one Job ID and --revision with a lowercase full commit OID")
+	}
+	params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "attempt": params.Attempt, "task_id": taskID, "created": created, "scheduled": true})
 }
 
 func parsePublicationTarget(set *flag.FlagSet, args []string, command string) (string, error) {

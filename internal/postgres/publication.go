@@ -12,8 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const dogfoodStartingRevision = "a09e08da11cc89aacd8aee6d33a4a38c45d53824"
-
 const (
 	PublicationTaskName        = "dorf-github-publication-v1"
 	PublicationTaskMaxAttempts = 5
@@ -21,42 +19,6 @@ const (
 
 func PublicationTaskKey(jobID, revision string, attempt int) string {
 	return fmt.Sprintf("publication:%s:%s:%d", jobID, revision, attempt)
-}
-
-// BindDogfoodPublicationAuthority is deliberately limited to the one #43 Job
-// admitted before migration 009 existed. It is not a compatibility backfill.
-func (s Store) BindDogfoodPublicationAuthority(ctx context.Context, jobID, repository, installation, base string) (spine.Job, error) {
-	job, err := s.Job(ctx, jobID)
-	if err != nil {
-		return spine.Job{}, err
-	}
-	if job.StartingRevision != dogfoodStartingRevision || base != "greenfield" {
-		return spine.Job{}, fmt.Errorf("publication bind is only the guarded #43 dogfood bootstrap at starting Revision %s with base greenfield", dogfoodStartingRevision)
-	}
-	if err := githubapi.ValidateAuthority(job.Repository, repository, installation, base, job.Branch); err != nil {
-		return spine.Job{}, err
-	}
-	result, err := s.DB.ExecContext(ctx, `
-		update dorf.jobs set github_repository=$2,github_installation_id=$3,base_branch=$4
-		where id=$1 and github_repository is null and github_installation_id is null and base_branch is null`, jobID, repository, installation, base)
-	if err != nil {
-		return spine.Job{}, err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return spine.Job{}, err
-	}
-	if rows == 0 {
-		bound, loadErr := s.Job(ctx, jobID)
-		if loadErr != nil {
-			return spine.Job{}, loadErr
-		}
-		if bound.GitHubRepository != repository || bound.GitHubInstallation != installation || bound.BaseBranch != base {
-			return spine.Job{}, fmt.Errorf("Job publication authority is already bound differently")
-		}
-		return bound, nil
-	}
-	return s.Job(ctx, jobID)
 }
 
 func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (spine.Job, spine.Action, spine.Action, bool, error) {

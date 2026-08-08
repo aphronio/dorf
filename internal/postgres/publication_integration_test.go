@@ -228,31 +228,6 @@ func TestPostgresFreshAdmissionRequiresCompleteGitHubAuthorityAndSchemaHasNoCred
 	}
 }
 
-func TestPostgresGuardedDogfoodBindingIsNarrowImmutableAndIdempotent(t *testing.T) {
-	db, store, _ := testDatabase(t)
-	ctx := context.Background()
-	jobID := fmt.Sprintf("job-dogfood-bind-%d", time.Now().UnixNano())
-	revision := "a09e08da11cc89aacd8aee6d33a4a38c45d53824"
-	branch := "dorf/issue-43-durable-github-publication"
-	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,$2,'issue 43 dogfood','https://github.com/aphronio/dorf.git',$3,$3,$4,'primary','gpt-5.6-sol','high')`, jobID, jobID, revision, branch); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,branch,generation) values($1,$2,$3,0)`, jobID, revision, branch); err != nil {
-		t.Fatal(err)
-	}
-	bound, err := store.BindDogfoodPublicationAuthority(ctx, jobID, "aphronio/dorf", "42", "greenfield")
-	if err != nil || bound.GitHubRepository != "aphronio/dorf" || bound.GitHubInstallation != "42" || bound.BaseBranch != "greenfield" {
-		t.Fatalf("bound=%#v err=%v", bound, err)
-	}
-	repeated, err := store.BindDogfoodPublicationAuthority(ctx, jobID, "aphronio/dorf", "42", "greenfield")
-	if err != nil || repeated.GitHubInstallation != "42" {
-		t.Fatalf("idempotent bind=%#v err=%v", repeated, err)
-	}
-	if _, err := store.BindDogfoodPublicationAuthority(ctx, jobID, "aphronio/dorf", "43", "greenfield"); err == nil {
-		t.Fatal("guarded dogfood authority was rebound")
-	}
-}
-
 func TestPostgresExhaustedPublicationTaskAdvancesOneGenerationConcurrentlyAndPreservesActions(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()

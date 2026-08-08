@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -18,6 +21,15 @@ func TestPublicationGrammarParsesJobBeforeFlags(t *testing.T) {
 	}
 	if _, err := parsePublicationTarget(flag.NewFlagSet("publication publish", flag.ContinueOnError), []string{"--revision", strings.Repeat("a", 40), "job-exact"}, "publication publish"); err == nil {
 		t.Fatal("flags-before-Job grammar was accepted")
+	}
+}
+
+func TestPublicationGrammarExposesOnlyPublish(t *testing.T) {
+	for _, args := range [][]string{nil, {"bind", "job-exact", "--github-repo", "aphronio/dorf"}, {"other"}} {
+		err := publicationCommand(context.Background(), postgres.Store{}, nil, nil, args, io.Discard, io.Discard)
+		if err == nil || err.Error() != "publication requires: publish JOB_ID --revision EXACT_OID" {
+			t.Fatalf("args=%v error=%v", args, err)
+		}
 	}
 }
 
