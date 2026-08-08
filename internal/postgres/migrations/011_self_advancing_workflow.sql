@@ -1,14 +1,5 @@
 alter table dorf.jobs drop constraint if exists jobs_workflow_phase_check;
 
-insert into dorf.review_plans(job_id,revision,state)
-select id,revision,'pending'
-from dorf.jobs
-where workflow_phase='review-activation';
-
-update dorf.jobs
-set workflow_phase='review-planning',workflow_attention=null
-where workflow_phase='review-activation';
-
 alter table dorf.jobs add constraint jobs_workflow_phase_check check (
     workflow_phase in (
         'setup','implementing','committing','checking','repairing',

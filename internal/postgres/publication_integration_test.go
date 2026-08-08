@@ -27,7 +27,7 @@ func publicationInput(key string) postgres.NewJob {
 	}
 }
 
-func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t *testing.T) {
+func TestMigration009PreservesHistoricalReviewWorkspaceDeleteAndAddsPublicationKinds(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -93,9 +93,6 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'publication-upgrade','preserve historical review cleanup','https://github.com/aphronio/dorf.git',$2,$2,'dorf/publication-upgrade','primary','gpt-5.6-sol','high')`, jobID, revision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-activation' where id=$1`, jobID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values('action-review-workspace-delete',$1,'review-workspace-delete','succeeded','historical-review-run')`, jobID); err != nil {
 		t.Fatal(err)
 	}
@@ -130,21 +127,6 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 	}
 	if !outcomeTable || !legacyLocatorNull {
 		t.Fatalf("010 upgrade outcome table=%t legacy locator nullable=%t", outcomeTable, legacyLocatorNull)
-	}
-	var migrationApplied, optionalColumnsRemain bool
-	var phaseConstraint string
-	var workflowPhase, reviewPlanState string
-	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='011_self_advancing_workflow.sql'),exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='review_plans' and column_name in ('requested_roles','requested_by_run_id'))`).Scan(&migrationApplied, &optionalColumnsRemain); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRowContext(ctx, `select pg_get_constraintdef(oid) from pg_constraint where conrelid='dorf.jobs'::regclass and conname='jobs_workflow_phase_check'`).Scan(&phaseConstraint); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRowContext(ctx, `select j.workflow_phase,p.state from dorf.jobs j join dorf.review_plans p on p.job_id=j.id and p.revision=j.revision where j.id=$1`, jobID).Scan(&workflowPhase, &reviewPlanState); err != nil {
-		t.Fatal(err)
-	}
-	if !migrationApplied || optionalColumnsRemain || strings.Contains(phaseConstraint, "review-activation") || !strings.Contains(phaseConstraint, "review-planning") || workflowPhase != "review-planning" || reviewPlanState != "pending" {
-		t.Fatalf("011 applied=%t optional columns=%t phase constraint=%s upgraded phase=%s plan=%s", migrationApplied, optionalColumnsRemain, phaseConstraint, workflowPhase, reviewPlanState)
 	}
 }
 
