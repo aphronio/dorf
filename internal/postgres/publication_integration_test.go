@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
+	publicationapi "github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -21,8 +24,9 @@ func publicationInput(key string) postgres.NewJob {
 }
 
 func TestPostgresPublicationIdentityFreshnessAndSamePullRequestRefresh(t *testing.T) {
-	db, store, _ := testDatabase(t)
+	db, store, client := testDatabase(t)
 	ctx := context.Background()
+	publicationapi.Register(client, publicationapi.Service{Store: store})
 	input := publicationInput(fmt.Sprintf("publication-integration-%d", time.Now().UnixNano()))
 	job, created, err := store.Admit(ctx, input)
 	if err != nil || !created {
@@ -31,16 +35,31 @@ func TestPostgresPublicationIdentityFreshnessAndSamePullRequestRefresh(t *testin
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	job, push, pull, err := store.BeginPublication(ctx, job.ID, input.Revision)
-	if err != nil || job.WorkflowPhase != "publishing" {
-		t.Fatalf("begin=%#v push=%#v pull=%#v err=%v", job, push, pull, err)
+	params, taskID, created, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	if err != nil || !created || params.Attempt != 0 {
+		t.Fatalf("schedule params=%#v task=%s created=%v err=%v", params, taskID, created, err)
+	}
+	taskIDs := []string{taskID}
+	t.Cleanup(func() {
+		for _, id := range taskIDs {
+			_ = client.CancelTask(context.Background(), config.QueueName, id)
+		}
+	})
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.WorkflowPhase != "publishing" || job.PublicationTaskID != taskID {
+		t.Fatalf("begin=%#v err=%v", job, err)
+	}
+	push, pull, err := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if push.ID != spine.ScopedActionID(job.ID, spine.ActionRepositoryPush, input.Revision) || pull.ID != spine.ScopedActionID(job.ID, spine.ActionGitHubPullRequest, input.Revision) {
 		t.Fatal("publication Actions do not have stable Job/Revision identities")
 	}
-	_, repeatedPush, repeatedPull, err := store.BeginPublication(ctx, job.ID, input.Revision)
-	if err != nil || repeatedPush.ID != push.ID || repeatedPull.ID != pull.ID {
-		t.Fatalf("repeated identities push=%#v pull=%#v err=%v", repeatedPush, repeatedPull, err)
+	repeatedParams, repeatedTaskID, repeatedCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	repeatedPush, repeatedPull, actionErr := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil || actionErr != nil || repeatedCreated || repeatedParams.Attempt != params.Attempt || repeatedTaskID != taskID || repeatedPush.ID != push.ID || repeatedPull.ID != pull.ID {
+		t.Fatalf("repeated params=%#v task=%s created=%v push=%#v pull=%#v err=%v actionErr=%v", repeatedParams, repeatedTaskID, repeatedCreated, repeatedPush, repeatedPull, err, actionErr)
 	}
 	if err := store.RecordPush(ctx, push.ID, input.Revision); err != nil {
 		t.Fatal(err)
@@ -54,9 +73,11 @@ func TestPostgresPublicationIdentityFreshnessAndSamePullRequestRefresh(t *testin
 	if err != nil || stored == nil || stored.Stale || stored.Number != 43 || stored.BodyDigest != digest1 {
 		t.Fatalf("proposal=%#v err=%v", stored, err)
 	}
-	idempotent, samePush, samePull, err := store.BeginPublication(ctx, job.ID, input.Revision)
-	if err != nil || idempotent.WorkflowPhase != "published" || samePush.ID != push.ID || samePull.ID != pull.ID {
-		t.Fatalf("published idempotency job=%#v push=%#v pull=%#v err=%v", idempotent, samePush, samePull, err)
+	_, sameTaskID, sameCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	idempotent, jobErr := store.Job(ctx, job.ID)
+	samePush, samePull, actionErr := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil || jobErr != nil || actionErr != nil || sameCreated || sameTaskID != taskID || idempotent.WorkflowPhase != "published" || samePush.ID != push.ID || samePull.ID != pull.ID {
+		t.Fatalf("published idempotency job=%#v task=%s created=%v push=%#v pull=%#v err=%v jobErr=%v actionErr=%v", idempotent, sameTaskID, sameCreated, samePush, samePull, err, jobErr, actionErr)
 	}
 
 	later := strings.Repeat("b", 40)
@@ -70,9 +91,11 @@ func TestPostgresPublicationIdentityFreshnessAndSamePullRequestRefresh(t *testin
 	if err != nil || stale == nil || !stale.Stale {
 		t.Fatalf("later Revision reused stale proposal proof: %#v err=%v", stale, err)
 	}
-	_, laterPush, laterPull, err := store.BeginPublication(ctx, job.ID, later)
-	if err != nil || laterPush.ID == push.ID || laterPull.ID == pull.ID {
-		t.Fatalf("later Actions push=%#v pull=%#v err=%v", laterPush, laterPull, err)
+	_, laterTaskID, laterCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, later)
+	taskIDs = append(taskIDs, laterTaskID)
+	laterPush, laterPull, actionErr := store.PublicationActions(ctx, job.ID, later)
+	if err != nil || actionErr != nil || !laterCreated || laterPush.ID == push.ID || laterPull.ID == pull.ID {
+		t.Fatalf("later task=%s created=%v Actions push=%#v pull=%#v err=%v actionErr=%v", laterTaskID, laterCreated, laterPush, laterPull, err, actionErr)
 	}
 	if err := store.RecordPush(ctx, laterPush.ID, later); err != nil {
 		t.Fatal(err)
@@ -132,5 +155,118 @@ func TestPostgresGuardedDogfoodBindingIsNarrowImmutableAndIdempotent(t *testing.
 	}
 	if _, err := store.BindDogfoodPublicationAuthority(ctx, jobID, "aphronio/dorf", "43", "greenfield"); err == nil {
 		t.Fatal("guarded dogfood authority was rebound")
+	}
+}
+
+func TestPostgresExhaustedPublicationTaskAdvancesOneGenerationConcurrentlyAndPreservesActions(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	publicationapi.Register(client, publicationapi.Service{Store: store})
+	input := publicationInput(fmt.Sprintf("publication-exhaustion-%d", time.Now().UnixNano()))
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	initial, initialTaskID, initialCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	if err != nil || !initialCreated || initial.Attempt != 0 || initialTaskID == "" {
+		t.Fatalf("initial=%#v task=%s created=%v err=%v", initial, initialTaskID, initialCreated, err)
+	}
+	taskIDs := []string{initialTaskID}
+	t.Cleanup(func() {
+		for _, id := range taskIDs {
+			_ = client.CancelTask(context.Background(), config.QueueName, id)
+		}
+	})
+	replayed, replayedTaskID, replayedCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	if err != nil || replayedCreated || replayed.Attempt != initial.Attempt || replayedTaskID != initialTaskID {
+		t.Fatalf("active replay=%#v task=%s created=%v err=%v", replayed, replayedTaskID, replayedCreated, err)
+	}
+	push, pull, err := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordPush(ctx, push.ID, input.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.r_dorf_jobs r set state='failed',attempt=$2 from absurd.t_dorf_jobs t where t.task_id=$1::uuid and r.run_id=t.last_attempt_run and r.task_id=t.task_id`, initialTaskID, postgres.PublicationTaskMaxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update absurd.t_dorf_jobs set state='failed',attempts=$2 where task_id=$1::uuid`, initialTaskID, postgres.PublicationTaskMaxAttempts); err != nil {
+		t.Fatal(err)
+	}
+	oldEvidence, err := store.TaskEvidence(ctx, initialTaskID)
+	if err != nil || oldEvidence.State != "failed" || oldEvidence.Attempts != postgres.PublicationTaskMaxAttempts {
+		t.Fatalf("old task Evidence=%#v err=%v", oldEvidence, err)
+	}
+
+	const callers = 8
+	type result struct {
+		params  publicationapi.Params
+		taskID  string
+		created bool
+		err     error
+	}
+	results := make(chan result, callers)
+	var wait sync.WaitGroup
+	for range callers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			params, taskID, created, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+			results <- result{params: params, taskID: taskID, created: created, err: err}
+		}()
+	}
+	wait.Wait()
+	close(results)
+	var nextTaskID string
+	createdCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if result.params.Attempt != initial.Attempt+1 || result.taskID == "" || result.taskID == initialTaskID {
+			t.Fatalf("retry result=%#v", result)
+		}
+		if nextTaskID == "" {
+			nextTaskID = result.taskID
+		} else if result.taskID != nextTaskID {
+			t.Fatalf("concurrent retry created multiple task identities: %s and %s", nextTaskID, result.taskID)
+		}
+		if result.created {
+			createdCount++
+		}
+	}
+	taskIDs = append(taskIDs, nextTaskID)
+	if createdCount != 1 {
+		t.Fatalf("concurrent retry created %d tasks, want exactly one", createdCount)
+	}
+	var taskCount int
+	var oldKey, nextKey string
+	if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2 and params->>'revision'=$3`, postgres.PublicationTaskName, job.ID, input.Revision).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select idempotency_key from absurd.t_dorf_jobs where task_id=$1::uuid`, initialTaskID).Scan(&oldKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `select idempotency_key from absurd.t_dorf_jobs where task_id=$1::uuid`, nextTaskID).Scan(&nextKey); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 2 || oldKey != postgres.PublicationTaskKey(job.ID, input.Revision, initial.Attempt) || nextKey != postgres.PublicationTaskKey(job.ID, input.Revision, initial.Attempt+1) || oldKey == nextKey {
+		t.Fatalf("tasks=%d oldKey=%q nextKey=%q", taskCount, oldKey, nextKey)
+	}
+	retainedPush, retainedPull, err := store.PublicationActions(ctx, job.ID, input.Revision)
+	if err != nil || retainedPush.ID != push.ID || retainedPush.State != spine.ActionSucceeded || retainedPush.ExternalID != input.Revision || retainedPull.ID != pull.ID {
+		t.Fatalf("retained push=%#v pull=%#v err=%v", retainedPush, retainedPull, err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || job.PublicationAttempt != initial.Attempt+1 || job.PublicationTaskID != nextTaskID || job.WorkflowPhase != "publishing" {
+		t.Fatalf("advanced Job=%#v err=%v", job, err)
+	}
+	again, againTaskID, againCreated, err := publicationapi.Schedule(ctx, store, client, job.ID, input.Revision)
+	if err != nil || againCreated || again.Attempt != initial.Attempt+1 || againTaskID != nextTaskID {
+		t.Fatalf("new active replay=%#v task=%s created=%v err=%v", again, againTaskID, againCreated, err)
 	}
 }

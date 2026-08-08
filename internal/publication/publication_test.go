@@ -171,6 +171,18 @@ func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testin
 	}
 }
 
+func TestPublicationTaskRetryAdoptsPreviouslyAcceptedExternalEffects(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	if decision, err := planPush(true, revision, revision, ""); err != nil || decision != "adopt" {
+		t.Fatalf("accepted push decision=%s err=%v", decision, err)
+	}
+	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
+	pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: "exact body"}
+	if decision, adopted, err := planPull(job, []githubapi.PullRequest{pull}, nil, pull.Body); err != nil || decision != "adopt" || adopted.Number != pull.Number {
+		t.Fatalf("accepted pull request decision=%s pull=%#v err=%v", decision, adopted, err)
+	}
+}
+
 func TestSanitizeAlwaysRedactsCredential(t *testing.T) {
 	if got := sanitize([]byte("failure secret-value suffix"), "secret-value"); got != "failure [REDACTED_GITHUB_TOKEN] suffix" {
 		t.Fatal(got)
