@@ -300,6 +300,73 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	}
 }
 
+func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, sessionID := prepareTransportIntegrationJob(t, store, "steer-terminal-fallback")
+	target, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, target.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "terminal-race-steer", Input: "preserve exact durable input", Intent: spine.MessageSteer})
+	if err != nil || !created || steer.TargetTurnID != targetTurnID {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || fallback == nil || fallback.Message.ID != steer.ID || fallback.AgentRun.ID != spine.AgentRunID(steer.ID) {
+		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
+	}
+	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, targetTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, fallback.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	actualTurnID := "turn-fallback-" + job.ID
+	if err := store.BindNativeTurn(ctx, fallback.AgentRun.ID, actualTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "later-follow", Input: "later FIFO delivery"})
+	if err != nil || !created {
+		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
+	}
+	active, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || active == nil || active.Message.ID != steer.ID || active.AgentRun.NativeTurnID != actualTurnID {
+		t.Fatalf("active fallback selection=%#v err=%v", active, err)
+	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil || len(messages) != 3 {
+		t.Fatalf("messages=%#v err=%v", messages, err)
+	}
+	if messages[1].Intent != spine.MessageSteer || messages[1].TargetTurnID != targetTurnID || messages[1].NativeTurnID != actualTurnID || messages[2].BlockingSeq != steer.Sequence {
+		t.Fatalf("fallback projection=%#v later=%#v", messages[1], messages[2])
+	}
+	if err := store.BindNativeTurn(ctx, fallback.AgentRun.ID, actualTurnID, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || next == nil || next.Message.ID != later.ID || next.AgentRun.SessionID != sessionID {
+		t.Fatalf("later delivery=%#v err=%v", next, err)
+	}
+	messages, err = store.Messages(ctx, job.ID)
+	if err != nil || messages[1].State != spine.AgentRunFailed || messages[1].NativeOutcome != "failed" || messages[1].TargetTurnID != targetTurnID {
+		t.Fatalf("terminal fallback evidence=%#v err=%v", messages[1], err)
+	}
+}
+
 func TestAcceptedTerminalTurnAllowsSameSessionFollowFIFO(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "interrupted"} {
 		t.Run(status, func(t *testing.T) {

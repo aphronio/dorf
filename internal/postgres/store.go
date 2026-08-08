@@ -1169,25 +1169,26 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	var message spine.Message
 	err = tx.QueryRowContext(ctx, `
-		with current_follow as (
+		with current_turn_start as (
 			select m.id as message_id,ar.native_turn_id,ar.state
 			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-			where m.job_id=$1 and m.delivery_intent='follow' and ar.native_turn_id is not null
+			where m.job_id=$1 and ar.native_turn_id is not null
+			  and (m.delivery_intent='follow' or ar.native_turn_id<>m.steer_target_turn_id)
 			  and ar.state in ('active','uncertain')
 			order by m.sequence limit 1
 		), candidate as (
 			select steer.id as message_id,0 as priority,steer.sequence
-			from current_follow active
+			from current_turn_start active
 			join dorf.job_messages steer on steer.job_id=$1 and steer.delivery_intent='steer'
 			  and steer.steer_target_turn_id=active.native_turn_id
 			join dorf.agent_runs steer_run on steer_run.message_id=steer.id
 			where active.state='active' and steer_run.native_turn_id is null
 			union all
-			select message_id,1,0 from current_follow
+			select message_id,1,0 from current_turn_start
 			union all
 			select m.id,2,m.sequence
 			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-			where m.job_id=$1 and ar.native_turn_id is null and not exists(select 1 from current_follow)
+			where m.job_id=$1 and ar.native_turn_id is null and not exists(select 1 from current_turn_start)
 		)
 		select m.id,m.job_id,m.caller_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,'')
 		from candidate c join dorf.job_messages m on m.id=c.message_id
@@ -1385,7 +1386,8 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 				view.BlockingReason += ": " + blocker.Attention
 			}
 		}
-		if blocker == nil && ((!view.Delivered && view.State != spine.AgentRunCompleted) || view.Intent == spine.MessageFollow && (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain)) {
+		turnStartActive := (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain) && (view.Intent == spine.MessageFollow || view.NativeTurnID != "" && view.NativeTurnID != view.TargetTurnID)
+		if blocker == nil && ((!view.Delivered && view.State != spine.AgentRunCompleted) || turnStartActive) {
 			blocker = view
 		}
 	}

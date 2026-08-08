@@ -595,10 +595,18 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	case spine.AgentRunSubmitting:
 		detail = "queued; delivery reconciliation is in progress"
 	case spine.AgentRunActive:
-		detail = "active native turn"
+		if message.Intent == spine.MessageSteer && message.NativeTurnID != message.TargetTurnID {
+			detail = "active native turn started after the requested steer target became terminal"
+		} else {
+			detail = "active native turn"
+		}
 	case spine.AgentRunCompleted:
 		if message.Intent == spine.MessageSteer {
-			detail = "delivered: steer accepted by the active native turn"
+			if message.NativeTurnID == message.TargetTurnID {
+				detail = "delivered: steer accepted by the active native turn"
+			} else {
+				detail = "terminal: native turn started after the requested steer target became terminal"
+			}
 		} else {
 			detail = "terminal: native turn completed"
 		}
@@ -621,6 +629,9 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	}
 	if message.NativeTurnID != "" {
 		detail += fmt.Sprintf("; native=%s outcome=%s", message.NativeTurnID, empty(message.NativeOutcome))
+	}
+	if message.Intent == spine.MessageSteer && message.TargetTurnID != "" && message.NativeTurnID != "" && message.NativeTurnID != message.TargetTurnID {
+		detail += "; requested steer target=" + message.TargetTurnID
 	}
 	if message.Attention != "" {
 		detail += "; reason: " + message.Attention

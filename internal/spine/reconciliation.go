@@ -56,6 +56,12 @@ func ReconcileSteer(clientMessageID, targetTurnID string, turns []NativeTurn) Re
 				return Reconciliation{Classification: "completed", Turn: turn}
 			}
 		}
+		if terminalNative(turn.Status) {
+			return Reconciliation{Classification: "target-terminal", Turn: turn}
+		}
+		if !activeNative(turn.Status) {
+			return Reconciliation{Classification: "uncertain", Turn: turn, Reason: fmt.Sprintf("steer target native turn %s has unsupported status %q", targetTurnID, turn.Status)}
+		}
 		return Reconciliation{Classification: "no-submit", Turn: turn}
 	}
 	return Reconciliation{Classification: "uncertain", Reason: fmt.Sprintf("steer target native turn %s is missing from Session history", targetTurnID)}

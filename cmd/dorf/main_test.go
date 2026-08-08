@@ -23,6 +23,7 @@ func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T)
 		{"waiting active", spine.MessageView{Message: spine.Message{Sequence: 2}, State: spine.AgentRunPending}, []spine.MessageView{{Message: spine.Message{Sequence: 1}, State: spine.AgentRunActive}}, []string{"queued", "waiting behind sequence 1", "active"}},
 		{"accepted failure", spine.MessageView{Message: spine.Message{Sequence: 1, Intent: spine.MessageFollow}, State: spine.AgentRunFailed, NativeTurnID: "turn-failed", NativeOutcome: "failed", Delivered: true}, nil, []string{"native turn failed", "turn-failed", "outcome=failed"}},
 		{"accepted steer", spine.MessageView{Message: spine.Message{Sequence: 2, Intent: spine.MessageSteer, TargetTurnID: "turn-active"}, State: spine.AgentRunCompleted, NativeTurnID: "turn-active", Delivered: true}, nil, []string{"steer accepted", "turn-active"}},
+		{"terminal-race steer", spine.MessageView{Message: spine.Message{Sequence: 2, Intent: spine.MessageSteer, TargetTurnID: "turn-original"}, State: spine.AgentRunCompleted, NativeTurnID: "turn-fallback", NativeOutcome: "completed", Delivered: true}, nil, []string{"target became terminal", "turn-fallback", "requested steer target=turn-original"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

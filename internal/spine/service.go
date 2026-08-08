@@ -533,9 +533,13 @@ func (s Service) deliverInitial(ctx context.Context, job Job, session Action, de
 }
 
 func (s Service) deliver(ctx context.Context, job Job, delivery Delivery) (bool, error) {
-	if delivery.Message.Intent == MessageSteer {
+	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.NativeTurnID == "" || delivery.AgentRun.NativeTurnID == delivery.Message.TargetTurnID) {
 		return s.deliverSteer(ctx, job, delivery)
 	}
+	return s.deliverTurnStart(ctx, job, delivery)
+}
+
+func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Delivery) (bool, error) {
 	run := delivery.AgentRun
 	if run.NativeTurnID != "" && run.State == AgentRunActive {
 		if err := s.reach(ctx, BarrierNativeActive, delivery); err != nil {
@@ -666,6 +670,12 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	if reconciliation.Classification == "completed" {
 		return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
 	}
+	if reconciliation.Classification == "target-terminal" {
+		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
+			return false, s.Store.UncertainAgentRun(ctx, run.ID, "native turns appeared after the terminal steer target before a fallback baseline was recorded")
+		}
+		return s.deliverTurnStart(ctx, job, delivery)
+	}
 	if reconciliation.Classification == "uncertain" {
 		return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 	}
@@ -692,6 +702,12 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
 		if reconciled.Classification == "completed" {
 			return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
+		}
+		if reconciled.Classification == "target-terminal" {
+			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
+				return false, s.Store.UncertainAgentRun(ctx, run.ID, "native turns appeared after the terminal steer target before a fallback baseline was recorded")
+			}
+			return s.deliverTurnStart(ctx, job, delivery)
 		}
 		if reconciled.Classification == "uncertain" {
 			return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -839,7 +855,7 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
-	if delivery.Message.Intent == MessageSteer {
+	if delivery.Message.Intent == MessageSteer && (run.NativeTurnID == "" || run.NativeTurnID == delivery.Message.TargetTurnID) {
 		reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 		switch reconciliation.Classification {
 		case "completed":
@@ -850,6 +866,10 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 			return store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID)
 		case "no-submit":
 			return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after native history proved it was not accepted")
+		case "target-terminal":
+			if !run.BaselineRecorded {
+				return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after native history proved it was not accepted")
+			}
 		default:
 			if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
 				return err
