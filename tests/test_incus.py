@@ -101,7 +101,7 @@ def test_codex_image_build_fails_if_room_auth_inputs_enter_the_base_image() -> N
     assert "npm view @openai/codex@latest version" in provision_script
     assert 'npm install -g "@openai/codex@$CODEX_VERSION"' in provision_script
     assert 'NODE_VERSION="22.23.2"' in provision_script
-    assert 'npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION"' in provision_script
+    assert "pi-coding-agent" not in provision_script
     assert "git" in provision_script
     assert "astral.sh/uv/install.sh" not in provision_script
     assert "uv-x86_64-unknown-linux-gnu.tar.gz" in provision_script

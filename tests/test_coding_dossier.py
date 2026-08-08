@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import subprocess
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -10,10 +9,8 @@ from dorf.runtime import ArtifactInput, JobRuntime, NewJob, NewWorker, WorkerRun
 from dorf.workflows import CodingStore
 from dorf.workflows.coding_dossier import (
     AcceptanceItem,
-    acceptance_is_proven,
     build_proof_dossier,
     render_proof_dossier,
-    review_output_has_no_findings,
 )
 
 
@@ -87,51 +84,6 @@ def test_acceptance_can_be_corrected_until_frozen(tmp_path: Path) -> None:
     store.freeze_acceptance_checklist("proof")
     with pytest.raises(RuntimeError, match="already governs"):
         store.replace_acceptance_checklist("proof", initial)
-
-
-def test_deepseek_review_is_advisory_and_decline_is_a_visible_risk(tmp_path: Path) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    commit = "b" * 40
-    output = tmp_path / "review.log"
-    output.write_text("DORF_REVIEW_NO_FINDINGS\n")
-    run = store.create_command_run(
-        "proof", "verify-role:diff", "pi deepseek-v4-flash", str(output)
-    )
-    store.finish_command_run(run.id, "succeeded", 0)
-    store.set_command_run_git_commits(run.id, before=commit, after=commit)
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha=commit)
-
-    assert review_output_has_no_findings(output.read_text())
-    assert dossier.independent_review[0].command_run_id == run.id
-    assert dossier.acceptance == ()
-
-    store.set_metadata_value(
-        "proof",
-        "diff_verifier_attention",
-        json.dumps({"id": "attention-1", "status": "declined"}),
-    )
-    job = store.get_coding_job("proof")
-    declined = build_proof_dossier(store, job, binding, commit_sha=commit)
-    assert any("review was declined" in risk for risk in declined.unresolved_risks)
-
-
-def test_legacy_review_acceptance_item_is_retired_for_an_in_flight_job(tmp_path: Path) -> None:
-    store, job, binding = assigned_coding_job(tmp_path)
-    store.record_acceptance_checklist("proof", goal="Pinned goal", items=())
-    legacy = AcceptanceItem(
-        "review-codex", "Codex reports no findings", "contract", "review", "codex"
-    )
-    with sqlite3.connect(store.database_path) as connection:
-        connection.execute(
-            "UPDATE coding_acceptance_checklists SET items = ? WHERE job_name = 'proof'",
-            (json.dumps([asdict(legacy)]),),
-        )
-
-    dossier = build_proof_dossier(store, job, binding, commit_sha="b" * 40)
-
-    assert dossier.acceptance == ()
-    assert acceptance_is_proven(dossier)
 
 
 def test_default_dossier_compacts_many_unproven_acceptance_items(

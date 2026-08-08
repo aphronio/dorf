@@ -26,15 +26,16 @@ const (
 type ActionKind string
 
 const (
-	ActionSandboxCreate    ActionKind = "sandbox-create"
-	ActionRepositoryClone  ActionKind = "repository-clone"
-	ActionRepositorySetup  ActionKind = "repository-setup"
-	ActionRepositoryCommit ActionKind = "repository-commit"
-	ActionRouteCreate      ActionKind = "provider-route-create"
-	ActionSessionStart     ActionKind = "codex-session-start"
-	ActionTurnStart        ActionKind = "codex-turn-start"
-	ActionRouteRevoke      ActionKind = "provider-route-revoke"
-	ActionSandboxDelete    ActionKind = "sandbox-delete"
+	ActionSandboxCreate         ActionKind = "sandbox-create"
+	ActionRepositoryClone       ActionKind = "repository-clone"
+	ActionRepositorySetup       ActionKind = "repository-setup"
+	ActionRepositoryCommit      ActionKind = "repository-commit"
+	ActionReviewWorkspaceCreate ActionKind = "review-workspace-create"
+	ActionRouteCreate           ActionKind = "provider-route-create"
+	ActionSessionStart          ActionKind = "codex-session-start"
+	ActionTurnStart             ActionKind = "codex-turn-start"
+	ActionRouteRevoke           ActionKind = "provider-route-revoke"
+	ActionSandboxDelete         ActionKind = "sandbox-delete"
 )
 
 type ActionState string
@@ -64,6 +65,7 @@ type Job struct {
 	Goal               string       `json:"goal"`
 	Repository         string       `json:"repository"`
 	Revision           string       `json:"revision"`
+	RevisionGeneration int          `json:"revision_generation"`
 	StartingRevision   string       `json:"starting_revision"`
 	Branch             string       `json:"branch"`
 	ProviderConnection string       `json:"provider_connection"`
@@ -81,6 +83,7 @@ type Job struct {
 	WorkflowPhase      string       `json:"workflow_phase"`
 	RepairCount        int          `json:"repair_count"`
 	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
+	ReviewRepairCount  int          `json:"review_repair_count"`
 }
 
 type Message struct {
@@ -92,18 +95,44 @@ type Message struct {
 }
 
 type AgentRun struct {
-	ID               string        `json:"id"`
-	JobID            string        `json:"job_id"`
-	MessageID        string        `json:"message_id"`
-	ActionID         string        `json:"action_id"`
-	SessionID        string        `json:"session_id"`
-	State            AgentRunState `json:"state"`
-	BaselineRecorded bool          `json:"baseline_recorded"`
-	BaselineTurnID   string        `json:"baseline_turn_id,omitempty"`
-	NativeTurnID     string        `json:"native_turn_id,omitempty"`
-	NativeOutcome    string        `json:"native_outcome,omitempty"`
-	Attention        string        `json:"attention,omitempty"`
-	Role             string        `json:"role"`
+	ID                   string        `json:"id"`
+	JobID                string        `json:"job_id"`
+	MessageID            string        `json:"message_id"`
+	ActionID             string        `json:"action_id"`
+	SessionID            string        `json:"session_id"`
+	State                AgentRunState `json:"state"`
+	BaselineRecorded     bool          `json:"baseline_recorded"`
+	BaselineTurnID       string        `json:"baseline_turn_id,omitempty"`
+	NativeTurnID         string        `json:"native_turn_id,omitempty"`
+	NativeOutcome        string        `json:"native_outcome,omitempty"`
+	Attention            string        `json:"attention,omitempty"`
+	Role                 string        `json:"role"`
+	Revision             string        `json:"revision,omitempty"`
+	Capability           string        `json:"capability,omitempty"`
+	Workspace            string        `json:"workspace,omitempty"`
+	InputContract        string        `json:"input_contract,omitempty"`
+	OutputContract       string        `json:"output_contract,omitempty"`
+	ClaimEvidenceID      string        `json:"claim_evidence_id,omitempty"`
+	ObservedEvidenceID   string        `json:"observed_evidence_id,omitempty"`
+	StartedAt            time.Time     `json:"started_at,omitempty"`
+	FinishedAt           time.Time     `json:"finished_at,omitempty"`
+	InputTokens          int64         `json:"input_tokens,omitempty"`
+	CachedInputTokens    int64         `json:"cached_input_tokens,omitempty"`
+	OutputTokens         int64         `json:"output_tokens,omitempty"`
+	CostMicrousd         int64         `json:"cost_microusd,omitempty"`
+	UsageAvailable       bool          `json:"usage_available"`
+	YieldCount           int           `json:"yield_count,omitempty"`
+	ReviewerSandboxID    string        `json:"reviewer_sandbox_id,omitempty"`
+	ReviewerRouteID      string        `json:"reviewer_route_id,omitempty"`
+	ReviewerAppServer    string        `json:"reviewer_app_server_id,omitempty"`
+	ReviewerOwnerNonce   string        `json:"-"`
+	SubmissionNonce      string        `json:"-"`
+	InputDigest          string        `json:"input_digest,omitempty"`
+	RevisionTree         string        `json:"revision_tree,omitempty"`
+	ReviewerSandboxState string        `json:"reviewer_sandbox_state,omitempty"`
+	ReviewerRouteState   string        `json:"reviewer_route_state,omitempty"`
+	CheckoutState        string        `json:"checkout_state,omitempty"`
+	PostReviewState      string        `json:"post_review_state,omitempty"`
 }
 
 type Delivery struct {
@@ -194,8 +223,14 @@ type Receipt struct {
 }
 
 type NativeTurn struct {
-	ID     string
-	Status string
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	Output            string `json:"output,omitempty"`
+	InputTokens       int64  `json:"input_tokens,omitempty"`
+	CachedInputTokens int64  `json:"cached_input_tokens,omitempty"`
+	OutputTokens      int64  `json:"output_tokens,omitempty"`
+	CostMicrousd      int64  `json:"cost_microusd,omitempty"`
+	UsageAvailable    bool   `json:"usage_available"`
 }
 
 type Reconciliation struct {
@@ -214,6 +249,18 @@ func MessageID(jobID, callerID string) string {
 
 func AgentRunID(messageID string) string {
 	return "agent-run-" + digest(messageID+"\x00implement", 24)
+}
+
+func ReviewAgentRunID(jobID, revision, role string) string {
+	return "agent-run-" + digest(jobID+"\x00"+revision+"\x00"+role, 24)
+}
+
+func ReviewSandboxName(runID string) string {
+	return "dorf-review-" + digest(runID, 20)
+}
+
+func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
+	return "review-controller-" + digest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
 }
 
 func ActionID(jobID string, kind ActionKind) string {

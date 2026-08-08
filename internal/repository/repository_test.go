@@ -23,11 +23,14 @@ smoke = 'uv run dorf --help'
 
 [agent.codex]
 model = "gpt-5.6-sol"
+
+[review]
+performance = true
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contract.Prepare != "uv sync --frozen" || len(contract.Checks) != 2 || contract.Checks[0].Name != "check" || contract.Checks[1].Name != "smoke" {
+	if contract.Prepare != "uv sync --frozen" || len(contract.Checks) != 2 || contract.Checks[0].Name != "check" || contract.Checks[1].Name != "smoke" || !contract.DeclaredPerformance {
 		t.Fatalf("contract=%#v", contract)
 	}
 	invalid := []string{
@@ -35,6 +38,7 @@ model = "gpt-5.6-sol"
 		"[commands]\ncheck = [\"uv\", \"run\", \"pytest\"]",
 		"[commands]\nprepare = \"uv sync\"\nreview = \"agent review\"\ncheck = \"go test ./...\"",
 		"[commands]\nprepare = \"uv sync\"",
+		"[commands]\nprepare = \"uv sync\"\ncheck = \"go test ./...\"\n[review]\nperformance = \"yes\"",
 	}
 	for _, contents := range invalid {
 		if _, err := ParseContract(contents); err == nil {

@@ -145,26 +145,29 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	if err != nil {
 		return RunIdle, err
 	}
-	session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
-	if err != nil {
-		return RunIdle, err
-	}
-	sessionID := session.ExternalID
-	if session.State != ActionSucceeded {
-		delivery, err := s.Store.NextDelivery(ctx, jobID, "")
+	sessionID := job.SessionID
+	if !reviewPhasePreemptsFIFO(job.WorkflowPhase) {
+		session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
 		if err != nil {
 			return RunIdle, err
 		}
-		if delivery == nil || delivery.Message.Sequence != 1 {
-			return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
-		}
-		switch delivery.AgentRun.State {
-		case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
-			return RunBlocked, nil
-		}
-		sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
-		if err != nil {
-			return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
+		sessionID = session.ExternalID
+		if session.State != ActionSucceeded {
+			delivery, err := s.Store.NextDelivery(ctx, jobID, "")
+			if err != nil {
+				return RunIdle, err
+			}
+			if delivery == nil || delivery.Message.Sequence != 1 {
+				return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
+			}
+			switch delivery.AgentRun.State {
+			case AgentRunFailed, AgentRunInterrupted, AgentRunUncertain:
+				return RunBlocked, nil
+			}
+			sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
+			if err != nil {
+				return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
+			}
 		}
 	}
 	for {
@@ -174,6 +177,13 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		}
 		if !job.AdmissionOpen {
 			return RunClosed, nil
+		}
+		if reviewPhasePreemptsFIFO(job.WorkflowPhase) {
+			disposition, progressed, err := s.advanceCoding(ctx, job)
+			if err != nil || disposition == RunBlocked || !progressed {
+				return disposition, err
+			}
+			continue
 		}
 		delivery, err := s.Store.NextDelivery(ctx, jobID, sessionID)
 		if err != nil {
@@ -196,6 +206,15 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		if err := s.deliver(ctx, job, *delivery); err != nil {
 			return RunIdle, err
 		}
+	}
+}
+
+func reviewPhasePreemptsFIFO(phase string) bool {
+	switch phase {
+	case "review-planning", "review-triage", "reviewing":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -248,7 +267,24 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, false, nil
 	case "blocked":
 		return RunBlocked, false, nil
-	case "implementing", "repairing", "committing":
+	case "implementing", "repairing", "review-repairing", "committing":
+		if job.WorkflowPhase == "review-repairing" {
+			observer, ok := s.Externals.(ReviewAdjudicationExternals)
+			if !ok {
+				return RunIdle, false, fmt.Errorf("review adjudication requires an observed Git workspace boundary")
+			}
+			changed, err := observer.RepositoryHasChanges(ctx, job)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if !changed {
+				reviewStore := s.Store.(ReviewStore)
+				if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
+					return RunIdle, false, err
+				}
+				return RunIdle, true, nil
+			}
+		}
 		parent := job.Revision
 		action, started, err := store.BeginCommit(ctx, job.ID, parent)
 		if err != nil {
@@ -348,10 +384,21 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		for _, result := range verified {
 			verifiedIDs = append(verifiedIDs, result.EvidenceID)
 		}
-		if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+		if reviewStore, ok := s.Store.(ReviewStore); ok {
+			if err := reviewStore.MarkChecksVerified(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+				return RunIdle, false, err
+			}
+		} else if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
 			return RunIdle, false, err
 		}
 		return RunIdle, true, nil
+	case "review-planning", "review-triage", "reviewing":
+		return s.advanceReview(ctx, job)
+	case "review-activation":
+		// Exact-Revision Checks are proven. The orchestrator must now bind the
+		// implementation-requested allowlisted Roles, including an explicit
+		// empty set, before the atomic policy result can be computed.
+		return RunIdle, false, nil
 	default:
 		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
 	}
@@ -364,7 +411,7 @@ func attentionNeeded(err error) bool {
 
 func (s Service) handleFailedCheck(ctx context.Context, job Job, check Check) (RunDisposition, bool, error) {
 	store := s.Store.(CodingStore)
-	if job.RepairCount == 0 {
+	if job.RepairCount == 0 && job.ReviewRepairCount == 0 {
 		if _, _, err := store.AdmitRepair(ctx, check); err != nil {
 			return RunIdle, false, err
 		}
@@ -597,6 +644,56 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		}
 		if err := s.reconcileCleanupMutation(ctx, job); err != nil {
 			return err
+		}
+		if reviewStore, ok := s.Store.(ReviewStore); ok {
+			runs, err := reviewStore.AllReviewRuns(ctx, job.ID)
+			if err != nil {
+				return err
+			}
+			reviewExternals, externalOK := s.Externals.(ReviewExternals)
+			if len(runs) > 0 && !externalOK {
+				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
+			}
+			for _, run := range runs {
+				if run.ReviewerSandboxID == "" {
+					return fmt.Errorf("cleanup cannot reconcile review AgentRun %s without its dedicated reviewer Sandbox", run.ID)
+				}
+				settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
+				if !settled {
+					if err := reviewStore.InterruptReviewRun(ctx, run.ID, "admission closed; exact isolated reviewer resources are being reclaimed"); err != nil {
+						return err
+					}
+					run.State = AgentRunInterrupted
+				}
+				routeAction, err := reviewStore.BeginReviewRouteCleanup(ctx, run.ID)
+				if err != nil {
+					return err
+				}
+				if routeAction.State != ActionSucceeded {
+					receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run.AgentRun, routeAction)
+					if err != nil {
+						_ = s.Store.UncertainAction(ctx, routeAction.ID)
+						return fmt.Errorf("reconcile exact reviewer route for %s: %w", run.ID, err)
+					}
+					if err := s.Store.CompleteAction(ctx, routeAction.ID, receipt); err != nil {
+						return err
+					}
+				}
+				sandboxAction, err := reviewStore.BeginReviewSandboxCleanup(ctx, run.ID)
+				if err != nil {
+					return err
+				}
+				if sandboxAction.State != ActionSucceeded {
+					receipt, err := reviewExternals.ReviewSandboxDelete(ctx, job, run.AgentRun, sandboxAction)
+					if err != nil {
+						_ = s.Store.UncertainAction(ctx, sandboxAction.ID)
+						return fmt.Errorf("reconcile exact reviewer Sandbox %s: %w", run.ReviewerSandboxID, err)
+					}
+					if err := s.Store.CompleteAction(ctx, sandboxAction.ID, receipt); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
 			if _, err := s.reconcile(ctx, job, kind); err != nil {

@@ -7,7 +7,6 @@ UV_ARCHIVE="uv-x86_64-unknown-linux-gnu.tar.gz"
 UV_ARCHIVE_SHA256="90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb"
 NODE_VERSION="22.23.2"
 NODE_SHA256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a"
-PI_VERSION="0.83.0"
 
 apt-get update
 apt-get install -y --no-install-recommends \
@@ -25,9 +24,7 @@ npm cache clean --force
 CODEX_VERSION="$(npm view @openai/codex@latest version)"
 CODEX_NPM_INTEGRITY="$(npm view "@openai/codex@$CODEX_VERSION" dist.integrity)"
 npm install -g "@openai/codex@$CODEX_VERSION"
-PI_NPM_INTEGRITY="$(npm view "@earendil-works/pi-coding-agent@$PI_VERSION" dist.integrity)"
-npm install -g "@earendil-works/pi-coding-agent@$PI_VERSION"
-ln -sf /opt/node/bin/{codex,pi} /usr/local/bin/
+ln -sf /opt/node/bin/codex /usr/local/bin/
 
 curl -LsSf -o "/tmp/$UV_ARCHIVE" \
   "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/$UV_ARCHIVE"
@@ -37,7 +34,6 @@ install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv
 rm -rf -- "/tmp/$UV_ARCHIVE" /tmp/uv-x86_64-unknown-linux-gnu
 
 codex --version
-pi --version
 git --version
 node --version
 uv --version
@@ -48,9 +44,7 @@ printf '%s\n' \
   '  "package": "@openai/codex",' \
   "  \"version\": \"$CODEX_VERSION\"," \
   "  \"npm_integrity\": \"$CODEX_NPM_INTEGRITY\"," \
-  "  \"pi_version\": \"$PI_VERSION\"," \
-  "  \"pi_npm_integrity\": \"$PI_NPM_INTEGRITY\"," \
-  "  \"tools\": {\"git\": \"$(git --version | cut -d' ' -f3)\", \"node\": \"$(node --version)\", \"pi\": \"$(pi --version)\", \"uv\": \"$(uv --version | cut -d' ' -f2)\"}," \
+  "  \"tools\": {\"git\": \"$(git --version | cut -d' ' -f3)\", \"node\": \"$(node --version)\", \"uv\": \"$(uv --version | cut -d' ' -f2)\"}," \
   "  \"tool_integrity\": {\"uv\": \"sha256:$UV_ARCHIVE_SHA256\"}" \
   '}' \
   > /usr/local/share/dorf/image.json

@@ -2,6 +2,7 @@ package incus
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,64 @@ type scriptedRunner struct {
 	inputs   [][]byte
 	existing bool
 	head     string
+}
+
+type inventoryRunner struct {
+	instances []reviewInstance
+	exists    bool
+	calls     [][]string
+}
+
+func (r *inventoryRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
+	r.calls = append(r.calls, append([]string{command}, args...))
+	joined := strings.Join(args, " ")
+	if strings.HasPrefix(joined, "list ") {
+		payload, _ := json.Marshal(r.instances)
+		return Result{Stdout: string(payload)}, nil
+	}
+	if strings.HasPrefix(joined, "info ") && !r.exists {
+		return Result{ExitCode: 1, Stderr: "not found"}, nil
+	}
+	return Result{}, nil
+}
+
+func TestReviewSandboxRequiresExactHostOwnedMetadataAndUniqueResource(t *testing.T) {
+	metadata := ReviewMetadata{JobID: "job-1", AgentRunID: "agent-run-1", Revision: strings.Repeat("a", 40), OwnershipNonce: strings.Repeat("b", 64)}
+	name := "dorf-review-owned"
+	config := map[string]string{
+		"user.dorf.owner": "review", "user.dorf.job": metadata.JobID, "user.dorf.agent_run": metadata.AgentRunID,
+		"user.dorf.revision": metadata.Revision, "user.dorf.ownership_nonce": metadata.OwnershipNonce,
+	}
+	runner := &inventoryRunner{exists: true, instances: []reviewInstance{{Name: name, Config: config}}}
+	sandbox := Sandbox{Runner: runner}
+	if err := sandbox.AttestReview(context.Background(), name, metadata); err != nil {
+		t.Fatal(err)
+	}
+	wrong := metadata
+	wrong.OwnershipNonce = strings.Repeat("c", 64)
+	if err := sandbox.AttestReview(context.Background(), name, wrong); err == nil || !strings.Contains(err.Error(), "ownership_nonce") {
+		t.Fatalf("mismatched owner metadata error=%v", err)
+	}
+	runner.instances = append(runner.instances, reviewInstance{Name: "dorf-review-competing", Config: config})
+	if err := sandbox.AttestReview(context.Background(), name, metadata); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous review Sandbox error=%v", err)
+	}
+}
+
+func TestReviewSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testing.T) {
+	metadata := ReviewMetadata{JobID: "job-1", AgentRunID: "agent-run-1", Revision: strings.Repeat("a", 40), OwnershipNonce: strings.Repeat("b", 64)}
+	runner := &inventoryRunner{}
+	sandbox := Sandbox{Runner: runner}
+	for range 2 {
+		if err := sandbox.DeleteReview(context.Background(), "dorf-review-owned", metadata); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner.exists = true
+	runner.instances = []reviewInstance{{Name: "dorf-review-owned", Config: map[string]string{"user.dorf.agent_run": metadata.AgentRunID, "user.dorf.owner": "foreign"}}}
+	if err := sandbox.DeleteReview(context.Background(), "dorf-review-owned", metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("foreign review Sandbox deletion error=%v", err)
+	}
 }
 
 func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, args ...string) (Result, error) {

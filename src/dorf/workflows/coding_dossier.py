@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from dorf.runtime import JobArtifact, JobBinding, TimelineEvent
 
 from .coding_store import AcceptanceItem, CodingCommandRun, CodingJob, CodingStore
-
-REVIEW_NO_FINDINGS_SENTINEL = "DORF_REVIEW_NO_FINDINGS"
 
 
 @dataclass(frozen=True)
@@ -119,9 +115,7 @@ def build_proof_dossier(
         for run in runs
     }
     checklist = store.get_acceptance_checklist(job.job_name)
-    active_items = tuple(
-        item for item in (checklist.items if checklist else ()) if item.verifier != "review"
-    )
+    active_items = checklist.items if checklist else ()
     acceptance = tuple(
         _evaluate_acceptance_item(
             item,
@@ -130,10 +124,6 @@ def build_proof_dossier(
             commit_sha=commit_sha,
         )
         for item in active_items
-    )
-    reviews = tuple(
-        run_evidence[run.id]
-        for run in _compact_runs(runs, commit_sha, lambda run: run.kind == "verify-role:diff")
     )
     claim_events = [
         event
@@ -165,13 +155,6 @@ def build_proof_dossier(
             "Repository supplied no machine-verifiable acceptance items; human GitHub "
             "acceptance remains required"
         )
-    if raw_attention := job.metadata.get("diff_verifier_attention"):
-        try:
-            attention = json.loads(raw_attention)
-        except json.JSONDecodeError:
-            attention = {}
-        if attention.get("status") == "declined":
-            risks.append("DeepSeek diff advisory review was declined; review evidence is missing")
     image_fingerprint = binding.metadata.get("image_fingerprint")
     if (
         image_fingerprint is None
@@ -222,11 +205,11 @@ def build_proof_dossier(
                 sorted((str(key), str(value)) for key, value in binding.metadata.items())
             ),
         ),
-        independent_review=reviews,
+        independent_review=(),
         assumptions_and_claims=claims,
         unresolved_risks=tuple(dict.fromkeys(risks)),
         relevant_artifacts=_relevant_artifacts(
-            (*acceptance_evidence, *reviews, *claims)
+            (*acceptance_evidence, *claims)
         ),
         cleanup=CleanupState(
             job=binding.job.status,
@@ -395,27 +378,6 @@ def _observed_at_commit(run: CodingCommandRun, commit_sha: str) -> bool:
     return run.git_commit_before == commit_sha and run.git_commit_after == commit_sha
 
 
-def _compact_runs(
-    runs: list[CodingCommandRun],
-    commit_sha: str,
-    include: Callable[[CodingCommandRun], bool],
-) -> tuple[CodingCommandRun, ...]:
-    """Keep one useful run per check/reviewer while exact logs remain in the audit layer."""
-    selected: list[CodingCommandRun] = []
-    for kind in dict.fromkeys(run.kind for run in runs if include(run)):
-        candidates = [run for run in runs if run.kind == kind]
-        current = next(
-            (
-                run
-                for run in candidates
-                if commit_sha in {run.git_commit_before, run.git_commit_after}
-            ),
-            None,
-        )
-        selected.append(current or candidates[0])
-    return tuple(selected)
-
-
 def _relevant_artifacts(evidence: tuple[ProofEvidence, ...]) -> tuple[DossierArtifact, ...]:
     by_ref = {
         artifact.ref: artifact
@@ -423,12 +385,6 @@ def _relevant_artifacts(evidence: tuple[ProofEvidence, ...]) -> tuple[DossierArt
         for artifact in item.artifacts
     }
     return tuple(by_ref.values())
-
-
-def review_output_has_no_findings(output: str) -> bool:
-    """Accept only the DeepSeek role's exact clean response."""
-    non_empty_lines = [line.strip() for line in output.splitlines() if line.strip()]
-    return non_empty_lines == [REVIEW_NO_FINDINGS_SENTINEL]
 
 
 def _command_evidence(
@@ -540,5 +496,4 @@ __all__ = [
     "acceptance_is_proven",
     "build_proof_dossier",
     "render_proof_dossier",
-    "review_output_has_no_findings",
 ]
