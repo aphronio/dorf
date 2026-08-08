@@ -46,6 +46,11 @@ class ProviderGatewayError(RuntimeError):
 class GatewayUnavailableError(ProviderGatewayError):
     """The local provider gateway could not become ready."""
 
+    def __init__(self, message: str, *, remediation: str | None = None) -> None:
+        if remediation is not None:
+            self.remediation = remediation
+        super().__init__(message)
+
 
 class ProviderConnectionNotFoundError(ProviderGatewayError):
     """The selected upstream provider connection does not exist."""
@@ -148,6 +153,7 @@ class ProviderConnection:
     status: Literal[
         "connected",
         "authentication_stale",
+        "capability_unavailable",
         "upstream_unavailable",
         "broker_unavailable",
     ]
@@ -369,6 +375,18 @@ class ProviderGateway:
                 status="upstream_unavailable",
                 remediation=f"Try {name} again later",
             )
+        if entry.get("websockets") is not True:
+            return ProviderConnection(
+                name=name,
+                provider=record["provider"],
+                auth_mode=record["auth_mode"],
+                status="capability_unavailable",
+                remediation=_reconnect_remediation(
+                    record["provider"],
+                    record["auth_mode"],
+                    name,
+                ),
+            )
         return ProviderConnection(
             name=name,
             provider=record["provider"],
@@ -388,6 +406,11 @@ class ProviderGateway:
             )
         if connection.status == "upstream_unavailable":
             raise ProviderUpstreamUnavailableError(name)
+        if connection.status == "capability_unavailable":
+            raise GatewayUnavailableError(
+                f"Provider connection does not support required Responses WebSockets: {name}",
+                remediation=connection.remediation,
+            )
         if connection.status == "broker_unavailable":
             raise GatewayUnavailableError(
                 f"Provider gateway is unavailable; {connection.remediation}"
