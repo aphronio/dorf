@@ -124,7 +124,7 @@ func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID stri
 			}
 		}
 		if index < 0 {
-			return nil
+			return g.activate(ctx, routes)
 		}
 		removedID = expectedRouteID
 		remaining := append(routes[:index:index], routes[index+1:]...)
