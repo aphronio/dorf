@@ -157,7 +157,7 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 			if err != nil {
 				return RunIdle, err
 			}
-			if delivery == nil || delivery.Message.Sequence != 1 {
+			if delivery == nil || delivery.Message.Sequence != 1 && delivery.Message.RetryOfMessageID == "" {
 				return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
 			}
 			switch delivery.AgentRun.State {

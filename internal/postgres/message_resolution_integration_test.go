@@ -210,24 +210,35 @@ func TestMessageResolutionReceiptAndWakeFaultBarriersConverge(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `select count(*) from dorf.message_resolutions where job_id=$1`, job.ID).Scan(&receipts); err != nil || receipts != 0 {
 		t.Fatalf("before-receipt receipts=%d err=%v", receipts, err)
 	}
+	var retryMessages int
+	if err := db.QueryRowContext(ctx, `select count(*) from dorf.job_messages where retry_of_message_id=$1`, failed.Message.ID).Scan(&retryMessages); err != nil || retryMessages != 0 {
+		t.Fatalf("before-receipt retry messages=%d err=%v", retryMessages, err)
+	}
 	if receipt, created, err := workflow.ResolveMessage(ctx, store, client, input, resolutionTestBarrier{point: workflow.BarrierAfterResolutionReceipt, err: barrierErr}); err == nil || !created || receipt.ReservedWakeSequence != 2 {
 		t.Fatalf("after-receipt result=%#v created=%v err=%v", receipt, created, err)
 	}
 	if err := db.QueryRowContext(ctx, `select count(*) from dorf.message_resolutions where job_id=$1`, job.ID).Scan(&receipts); err != nil || receipts != 1 {
 		t.Fatalf("after-receipt receipts=%d err=%v", receipts, err)
 	}
+	var retryMessageID string
+	if err := db.QueryRowContext(ctx, `select id from dorf.job_messages where retry_of_message_id=$1`, failed.Message.ID).Scan(&retryMessageID); err != nil || retryMessageID == "" {
+		t.Fatalf("after-receipt retry message=%q err=%v", retryMessageID, err)
+	}
 	if err := db.QueryRowContext(ctx, `select count(*) from absurd.e_dorf_jobs where event_name=$1`, workflow.WakeEvent(job.ID, 2)).Scan(&wakes); err != nil || wakes != 0 {
 		t.Fatalf("after-receipt wakes=%d err=%v", wakes, err)
 	}
-	if receipt, created, err := workflow.ResolveMessage(ctx, store, client, input, resolutionTestBarrier{point: workflow.BarrierAfterResolutionWake, err: barrierErr}); err == nil || created || receipt.ReservedWakeSequence != 2 {
+	if receipt, created, err := workflow.ResolveMessage(ctx, store, client, input, resolutionTestBarrier{point: workflow.BarrierAfterResolutionWake, err: barrierErr}); err == nil || created || receipt.ReservedWakeSequence != 2 || receipt.RetryMessageID != retryMessageID {
 		t.Fatalf("after-wake result=%#v created=%v err=%v", receipt, created, err)
 	}
 	if err := db.QueryRowContext(ctx, `select count(*) from absurd.e_dorf_jobs where event_name=$1`, workflow.WakeEvent(job.ID, 2)).Scan(&wakes); err != nil || wakes != 1 {
 		t.Fatalf("after-wake wakes=%d err=%v", wakes, err)
 	}
 	receipt, created, err := workflow.ResolveMessage(ctx, store, client, input)
-	if err != nil || created || receipt.ReservedWakeSequence != 2 {
+	if err != nil || created || receipt.ReservedWakeSequence != 2 || receipt.RetryMessageID != retryMessageID {
 		t.Fatalf("converged retry=%#v created=%v err=%v", receipt, created, err)
+	}
+	if err := db.QueryRowContext(ctx, `select count(*) from dorf.job_messages where retry_of_message_id=$1`, failed.Message.ID).Scan(&retryMessages); err != nil || retryMessages != 1 {
+		t.Fatalf("converged retry messages=%d err=%v", retryMessages, err)
 	}
 	if err := db.QueryRowContext(ctx, `select count(*) from absurd.e_dorf_jobs where event_name=$1`, workflow.WakeEvent(job.ID, 2)).Scan(&wakes); err != nil || wakes != 1 {
 		t.Fatalf("converged wake count=%d err=%v", wakes, err)
@@ -242,12 +253,12 @@ func TestMessageResolutionRetrySafetyAndAbandonment(t *testing.T) {
 	failed := failNoSubmit(t, store, retryJob.ID, retrySession)
 	retryInput := postgres.MessageResolutionInput{JobID: retryJob.ID, MessageID: failed.Message.ID, Decision: spine.ResolutionRetry, Authority: "operator", Reason: "native history proves exact non-delivery"}
 	receipt, created, err := store.ResolveMessage(ctx, retryInput)
-	if err != nil || !created || receipt.ReservedWakeSequence != 2 {
+	if err != nil || !created || receipt.ReservedWakeSequence != 2 || receipt.RetryMessageID == "" {
 		t.Fatalf("retry receipt=%#v created=%v err=%v", receipt, created, err)
 	}
 	delivery, err := store.NextDelivery(ctx, retryJob.ID, retrySession)
-	if err != nil || delivery == nil || delivery.AgentRun.ID != failed.AgentRun.ID || delivery.AgentRun.State != spine.AgentRunPending {
-		t.Fatalf("authorized same-identity retry=%#v err=%v", delivery, err)
+	if err != nil || delivery == nil || delivery.Message.ID != receipt.RetryMessageID || delivery.Message.RetryOfMessageID != failed.Message.ID || delivery.Message.Input != failed.Message.Input || delivery.AgentRun.ID == failed.AgentRun.ID || delivery.AgentRun.ActionID == failed.AgentRun.ActionID || delivery.AgentRun.State != spine.AgentRunPending {
+		t.Fatalf("authorized new-identity retry=%#v err=%v", delivery, err)
 	}
 	externals := &integrationExternals{}
 	service := spine.Service{Store: store, Externals: externals}
@@ -257,7 +268,7 @@ func TestMessageResolutionRetrySafetyAndAbandonment(t *testing.T) {
 	if disposition, err := service.RunUntilIdle(ctx, retryJob.ID); err != nil || disposition != spine.RunIdle {
 		t.Fatalf("retry replay disposition=%s err=%v", disposition, err)
 	}
-	if got := externals.submittedSequences(); fmt.Sprint(got) != "[1]" {
+	if got := externals.submittedSequences(); fmt.Sprint(got) != "[2]" {
 		t.Fatalf("authorized retry submitted native turns=%v", got)
 	}
 
@@ -297,6 +308,65 @@ func TestMessageResolutionRetrySafetyAndAbandonment(t *testing.T) {
 	}
 	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "after-abandon", Input: "must be closed"}); err == nil {
 		t.Fatal("abandonment left admission open")
+	}
+}
+
+func TestRetryChildFailureHasIndependentResolutionAndPreservesRootFIFO(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, sessionID := resolutionJob(t, store, "retry-child-failure-")
+	failed := failNoSubmit(t, store, job.ID, sessionID)
+	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second", Input: "pending after the failed root"})
+	if err != nil || !created || second.Sequence != 2 {
+		t.Fatalf("second=%#v created=%v err=%v", second, created, err)
+	}
+
+	rootInput := postgres.MessageResolutionInput{JobID: job.ID, MessageID: failed.Message.ID, Decision: spine.ResolutionRetry, Authority: "operator", Reason: "native history proves the root input was not submitted"}
+	rootReceipt, created, err := store.ResolveMessage(ctx, rootInput)
+	if err != nil || !created || rootReceipt.ReservedWakeSequence != 3 || rootReceipt.RetryMessageID == "" {
+		t.Fatalf("root receipt=%#v created=%v err=%v", rootReceipt, created, err)
+	}
+	fourth, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "fourth", Input: "admitted after retry wake reservation"})
+	if err != nil || !created || fourth.Sequence != 4 {
+		t.Fatalf("fourth=%#v created=%v err=%v", fourth, created, err)
+	}
+	retryDelivery, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || retryDelivery == nil || retryDelivery.Message.ID != rootReceipt.RetryMessageID || retryDelivery.Message.Sequence != 3 || retryDelivery.Message.RetryOfMessageID != failed.Message.ID || retryDelivery.AgentRun.ID == failed.AgentRun.ID {
+		t.Fatalf("root-priority retry delivery=%#v err=%v", retryDelivery, err)
+	}
+	if err := store.PrepareAgentRun(ctx, retryDelivery.AgentRun.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurnSubmission(ctx, retryDelivery.AgentRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindNativeTurn(ctx, retryDelivery.AgentRun.ID, "failed-retry-turn-"+job.ID, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	blockedWake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || blockedWake != 5 {
+		t.Fatalf("failed retry selected wake=%d want=5, not replayed wake 3: %v", blockedWake, err)
+	}
+
+	diagnosis, err := store.DiagnoseMessage(ctx, job.ID, retryDelivery.Message.ID)
+	if err != nil || diagnosis.Message.RetryOfMessageID != failed.Message.ID || diagnosis.AgentRun.ID != retryDelivery.AgentRun.ID || diagnosis.NativeTurnID == "" || diagnosis.NativeOutcome != "failed" || fmt.Sprint(diagnosis.SafeDecisions) != "[acknowledge-loss abandon]" {
+		t.Fatalf("retry child diagnosis=%#v err=%v", diagnosis, err)
+	}
+	original, err := store.DiagnoseMessage(ctx, job.ID, failed.Message.ID)
+	if err != nil || original.Resolution == nil || *original.Resolution != rootReceipt || original.AgentRun.ID != failed.AgentRun.ID || original.AgentRun.State != spine.AgentRunFailed {
+		t.Fatalf("preserved root diagnosis=%#v err=%v", original, err)
+	}
+	childReceipt, created, err := store.ResolveMessage(ctx, postgres.MessageResolutionInput{JobID: job.ID, MessageID: retryDelivery.Message.ID, Decision: spine.ResolutionAcknowledgeLoss, Authority: "operator", Reason: "preserve the failed retry turn and continue FIFO"})
+	if err != nil || !created || childReceipt.MessageID != retryDelivery.Message.ID || childReceipt.ReservedWakeSequence != 5 {
+		t.Fatalf("child receipt=%#v created=%v err=%v", childReceipt, created, err)
+	}
+	next, err := store.NextDelivery(ctx, job.ID, sessionID)
+	if err != nil || next == nil || next.Message.ID != second.ID {
+		t.Fatalf("FIFO continuation after retry child resolution=%#v err=%v", next, err)
+	}
+	wake, err := store.NextWakeSequence(ctx, job.ID)
+	if err != nil || wake != second.Sequence {
+		t.Fatalf("replayed retry wake selected=%d want=%d err=%v", wake, second.Sequence, err)
 	}
 }
 

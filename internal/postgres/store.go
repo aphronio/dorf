@@ -1107,12 +1107,13 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	var message spine.Message
 	err = tx.QueryRowContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,coalesce(m.retry_of_message_id,'')
 		from dorf.job_messages m
+		join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
 		left join dorf.agent_runs ar on ar.message_id=m.id
 		left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id
 		where m.job_id=$1 and not dorf.message_is_settled(ar.state,mr.decision)
-		order by m.sequence limit 1`, jobID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input)
+		order by ordering.root_sequence,ordering.retry_depth,m.sequence limit 1`, jobID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input, &message.RetryOfMessageID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1138,17 +1139,6 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	if sessionID != "" && run.SessionID != sessionID {
 		return nil, fmt.Errorf("AgentRun %s is bound to native Session %s, not %s", run.ID, run.SessionID, sessionID)
-	}
-	if run.State == spine.AgentRunFailed && run.NativeTurnID == "" {
-		var decision, actionState string
-		var actionUpdated, resolvedAt time.Time
-		err := tx.QueryRowContext(ctx, `select coalesce(mr.decision,''),a.state,a.updated_at,coalesce(mr.resolved_at,'epoch') from dorf.actions a left join dorf.message_resolutions mr on mr.job_id=a.job_id and mr.message_id=a.message_id where a.id=$1`, run.ActionID).Scan(&decision, &actionState, &actionUpdated, &resolvedAt)
-		if err != nil {
-			return nil, err
-		}
-		if decision == string(spine.ResolutionRetry) && (actionState == string(spine.ActionPending) || !actionUpdated.After(resolvedAt)) {
-			run.State = spine.AgentRunPending
-		}
 	}
 	allowed := run.Role == "implement" && (workflowPhase == "setup" || workflowPhase == "implementing") || run.Role == "repair" && (workflowPhase == "repairing" || workflowPhase == "review-repairing")
 	if !allowed {
@@ -1198,16 +1188,7 @@ func (s Store) PrepareAgentRun(ctx context.Context, runID, baselineTurnID string
 }
 
 func (s Store) BeginTurnSubmission(ctx context.Context, runID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `
-		update dorf.actions a set state='pending',attempts=attempts+1,updated_at=clock_timestamp()
-		where a.id=(select action_id from dorf.agent_runs where id=$1)
-		  and (a.state in ('pending','uncertain') or (
-			a.state='failed' and exists (
-				select 1 from dorf.agent_runs ar
-				join dorf.message_resolutions mr on mr.job_id=ar.job_id and mr.message_id=ar.message_id
-				where ar.id=$1 and ar.native_turn_id is null and mr.decision='retry' and a.updated_at<=mr.resolved_at
-			)
-		  ))`, runID))
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='pending',attempts=attempts+1,updated_at=clock_timestamp() where id=(select action_id from dorf.agent_runs where id=$1) and state in ('pending','uncertain')`, runID))
 }
 
 func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string) error {
@@ -1277,15 +1258,16 @@ func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) erro
 
 func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input,
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,coalesce(m.retry_of_message_id,''),
 		       coalesce(ar.id,''),coalesce(ar.state,''),coalesce(ar.native_turn_id,''),
 		       coalesce(ar.native_outcome,''),coalesce(ar.attention,''),
 		       coalesce(mr.id,''),coalesce(mr.decision,''),coalesce(mr.authority,''),coalesce(mr.reason,''),
-		       coalesce(mr.reserved_wake_sequence,0),coalesce(mr.resolved_at,'epoch'),
+		       coalesce(mr.reserved_wake_sequence,0),coalesce(mr.retry_message_id,''),coalesce(mr.resolved_at,'epoch'),
 		       dorf.message_is_settled(ar.state,mr.decision)
 		from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id
+		join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
 		left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id
-		where m.job_id=$1 order by m.sequence`, jobID)
+		where m.job_id=$1 order by ordering.root_sequence,ordering.retry_depth,m.sequence`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1294,9 +1276,9 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 	for rows.Next() {
 		var view spine.MessageView
 		var resolution spine.MessageResolution
-		if err := rows.Scan(&view.ID, &view.JobID, &view.CallerID, &view.Sequence, &view.Input,
+		if err := rows.Scan(&view.ID, &view.JobID, &view.CallerID, &view.Sequence, &view.Input, &view.RetryOfMessageID,
 			&view.AgentRunID, &view.State, &view.NativeTurnID, &view.NativeOutcome, &view.Attention,
-			&resolution.ID, &resolution.Decision, &resolution.Authority, &resolution.Reason, &resolution.ReservedWakeSequence, &resolution.ResolvedAt, &view.Settled); err != nil {
+			&resolution.ID, &resolution.Decision, &resolution.Authority, &resolution.Reason, &resolution.ReservedWakeSequence, &resolution.RetryMessageID, &resolution.ResolvedAt, &view.Settled); err != nil {
 			return nil, err
 		}
 		if resolution.ID != "" {
@@ -1471,18 +1453,24 @@ func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error
 				  and a.scope_key<>'' and a.state in ('pending','uncertain')
 			),
 			(
-				select min(m.sequence)
+				select m.sequence
 				from dorf.job_messages m
+				join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
 				join dorf.agent_runs ar on ar.message_id=m.id
 				where m.job_id=$1 and m.sequence>1 and ar.state='pending'
 				  and not exists (
 					select 1
 					from dorf.job_messages earlier
+					join dorf.message_delivery_order earlier_ordering on earlier_ordering.job_id=earlier.job_id and earlier_ordering.message_id=earlier.id
 					join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
 					left join dorf.message_resolutions earlier_resolution on earlier_resolution.job_id=earlier.job_id and earlier_resolution.message_id=earlier.id
-					where earlier.job_id=m.job_id and earlier.sequence<m.sequence
+					where earlier.job_id=m.job_id
+					  and (earlier_ordering.root_sequence,earlier_ordering.retry_depth,earlier.sequence)
+					      < (ordering.root_sequence,ordering.retry_depth,m.sequence)
 					  and not dorf.message_is_settled(earlier_run.state,earlier_resolution.decision)
 				  )
+				order by ordering.root_sequence,ordering.retry_depth,m.sequence
+				limit 1
 			),
 			(select greatest(
 				coalesce((select max(sequence) from dorf.job_messages where job_id=$1),0),

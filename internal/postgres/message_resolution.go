@@ -45,13 +45,13 @@ func (s Store) DiagnoseMessage(ctx context.Context, jobID, messageID string) (sp
 }
 
 const messageDiagnosisSQL = `
-	select m.id,m.job_id,m.caller_id,m.sequence,m.input,
+	select m.id,m.job_id,m.caller_id,m.sequence,m.input,coalesce(m.retry_of_message_id,''),
 	       ar.id,ar.job_id,ar.message_id,ar.action_id,coalesce(ar.session_id,''),ar.state,
 	       ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),
 	       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role,
 	       a.id,a.kind,a.state,coalesce(a.external_outcome,''),
 	       coalesce(mr.id,''),coalesce(mr.decision,''),coalesce(mr.authority,''),coalesce(mr.reason,''),
-	       coalesce(mr.reserved_wake_sequence,0),coalesce(mr.resolved_at,'epoch')
+	       coalesce(mr.reserved_wake_sequence,0),coalesce(mr.retry_message_id,''),coalesce(mr.resolved_at,'epoch')
 	from dorf.job_messages m
 	join dorf.agent_runs ar on ar.message_id=m.id
 	join dorf.actions a on a.id=ar.action_id
@@ -62,14 +62,14 @@ func scanMessageDiagnosis(row rowScanner) (spine.MessageResolutionDiagnosis, err
 	var diagnosis spine.MessageResolutionDiagnosis
 	var resolution spine.MessageResolution
 	err := row.Scan(
-		&diagnosis.Message.ID, &diagnosis.Message.JobID, &diagnosis.Message.CallerID, &diagnosis.Message.Sequence, &diagnosis.Message.Input,
+		&diagnosis.Message.ID, &diagnosis.Message.JobID, &diagnosis.Message.CallerID, &diagnosis.Message.Sequence, &diagnosis.Message.Input, &diagnosis.Message.RetryOfMessageID,
 		&diagnosis.AgentRun.ID, &diagnosis.AgentRun.JobID, &diagnosis.AgentRun.MessageID, &diagnosis.AgentRun.ActionID,
 		&diagnosis.AgentRun.SessionID, &diagnosis.AgentRun.State, &diagnosis.AgentRun.BaselineRecorded,
 		&diagnosis.AgentRun.BaselineTurnID, &diagnosis.AgentRun.NativeTurnID, &diagnosis.AgentRun.NativeOutcome,
 		&diagnosis.AgentRun.Attention, &diagnosis.AgentRun.Role,
 		&diagnosis.Action.ID, &diagnosis.Action.Kind, &diagnosis.Action.State, &diagnosis.Action.Outcome,
 		&resolution.ID, &resolution.Decision, &resolution.Authority, &resolution.Reason,
-		&resolution.ReservedWakeSequence, &resolution.ResolvedAt,
+		&resolution.ReservedWakeSequence, &resolution.RetryMessageID, &resolution.ResolvedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return diagnosis, ErrNotFound
@@ -139,7 +139,11 @@ func (s Store) PlanMessageResolution(ctx context.Context, input MessageResolutio
 	if !slices.Contains(diagnosis.SafeDecisions, input.Decision) {
 		return diagnosis, spine.MessageResolution{}, fmt.Errorf("decision %q is not proven safe: %s", input.Decision, diagnosis.ReconciliationReason)
 	}
-	return diagnosis, spine.MessageResolution{ID: spine.MessageResolutionID(input.JobID, input.MessageID), JobID: input.JobID, MessageID: input.MessageID, Decision: input.Decision, Authority: input.Authority, Reason: input.Reason}, nil
+	proposed := spine.MessageResolution{ID: spine.MessageResolutionID(input.JobID, input.MessageID), JobID: input.JobID, MessageID: input.MessageID, Decision: input.Decision, Authority: input.Authority, Reason: input.Reason}
+	if input.Decision == spine.ResolutionRetry {
+		proposed.RetryMessageID = spine.MessageID(input.JobID, resolutionRetryCallerID(proposed.ID))
+	}
+	return diagnosis, proposed, nil
 }
 
 func (s Store) ResolveMessage(ctx context.Context, input MessageResolutionInput) (spine.MessageResolution, bool, error) {
@@ -182,7 +186,22 @@ func (s Store) ResolveMessage(ctx context.Context, input MessageResolutionInput)
 			return spine.MessageResolution{}, false, err
 		}
 	}
-	if err := tx.QueryRowContext(ctx, `insert into dorf.message_resolutions(id,job_id,message_id,decision,authority,reason,reserved_wake_sequence) values($1,$2,$3,$4,$5,$6,nullif($7,0)) returning resolved_at`, resolution.ID, resolution.JobID, resolution.MessageID, resolution.Decision, resolution.Authority, resolution.Reason, resolution.ReservedWakeSequence).Scan(&resolution.ResolvedAt); err != nil {
+	if input.Decision == spine.ResolutionRetry {
+		callerID := resolutionRetryCallerID(resolution.ID)
+		resolution.RetryMessageID = spine.MessageID(input.JobID, callerID)
+		retry := spine.Message{ID: resolution.RetryMessageID, JobID: input.JobID, CallerID: callerID, Sequence: resolution.ReservedWakeSequence, Input: diagnosis.Message.Input, RetryOfMessageID: diagnosis.Message.ID}
+		if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input,retry_of_message_id) values($1,$2,$3,$4,$5,$6)`, retry.ID, retry.JobID, retry.CallerID, retry.Sequence, retry.Input, retry.RetryOfMessageID); err != nil {
+			return spine.MessageResolution{}, false, err
+		}
+		actionID, runID := spine.TurnActionID(retry.ID), spine.AgentRunID(retry.ID)
+		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, retry.JobID, retry.ID, spine.ActionTurnStart); err != nil {
+			return spine.MessageResolution{}, false, err
+		}
+		if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,nullif($5,''),$6,'pending')`, runID, retry.JobID, retry.ID, actionID, diagnosis.AgentRun.SessionID, diagnosis.AgentRun.Role); err != nil {
+			return spine.MessageResolution{}, false, err
+		}
+	}
+	if err := tx.QueryRowContext(ctx, `insert into dorf.message_resolutions(id,job_id,message_id,decision,authority,reason,reserved_wake_sequence,retry_message_id) values($1,$2,$3,$4,$5,$6,nullif($7,0),nullif($8,'')) returning resolved_at`, resolution.ID, resolution.JobID, resolution.MessageID, resolution.Decision, resolution.Authority, resolution.Reason, resolution.ReservedWakeSequence, resolution.RetryMessageID).Scan(&resolution.ResolvedAt); err != nil {
 		return spine.MessageResolution{}, false, err
 	}
 	if input.Decision == spine.ResolutionAbandon {
@@ -200,6 +219,10 @@ func resolutionMatches(resolution spine.MessageResolution, input MessageResoluti
 	return resolution.JobID == input.JobID && resolution.MessageID == input.MessageID && resolution.Decision == input.Decision && resolution.Authority == input.Authority && resolution.Reason == input.Reason
 }
 
+func resolutionRetryCallerID(resolutionID string) string {
+	return "dorf:message-retry:" + resolutionID
+}
+
 func allocateWakeSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (int64, error) {
 	var sequence int64
 	err := tx.QueryRowContext(ctx, `select greatest(
@@ -215,10 +238,11 @@ func ensureInputsSettledTx(ctx context.Context, tx *sql.Tx, jobID string) error 
 	err := tx.QueryRowContext(ctx, `
 		select m.sequence,coalesce(ar.state,''),coalesce(ar.attention,'')
 		from dorf.job_messages m
+		join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
 		left join dorf.agent_runs ar on ar.message_id=m.id
 		left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id
 		where m.job_id=$1 and not dorf.message_is_settled(ar.state,mr.decision)
-		order by m.sequence limit 1`, jobID).Scan(&sequence, &state, &reason)
+		order by ordering.root_sequence,ordering.retry_depth,m.sequence limit 1`, jobID).Scan(&sequence, &state, &reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

@@ -93,6 +93,14 @@ func TestResolveMessageCLIDiagnosisDryRunAndReceipt(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &dry); err != nil || dry["dry_run"] != true || dry["mutated"] != false {
 		t.Fatalf("dry-run=%v decode=%v", dry, err)
 	}
+	proposedJSON, err := json.Marshal(dry["proposed_receipt"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposed spine.MessageResolution
+	if err := json.Unmarshal(proposedJSON, &proposed); err != nil || proposed.RetryMessageID == "" {
+		t.Fatalf("dry-run proposed receipt=%#v err=%v", proposed, err)
+	}
 	var receiptCount int
 	if err := db.QueryRowContext(ctx, "select count(*) from dorf.message_resolutions where job_id=$1", job.ID).Scan(&receiptCount); err != nil || receiptCount != 0 {
 		t.Fatalf("dry-run receipts=%d err=%v", receiptCount, err)
@@ -109,7 +117,7 @@ func TestResolveMessageCLIDiagnosisDryRunAndReceipt(t *testing.T) {
 	var receipt spine.MessageResolution
 	var wake string
 	decodeErr := errors.Join(json.Unmarshal(output["created"], &outputCreated), json.Unmarshal(output["receipt"], &receipt), json.Unmarshal(output["wake_event"], &wake))
-	if decodeErr != nil || !outputCreated || receipt.Decision != spine.ResolutionRetry || receipt.Authority != "owner" || receipt.Reason != reason || receipt.ReservedWakeSequence != 2 || wake == "" {
+	if decodeErr != nil || !outputCreated || receipt.Decision != spine.ResolutionRetry || receipt.Authority != "owner" || receipt.Reason != reason || receipt.ReservedWakeSequence != 2 || receipt.RetryMessageID == "" || receipt.RetryMessageID != proposed.RetryMessageID || wake == "" {
 		t.Fatalf("resolution output=%#v decode=%v stderr=%s", output, decodeErr, stderr.String())
 	}
 }

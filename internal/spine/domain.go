@@ -87,11 +87,12 @@ type Job struct {
 }
 
 type Message struct {
-	ID       string `json:"id"`
-	JobID    string `json:"job_id"`
-	CallerID string `json:"caller_id"`
-	Sequence int64  `json:"sequence"`
-	Input    string `json:"input"`
+	ID               string `json:"id"`
+	JobID            string `json:"job_id"`
+	CallerID         string `json:"caller_id"`
+	Sequence         int64  `json:"sequence"`
+	Input            string `json:"input"`
+	RetryOfMessageID string `json:"retry_of_message_id,omitempty"`
 }
 
 type MessageResolutionDecision string
@@ -110,6 +111,7 @@ type MessageResolution struct {
 	Authority            string                    `json:"authority"`
 	Reason               string                    `json:"reason"`
 	ReservedWakeSequence int64                     `json:"reserved_wake_sequence,omitempty"`
+	RetryMessageID       string                    `json:"retry_message_id,omitempty"`
 	ResolvedAt           time.Time                 `json:"resolved_at"`
 }
 
