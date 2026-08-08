@@ -31,12 +31,29 @@ const (
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
 	MessageTaskName     = "dorf-job-messages-v2"
 	initialCallerID     = "dorf:initial"
-	legacyRunTaskName   = "dorf-job-spine-v1"
 )
 
 func MessageTaskKey(jobID string) string { return "run:v2:" + jobID }
 
 type Store struct{ DB *sql.DB }
+
+func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
+	var installed bool
+	if err := s.DB.QueryRowContext(ctx, `select to_regprocedure('absurd.get_schema_version()') is not null`).Scan(&installed); err != nil {
+		return false, err
+	}
+	if !installed {
+		return false, nil
+	}
+	var version string
+	if err := s.DB.QueryRowContext(ctx, `select absurd.get_schema_version()`).Scan(&version); err != nil {
+		return false, err
+	}
+	if version != "0.5.0" {
+		return false, fmt.Errorf("Absurd schema version is %q; Dorf requires 0.5.0", version)
+	}
+	return true, nil
+}
 
 type NewJob struct {
 	AdmissionKey         string
@@ -431,8 +448,8 @@ func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and (task_id is null or task_id=$2)`, jobID, taskID))
 }
 
-// CheckMessageTaskAttachment prevents spawning a v2 consumer while an active
-// or unrelated task is still authoritative for the Job.
+// CheckMessageTaskAttachment prevents spawning a competing consumer while an
+// active or unrelated task is still authoritative for the Job.
 func (s Store) CheckMessageTaskAttachment(ctx context.Context, jobID string) error {
 	var taskID string
 	var admissionOpen bool
@@ -452,11 +469,10 @@ func (s Store) CheckMessageTaskAttachment(ctx context.Context, jobID string) err
 	if err != nil {
 		return fmt.Errorf("inspect current Absurd run task %s: %w", taskID, err)
 	}
-	return validateReplaceableRunTask(jobID, task, true)
+	return validateCurrentMessageTask(jobID, task)
 }
 
-// AttachMessageTask replaces only an exact terminal v1 predecessor. The old
-// Absurd task remains untouched as historical execution evidence.
+// AttachMessageTask binds the one exact consumer admitted for this Job.
 func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -482,13 +498,7 @@ func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID stri
 		return err
 	}
 	if currentTaskID != "" && currentTaskID != proposedTaskID {
-		current, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, currentTaskID))
-		if err != nil {
-			return fmt.Errorf("inspect current Absurd run task %s: %w", currentTaskID, err)
-		}
-		if err := validateReplaceableRunTask(jobID, current, false); err != nil {
-			return err
-		}
+		return fmt.Errorf("Job %s is already attached to another Absurd consumer %s", jobID, currentTaskID)
 	}
 	if _, err := tx.ExecContext(ctx, `update dorf.jobs set task_id=$2 where id=$1`, jobID, proposedTaskID); err != nil {
 		return err
@@ -518,19 +528,6 @@ func validateCurrentMessageTask(jobID string, task runTaskRecord) error {
 	}
 	if task.State != "pending" && task.State != "running" && task.State != "sleeping" {
 		return fmt.Errorf("Absurd message task %s is %s, not an active consumer for open Job %s", task.ID, task.State, jobID)
-	}
-	return nil
-}
-
-func validateReplaceableRunTask(jobID string, task runTaskRecord, allowCurrentV2 bool) error {
-	if allowCurrentV2 && task.Name == MessageTaskName && task.JobID == jobID && task.IdempotencyKey == MessageTaskKey(jobID) {
-		return validateCurrentMessageTask(jobID, task)
-	}
-	if task.Name != legacyRunTaskName || task.JobID != jobID || task.IdempotencyKey != "run:"+jobID {
-		return fmt.Errorf("current Absurd task %s does not belong to Job %s as the expected %s predecessor", task.ID, jobID, legacyRunTaskName)
-	}
-	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
-		return fmt.Errorf("current predecessor task %s is %s; refusing to replace a nonterminal run", task.ID, task.State)
 	}
 	return nil
 }
@@ -1649,8 +1646,7 @@ func (s Store) CancelRun(ctx context.Context, jobID string) (string, error) {
 		return "", fmt.Errorf("inspect exact ordinary Job task: %w", err)
 	}
 	validCurrent := task.Name == MessageTaskName && task.JobID == jobID && task.IdempotencyKey == MessageTaskKey(jobID)
-	validLegacy := task.Name == legacyRunTaskName && task.JobID == jobID && task.IdempotencyKey == "run:"+jobID
-	if !validCurrent && !validLegacy {
+	if !validCurrent {
 		return "", fmt.Errorf("attached ordinary task %s does not belong to exact Job %s", taskID, jobID)
 	}
 	if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {

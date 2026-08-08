@@ -1,7 +1,7 @@
 [commands]
-prepare = "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups && go mod download"
-check = "scripts/verify-issue-37-legacy-deletion.sh && go test ./... && go vet ./... && UV_CACHE_DIR=.dorf/uv-cache uv run pytest && UV_CACHE_DIR=.dorf/uv-cache uv run ruff check ."
-smoke = "mkdir -p .dorf/bin && go build -o .dorf/bin/dorf ./cmd/dorf && go version -m .dorf/bin/dorf"
+prepare = "go mod download"
+check = "go test ./... && go vet ./..."
+smoke = "mkdir -p .dorf/bin && go build -o .dorf/bin/dorf ./cmd/dorf && .dorf/bin/dorf version && go version -m .dorf/bin/dorf"
 
 [agent.codex]
 model = "gpt-5.6-sol"

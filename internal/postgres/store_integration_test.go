@@ -18,7 +18,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
-	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -1915,308 +1914,6 @@ func (e *integrationExternals) effectKinds() []spine.ActionKind {
 	return append([]spine.ActionKind(nil), e.effects...)
 }
 
-func TestMigration008UpgradesApplied001Through007(t *testing.T) {
-	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DORF_TEST_DATABASE_URL is not configured")
-	}
-	sourceConfig, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adminConfig := sourceConfig.Copy()
-	adminConfig.Database = "postgres"
-	admin, err := sql.Open("pgx", adminConfig.ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { admin.Close() })
-	databaseName := fmt.Sprintf("dorf_delivery_upgrade_%d", time.Now().UnixNano())
-	if _, err := admin.ExecContext(context.Background(), `create database `+pgx.Identifier{databaseName}.Sanitize()+` template `+pgx.Identifier{sourceConfig.Database}.Sanitize()); err != nil {
-		t.Fatalf("create isolated delivery upgrade database: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.ExecContext(context.Background(), `select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid<>pg_backend_pid()`, databaseName); err != nil {
-			t.Errorf("terminate isolated delivery upgrade connections: %v", err)
-		}
-		if _, err := admin.ExecContext(context.Background(), `drop database `+pgx.Identifier{databaseName}.Sanitize()); err != nil {
-			t.Errorf("drop isolated delivery upgrade database: %v", err)
-		}
-	})
-	upgradeConfig := sourceConfig.Copy()
-	upgradeConfig.Database = databaseName
-	db, err := sql.Open("pgx", upgradeConfig.ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
-		t.Fatal(err)
-	}
-	prior := []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql"}
-	for _, name := range prior {
-		contents, err := os.ReadFile("migrations/" + name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.ExecContext(ctx, string(contents)); err != nil {
-			t.Fatalf("apply prior migration %s: %v", name, err)
-		}
-		if _, err := db.ExecContext(ctx, `insert into dorf.schema_migrations(name) values($1)`, name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var deliveryColumn bool
-	if err := db.QueryRowContext(ctx, `select exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='job_messages' and column_name='delivery_intent')`).Scan(&deliveryColumn); err != nil {
-		t.Fatal(err)
-	}
-	if deliveryColumn {
-		t.Fatal("delivery schema was already present after recorded migrations 001 through 007")
-	}
-	jobID := "job-delivery-upgrade"
-	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'delivery-upgrade','upgrade delivery schema','https://github.com/aphronio/dorf.git',$2,$2,'dorf/delivery-upgrade','primary','gpt-5.6-sol','high')`, jobID, strings.Repeat("a", 40)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values('message-delivery-upgrade',$1,'existing-message',1,'preserve me')`, jobID); err != nil {
-		t.Fatal(err)
-	}
-	store := postgres.Store{DB: db}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var intent, target string
-	if err := db.QueryRowContext(ctx, `select delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where id='message-delivery-upgrade'`).Scan(&intent, &target); err != nil {
-		t.Fatal(err)
-	}
-	if intent != string(spine.MessageFollow) || target != "" {
-		t.Fatalf("upgraded existing message intent=%q target=%q", intent, target)
-	}
-	var migrationApplied, nativeTurnUnique bool
-	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='008_message_delivery.sql'),exists(select 1 from pg_constraint where conrelid='dorf.agent_runs'::regclass and conname='agent_runs_native_turn_id_key')`).Scan(&migrationApplied, &nativeTurnUnique); err != nil {
-		t.Fatal(err)
-	}
-	if !migrationApplied || nativeTurnUnique {
-		t.Fatalf("migration applied=%v old native-turn uniqueness retained=%v", migrationApplied, nativeTurnUnique)
-	}
-	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer' where id='message-delivery-upgrade'`); err == nil {
-		t.Fatal("delivery target invariant allowed steer without an exact target")
-	}
-	if _, err := db.ExecContext(ctx, `update dorf.job_messages set delivery_intent='steer',steer_target_turn_id='turn-active' where id='message-delivery-upgrade'`); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestMigration003PreservesCompletedGoJobFacts(t *testing.T) {
-	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DORF_TEST_DATABASE_URL is not configured")
-	}
-	sourceConfig, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sourceConfig.Database == "" {
-		t.Fatal("DORF_TEST_DATABASE_URL must name a database for the isolated upgrade clone")
-	}
-	adminConfig := sourceConfig.Copy()
-	adminConfig.Database = "postgres"
-	admin, err := sql.Open("pgx", adminConfig.ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { admin.Close() })
-	databaseName := fmt.Sprintf("dorf_upgrade_%d", time.Now().UnixNano())
-	if _, err := admin.ExecContext(context.Background(), `create database `+pgx.Identifier{databaseName}.Sanitize()+` template `+pgx.Identifier{sourceConfig.Database}.Sanitize()); err != nil {
-		t.Fatalf("create isolated upgrade database: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := admin.ExecContext(context.Background(), `select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and pid<>pg_backend_pid()`, databaseName); err != nil {
-			t.Errorf("terminate isolated upgrade database connections: %v", err)
-		}
-		if _, err := admin.ExecContext(context.Background(), `drop database `+databaseName); err != nil {
-			t.Errorf("drop isolated upgrade database: %v", err)
-		}
-	})
-	upgradeConfig := sourceConfig.Copy()
-	upgradeConfig.Database = databaseName
-	db, err := sql.Open("pgx", upgradeConfig.ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `drop schema if exists dorf cascade`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `truncate absurd.c_dorf_jobs,absurd.w_dorf_jobs,absurd.r_dorf_jobs,absurd.e_dorf_jobs,absurd.t_dorf_jobs`); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql"} {
-		contents, err := os.ReadFile("migrations/" + name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.ExecContext(ctx, string(contents)); err != nil {
-			t.Fatalf("apply prior schema %s: %v", name, err)
-		}
-	}
-	observedAt := time.Date(2026, 8, 6, 12, 34, 56, 0, time.UTC)
-	input := postgres.NewJob{AdmissionKey: "upgrade-preserved", Goal: "completed legacy goal", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/upgrade-preserved", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high"}
-	jobID := spine.JobID(input.AdmissionKey)
-	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { client.Close() })
-	client.MustRegister(absurd.Task("dorf-job-spine-v1", func(_ context.Context, params workflow.Params) (workflow.Result, error) {
-		return workflow.Result{JobID: params.JobID, Outcome: "observed"}, nil
-	}))
-	legacyTask, err := client.Spawn(ctx, "dorf-job-spine-v1", workflow.Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "run:" + jobID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "legacy-upgrade", BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	legacySnapshot, err := client.FetchTaskResult(ctx, config.QueueName, legacyTask.TaskID)
-	if err != nil || legacySnapshot.State != absurd.TaskCompleted {
-		t.Fatalf("legacy v1 task state=%v err=%v", legacySnapshot, err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,branch,provider_connection,model,reasoning_effort,state,task_id,native_outcome,observed_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,'observed',$10,'completed',$11)`, jobID, input.AdmissionKey, input.Goal, input.Repository, input.Revision, input.Branch, input.ProviderConnection, input.Model, input.ReasoningEffort, legacyTask.TaskID, observedAt); err != nil {
-		t.Fatal(err)
-	}
-	actionIDs := map[spine.ActionKind]string{
-		spine.ActionSandboxCreate:   "legacy-action-sandbox",
-		spine.ActionRepositoryClone: "legacy-action-clone",
-		spine.ActionRouteCreate:     "legacy-action-route",
-		spine.ActionSessionStart:    "legacy-action-session",
-		spine.ActionTurnStart:       "legacy-action-turn",
-	}
-	externalIDs := map[spine.ActionKind]string{
-		spine.ActionSandboxCreate:   "legacy-sandbox",
-		spine.ActionRepositoryClone: "legacy-checkout",
-		spine.ActionRouteCreate:     "legacy-route",
-		spine.ActionSessionStart:    "legacy-session",
-		spine.ActionTurnStart:       "legacy-turn",
-	}
-	for _, kind := range []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate, spine.ActionSessionStart, spine.ActionTurnStart} {
-		if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,external_id,external_outcome) values($1,$2,$3,'succeeded',$4,$5)`, actionIDs[kind], jobID, kind, externalIDs[kind], map[bool]string{true: "completed", false: ""}[kind == spine.ActionTurnStart]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'created')`, jobID, actionIDs[spine.ActionSandboxCreate], externalIDs[spine.ActionSandboxCreate]); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'active')`, jobID, actionIDs[spine.ActionRouteCreate], externalIDs[spine.ActionRouteCreate]); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.sessions(job_id,action_id,native_session_id,observed_at) values($1,$2,$3,$4)`, jobID, actionIDs[spine.ActionSessionStart], externalIDs[spine.ActionSessionStart], observedAt); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,session_id,native_turn_id,role,native_outcome,observed_at) values('legacy-agent-run',$1,$2,$3,$4,'implement','completed',$5)`, jobID, actionIDs[spine.ActionTurnStart], externalIDs[spine.ActionSessionStart], externalIDs[spine.ActionTurnStart], observedAt); err != nil {
-		t.Fatal(err)
-	}
-
-	store := postgres.Store{DB: db}
-	if err := store.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if job.State != spine.JobObserved || job.SessionID != "legacy-session" || job.SandboxID != "legacy-sandbox" || job.RouteID != "legacy-route" {
-		t.Fatalf("upgraded Job lost readable setup/session facts: %#v", job)
-	}
-	messages, err := store.Messages(ctx, jobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 1 || messages[0].Sequence != 1 || messages[0].AgentRunID != "legacy-agent-run" || messages[0].NativeTurnID != "legacy-turn" || messages[0].NativeOutcome != "completed" || messages[0].State != spine.AgentRunCompleted {
-		t.Fatalf("upgraded turn facts=%#v", messages)
-	}
-	actions, err := store.Actions(ctx, jobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(actions) != len(actionIDs) {
-		t.Fatalf("upgraded actions=%#v", actions)
-	}
-	for _, action := range actions {
-		if action.ID != actionIDs[action.Kind] || action.ExternalID != externalIDs[action.Kind] || action.State != spine.ActionSucceeded {
-			t.Fatalf("upgraded Action changed identity/outcome: %#v", action)
-		}
-	}
-	var jobOutcome string
-	var jobObservedAt, runObservedAt time.Time
-	if err := db.QueryRowContext(ctx, `select native_outcome,observed_at from dorf.jobs where id=$1`, jobID).Scan(&jobOutcome, &jobObservedAt); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.QueryRowContext(ctx, `select observed_at from dorf.agent_runs where id='legacy-agent-run'`).Scan(&runObservedAt); err != nil {
-		t.Fatal(err)
-	}
-	if jobOutcome != "completed" || !jobObservedAt.Equal(observedAt) || !runObservedAt.Equal(observedAt) {
-		t.Fatalf("upgrade changed durable observation outcome/timestamps: %q %s %s", jobOutcome, jobObservedAt, runObservedAt)
-	}
-	externals := &integrationExternals{}
-	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
-	if err := store.CheckMessageTaskAttachment(ctx, jobID); err != nil {
-		t.Fatal(err)
-	}
-	spawned, err := client.Spawn(ctx, workflow.RunTaskName, workflow.Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(jobID)})
-	if err != nil || !spawned.Created {
-		t.Fatalf("spawn upgraded v2 task=%#v err=%v", spawned, err)
-	}
-	if err := store.AttachMessageTask(ctx, jobID, spawned.TaskID); err != nil {
-		t.Fatal(err)
-	}
-	reattached, err := store.Job(ctx, jobID)
-	if err != nil || reattached.ID != jobID || reattached.TaskID == legacyTask.TaskID {
-		t.Fatalf("upgraded v2 reattachment=%#v err=%v", reattached, err)
-	}
-	v2TaskID := reattached.TaskID
-	var v2Tasks int
-	if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2 and idempotency_key=$3`, workflow.RunTaskName, jobID, postgres.MessageTaskKey(jobID)).Scan(&v2Tasks); err != nil {
-		t.Fatal(err)
-	}
-	if v2Tasks != 1 {
-		t.Fatalf("reattachment created %d v2 message tasks", v2Tasks)
-	}
-	repeated, err := client.Spawn(ctx, workflow.RunTaskName, workflow.Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(jobID)})
-	if err != nil || repeated.Created || repeated.TaskID != v2TaskID {
-		t.Fatalf("repeated v2 task=%#v err=%v", repeated, err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "upgraded-v2-idle", BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	message, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: jobID, CallerID: "after-upgrade", Input: "continue through v2"})
-	if err != nil || !created || message.Sequence != 2 {
-		t.Fatalf("post-upgrade message=%#v created=%v err=%v", message, created, err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "upgraded-v2-message", BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if got := externals.submittedSequences(); fmt.Sprint(got) != "[2]" {
-		t.Fatalf("post-upgrade v2 submissions=%v want=[2]", got)
-	}
-	continuedMessages, err := store.Messages(ctx, jobID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(continuedMessages) != 2 || continuedMessages[1].Sequence != 2 || continuedMessages[1].State != spine.AgentRunCompleted {
-		t.Fatalf("post-upgrade message did not durably complete through v2: %#v", continuedMessages)
-	}
-	legacySnapshot, err = client.FetchTaskResult(ctx, config.QueueName, legacyTask.TaskID)
-	if err != nil || legacySnapshot.State != absurd.TaskCompleted {
-		t.Fatalf("historical v1 task was not retained: state=%v err=%v", legacySnapshot, err)
-	}
-	v2Snapshot, err := client.FetchTaskResult(ctx, config.QueueName, v2TaskID)
-	if err != nil || v2Snapshot.State == absurd.TaskCompleted || v2Snapshot.State == absurd.TaskFailed || v2Snapshot.State == absurd.TaskCancelled {
-		t.Fatalf("v2 task is not the live post-upgrade consumer: state=%v err=%v", v2Snapshot, err)
-	}
-}
-
 func TestMessageTaskReattachmentFailsClosed(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
@@ -2231,29 +1928,29 @@ func TestMessageTaskReattachmentFailsClosed(t *testing.T) {
 		}
 	})
 
-	t.Run("active predecessor", func(t *testing.T) {
+	t.Run("active unrelated consumer", func(t *testing.T) {
 		input := newInput("active")
 		job, created, err := store.Admit(ctx, input)
 		if err != nil || !created {
 			t.Fatalf("admit created=%v err=%v", created, err)
 		}
-		legacy, err := client.Spawn(ctx, "dorf-job-spine-v1", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "run:" + job.ID})
+		unrelated, err := client.Spawn(ctx, "unrelated-active-task", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "run:" + job.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
-		taskIDs = append(taskIDs, legacy.TaskID)
-		if err := store.SetTaskID(ctx, job.ID, legacy.TaskID); err != nil {
+		taskIDs = append(taskIDs, unrelated.TaskID)
+		if err := store.SetTaskID(ctx, job.ID, unrelated.TaskID); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "refusing to replace a nonterminal run") {
-			t.Fatalf("active predecessor reattachment error=%v", err)
+		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "not the expected dorf-job-messages-v2 consumer") {
+			t.Fatalf("active unrelated consumer reattachment error=%v", err)
 		}
 		var v2Tasks int
 		if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where idempotency_key=$1`, postgres.MessageTaskKey(job.ID)).Scan(&v2Tasks); err != nil {
 			t.Fatal(err)
 		}
 		if v2Tasks != 0 {
-			t.Fatalf("active predecessor allowed %d v2 tasks to spawn", v2Tasks)
+			t.Fatalf("active unrelated consumer allowed %d message tasks to spawn", v2Tasks)
 		}
 	})
 
@@ -2271,7 +1968,7 @@ func TestMessageTaskReattachmentFailsClosed(t *testing.T) {
 		if err := store.SetTaskID(ctx, job.ID, unrelated.TaskID); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "expected dorf-job-spine-v1 predecessor") {
+		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "not the expected dorf-job-messages-v2 consumer") {
 			t.Fatalf("unrelated current task error=%v", err)
 		}
 	})

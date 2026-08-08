@@ -1,13 +1,7 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-.venv/
 .web/
 .codex
 dist/
 build/
-*.egg-info/
 .dorf/
 .firecrawl/
 .reference/

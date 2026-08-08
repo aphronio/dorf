@@ -11,10 +11,10 @@ PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/room-image}"
 SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
-MANIFEST_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v3-x86_64.json"
-ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v3-x86_64.tar.gz"
+MANIFEST_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v4-x86_64.json"
+ARCHIVE_PATH="$OUTPUT_DIR/dorf-codex-incus-vm-v4-x86_64.tar.gz"
 
-for command in gh incus jq npm uv; do
+for command in gh go incus jq npm; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required release command is unavailable: $command" >&2
     exit 1
@@ -26,7 +26,7 @@ if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
   exit 1
 fi
 if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" != "public" ]]; then
-  echo "Official Room images require a public GitHub repository." >&2
+  echo "Official Sandbox images require a public GitHub repository." >&2
   exit 1
 fi
 if [[ "$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
@@ -39,21 +39,19 @@ if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT" >/dev/null; then
   exit 1
 fi
 
-echo "Building and validating the official Room image locally."
+echo "Building and validating the official Sandbox image locally."
 echo "The Provider Gateway credential remains on this host."
 PROVIDER_CONNECTION="$PROVIDER_CONNECTION" \
 OUTPUT_DIR="$OUTPUT_DIR" \
 SOURCE_COMMIT="$SOURCE_COMMIT" \
   "$SCRIPT_DIR/prepare-dorf-codex-release.sh"
+"$PROJECT_ROOT/scripts/build-release.sh" "$OUTPUT_DIR"
 
 RELEASE_TAG="$(jq -r .release_tag "$MANIFEST_PATH")"
 CODEX_VERSION="$(jq -r .codex.version "$MANIFEST_PATH")"
-PACKAGE_VERSION="$(
-  uv run --project "$PROJECT_ROOT" python -c \
-    'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])'
-)"
-if [[ "$RELEASE_TAG" != "v$PACKAGE_VERSION" ]]; then
-  echo "Image release tag must match package version v$PACKAGE_VERSION: $RELEASE_TAG" >&2
+PRODUCT_VERSION="$(go -C "$PROJECT_ROOT" run ./cmd/dorf version | awk '{print $2}')"
+if [[ "$RELEASE_TAG" != "v$PRODUCT_VERSION" ]]; then
+  echo "Image release tag must match Go product version v$PRODUCT_VERSION: $RELEASE_TAG" >&2
   exit 1
 fi
 if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -67,9 +65,9 @@ cleanup_notes() {
 }
 trap cleanup_notes EXIT
 printf '%s\n' \
-  "Dorf $PACKAGE_VERSION" \
+  "Dorf $PRODUCT_VERSION" \
   "" \
-  "Python package and credential-free Incus VM image." \
+  "Go x86_64 Linux application and credential-free Incus VM image." \
   "The image was promoted after a real Dorf Codex turn." \
   "" \
   "Codex: $CODEX_VERSION" \
@@ -85,6 +83,8 @@ gh release create "$RELEASE_TAG" \
   --target "$SOURCE_COMMIT" \
   --title "Dorf $RELEASE_TAG" \
   --notes-file "$NOTES_PATH" \
+  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz" \
+  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt" \
   "$ARCHIVE_PATH" \
   "$MANIFEST_PATH"
 
@@ -98,5 +98,11 @@ gh release verify-asset "$RELEASE_TAG" "$ARCHIVE_PATH" \
   --repo "$GITHUB_REPOSITORY"
 gh release verify-asset "$RELEASE_TAG" "$MANIFEST_PATH" \
   --repo "$GITHUB_REPOSITORY"
+gh release verify-asset "$RELEASE_TAG" \
+  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz" \
+  --repo "$GITHUB_REPOSITORY"
+gh release verify-asset "$RELEASE_TAG" \
+  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt" \
+  --repo "$GITHUB_REPOSITORY"
 
-echo "Published verified official Room image: $RELEASE_TAG"
+echo "Published verified official Sandbox image: $RELEASE_TAG"

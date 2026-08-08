@@ -1,192 +1,136 @@
-# Getting started with Dorf
+# Getting started on x86_64 Linux
 
-This guide exercises the supported Dorf core: one Codex Worker in one local Incus VM Room, assigned
-one non-coding Job. It does not configure a repository or use the coding-to-PR workflow.
+The supported host is x86_64 Linux with hardware virtualization and a local Incus daemon. Ubuntu
+24.04 is the clean-machine path currently validated. macOS is unsupported because it cannot host
+the local Incus VM daemon; running only the CLI on macOS does not create a supported remote mode.
 
-> [!NOTE]
-> This walkthrough was validated with Dorf `0.1.1`. Dorf is alpha software, and command syntax may
-> change in a later release.
+## 1. Install the Go application and native services
 
-## Prerequisites
-
-Use a local x86_64 Linux host with:
-
-- hardware virtualization enabled and an accessible `/dev/kvm`;
-- at least 4 GiB total memory and 20 GiB free on `/`;
-- `uv` and Python 3.11 or newer available to `uv`;
-- network access for PyPI, the immutable GitHub Room-image download, provider login, and inference;
-- either a ChatGPT subscription, which is the live-validated and recommended setup choice, or an
-  OpenAI API key, which is also an implemented setup option; and
-- administrator access if Dorf needs to install or configure Incus.
-
-Automatic host convergence has been reviewed for x86_64 Arch Linux and Ubuntu 24.04 LTS. On Arch,
-installing Incus includes the package update required by the rolling-release package set. On Ubuntu,
-it uses the distribution's native Incus and QEMU packages. Setup explains the exact changes and
-asks before using administrator authority.
-
-Other x86_64 Linux distributions may work only when a local Incus daemon is already installed,
-initialized, and usable by the current user. Read [Setup support](support.md) before proceeding on
-another host. Membership in `incus-admin` is root-equivalent machine access.
-
-## Install the verified release
+Download `dorf_VERSION_linux_x86_64.tar.gz` and its checksum from the same immutable GitHub release
+as the Incus image, verify it, and install `dorf` on `PATH`. Building the same artifact requires Go
+1.25 or newer:
 
 ```bash
-uv tool install "dorf==0.1.1"
-dorf --version
+go build -o ./bin/dorf ./cmd/dorf
 ```
 
-This guide is version-specific; `dorf --version` should print `0.1.1`.
-
-## Set up the host and provider
-
-Run the no-option guided setup:
+On Ubuntu 24.04, Dorf can apply the reviewed native package/service recipe after first displaying
+its exact administrator and root-equivalent group effects:
 
 ```bash
-dorf setup
+dorf host install
+dorf host install --yes
 ```
 
-The first run downloads an approximately 766 MB Room image. It may also request administrator
-authority to install or configure Incus and require a sign-out/sign-in before the new
-`incus-admin` membership takes effect.
-
-Setup inspects the host before mutation. When needed on a reviewed distribution, it offers to
-install and start Incus, add the user to `incus-admin`, and initialize local storage plus the
-private `incusbr0` NAT network. It does not enable Incus's remote API. It then installs or reuses the
-immutable credential-free Dorf Room image, selects or connects the chosen provider, and runs a real
-turn in a disposable Worker. The disposable Room and its scoped provider route are removed
-afterward.
-
-For the recommended ChatGPT subscription path, follow the displayed device URL and code. The other
-choice reads `OPENAI_API_KEY` when present or prompts for the key without echoing it.
-
-Setup is complete only when it prints `Dorf is ready.` and offers `dorf worker spawn my-worker` as
-the next command. Earlier green checks are not the success boundary. Rerunning `dorf setup` is safe:
-it rechecks the host, image, and provider, reuses the verified image when present, and repeats the
-disposable real-Worker proof.
-
-If setup asks for a new login so `incus-admin` membership can take effect, sign out and back in,
-then rerun the same command.
-
-## Run one Worker and Job
-
-Spawn a durable Worker and its private Room:
+Sign out and back in if requested, then repeat the same command. It initializes only a pristine
+Incus daemon and creates the local PostgreSQL role/database idempotently. The resulting default DSN
+is:
 
 ```bash
-dorf worker spawn guide-worker
+export DORF_DATABASE_URL='postgresql:///dorf?host=/var/run/postgresql'
 ```
 
-Success includes `guide-worker · ready` and `current Job: none`. Spawning does not send a model
-turn or create a placeholder Job.
+Do not run `incus admin init --minimal` over a partially configured daemon: inspect and preserve
+operator-owned storage and networking instead.
 
-Assign a complete goal. Assignment queues the goal as input 1 and returns while delivery continues
-detached:
+## 2. Install the credential-free Codex image
+
+Install directly from the same immutable Dorf release tag used for the Go binary:
 
 ```bash
-dorf job assign first-job \
-  --to guide-worker \
-  --goal "Create a five-item checklist for reviewing a technical proposal. Return only the checklist."
+dorf image install --release v0.2.0
 ```
 
-Success includes `first-job · open`, the exact `goal v1`, and the workspace
-`/workspace/jobs/first-job`. Wait for the latest input selected when the command begins to leave the
-working state:
+The Go CLI requires GitHub to report the release immutable, downloads exactly these two assets,
+verifies both GitHub SHA-256 digests plus the manifest/archive agreement, and then verifies the
+imported Incus fingerprint:
+
+```text
+dorf-codex-incus-vm-v4-x86_64.tar.gz
+dorf-codex-incus-vm-v4-x86_64.json
+```
+
+An offline-prepared host can download those assets separately and use the equivalent local path:
 
 ```bash
-dorf job wait first-job
+dorf image install \
+  --manifest dorf-codex-incus-vm-v4-x86_64.json \
+  --archive dorf-codex-incus-vm-v4-x86_64.tar.gz
 ```
 
-The completed boundary is `Job first-job: done` followed by the model's `Response:`. A `blocked` or
-`pending-approval` outcome is not success; read its `Need:` or `Detail:`. `wait` is read-only and
-does not ask the Worker for a status update.
+Maintainers can instead build and prove the image locally with
+`scripts/incus/prepare-dorf-codex-release.sh`. Schema 4 is the first post-cutover image contract: it
+contains the pinned Go 1.26.5 toolchain and proves the managed repository's declared preparation
+inside a fresh Sandbox before publication. Schema-3 images are pre-cutover and unsupported even if
+their alias is still present locally. The image contains no upstream credential or scoped route key.
 
-Inspect the recorded situation independently:
+## 3. Connect the provider and initialize PostgreSQL/Absurd
+
+The supported ChatGPT-subscription route uses the pinned CLIProxyAPI broker. This is a separate
+concrete Go binary and the only retained helper service in Dorf's model path. Dorf downloads its
+verified x86_64 Linux release, binds it to the private Incus bridge, and launches its device login:
 
 ```bash
-dorf job inspect first-job
-dorf worker inspect guide-worker
+export DORF_PROVIDER_GATEWAY_STATE="$HOME/.local/state/dorf/provider-gateway"
+dorf provider connect chatgpt --name personal-chatgpt
+dorf setup --provider personal-chatgpt
 ```
 
-At this point the core loop is proven: a named Worker and Room survived the initiating commands, a
-goal-backed Job ran in its dedicated conversation, and Dorf returned the native response.
+`setup` downloads the immutable Absurd 0.5.0 schema only for first initialization, verifies its
+hard-coded SHA-256, applies the embedded Dorf schema, and runs bounded direct checks. A prepared
+offline machine may pass `--absurd-schema FILE`.
 
-## Leave, reconnect, and steer
+## 4. Prove GitHub and repository authority
 
-Closing the initiating terminal does not delete the Worker, Job, admitted input, native
-conversation binding, or Room. On the same host, reconnect through the recorded names:
+Configure a GitHub App with metadata-read, contents-write, and pull-requests-write authority for
+the selected repository. Keep its metadata and private key at the paths shown by `dorf doctor` (or
+set `DORF_GITHUB_APP_METADATA` and `DORF_GITHUB_APP_PRIVATE_KEY`). Then run:
 
 ```bash
-dorf job inspect first-job
-dorf job inspect first-job --timeline
-dorf job inspect first-job --evidence
+dorf doctor \
+  --provider personal-chatgpt \
+  --contract .dorf.toml \
+  --repo https://github.com/aphronio/dorf.git \
+  --github-repo aphronio/dorf \
+  --github-installation INSTALLATION_ID \
+  --base greenfield
 ```
 
-The default view reports observed runtime facts separately from accepted Worker claims. Timeline and
-evidence are retained Job-document lenses; neither starts a turn.
+Every failed fact includes concrete remediation. The command checks PostgreSQL, Absurd and its
+queue, Incus access/network/image, provider route authority, the Go-first repository contract, and
+the exact GitHub App repository/base authority. It never probes Docker.
 
-Steer the same Job with an ordinary message, then wait for the newly admitted latest input:
+## 5. Run a coding Job
+
+Save the complete goal in `goal.txt`, then admit it with stable authority:
 
 ```bash
-dorf job message first-job "Revise item three to include explicit risk and rollback checks."
-dorf job wait first-job
+dorf admit \
+  --key my-change-v1 \
+  --goal-file goal.txt \
+  --repo https://github.com/OWNER/REPOSITORY.git \
+  --revision FULL_COMMIT_OID \
+  --branch dorf/my-change-v1 \
+  --github-repo owner/repository \
+  --github-installation INSTALLATION_ID \
+  --base main \
+  --provider personal-chatgpt \
+  --model gpt-5.6-sol \
+  --reasoning high
+
+dorf worker
+dorf inspect JOB_ID
 ```
 
-The message is queued durably and does not change goal version 1. For automation, add `--json` to
-`job message`, retain its `message_id`, and pass that value to `job wait --message ID` so the wait is
-pinned to one admitted input.
-
-To enter the current Room directly, use:
+`worker` may be restarted after process loss. Send a stable message while work is active with
+`dorf message`; use `--intent steer` to target the current native turn. After GitHub records the
+human decision, record exactly one explicit outcome:
 
 ```bash
-dorf worker attach guide-worker
+dorf outcome JOB_ID accepted   # or rejected / abandoned
+dorf worker --once
+dorf inspect JOB_ID
 ```
 
-The shell starts at `/workspace`; the Job workspace is `/workspace/jobs/first-job`. Exiting the
-shell ends human presence without changing Worker, Room, Job, Assignment, or conversation identity.
-
-After a controller interruption or host restart, reconcile the exact surviving Room and restart
-replaceable delivery processes with:
-
-```bash
-dorf worker recover guide-worker
-```
-
-Recovery never invents a replacement Room. Inspect and wait again after it completes.
-
-## Clean up
-
-Wait for the latest Job input to settle, then end the Job before the Worker:
-
-```bash
-dorf job wait first-job
-dorf job end first-job
-dorf worker end guide-worker
-```
-
-Successful Job cleanup reports `Ended Job: first-job` and removes
-`/workspace/jobs/first-job` from the Room. Successful Worker cleanup reports
-`Ended Worker: guide-worker` and `Room destroyed:`; destruction also revokes the Room-scoped
-provider route. The ended Worker identity and retained Job records remain available for audit—they
-are not presented as purged.
-
-If a turn is still unsettled, ordinary cleanup refuses and shows the wait outcome. Use
-`dorf job end first-job --interrupt` or `dorf worker end guide-worker --interrupt` only when you
-intend to cancel that work. Cleanup failures remain visible and retryable.
-
-## Failure and support boundaries
-
-- Follow the safe action reported by a setup failure, then rerun `dorf setup`. `dorf doctor` is a
-  separate diagnostic for an already configured core. Diagnostics are written under
-  `$XDG_STATE_HOME/dorf/diagnostics/`, or
-  `~/.local/state/dorf/diagnostics/`; review them before sharing because redacted host facts can
-  still identify the machine. See [Setup support](support.md).
-- Dorf will not modify a partially configured Incus installation whose resources it cannot identify
-  as its own. Follow the observed-state diagnosis rather than deleting generic Incus resources.
-- macOS, Windows, non-x86_64 hosts, remote Incus daemons, custom Room images, alternate VM backends,
-  and harnesses other than Codex are not supported by `0.1.1`.
-- This release uses local VMs. Work cannot continue while the host is powered off. A client or
-  controller process may be replaced, and an existing Room can be recovered after the host returns.
-- If the recorded Incus VM body or disk is gone, `worker recover` reports the Worker offline and
-  Roomless. Durable identity and queued input remain inspectable, but executable conversation
-  continuity cannot be restored; create a fresh Worker and Job.
-- The runtime and Python SDK are experimental and do not yet provide a third-party compatibility
-  promise. Use CLI help as the syntax authority: `dorf worker --help` and `dorf job --help`.
+Cleanup is a separate observable lifecycle fact. If ordinary durable cleanup needs bounded operator
+reconciliation, use `dorf cleanup --now JOB_ID` and inspect again.

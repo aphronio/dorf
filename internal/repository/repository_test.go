@@ -18,8 +18,8 @@ import (
 func TestParseNarrowRepositoryContract(t *testing.T) {
 	contract, err := ParseContract(`[commands]
 prepare = "uv sync --frozen"
-check = "uv run pytest" # direct command
-smoke = 'uv run dorf --help'
+check = "go test ./..." # direct command
+smoke = 'go build ./cmd/dorf'
 
 [agent.codex]
 model = "gpt-5.6-sol"
@@ -34,8 +34,8 @@ performance = true
 		t.Fatalf("contract=%#v", contract)
 	}
 	invalid := []string{
-		`commands = "uv run pytest"`,
-		"[commands]\ncheck = [\"uv\", \"run\", \"pytest\"]",
+		`commands = "go test ./..."`,
+		"[commands]\ncheck = [\"go\", \"test\", \"./...\"]",
 		"[commands]\nprepare = \"uv sync\"\nreview = \"agent review\"\ncheck = \"go test ./...\"",
 		"[commands]\nprepare = \"uv sync\"",
 		"[commands]\nprepare = \"uv sync\"\ncheck = \"go test ./...\"\n[review]\nperformance = \"yes\"",
