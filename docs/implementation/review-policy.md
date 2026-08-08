@@ -53,7 +53,9 @@ task. Inspection reports `self-advancing`, `external-authority`, `attention`,
 `automatic-cleanup`, or `terminal` so a caller can distinguish admitted work from a real stop.
 `dorf publication retry JOB_ID --revision EXACT_OID` is limited to an already-scheduled exhausted
 publication or a visible `publication-blocked` condition after its concrete external cause is
-repaired; it cannot activate an ordinary ready Revision.
+repaired; it cannot activate an ordinary ready Revision. An explicit `dorf cleanup JOB_ID` may end
+resources for a pre-proposal `publication-blocked` Job without recording an outcome; published
+and stale stored proposals remain protected until an authoritative outcome is recorded.
 
 ## Native and Evidence boundaries
 

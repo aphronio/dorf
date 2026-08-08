@@ -151,12 +151,18 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 			return nil
 		}
 		if job.WorkflowPhase == "publishing" || job.WorkflowPhase == "publication-blocked" || job.WorkflowPhase == "published" {
-			outcome, err := store.Outcome(ctx, job.ID)
+			proposal, err := store.Proposal(ctx, job.ID)
 			if err != nil {
 				return err
 			}
-			if outcome == nil {
-				return fmt.Errorf("cleanup cannot cancel or remove a live publication without a recorded accepted, rejected, or explicitly abandoned outcome")
+			if proposal != nil {
+				outcome, err := store.Outcome(ctx, job.ID)
+				if err != nil {
+					return err
+				}
+				if outcome == nil {
+					return fmt.Errorf("cleanup cannot cancel or remove a stored GitHub proposal without a recorded accepted, rejected, or explicitly abandoned outcome")
+				}
 			}
 		}
 		if err := store.CloseAdmission(ctx, jobID); err != nil {

@@ -240,6 +240,44 @@ func TestPostgresFreshAdmissionRequiresCompleteGitHubAuthorityAndSchemaHasNoCred
 	}
 }
 
+func TestPreProposalPublicationBlockedAllowsExplicitCleanupWithoutOutcome(t *testing.T) {
+	db, store, client := testDatabase(t)
+	ctx := context.Background()
+	publicationapi.Register(client, publicationapi.Service{Store: store})
+	input := publicationInput(fmt.Sprintf("cleanup-blocked-publication-%d", time.Now().UnixNano()))
+	job, created, err := workflow.Admit(ctx, store, client, input)
+	if err != nil || !created {
+		t.Fatalf("admit created=%t err=%v", created, err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, publicationTaskID, created, err := publicationapi.Schedule(ctx, store, client, nil, job.ID, job.Revision)
+	if err != nil || !created {
+		t.Fatalf("publication task=%s created=%t err=%v", publicationTaskID, created, err)
+	}
+	if err := store.BlockPublication(ctx, job.ID, job.Revision, "pre-proposal failure"); err != nil {
+		t.Fatal(err)
+	}
+	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, id := range []string{job.TaskID, publicationTaskID, cleaning.CleanupTaskID} {
+			_ = client.CancelTask(context.Background(), config.QueueName, id)
+		}
+	})
+	outcome, err := store.Outcome(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal, err := store.Proposal(ctx, job.ID)
+	if err != nil || outcome != nil || proposal != nil || cleaning.AdmissionOpen || cleaning.CleanupState != spine.CleanupScheduled {
+		t.Fatalf("cleanup=%#v outcome=%#v proposal=%#v err=%v", cleaning, outcome, proposal, err)
+	}
+}
+
 func TestCleanupSettlesOnlyItsExactAttachedPublicationAndOrdinaryTasks(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
@@ -276,6 +314,12 @@ func TestCleanupSettlesOnlyItsExactAttachedPublicationAndOrdinaryTasks(t *testin
 	sentinel, sentinelPublication := prepare("sentinel")
 	if _, err := workflow.ScheduleCleanup(ctx, store, client, target.ID); err == nil || !strings.Contains(err.Error(), "without a recorded accepted, rejected, or explicitly abandoned outcome") {
 		t.Fatalf("live proposal cleanup error=%v", err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='publication-blocked',revision=$2 where id=$1`, sentinel.ID, strings.Repeat("b", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.ScheduleCleanup(ctx, store, client, sentinel.ID); err == nil || !strings.Contains(err.Error(), "without a recorded accepted, rejected, or explicitly abandoned outcome") {
+		t.Fatalf("stale proposal cleanup error=%v", err)
 	}
 	targetProposal, err := store.Proposal(ctx, target.ID)
 	if err != nil || targetProposal == nil {
