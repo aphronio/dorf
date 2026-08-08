@@ -130,6 +130,39 @@ func TestFaultBoundariesRecoverOneNativeTurn(t *testing.T) {
 	}
 }
 
+func TestSteerAcceptanceRecoversAfterAcknowledgementBeforeBind(t *testing.T) {
+	base := newMemoryStore()
+	store := &steeringMemoryStore{memoryStore: base}
+	job := testJob()
+	job.SessionID = "session-1"
+	store.jobs[job.ID] = job
+	targetTurnID := "turn-active-1"
+	message := Message{ID: MessageID(job.ID, "steer-1"), JobID: job.ID, CallerID: "steer-1", Sequence: 2, Input: "correct active work", Intent: MessageSteer, TargetTurnID: targetTurnID}
+	run := AgentRun{ID: AgentRunID(message.ID), JobID: job.ID, MessageID: message.ID, ActionID: TurnActionID(message.ID), SessionID: job.SessionID, State: AgentRunPending}
+	store.messages[job.ID] = []Message{message}
+	store.runs[run.ID] = run
+	store.actions[run.ActionID] = Action{ID: run.ActionID, JobID: job.ID, MessageID: message.ID, Kind: ActionTurnStart, State: ActionPending}
+	externals := &steeringFakeExternals{fakeExternals: newFakeExternals()}
+	externals.turns = []NativeTurn{{ID: targetTurnID, Status: "inProgress"}}
+	delivery := Delivery{Message: message, AgentRun: run}
+	service := Service{Store: store, Externals: externals, Barrier: &failBarrier{point: BarrierAfterSubmitBeforeBind}}
+	if _, err := service.deliverSteer(context.Background(), job, delivery); !errors.Is(err, errBarrier) {
+		t.Fatalf("first steer error=%v want barrier", err)
+	}
+	if len(externals.steered) != 1 || store.runs[run.ID].NativeTurnID != "" {
+		t.Fatalf("accepted-before-bind calls=%v run=%#v", externals.steered, store.runs[run.ID])
+	}
+	service.Barrier = nil
+	progressed, err := service.deliverSteer(context.Background(), job, Delivery{Message: message, AgentRun: store.runs[run.ID]})
+	if err != nil || !progressed {
+		t.Fatalf("reconciled steer progressed=%v err=%v", progressed, err)
+	}
+	bound := store.runs[run.ID]
+	if len(externals.steered) != 1 || bound.State != AgentRunCompleted || bound.NativeTurnID != targetTurnID {
+		t.Fatalf("reconciled steer calls=%v run=%#v", externals.steered, bound)
+	}
+}
+
 func TestRepositoryRecordBoundariesRecoverCompletedLogicalWork(t *testing.T) {
 	for _, point := range []string{BarrierSetupComplete, BarrierCommitCreated, BarrierCheckExited} {
 		t.Run(point, func(t *testing.T) {
@@ -183,7 +216,7 @@ func TestInitialRecoveryAdoptsTurnAfterSessionCheckpoint(t *testing.T) {
 	}
 }
 
-func TestFailedAndInterruptedInputBlockLaterFIFO(t *testing.T) {
+func TestAcceptedFailedAndInterruptedTurnsPermitLaterFIFO(t *testing.T) {
 	for _, status := range []string{"failed", "interrupted"} {
 		t.Run(status, func(t *testing.T) {
 			store := newMemoryStore()
@@ -197,11 +230,12 @@ func TestFailedAndInterruptedInputBlockLaterFIFO(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if disposition != RunBlocked || !reflect.DeepEqual(externals.submittedSequences(), []int64{1}) {
+			if disposition != RunIdle || !reflect.DeepEqual(externals.submittedSequences(), []int64{1, 2}) {
 				t.Fatalf("disposition=%s submissions=%v", disposition, externals.submittedSequences())
 			}
-			if got := store.runs[AgentRunID(first.ID)].State; string(got) != status {
-				t.Fatalf("first state=%s want=%s", got, status)
+			firstRun := store.runs[AgentRunID(first.ID)]
+			if string(firstRun.State) != status || firstRun.NativeTurnID == "" || firstRun.NativeOutcome != status {
+				t.Fatalf("first run=%#v want preserved accepted %s outcome", firstRun, status)
 			}
 		})
 	}
@@ -503,6 +537,23 @@ type memoryStore struct {
 	bindFailures int
 }
 
+type steeringMemoryStore struct{ *memoryStore }
+
+func (s *steeringMemoryStore) BindNativeSteer(_ context.Context, runID, turnID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.runs[runID]
+	if run.NativeTurnID != "" && run.NativeTurnID != turnID {
+		return errors.New("steer native turn conflict")
+	}
+	run.NativeTurnID, run.State = turnID, AgentRunCompleted
+	s.runs[runID] = run
+	action := s.actions[run.ActionID]
+	action.State, action.ExternalID, action.Outcome = ActionSucceeded, turnID, "steered"
+	s.actions[run.ActionID] = action
+	return nil
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{jobs: map[string]Job{}, messages: map[string][]Message{}, runs: map[string]AgentRun{}, actions: map[string]Action{}}
 }
@@ -510,7 +561,7 @@ func newMemoryStore() *memoryStore {
 func (s *memoryStore) addMessage(jobID, callerID, input string) Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	message := Message{ID: MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: int64(len(s.messages[jobID]) + 1), Input: input}
+	message := Message{ID: MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: int64(len(s.messages[jobID]) + 1), Input: input, Intent: MessageFollow}
 	s.messages[jobID] = append(s.messages[jobID], message)
 	return message
 }
@@ -597,7 +648,7 @@ func (s *memoryStore) NextDelivery(_ context.Context, jobID, sessionID string) (
 	for _, message := range messages {
 		runID := AgentRunID(message.ID)
 		run, ok := s.runs[runID]
-		if ok && run.State == AgentRunCompleted {
+		if ok && run.NativeTurnID != "" && (run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted) {
 			continue
 		}
 		if !ok {
@@ -707,10 +758,18 @@ func (s *codingMemoryStore) BeginCommit(_ context.Context, jobID, scope string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
+	var latestFollow AgentRun
 	for _, message := range s.messages[jobID] {
-		if run := s.runs[AgentRunID(message.ID)]; run.State != AgentRunCompleted {
+		run := s.runs[AgentRunID(message.ID)]
+		if run.NativeTurnID == "" || (run.State != AgentRunCompleted && run.State != AgentRunFailed && run.State != AgentRunInterrupted) {
 			return Action{}, false, nil
 		}
+		if message.Intent == MessageFollow {
+			latestFollow = run
+		}
+	}
+	if latestFollow.State != AgentRunCompleted {
+		return Action{}, false, nil
 	}
 	if job.WorkflowPhase != "implementing" && job.WorkflowPhase != "repairing" && job.WorkflowPhase != "committing" {
 		return Action{}, false, fmt.Errorf("commit during %s", job.WorkflowPhase)
@@ -796,7 +855,7 @@ func (s *codingMemoryStore) AdmitRepair(_ context.Context, check Check) (Message
 			}
 		}
 	}
-	message := Message{ID: MessageID(job.ID, "dorf:repair:1"), JobID: job.ID, CallerID: "dorf:repair:1", Sequence: int64(len(s.messages[job.ID]) + 1), Input: "focused failed Check repair"}
+	message := Message{ID: MessageID(job.ID, "dorf:repair:1"), JobID: job.ID, CallerID: "dorf:repair:1", Sequence: int64(len(s.messages[job.ID]) + 1), Input: "focused failed Check repair", Intent: MessageFollow}
 	s.messages[job.ID] = append(s.messages[job.ID], message)
 	actionID, runID := TurnActionID(message.ID), AgentRunID(message.ID)
 	s.actions[actionID] = Action{ID: actionID, JobID: job.ID, MessageID: message.ID, Kind: ActionTurnStart, State: ActionPending}
@@ -937,6 +996,24 @@ type fakeExternals struct {
 	activeOnce       sync.Once
 	secondClaim      chan struct{}
 	initialSessionID string
+}
+
+type steeringFakeExternals struct {
+	*fakeExternals
+	steered []string
+}
+
+func (e *steeringFakeExternals) AgentSteer(_ context.Context, _ Job, delivery Delivery) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.steered = append(e.steered, delivery.AgentRun.ID)
+	for index := range e.turns {
+		if e.turns[index].ID == delivery.Message.TargetTurnID {
+			e.turns[index].AcceptedMessageIDs = append(e.turns[index].AcceptedMessageIDs, delivery.AgentRun.ID)
+			return e.turns[index].ID, nil
+		}
+	}
+	return "", errors.New("missing steer target")
 }
 
 func newFakeExternals() *fakeExternals {

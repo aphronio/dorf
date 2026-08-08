@@ -16,19 +16,17 @@ import (
 )
 
 const (
-	messageEnablePhrase    = "issue-41-external-sigkill-only"
-	workflowEnablePhrase   = "issue-37-external-sigkill-only"
-	resolutionEnablePhrase = "issue-47-external-sigkill-only"
+	messageEnablePhrase  = "issue-41-external-sigkill-only"
+	workflowEnablePhrase = "issue-37-external-sigkill-only"
 )
 
 type Barrier struct {
-	Point     string
-	Sequence  int64
-	JobID     string
-	MessageID string
-	Dir       string
-	Wait      time.Duration
-	Lease     time.Duration
+	Point    string
+	Sequence int64
+	JobID    string
+	Dir      string
+	Wait     time.Duration
+	Lease    time.Duration
 }
 
 func FromEnv() (spine.FaultBarrier, error) {
@@ -38,15 +36,12 @@ func FromEnv() (spine.FaultBarrier, error) {
 	}
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierNativeActive
 	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCommitCreated || point == spine.BarrierCheckExited
-	resolutionPoint := point == "before-resolution-receipt" || point == "after-resolution-receipt" || point == "after-resolution-wake"
-	if !messagePoint && !workflowPoint && !resolutionPoint {
+	if !messagePoint && !workflowPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
 	phrase := workflowEnablePhrase
 	if messagePoint {
 		phrase = messageEnablePhrase
-	} else if resolutionPoint {
-		phrase = resolutionEnablePhrase
 	}
 	if os.Getenv("DORF_PROOF_FAULT_BARRIER_ENABLE") != phrase {
 		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER requires the exact proof-only enable phrase %q", phrase)
@@ -62,13 +57,6 @@ func FromEnv() (spine.FaultBarrier, error) {
 	} else if jobID == "" {
 		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_JOB is required for repository proof boundaries")
 	}
-	messageID := ""
-	if resolutionPoint {
-		messageID = strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_MESSAGE"))
-		if messageID == "" {
-			return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_MESSAGE is required for resolution proof boundaries")
-		}
-	}
 	dir := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_DIR"))
 	if dir == "" {
 		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER_DIR is required in proof mode")
@@ -77,45 +65,7 @@ func FromEnv() (spine.FaultBarrier, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Barrier{Point: point, Sequence: sequence, JobID: jobID, MessageID: messageID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
-}
-
-func (b Barrier) ReachResolution(ctx context.Context, point string, resolution spine.MessageResolution) error {
-	if point != b.Point || resolution.JobID != b.JobID || resolution.MessageID != b.MessageID {
-		return nil
-	}
-	if b.Wait <= 0 || b.Wait > 30*time.Second {
-		return fmt.Errorf("unsafe proof barrier timing")
-	}
-	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
-		return err
-	}
-	base := fmt.Sprintf("%s-%s-%s", resolution.JobID, resolution.MessageID, point)
-	ready := filepath.Join(b.Dir, base+".ready")
-	release := filepath.Join(b.Dir, base+".release")
-	payload := fmt.Sprintf("job=%s\nmessage=%s\nreceipt=%s\nwake=%d\npoint=%s\n", resolution.JobID, resolution.MessageID, resolution.ID, resolution.ReservedWakeSequence, point)
-	if recovered, err := recoverReady(ready, payload); err != nil {
-		return err
-	} else if recovered {
-		return nil
-	}
-	if err := os.WriteFile(ready, []byte(payload), 0o600); err != nil {
-		return err
-	}
-	deadline := time.Now().Add(b.Wait)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(release); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("proof barrier %s timed out; SIGKILL was not observed", point)
+	return Barrier{Point: point, Sequence: sequence, JobID: jobID, Dir: dir, Wait: 8 * time.Second, Lease: 10 * time.Second}, nil
 }
 
 func (b Barrier) ReachWorkflow(ctx context.Context, point, jobID, identity string) error {

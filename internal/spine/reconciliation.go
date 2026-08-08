@@ -45,3 +45,18 @@ func classifyTurn(turn NativeTurn) Reconciliation {
 	}
 	return Reconciliation{Classification: "uncertain", Turn: turn, Reason: fmt.Sprintf("native turn %s has unsupported status %q", turn.ID, turn.Status)}
 }
+
+func ReconcileSteer(clientMessageID, targetTurnID string, turns []NativeTurn) Reconciliation {
+	for _, turn := range turns {
+		if turn.ID != targetTurnID {
+			continue
+		}
+		for _, accepted := range turn.AcceptedMessageIDs {
+			if accepted == clientMessageID {
+				return Reconciliation{Classification: "completed", Turn: turn}
+			}
+		}
+		return Reconciliation{Classification: "no-submit", Turn: turn}
+	}
+	return Reconciliation{Classification: "uncertain", Reason: fmt.Sprintf("steer target native turn %s is missing from Session history", targetTurnID)}
+}

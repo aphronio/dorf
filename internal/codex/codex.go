@@ -190,6 +190,18 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID,
 	return outcome, err
 }
 
+func (a Agent) SteerTurn(ctx context.Context, sandboxName, sessionID, turnID, agentRunID, input string) (string, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	var acceptedTurnID string
+	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+		var err error
+		acceptedTurnID, err = protocol.steerTurn(ctx, sessionID, turnID, agentRunID, input)
+		return err
+	})
+	return acceptedTurnID, err
+}
+
 func (a Agent) WaitTurn(ctx context.Context, sandboxName, workspace, sessionID, turnID string) (TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
@@ -735,7 +747,16 @@ func parseTurn(turn map[string]any) TurnOutcome {
 	items, _ := turn["items"].([]any)
 	for _, value := range items {
 		item, ok := value.(map[string]any)
-		if !ok || item["type"] != "agentMessage" {
+		if !ok {
+			continue
+		}
+		if item["type"] == "userMessage" {
+			if clientID := stringValue(item["clientId"]); clientID != "" {
+				outcome.AcceptedMessageIDs = append(outcome.AcceptedMessageIDs, clientID)
+			}
+			continue
+		}
+		if item["type"] != "agentMessage" {
 			continue
 		}
 		if text, ok := item["text"].(string); ok && text != "" {
@@ -804,24 +825,38 @@ func (p *protocol) startTurn(ctx context.Context, sessionID, workspace, agentRun
 	return outcome, nil
 }
 
+func (p *protocol) steerTurn(ctx context.Context, sessionID, turnID, agentRunID, input string) (string, error) {
+	if err := p.resumeThread(ctx, sessionID); err != nil {
+		return "", err
+	}
+	result, err := p.call(ctx, "turn/steer", map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": agentRunID, "input": []map[string]string{{"type": "text", "text": input}}})
+	if err != nil {
+		return "", err
+	}
+	acceptedTurnID := stringValue(result["turnId"])
+	if acceptedTurnID == "" || acceptedTurnID != turnID {
+		return "", fmt.Errorf("turn/steer response did not acknowledge the exact active turn")
+	}
+	return acceptedTurnID, nil
+}
+
 func (p *protocol) pollTurn(ctx context.Context, sessionID, turnID string, outcome *TurnOutcome) error {
-	for {
-		turns, err := p.readTurns(ctx, sessionID)
-		if err != nil {
-			return err
-		}
-		for _, turn := range turns {
-			if turn.ID == turnID && terminal(turn.Status) {
-				*outcome = turn
-				return nil
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Second):
+	}
+	turns, err := p.readTurns(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, turn := range turns {
+		if turn.ID == turnID {
+			*outcome = turn
+			return nil
 		}
 	}
+	return fmt.Errorf("bound native turn %s is missing from Session history", turnID)
 }
 
 func (p *protocol) call(ctx context.Context, method string, params any) (map[string]any, error) {

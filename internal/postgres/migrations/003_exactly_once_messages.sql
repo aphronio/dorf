@@ -9,7 +9,11 @@ create table if not exists dorf.job_messages (
     caller_id text not null check (length(trim(caller_id)) > 0),
     sequence bigint not null check (sequence > 0),
     input text not null check (length(trim(input)) > 0),
+    delivery_intent text not null default 'follow' check (delivery_intent in ('follow','steer')),
+    steer_target_turn_id text,
     admitted_at timestamptz not null default clock_timestamp(),
+    check ((delivery_intent='follow' and steer_target_turn_id is null) or
+           (delivery_intent='steer' and steer_target_turn_id is not null)),
     unique (job_id, caller_id),
     unique (job_id, sequence)
 );
@@ -38,6 +42,7 @@ create unique index if not exists actions_one_message_effect
     on dorf.actions(message_id, kind) where message_id is not null;
 
 alter table dorf.agent_runs drop constraint if exists agent_runs_job_id_key;
+alter table dorf.agent_runs drop constraint if exists agent_runs_native_turn_id_key;
 alter table dorf.agent_runs alter column native_turn_id drop not null;
 alter table dorf.agent_runs alter column native_outcome drop not null;
 alter table dorf.agent_runs add column if not exists message_id text references dorf.job_messages(id);
@@ -73,5 +78,5 @@ alter table dorf.actions drop constraint if exists actions_turn_message_check;
 alter table dorf.actions add constraint actions_turn_message_check
     check ((kind = 'codex-turn-start') = (message_id is not null));
 
-comment on table dorf.job_messages is 'Immutable Dorf-owned client input and per-Job FIFO position';
-comment on table dorf.agent_runs is 'Per-input native binding and delivery truth only; Codex owns transcript and context';
+comment on table dorf.job_messages is 'Immutable Dorf-owned client input, explicit harness delivery intent, and per-Job FIFO position';
+comment on table dorf.agent_runs is 'Per-input harness acceptance binding and native outcome evidence only; Codex owns transcript and context';

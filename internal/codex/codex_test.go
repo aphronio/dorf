@@ -390,6 +390,48 @@ func TestPersistedThreadRejectsTurnStartUntilResumeWithoutLeakingNativeDetail(t 
 	}
 }
 
+func TestSteerUsesExactActiveTurnAndStableClientMessageIdentity(t *testing.T) {
+	const sessionID = "session-steer-1"
+	const turnID = "turn-active-1"
+	const clientMessageID = "agent-run-steer-1"
+	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+		switch method {
+		case "initialize":
+			return map[string]any{}, false
+		case "thread/resume":
+			return map[string]any{"thread": map[string]any{"id": sessionID}}, params["threadId"] != sessionID
+		case "turn/steer":
+			return map[string]any{"turnId": turnID}, false
+		default:
+			return nil, true
+		}
+	})
+	defer server.Close()
+	p := dialTestProtocol(t, server)
+
+	accepted, err := p.steerTurn(context.Background(), sessionID, turnID, clientMessageID, "correct the active work")
+	if err != nil || accepted != turnID {
+		t.Fatalf("accepted turn=%q err=%v", accepted, err)
+	}
+	for _, want := range []string{"initialize", "initialized", "thread/resume"} {
+		if got := (<-requests)["method"]; got != want {
+			t.Fatalf("method=%v want=%s", got, want)
+		}
+	}
+	request := <-requests
+	if request["method"] != "turn/steer" {
+		t.Fatalf("method=%v want=turn/steer", request["method"])
+	}
+	params := request["params"].(map[string]any)
+	if params["threadId"] != sessionID || params["expectedTurnId"] != turnID || params["clientUserMessageId"] != clientMessageID {
+		t.Fatalf("steer identity params=%#v", params)
+	}
+	input, ok := params["input"].([]any)
+	if !ok || len(input) != 1 || input[0].(map[string]any)["type"] != "text" || input[0].(map[string]any)["text"] != "correct the active work" {
+		t.Fatalf("steer input=%#v", params["input"])
+	}
+}
+
 func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) {
 	const sessionID = "session-persisted-1"
 	var loaded atomic.Bool
@@ -432,14 +474,14 @@ func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(turns) != 1 || turns[0] != (TurnOutcome{ID: "turn-prior", Status: "completed"}) {
+	if len(turns) != 1 || !reflect.DeepEqual(turns[0], TurnOutcome{ID: "turn-prior", Status: "completed"}) {
 		t.Fatalf("turns=%#v", turns)
 	}
 	outcome, err := p.resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", "agent-run-stable-2", "next input", "gpt-5.6-sol", "high", "danger-full-access")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != (TurnOutcome{ID: "turn-native-2", Status: "running"}) || acceptedStarts.Load() != 1 {
+	if !reflect.DeepEqual(outcome, TurnOutcome{ID: "turn-native-2", Status: "running"}) || acceptedStarts.Load() != 1 {
 		t.Fatalf("outcome=%#v accepted starts=%d", outcome, acceptedStarts.Load())
 	}
 
@@ -561,7 +603,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	if err := secondConnection.connection.CloseNow(); err != nil {
 		t.Fatal(err)
 	}
-	if sessionID != "session-empty-2" || turn != (TurnOutcome{ID: "turn-native-1", Status: "running"}) {
+	if sessionID != "session-empty-2" || !reflect.DeepEqual(turn, TurnOutcome{ID: "turn-native-1", Status: "running"}) {
 		t.Fatalf("accepted binding session=%s turn=%#v", sessionID, turn)
 	}
 
@@ -572,7 +614,7 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recoveredSession != sessionID || recoveredTurn != (TurnOutcome{ID: "turn-native-1", Status: "inProgress"}) {
+	if recoveredSession != sessionID || !reflect.DeepEqual(recoveredTurn, TurnOutcome{ID: "turn-native-1", Status: "inProgress"}) {
 		t.Fatalf("recovered binding session=%s turn=%#v", recoveredSession, recoveredTurn)
 	}
 	if threadStarts.Load() != 2 || turnStarts.Load() != 1 {
@@ -645,7 +687,7 @@ func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyNativeOutcome(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != (TurnOutcome{ID: "turn-native-1", Status: "running"}) {
+	if !reflect.DeepEqual(outcome, TurnOutcome{ID: "turn-native-1", Status: "running"}) {
 		t.Fatalf("outcome=%#v", outcome)
 	}
 	<-requests // initialize

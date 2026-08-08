@@ -50,6 +50,7 @@ type NewMessage struct {
 	JobID    string
 	CallerID string
 	Input    string
+	Intent   spine.MessageDeliveryIntent
 }
 
 type ActionView struct {
@@ -107,7 +108,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_resolution.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -245,6 +246,9 @@ func (s Store) admitMessage(ctx context.Context, input NewMessage, allowSetupRet
 func normalizeMessage(input NewMessage, allowSetupRetry bool) (NewMessage, error) {
 	input.JobID = strings.TrimSpace(input.JobID)
 	input.CallerID = strings.TrimSpace(input.CallerID)
+	if input.Intent == "" {
+		input.Intent = spine.MessageFollow
+	}
 	if input.JobID == "" || input.CallerID == "" || strings.TrimSpace(input.Input) == "" {
 		return NewMessage{}, fmt.Errorf("message admission requires Job ID, caller ID, and complete input")
 	}
@@ -253,6 +257,12 @@ func normalizeMessage(input NewMessage, allowSetupRetry bool) (NewMessage, error
 	}
 	if allowSetupRetry && !strings.HasPrefix(input.CallerID, "dorf:setup-retry:") {
 		return NewMessage{}, fmt.Errorf("internal setup retry caller ID is invalid")
+	}
+	if input.Intent != spine.MessageFollow && input.Intent != spine.MessageSteer {
+		return NewMessage{}, fmt.Errorf("message intent must be follow or steer")
+	}
+	if allowSetupRetry && input.Intent != spine.MessageFollow {
+		return NewMessage{}, fmt.Errorf("internal setup retry must use follow delivery")
 	}
 	if len(input.Input) > 1<<20 {
 		return NewMessage{}, fmt.Errorf("message input exceeds 1 MiB")
@@ -270,10 +280,10 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 		return spine.Message{}, false, err
 	}
 	var message spine.Message
-	err := tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, input.JobID, input.CallerID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input)
+	err := tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input,delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where job_id=$1 and caller_id=$2`, input.JobID, input.CallerID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input, &message.Intent, &message.TargetTurnID)
 	if err == nil {
-		if message.Input != input.Input {
-			return spine.Message{}, false, fmt.Errorf("caller ID %q is already bound to different complete message input", input.CallerID)
+		if message.Input != input.Input || message.Intent != input.Intent {
+			return spine.Message{}, false, fmt.Errorf("caller ID %q is already bound to different complete message input or delivery intent", input.CallerID)
 		}
 		return message, false, nil
 	}
@@ -286,23 +296,58 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if workflowPhase != "setup" && workflowPhase != "implementing" {
 		return spine.Message{}, false, fmt.Errorf("Job %s no longer accepts implementation steering after its first Revision; deterministic Check repair is workflow-owned", input.JobID)
 	}
-	message.Sequence, err = allocateWakeSequenceTx(ctx, tx, input.JobID)
+	role, sessionID := "implement", ""
+	if input.Intent == spine.MessageSteer {
+		if err := tx.QueryRowContext(ctx, `select ar.native_turn_id,ar.session_id,ar.role from dorf.agent_runs ar where ar.job_id=$1 and ar.state='active' and ar.native_turn_id is not null and ar.role in ('implement','repair') order by ar.started_at,ar.id limit 1`, input.JobID).Scan(&message.TargetTurnID, &sessionID, &role); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular native turn")
+			}
+			return spine.Message{}, false, err
+		}
+	}
+	message.Sequence, err = allocateMessageSequenceTx(ctx, tx, input.JobID)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
 	message.ID = spine.MessageID(input.JobID, input.CallerID)
-	message.JobID, message.CallerID, message.Input = input.JobID, input.CallerID, input.Input
-	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, message.JobID, message.CallerID, message.Sequence, message.Input); err != nil {
+	message.JobID, message.CallerID, message.Input, message.Intent = input.JobID, input.CallerID, input.Input, input.Intent
+	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input,delivery_intent,steer_target_turn_id) values($1,$2,$3,$4,$5,$6,nullif($7,''))`, message.ID, message.JobID, message.CallerID, message.Sequence, message.Input, message.Intent, message.TargetTurnID); err != nil {
 		return spine.Message{}, false, err
 	}
 	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
 	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, message.JobID, message.ID, spine.ActionTurnStart); err != nil {
 		return spine.Message{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending')`, runID, message.JobID, message.ID, actionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,nullif($5,''),$6,'pending')`, runID, message.JobID, message.ID, actionID, sessionID, role); err != nil {
 		return spine.Message{}, false, err
 	}
 	return message, true, nil
+}
+
+func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (int64, error) {
+	var sequence int64
+	err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, jobID).Scan(&sequence)
+	return sequence, err
+}
+
+func ensureInputsTerminalForWorkflowTx(ctx context.Context, tx *sql.Tx, jobID string) error {
+	var sequence int64
+	var state, reason string
+	err := tx.QueryRowContext(ctx, `
+		select m.sequence,coalesce(ar.state,''),coalesce(ar.attention,'')
+		from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id
+		where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))
+		order by m.sequence limit 1`, jobID).Scan(&sequence, &state, &reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		state += ": " + reason
+	}
+	return fmt.Errorf("FIFO sequence %d has not reached a terminal harness delivery (%s)", sequence, state)
 }
 
 func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
@@ -632,10 +677,20 @@ func (s Store) BeginCommit(ctx context.Context, jobID, parent string) (spine.Act
 	}
 	if phase != "committing" {
 		var unsettled int
-		if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id where m.job_id=$1 and not dorf.message_is_settled(ar.state,mr.decision)`, jobID).Scan(&unsettled); err != nil {
+		if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))`, jobID).Scan(&unsettled); err != nil {
 			return spine.Action{}, false, err
 		}
 		if unsettled != 0 {
+			if err := tx.Commit(); err != nil {
+				return spine.Action{}, false, err
+			}
+			return spine.Action{}, false, nil
+		}
+		var latestFollowState string
+		if err := tx.QueryRowContext(ctx, `select ar.state from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and m.delivery_intent='follow' order by m.sequence desc limit 1`, jobID).Scan(&latestFollowState); err != nil {
+			return spine.Action{}, false, err
+		}
+		if latestFollowState != string(spine.AgentRunCompleted) {
 			if err := tx.Commit(); err != nil {
 				return spine.Action{}, false, err
 			}
@@ -874,7 +929,7 @@ func (s Store) AdmitRepair(ctx context.Context, check spine.Check) (spine.Messag
 	}
 	callerID := "dorf:repair:1"
 	var existing spine.Message
-	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input from dorf.job_messages where job_id=$1 and caller_id=$2`, check.JobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input)
+	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input,delivery_intent from dorf.job_messages where job_id=$1 and caller_id=$2`, check.JobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input, &existing.Intent)
 	if err == nil {
 		if err := tx.Commit(); err != nil {
 			return spine.Message{}, false, err
@@ -887,15 +942,15 @@ func (s Store) AdmitRepair(ctx context.Context, check spine.Check) (spine.Messag
 	if repairCount != 0 || phase != "checking" || revision != check.Revision || check.State != "failed" {
 		return spine.Message{}, false, fmt.Errorf("focused repair is not admissible for the current failed Check")
 	}
-	if err := ensureInputsSettledTx(ctx, tx, check.JobID); err != nil {
+	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, check.JobID); err != nil {
 		return spine.Message{}, false, fmt.Errorf("focused repair admission blocked: %w", err)
 	}
-	sequence, err := allocateWakeSequenceTx(ctx, tx, check.JobID)
+	sequence, err := allocateMessageSequenceTx(ctx, tx, check.JobID)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
 	input := fmt.Sprintf("Focused repair: the deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Repair only that failure, keep the bounded change intact, do not create a commit, and return control so Dorf can commit and rerun affected verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
-	message := spine.Message{ID: spine.MessageID(check.JobID, callerID), JobID: check.JobID, CallerID: callerID, Sequence: sequence, Input: input}
+	message := spine.Message{ID: spine.MessageID(check.JobID, callerID), JobID: check.JobID, CallerID: callerID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, message.JobID, message.CallerID, message.Sequence, message.Input); err != nil {
 		return spine.Message{}, false, err
 	}
@@ -1114,13 +1169,29 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	var message spine.Message
 	err = tx.QueryRowContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input,coalesce(m.retry_of_message_id,'')
-		from dorf.job_messages m
-		join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
-		left join dorf.agent_runs ar on ar.message_id=m.id
-		left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id
-		where m.job_id=$1 and not dorf.message_is_settled(ar.state,mr.decision)
-		order by ordering.root_sequence,ordering.retry_depth,m.sequence limit 1`, jobID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input, &message.RetryOfMessageID)
+		with current_follow as (
+			select m.id as message_id,ar.native_turn_id,ar.state
+			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
+			where m.job_id=$1 and m.delivery_intent='follow' and ar.native_turn_id is not null
+			  and ar.state in ('active','uncertain')
+			order by m.sequence limit 1
+		), candidate as (
+			select steer.id as message_id,0 as priority,steer.sequence
+			from current_follow active
+			join dorf.job_messages steer on steer.job_id=$1 and steer.delivery_intent='steer'
+			  and steer.steer_target_turn_id=active.native_turn_id
+			join dorf.agent_runs steer_run on steer_run.message_id=steer.id
+			where active.state='active' and steer_run.native_turn_id is null
+			union all
+			select message_id,1,0 from current_follow
+			union all
+			select m.id,2,m.sequence
+			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
+			where m.job_id=$1 and ar.native_turn_id is null and not exists(select 1 from current_follow)
+		)
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,'')
+		from candidate c join dorf.job_messages m on m.id=c.message_id
+		order by c.priority,c.sequence limit 1`, jobID).Scan(&message.ID, &message.JobID, &message.CallerID, &message.Sequence, &message.Input, &message.Intent, &message.TargetTurnID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1227,6 +1298,22 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 	return tx.Commit()
 }
 
+func (s Store) BindNativeSteer(ctx context.Context, runID, turnID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var actionID string
+	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state='completed',native_outcome=null,attention=null,finished_at=coalesce(finished_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID).Scan(&actionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='steered',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -1237,7 +1324,7 @@ func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
 	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='failed',native_outcome=case when native_turn_id is null then null else 'failed' end,attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='failed',external_outcome=$2,updated_at=clock_timestamp() where id=$1`, actionID, reason); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=case when exists(select 1 from dorf.agent_runs where id=$1 and native_turn_id is null) then 'uncertain' else 'failed' end,external_outcome=$2,updated_at=clock_timestamp() where id=$3`, runID, reason, actionID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1265,16 +1352,12 @@ func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) erro
 
 func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input,coalesce(m.retry_of_message_id,''),
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,''),
 		       coalesce(ar.id,''),coalesce(ar.state,''),coalesce(ar.native_turn_id,''),
 		       coalesce(ar.native_outcome,''),coalesce(ar.attention,''),
-		       coalesce(mr.id,''),coalesce(mr.decision,''),coalesce(mr.authority,''),coalesce(mr.reason,''),
-		       coalesce(mr.reserved_wake_sequence,0),coalesce(mr.retry_message_id,''),coalesce(mr.resolved_at,'epoch'),
-		       dorf.message_is_settled(ar.state,mr.decision)
+		       ar.native_turn_id is not null
 		from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id
-		join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
-		left join dorf.message_resolutions mr on mr.job_id=m.job_id and mr.message_id=m.id
-		where m.job_id=$1 order by ordering.root_sequence,ordering.retry_depth,m.sequence`, jobID)
+		where m.job_id=$1 order by m.sequence`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1282,15 +1365,10 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 	var views []spine.MessageView
 	for rows.Next() {
 		var view spine.MessageView
-		var resolution spine.MessageResolution
-		if err := rows.Scan(&view.ID, &view.JobID, &view.CallerID, &view.Sequence, &view.Input, &view.RetryOfMessageID,
+		if err := rows.Scan(&view.ID, &view.JobID, &view.CallerID, &view.Sequence, &view.Input, &view.Intent, &view.TargetTurnID,
 			&view.AgentRunID, &view.State, &view.NativeTurnID, &view.NativeOutcome, &view.Attention,
-			&resolution.ID, &resolution.Decision, &resolution.Authority, &resolution.Reason, &resolution.ReservedWakeSequence, &resolution.RetryMessageID, &resolution.ResolvedAt, &view.Settled); err != nil {
+			&view.Delivered); err != nil {
 			return nil, err
-		}
-		if resolution.ID != "" {
-			resolution.JobID, resolution.MessageID = view.JobID, view.ID
-			view.Resolution = &resolution
 		}
 		views = append(views, view)
 	}
@@ -1300,14 +1378,14 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 	var blocker *spine.MessageView
 	for i := range views {
 		view := &views[i]
-		if blocker != nil {
+		if blocker != nil && !(view.Intent == spine.MessageSteer && blocker.State == spine.AgentRunActive && view.TargetTurnID == blocker.NativeTurnID) {
 			view.BlockingSeq = blocker.Sequence
 			view.BlockingReason = string(blocker.State)
 			if blocker.Attention != "" {
 				view.BlockingReason += ": " + blocker.Attention
 			}
 		}
-		if blocker == nil && !view.Settled && (view.State == spine.AgentRunFailed || view.State == spine.AgentRunInterrupted || view.State == spine.AgentRunUncertain) {
+		if blocker == nil && ((!view.Delivered && view.State != spine.AgentRunCompleted) || view.Intent == spine.MessageFollow && (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain)) {
 			blocker = view
 		}
 	}
@@ -1317,14 +1395,14 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
 	var delivery spine.Delivery
 	err := s.DB.QueryRowContext(ctx, `
-		select m.id,m.job_id,m.caller_id,m.sequence,m.input,
+		select m.id,m.job_id,m.caller_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,''),
 		       ar.id,ar.job_id,ar.message_id,ar.action_id,coalesce(ar.session_id,''),ar.state,
 		       ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),
 		       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role
 		from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
 		where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
 		order by m.sequence limit 1`, jobID).Scan(
-		&delivery.Message.ID, &delivery.Message.JobID, &delivery.Message.CallerID, &delivery.Message.Sequence, &delivery.Message.Input,
+		&delivery.Message.ID, &delivery.Message.JobID, &delivery.Message.CallerID, &delivery.Message.Sequence, &delivery.Message.Input, &delivery.Message.Intent, &delivery.Message.TargetTurnID,
 		&delivery.AgentRun.ID, &delivery.AgentRun.JobID, &delivery.AgentRun.MessageID, &delivery.AgentRun.ActionID,
 		&delivery.AgentRun.SessionID, &delivery.AgentRun.State, &delivery.AgentRun.BaselineRecorded,
 		&delivery.AgentRun.BaselineTurnID, &delivery.AgentRun.NativeTurnID, &delivery.AgentRun.NativeOutcome,
@@ -1460,29 +1538,17 @@ func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error
 				  and a.scope_key<>'' and a.state in ('pending','uncertain')
 			),
 			(
-				select m.sequence
-				from dorf.job_messages m
-				join dorf.message_delivery_order ordering on ordering.job_id=m.job_id and ordering.message_id=m.id
-				join dorf.agent_runs ar on ar.message_id=m.id
-				where m.job_id=$1 and m.sequence>1 and ar.state='pending'
+				select min(m.sequence)
+				from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
+				where m.job_id=$1 and m.sequence>1 and ar.native_turn_id is null
 				  and not exists (
 					select 1
-					from dorf.job_messages earlier
-					join dorf.message_delivery_order earlier_ordering on earlier_ordering.job_id=earlier.job_id and earlier_ordering.message_id=earlier.id
-					join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
-					left join dorf.message_resolutions earlier_resolution on earlier_resolution.job_id=earlier.job_id and earlier_resolution.message_id=earlier.id
-					where earlier.job_id=m.job_id
-					  and (earlier_ordering.root_sequence,earlier_ordering.retry_depth,earlier.sequence)
-					      < (ordering.root_sequence,ordering.retry_depth,m.sequence)
-					  and not dorf.message_is_settled(earlier_run.state,earlier_resolution.decision)
+					from dorf.job_messages earlier join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
+					where earlier.job_id=m.job_id and earlier.sequence<m.sequence
+					  and (earlier_run.native_turn_id is null or earlier_run.state not in ('completed','failed','interrupted'))
 				  )
-				order by ordering.root_sequence,ordering.retry_depth,m.sequence
-				limit 1
 			),
-			(select greatest(
-				coalesce((select max(sequence) from dorf.job_messages where job_id=$1),0),
-				coalesce((select max(reserved_wake_sequence) from dorf.message_resolutions where job_id=$1),0)
-			)+1)
+			(select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)
 		)`, jobID).Scan(&sequence)
 	return sequence, err
 }

@@ -67,8 +67,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return admit(ctx, store, client, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
-	case "resolve-message":
-		return resolveMessage(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
 	case "setup-retry":
 		return setupRetry(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
@@ -125,7 +123,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 008_message_resolution.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 007_review_policy.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -185,6 +183,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	jobID := set.String("job", "", "existing Job ID")
 	callerID := set.String("id", "", "stable caller message identity")
 	inputFile := set.String("input-file", "", "path containing the complete message input")
+	intent := set.String("intent", string(spine.MessageFollow), "harness delivery intent: follow or steer")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -192,7 +191,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input})
+	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input, Intent: spine.MessageDeliveryIntent(*intent)})
 	if err != nil {
 		return err
 	}
@@ -209,64 +208,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 			break
 		}
 	}
-	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "created": created, "accepted": true, "delivery": delivery, "blocking_sequence": blockingSequence, "blocking_reason": blockingReason})
-}
-
-func resolveMessage(ctx context.Context, store postgres.Store, client *absurd.Client, barrier spine.FaultBarrier, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "diagnose" && args[0] != "resolve" {
-		return fmt.Errorf("resolve-message requires: diagnose --job JOB --message MESSAGE, or resolve --job JOB --message MESSAGE --decision DECISION --authority AUTHORITY --reason-file PATH [--dry-run]")
-	}
-	operation := args[0]
-	set := flag.NewFlagSet("resolve-message "+operation, flag.ContinueOnError)
-	set.SetOutput(stderr)
-	jobID := set.String("job", "", "exact Job ID")
-	messageID := set.String("message", "", "exact admitted message ID")
-	decision := set.String("decision", "", "retry, acknowledge-loss, or abandon")
-	authority := set.String("authority", "", "explicit human/operator authority")
-	reasonFile := set.String("reason-file", "", "regular file containing the complete resolution reason")
-	dryRun := set.Bool("dry-run", false, "validate and render the proposed receipt without mutation or wake emission")
-	if err := set.Parse(args[1:]); err != nil {
-		return err
-	}
-	if set.NArg() != 0 || strings.TrimSpace(*jobID) == "" || strings.TrimSpace(*messageID) == "" {
-		return fmt.Errorf("resolve-message %s requires --job and --message", operation)
-	}
-	if operation == "diagnose" {
-		if *decision != "" || *authority != "" || *reasonFile != "" || *dryRun {
-			return fmt.Errorf("resolve-message diagnose is read-only and accepts only --job and --message")
-		}
-		diagnosis, err := store.DiagnoseMessage(ctx, *jobID, *messageID)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, diagnosis)
-	}
-	reason, err := readInput(*reasonFile, "resolve-message resolve", "reason")
-	if err != nil {
-		return err
-	}
-	input := postgres.MessageResolutionInput{JobID: *jobID, MessageID: *messageID, Decision: spine.MessageResolutionDecision(*decision), Authority: *authority, Reason: reason}
-	if *dryRun {
-		diagnosis, proposed, err := store.PlanMessageResolution(ctx, input)
-		if err != nil {
-			return err
-		}
-		return writeJSON(stdout, map[string]any{"dry_run": true, "diagnosis": diagnosis, "proposed_receipt": proposed, "mutated": false})
-	}
-	var resolutionBarrier workflow.ResolutionFaultBarrier
-	if candidate, ok := barrier.(workflow.ResolutionFaultBarrier); ok {
-		resolutionBarrier = candidate
-	}
-	receipt, created, err := workflow.ResolveMessage(ctx, store, client, input, resolutionBarrier)
-	if err != nil {
-		return err
-	}
-	return writeJSON(stdout, map[string]any{"dry_run": false, "created": created, "receipt": receipt, "wake_event": func() string {
-		if receipt.ReservedWakeSequence == 0 {
-			return ""
-		}
-		return workflow.WakeEvent(receipt.JobID, receipt.ReservedWakeSequence)
-	}()})
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": delivery, "blocking_sequence": blockingSequence, "blocking_reason": blockingReason})
 }
 
 func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -655,10 +597,18 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	case spine.AgentRunActive:
 		detail = "active native turn"
 	case spine.AgentRunCompleted:
-		detail = "terminal: native turn completed"
+		if message.Intent == spine.MessageSteer {
+			detail = "delivered: steer accepted by the active native turn"
+		} else {
+			detail = "terminal: native turn completed"
+		}
 	case spine.AgentRunFailed:
 		if message.NativeTurnID == "" {
-			detail = "terminal locally: delivery ended before any native turn was submitted"
+			if strings.HasPrefix(message.Attention, "cleanup closed") {
+				detail = "cleanup closed this input after history proved no native acceptance"
+			} else {
+				detail = "native delivery was not accepted; the same stable input remains retryable"
+			}
 		} else {
 			detail = "terminal: native turn failed"
 		}
@@ -675,10 +625,7 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	if message.Attention != "" {
 		detail += "; reason: " + message.Attention
 	}
-	if message.Resolution != nil {
-		detail += fmt.Sprintf("; resolved=%s receipt=%s authority=%s wake=%d", message.Resolution.Decision, message.Resolution.ID, message.Resolution.Authority, message.Resolution.ReservedWakeSequence)
-	}
-	if !message.Settled && (message.State == spine.AgentRunFailed || message.State == spine.AgentRunInterrupted || message.State == spine.AgentRunUncertain) {
+	if !message.Delivered && (message.State == spine.AgentRunFailed || message.State == spine.AgentRunInterrupted || message.State == spine.AgentRunUncertain) {
 		detail += "; later FIFO input is blocked"
 	}
 	if message.BlockingSeq > 0 {
@@ -689,7 +636,7 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 			if earlier.Sequence >= message.Sequence {
 				break
 			}
-			if !earlier.Settled {
+			if !earlier.Delivered || earlier.State == spine.AgentRunActive || earlier.State == spine.AgentRunUncertain {
 				return detail + fmt.Sprintf("; waiting behind sequence %d (%s)", earlier.Sequence, queuedState(earlier.State))
 			}
 		}
@@ -697,6 +644,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|resolve-message|setup-retry|worker|inspect|evidence|review|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
