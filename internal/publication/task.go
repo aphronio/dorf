@@ -6,6 +6,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -36,7 +37,7 @@ func Register(client *absurd.Client, service Service) {
 	}, absurd.TaskOptions{DefaultMaxAttempts: postgres.PublicationTaskMaxAttempts}))
 }
 
-func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, jobID, revision string) (Params, string, bool, error) {
+func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, jobID, revision string) (Params, string, bool, error) {
 	var params Params
 	var taskID string
 	var created bool
@@ -50,11 +51,18 @@ func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, 
 			taskID = job.PublicationTaskID
 			return nil
 		}
-		spawned, err := client.Spawn(ctx, TaskName, params, absurd.SpawnOptions{IdempotencyKey: postgres.PublicationTaskKey(job.ID, job.Revision, job.PublicationAttempt)})
+		key := postgres.PublicationTaskKey(job.ID, job.Revision, job.PublicationAttempt)
+		if err := reachScheduleBarrier(ctx, barrier, spine.BarrierPublicationBegin, job.ID, key); err != nil {
+			return err
+		}
+		spawned, err := client.Spawn(ctx, TaskName, params, absurd.SpawnOptions{IdempotencyKey: key})
 		if err != nil {
 			return fmt.Errorf("schedule exact-Revision publication: %w", err)
 		}
 		taskID, created = spawned.TaskID, spawned.Created
+		if err := reachScheduleBarrier(ctx, barrier, spine.BarrierPublicationSpawn, job.ID, spawned.TaskID); err != nil {
+			return err
+		}
 		if err := store.AttachPublicationTask(ctx, job.ID, job.Revision, job.PublicationAttempt, spawned.TaskID); err != nil {
 			if spawned.Created {
 				if cancelErr := client.CancelTask(ctx, config.QueueName, spawned.TaskID); cancelErr != nil {
@@ -69,4 +77,14 @@ func Schedule(ctx context.Context, store postgres.Store, client *absurd.Client, 
 		return params, taskID, created, err
 	}
 	return params, taskID, created, nil
+}
+
+func reachScheduleBarrier(ctx context.Context, barrier any, point, jobID, identity string) error {
+	reacher, ok := barrier.(interface {
+		ReachWorkflow(context.Context, string, string, string) error
+	})
+	if !ok {
+		return nil
+	}
+	return reacher.ReachWorkflow(ctx, point, jobID, identity)
 }

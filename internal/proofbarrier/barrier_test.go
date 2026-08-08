@@ -53,7 +53,7 @@ func TestRepositoryProofBarrierRequiresIssue37PhraseAndExactJob(t *testing.T) {
 }
 
 func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
-	for _, point := range []string{spine.BarrierPushAccepted, spine.BarrierPullRequestAccepted} {
+	for _, point := range []string{spine.BarrierPushAccepted, spine.BarrierPullRequestAccepted, spine.BarrierPublicationBegin, spine.BarrierPublicationSpawn} {
 		t.Run(point, func(t *testing.T) {
 			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
 			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
@@ -68,6 +68,19 @@ func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
 				t.Fatalf("barrier=%v err=%v", barrier, err)
 			}
 		})
+	}
+}
+
+func TestPublicationSchedulingBarrierDoesNotRequireTaskContext(t *testing.T) {
+	dir := t.TempDir()
+	barrier := Barrier{Point: spine.BarrierPublicationBegin, JobID: "job-exact", Dir: dir, Wait: time.Second}
+	identity := "publication:job-exact:revision:0"
+	release := filepath.Join(dir, "job-exact-"+identity+"-"+spine.BarrierPublicationBegin+".release")
+	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := barrier.ReachWorkflow(context.Background(), spine.BarrierPublicationBegin, "job-exact", identity); err != nil {
+		t.Fatalf("scheduling barrier required an Absurd task context: %v", err)
 	}
 }
 

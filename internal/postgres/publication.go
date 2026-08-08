@@ -88,7 +88,11 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		spawn = true
 	case "publishing":
 		if taskID == "" {
-			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication task authority is missing for active attempt %d; refusing to create another task", attempt)
+			// BeginPublication commits before Absurd Spawn/Attach. An empty
+			// attachment is the recoverable same-attempt scheduling window;
+			// the deterministic Absurd key decides create versus adopt.
+			spawn = true
+			break
 		}
 		task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
 		if err != nil {

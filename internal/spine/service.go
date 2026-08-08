@@ -88,6 +88,8 @@ const (
 	BarrierCheckExited           = "check-exited-before-record"
 	BarrierPushAccepted          = "push-accepted-before-record"
 	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
+	BarrierPublicationBegin      = "publication-begin-committed-before-spawn"
+	BarrierPublicationSpawn      = "publication-task-spawned-before-attach"
 )
 
 type RunDisposition string

@@ -82,7 +82,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "review":
 		return reviewCommand(ctx, store, service, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "publication":
-		return publicationCommand(ctx, store, client, args[1:], stdout, stderr)
+		return publicationCommand(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
 	default:
 		_ = service
 		return usage(stderr)
@@ -559,7 +559,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled, "synchronous": *now})
 }
 
-func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("publication requires: bind JOB_ID --github-repo OWNER/REPO --github-installation ID --base BRANCH, or publish JOB_ID --revision EXACT_OID")
 	}
@@ -590,7 +590,7 @@ func publicationCommand(ctx context.Context, store postgres.Store, client *absur
 		if !postgres.ValidRevision(*revision) {
 			return fmt.Errorf("publication publish requires one Job ID and --revision with a lowercase full commit OID")
 		}
-		params, taskID, created, err := publication.Schedule(ctx, store, client, jobID, *revision)
+		params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
 		if err != nil {
 			return err
 		}
