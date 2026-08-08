@@ -467,6 +467,25 @@ func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewR
 	return result, nil
 }
 
+// CleanupReviewRuns returns only AgentRuns backed by persisted reviewer
+// resources, including partial rows that cleanup must validate or reject.
+func (s Store) CleanupReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
+	rows, err := s.DB.QueryContext(ctx, reviewRunSelect+` where rr.job_id=$1 order by rr.revision,ar.role`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []spine.ReviewRunView
+	for rows.Next() {
+		run, err := scanReviewRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, spine.ReviewRunView{AgentRun: run})
+	}
+	return result, rows.Err()
+}
+
 func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.ActionKind) (spine.Action, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {

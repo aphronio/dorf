@@ -646,7 +646,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 			return err
 		}
 		if reviewStore, ok := s.Store.(ReviewStore); ok {
-			runs, err := reviewStore.AllReviewRuns(ctx, job.ID)
+			runs, err := reviewStore.CleanupReviewRuns(ctx, job.ID)
 			if err != nil {
 				return err
 			}
@@ -655,8 +655,8 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 				return fmt.Errorf("cleanup cannot reconcile persisted review resources without review externals")
 			}
 			for _, run := range runs {
-				if run.ReviewerSandboxID == "" {
-					return fmt.Errorf("cleanup cannot reconcile review AgentRun %s without its dedicated reviewer Sandbox", run.ID)
+				if run.JobID != job.ID || run.Revision == "" || run.Capability != ReviewReadOnlyCapability || run.ReviewerSandboxID != ReviewSandboxName(run.ID) || len(run.ReviewerOwnerNonce) != 64 {
+					return fmt.Errorf("cleanup cannot reconcile malformed reviewer resource for AgentRun %s", run.ID)
 				}
 				settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 				if !settled {

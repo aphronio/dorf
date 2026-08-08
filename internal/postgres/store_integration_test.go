@@ -566,6 +566,85 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	}
 }
 
+func TestCleanupReviewEnumerationUsesPersistedResourcesAndRetainsHistoricalEvidence(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "cleanup-review-resource-authority")
+	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := store.ActivateReview(ctx, spine.ReviewActivation{JobID: job.ID, Revision: revision, RequestedRoles: []policy.Role{policy.RoleCriticalBoundary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"docs/review.md"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts, record.RequestedRoles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Facts, record.Initial, record.Final = facts, plan, plan
+	if err := store.RecordReviewPolicy(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("recorded review runs=%#v err=%v", recorded, err)
+	}
+
+	historicalRevision := strings.Repeat("e", 40)
+	historicalRunID := spine.ReviewAgentRunID(job.ID, historicalRevision, string(policy.RoleBrowserUI))
+	historicalActionID := spine.ScopedActionID(job.ID, spine.ActionTurnStart, historicalRunID)
+	if _, err := db.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key,external_id) values($1,$2,'codex-turn-start','succeeded',$3,$4)`, historicalActionID, job.ID, historicalRunID, "turn-"+historicalRunID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := db.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,state,role,revision,capability,workspace,input_contract,output_contract,native_turn_id,native_outcome,started_at,finished_at) values($1,$2,$3,'completed',$4,$5,$6,'/historical/review','historical input','historical output',$7,'completed',$8,$8)`, historicalRunID, job.ID, historicalActionID, policy.RoleBrowserUI, historicalRevision, spine.ReviewReadOnlyCapability, "turn-"+historicalRunID, now); err != nil {
+		t.Fatal(err)
+	}
+	historicalEvidence := integrationEvidence(historicalRunID, "review-finding", historicalActionID, "", historicalRevision, "f")
+	historicalEvidence.Provenance = "claim"
+	if _, err := db.ExecContext(ctx, `insert into dorf.evidence(id,job_id,digest,byte_size,media_type,producer,provenance,kind,action_id,revision,started_at,finished_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, historicalEvidence.ID, job.ID, historicalEvidence.Digest, historicalEvidence.ByteSize, historicalEvidence.MediaType, historicalEvidence.Producer, historicalEvidence.Provenance, historicalEvidence.Kind, historicalEvidence.ActionID, historicalEvidence.Revision, historicalEvidence.StartedAt, historicalEvidence.FinishedAt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.agent_runs set claim_evidence_id=$2 where id=$1`, historicalRunID, historicalEvidence.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `insert into dorf.review_findings(run_id,job_id,revision,role,material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication,stale) values($1,$2,$3,$4,true,'historical claim','retained rejected finding','["browser-ui"]'::jsonb,'[]'::jsonb,$5,'rejected',true)`, historicalRunID, job.ID, historicalRevision, policy.RoleBrowserUI, historicalEvidence.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	allRuns, err := store.AllReviewRuns(ctx, job.ID)
+	historicalIndex := slices.IndexFunc(allRuns, func(run spine.ReviewRunView) bool { return run.ID == historicalRunID })
+	if err != nil || len(allRuns) != 2 || historicalIndex < 0 {
+		t.Fatalf("aggregate review runs=%#v err=%v", allRuns, err)
+	}
+	historicalView := allRuns[historicalIndex]
+	if !historicalView.Stale || historicalView.Finding == nil || historicalView.Finding.EvidenceID != historicalEvidence.ID || historicalView.Finding.Adjudication != "rejected" || !historicalView.Finding.Stale {
+		t.Fatalf("historical aggregate hydration=%#v", historicalView)
+	}
+
+	cleanupRuns, err := store.CleanupReviewRuns(ctx, job.ID)
+	if err != nil || len(cleanupRuns) != 1 || cleanupRuns[0].ID != recorded[0].ID || cleanupRuns[0].ReviewerSandboxID == "" || cleanupRuns[0].ReviewerSandboxState != "pending" || cleanupRuns[0].ReviewerRouteState != "pending" {
+		t.Fatalf("cleanup resource authority runs=%#v err=%v", cleanupRuns, err)
+	}
+	historicalRuns, err := store.ReviewRuns(ctx, job.ID, historicalRevision)
+	if err != nil || len(historicalRuns) != 1 || historicalRuns[0].ID != historicalRunID || historicalRuns[0].ReviewerSandboxID != "" || historicalRuns[0].ClaimEvidenceID != historicalEvidence.ID {
+		t.Fatalf("historical inspection runs=%#v err=%v", historicalRuns, err)
+	}
+	evidence, err := store.Evidence(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(evidence, func(record spine.Evidence) bool {
+		return record.ID == historicalEvidence.ID && record.Revision == historicalRevision && record.Provenance == "claim"
+	}) {
+		t.Fatalf("historical review Evidence was not retained: %#v", evidence)
+	}
+}
+
 func TestReviewSubmissionUncertaintyIsAtomicAndExactBindingCanRecover(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
