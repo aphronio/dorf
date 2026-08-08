@@ -185,7 +185,7 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string, atte
 			return err
 		}
 	}
-	proposal := spine.GitHubProposal{JobID: job.ID, Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation, BaseBranch: job.BaseBranch, HeadBranch: job.Branch, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, ObservedRemoteHead: job.Revision, BodyDigest: bodyDigest}
+	proposal := spine.GitHubProposal{JobID: job.ID, Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation, BaseBranch: job.BaseBranch, HeadBranch: job.Branch, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, ObservedRemoteHead: pull.HeadSHA, BodyDigest: bodyDigest}
 	return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 }
 
@@ -239,6 +239,9 @@ func (s Service) reach(ctx context.Context, point, jobID, identity string) error
 func validatePull(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
 	if pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.Number < 1 || pull.URL == "" {
 		return &AttentionError{Reason: "GitHub pull request conflicts with exact repository + head + base identity"}
+	}
+	if pull.HeadSHA != job.Revision {
+		return &AttentionError{Reason: fmt.Sprintf("GitHub pull request head Revision %s conflicts with exact proposed Revision %s", pull.HeadSHA, job.Revision)}
 	}
 	if stored != nil && stored.Number != pull.Number {
 		return &AttentionError{Reason: fmt.Sprintf("recorded pull request #%d conflicts with discovered pull request #%d", stored.Number, pull.Number)}

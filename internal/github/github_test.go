@@ -98,7 +98,7 @@ func TestEachGitHubAuthorityReadAndMutationMintsRepositoryPermissionTogether(t *
 		case request.URL.Path == "/repos/aphronio/dorf/pulls" && request.Method == http.MethodPost:
 			var body map[string]any
 			_ = json.NewDecoder(request.Body).Decode(&body)
-			_, _ = w.Write([]byte(`{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"body","head":{"ref":"dorf/issue-43","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
+			_, _ = w.Write([]byte(`{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"body","head":{"ref":"dorf/issue-43","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
 		default:
 			t.Fatalf("unexpected request %s %s", request.Method, request.URL.String())
 		}
@@ -136,8 +136,8 @@ func TestEachGitHubAuthorityReadAndMutationMintsRepositoryPermissionTogether(t *
 func TestPullRequestLookupRetainsZeroOneAndMultipleExactCandidates(t *testing.T) {
 	for name, payload := range map[string]string{
 		"zero":     `[]`,
-		"one":      `[{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"b","head":{"ref":"dorf/head","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
-		"multiple": `[{"number":7,"html_url":"u7","body":"b","head":{"ref":"dorf/head","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}},{"number":8,"html_url":"u8","body":"b","head":{"ref":"dorf/head","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
+		"one":      `[{"number":7,"html_url":"https://github.com/aphronio/dorf/pull/7","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
+		"multiple": `[{"number":7,"html_url":"u7","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}},{"number":8,"html_url":"u8","body":"b","head":{"ref":"dorf/head","sha":"1111111111111111111111111111111111111111","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(payload)) }))
@@ -147,6 +147,21 @@ func TestPullRequestLookupRetainsZeroOneAndMultipleExactCandidates(t *testing.T)
 			if err != nil || len(pulls) != map[string]int{"zero": 0, "one": 1, "multiple": 2}[name] {
 				t.Fatalf("pulls=%#v err=%v", pulls, err)
 			}
+			if len(pulls) > 0 && pulls[0].HeadSHA != strings.Repeat("1", 40) {
+				t.Fatalf("authoritative head SHA was not retained: %#v", pulls[0])
+			}
 		})
+	}
+}
+
+func TestPullRequestResponseRequiresExactHeadSHA(t *testing.T) {
+	var payload pullPayload
+	payload.Number = 7
+	payload.HTMLURL = "https://github.com/aphronio/dorf/pull/7"
+	payload.Head.Ref = "dorf/head"
+	payload.Head.Repo.FullName = "aphronio/dorf"
+	payload.Base.Ref = "greenfield"
+	if _, err := payload.pullRequest(); err == nil {
+		t.Fatal("pull request without an exact head SHA was accepted")
 	}
 }

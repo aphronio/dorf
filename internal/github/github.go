@@ -41,6 +41,7 @@ type PullRequest struct {
 	URL        string
 	Repository string
 	Head       string
+	HeadSHA    string
 	Base       string
 	Body       string
 }
@@ -184,6 +185,7 @@ type pullPayload struct {
 	Body    string `json:"body"`
 	Head    struct {
 		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
 		Repo struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
@@ -194,10 +196,10 @@ type pullPayload struct {
 }
 
 func (p pullPayload) pullRequest() (PullRequest, error) {
-	if p.Number < 1 || p.HTMLURL == "" || p.Head.Ref == "" || p.Head.Repo.FullName == "" || p.Base.Ref == "" {
+	if p.Number < 1 || p.HTMLURL == "" || p.Head.Ref == "" || !fullOID(p.Head.SHA) || p.Head.Repo.FullName == "" || p.Base.Ref == "" {
 		return PullRequest{}, fmt.Errorf("GitHub pull-request response omitted exact identity")
 	}
-	return PullRequest{Number: p.Number, URL: p.HTMLURL, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, Base: p.Base.Ref, Body: p.Body}, nil
+	return PullRequest{Number: p.Number, URL: p.HTMLURL, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, HeadSHA: p.Head.SHA, Base: p.Base.Ref, Body: p.Body}, nil
 }
 
 func (c Client) mint(ctx context.Context, authority Authority, permission, level string) (string, error) {

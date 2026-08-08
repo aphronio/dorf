@@ -97,8 +97,9 @@ func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T
 }
 
 func TestPullRequestExactIdentityAllowsOneAndRejectsConflicts(t *testing.T) {
-	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield"}
-	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: "aphronio/dorf", Head: "dorf/head", Base: "greenfield", Body: "body"}
+	revision := strings.Repeat("a", 40)
+	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
+	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: "aphronio/dorf", Head: "dorf/head", HeadSHA: revision, Base: "greenfield", Body: "body"}
 	if err := validatePull(job, exact, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -107,9 +108,10 @@ func TestPullRequestExactIdentityAllowsOneAndRejectsConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, conflict := range map[string]githubapi.PullRequest{
-		"repository": {Number: 43, URL: exact.URL, Repository: "other/repo", Head: exact.Head, Base: exact.Base},
-		"head":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: "other", Base: exact.Base},
-		"base":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: exact.Head, Base: "main"},
+		"repository": {Number: 43, URL: exact.URL, Repository: "other/repo", Head: exact.Head, HeadSHA: exact.HeadSHA, Base: exact.Base},
+		"head":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: "other", HeadSHA: exact.HeadSHA, Base: exact.Base},
+		"head SHA":   {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: exact.Head, HeadSHA: strings.Repeat("b", 40), Base: exact.Base},
+		"base":       {Number: 43, URL: exact.URL, Repository: exact.Repository, Head: exact.Head, HeadSHA: exact.HeadSHA, Base: "main"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validatePull(job, conflict, stored); err == nil {
@@ -147,8 +149,8 @@ func TestPushRecoveryAdoptsEqualPushesMissingOrBehindAndBlocksUnsafeHistory(t *t
 }
 
 func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testing.T) {
-	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield"}
-	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, Base: job.BaseBranch, Body: "exact body"}
+	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
+	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
 	if decision, _, err := planPull(job, nil, nil, exact.Body); err != nil || decision != "create" {
 		t.Fatalf("zero decision=%s err=%v", decision, err)
 	}
