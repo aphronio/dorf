@@ -52,6 +52,25 @@ func TestRepositoryProofBarrierRequiresIssue37PhraseAndExactJob(t *testing.T) {
 	}
 }
 
+func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
+	for _, point := range []string{spine.BarrierPushAccepted, spine.BarrierPullRequestAccepted} {
+		t.Run(point, func(t *testing.T) {
+			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", workflowEnablePhrase)
+			if _, err := FromEnv(); err == nil {
+				t.Fatal("older workflow proof phrase enabled publication barrier")
+			}
+			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", publicationEnablePhrase)
+			barrier, err := FromEnv()
+			if err != nil || barrier == nil {
+				t.Fatalf("barrier=%v err=%v", barrier, err)
+			}
+		})
+	}
+}
+
 func TestProofBarrierRecoveryAcceptsOnlyExactBoundedPayload(t *testing.T) {
 	dir := t.TempDir()
 	barrier := Barrier{Point: spine.BarrierCommitCreated, JobID: "job-exact", Dir: dir, Wait: time.Second, Lease: 2 * time.Second}

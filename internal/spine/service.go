@@ -86,6 +86,8 @@ const (
 	BarrierSetupComplete         = "setup-complete-before-record"
 	BarrierCommitCreated         = "commit-created-before-record"
 	BarrierCheckExited           = "check-exited-before-record"
+	BarrierPushAccepted          = "push-accepted-before-record"
+	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
 )
 
 type RunDisposition string
@@ -274,7 +276,7 @@ func (s Service) setup(ctx context.Context, job Job) (RunDisposition, error) {
 func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bool, error) {
 	store := s.Store.(CodingStore)
 	switch job.WorkflowPhase {
-	case "ready":
+	case "ready", "publishing", "publication-blocked", "published":
 		return RunIdle, false, nil
 	case "blocked":
 		return RunBlocked, false, nil

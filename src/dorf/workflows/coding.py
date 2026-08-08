@@ -22,7 +22,6 @@ from dorf.runtime import JobBinding
 from .coding_dossier import (
     acceptance_is_proven,
     build_proof_dossier,
-    render_proof_dossier,
 )
 from .coding_store import CodingCommandRun, CodingJob, CodingStore
 
@@ -95,10 +94,6 @@ class WorkflowFailure(RuntimeError):
         super().__init__(messages[-1].text if messages else kind)
 
 
-class PrPublicationFailed(WorkflowFailure):
-    pass
-
-
 class CommandInterrupted(RuntimeError):
     """A retained PR follow-up turn was interrupted."""
 
@@ -160,7 +155,7 @@ class GitPublicationRepairError(RuntimeError):
 
 
 class CodingWorkflow:
-    """Coordinate one coding Job through verification and PR publication."""
+    """Retained Python verification and linked-PR feedback/outcome consumption."""
 
     def __init__(
         self,
@@ -375,104 +370,6 @@ class CodingWorkflow:
             messages,
         )
 
-    def publish(self) -> WorkflowOutcome:
-        """Create or update the Job PR and persist its identity."""
-        if self.job.status not in {"ready", "needs-human"}:
-            self._fail(f"CodingJob cannot be published: {self.job.job_name} ({self.job.status})")
-        number, url, draft = self._publish_job_pr(self.job)
-        self.store.record_github_pr(self.job.job_name, number, url)
-        prefix = "Published draft GitHub PR" if draft else "Published GitHub PR"
-        self._emit(f"{prefix} #{number}: {url}")
-        return self._outcome()
-
-    def _publish_job_pr(self, job: CodingJob) -> tuple[int, str, bool]:
-        repo_full_name = job.metadata.get("github_repo")
-        if not repo_full_name:
-            self._fail(
-                "Could not create GitHub PR: Job metadata is missing github_repo.",
-                kind="publication",
-            )
-
-        draft = job.status == "needs-human"
-        try:
-            client = self._github_client()
-            existing_number = job.github_pr_number
-            existing_url = job.github_pr_url
-            if existing_number is None:
-                existing_prs = client.list_pull_requests_for_branch(
-                    repo_full_name,
-                    job.job_branch,
-                    state="open",
-                )
-                if existing_prs:
-                    existing = github_pr_from_payload(existing_prs[0])
-                    if existing is None:
-                        self._fail(
-                            "Could not create GitHub PR: existing PR response did not "
-                            "include number and html_url",
-                            kind="publication",
-                        )
-                    existing_number, existing_url = existing
-
-            if existing_number is None:
-                payload = client.create_pull_request(
-                    repo_full_name,
-                    title=github_pr_title(job),
-                    body=github_pr_body(job),
-                    head=job.job_branch,
-                    base=job.target_branch,
-                    draft=draft,
-                )
-            else:
-                payload = client.update_pull_request(
-                    repo_full_name,
-                    existing_number,
-                    title=github_pr_title(job),
-                    body=github_pr_body(job),
-                    base=job.target_branch,
-                )
-                if draft:
-                    client.mark_pull_request_draft(repo_full_name, existing_number)
-                else:
-                    client.mark_pull_request_ready(repo_full_name, existing_number)
-                if existing_url and "html_url" not in payload:
-                    payload["html_url"] = existing_url
-            pr = github_pr_from_payload(payload)
-            if pr is None:
-                self._fail(
-                    "Could not create GitHub PR: response did not include number and html_url",
-                    kind="publication",
-                )
-            client.add_pull_request_comment(
-                repo_full_name,
-                pr[0],
-                github_pr_verification_comment(self.store, job),
-            )
-        except WorkflowFailure:
-            raise
-        except GitHubAppConfigError as error:
-            self._fail(
-                f"github: not configured ({error})",
-                kind="publication",
-            )
-        except (GitHubAppVerificationError, GitHubRepositoryError) as error:
-            self._fail(
-                f"Could not create GitHub PR: {error}",
-                kind="publication",
-            )
-        return pr[0], pr[1], draft
-
-    def _publish_verified(self, job: CodingJob) -> None:
-        try:
-            number, url, _draft = self._publish_job_pr(job)
-        except WorkflowFailure as error:
-            raise PrPublicationFailed(
-                error.exit_code,
-                error.messages,
-                kind="publication",
-            ) from error
-        self.store.record_github_pr(job.job_name, number, url)
-
     def _require_execution(self) -> None:
         if self.execution is None:
             self._fail(
@@ -547,13 +444,12 @@ class CodingWorkflow:
         self._emit(f"CodingJob ready: {self.job.job_name}")
         return self._outcome()
 
-    def _mark_needs_human_and_publish(self) -> None:
+    def _mark_needs_human(self) -> None:
         self.store.update_status(self.job.job_name, "needs-human")
         job = self.store.get_coding_job(self.job.job_name)
         if job is None:
             self._fail(f"CodingJob not found: {self.job.job_name}")
         self.job = job
-        self._publish_verified(job)
 
     def _finish_verified(self, commit_sha: str) -> WorkflowOutcome:
         checklist = self.store.get_acceptance_checklist(self.job.job_name)
@@ -566,7 +462,7 @@ class CodingWorkflow:
             )
             self.store.set_metadata_value(self.job.job_name, "proof_commit", commit_sha)
             if not acceptance_is_proven(dossier):
-                self._mark_needs_human_and_publish()
+                self._mark_needs_human()
                 self._fail(
                     f"Verify stopped for {self.job.job_name}: acceptance remains "
                     f"unproven at {commit_sha}.",
@@ -577,7 +473,6 @@ class CodingWorkflow:
         if job is None:
             self._fail(f"CodingJob not found: {self.job.job_name}")
         self.job = job
-        self._publish_verified(job)
         self._emit(f"Verify passed for {self.job.job_name}")
         return self._outcome()
 
@@ -586,13 +481,13 @@ class CodingWorkflow:
         *,
         continue_guard: Callable[[], None] | None = None,
     ) -> WorkflowOutcome:
-        """Finalize retained deterministic proof before publication."""
+        """Finalize retained deterministic proof without publishing a pull request."""
         if self.store.get_acceptance_checklist(self.job.job_name) is not None:
             self.store.freeze_acceptance_checklist(self.job.job_name)
 
         recovered = self._unsettled_turn()
         if recovered is not None and recovered.exit_code != 0:
-            self._mark_needs_human_and_publish()
+            self._mark_needs_human()
             self._fail(
                 f"Verify found unrecovered Job turn {recovered.id}: {recovered.status}.",
                 exit_code=recovered.exit_code or 1,
@@ -1037,9 +932,7 @@ class CodingWorkflow:
                 if current is None:
                     self._fail(f"CodingJob not found: {self.job.job_name}")
                 self.job = current
-            self._set_afk_progress("publishing", f"retrying {outcome} PR publication")
-            self._publish_verified(self.job)
-            self._set_afk_progress(outcome, f"{outcome} PR published")
+            self._set_afk_progress(outcome, f"{outcome} outcome retained")
             implementation = self._implementation_turn()
             failure_code = implementation.exit_code or 1 if implementation else 1
             self.store.finish_command_run(
@@ -1079,12 +972,11 @@ class CodingWorkflow:
             exit_code = implementation.exit_code or 1
             outcome = f"implementation {implementation.status} (exit {exit_code})"
             self.store.update_status(self.job.job_name, "needs-human")
-            self._set_afk_progress("publishing", f"{outcome}; PR publication pending")
+            self._set_afk_progress("needs-human", outcome)
             failed = self.store.get_coding_job(self.job.job_name)
             if failed is None:
                 self._fail(f"CodingJob not found: {self.job.job_name}")
             self.job = failed
-            self._publish_verified(failed)
             self._set_afk_progress("needs-human", outcome)
             self.store.finish_command_run(afk_run.id, "failed", exit_code)
             self.store.finish_afk_coordinator(target_repo, issue_number, owner_token, "needs-human")
@@ -1098,28 +990,8 @@ class CodingWorkflow:
         self._emit(f"Implementation succeeded for {self.job.job_name}; starting verify")
         try:
             self.verify(continue_guard=ownership_guard)
-        except PrPublicationFailed:
-            current = self.store.get_coding_job(self.job.job_name)
-            if current is not None:
-                self.job = current
-                self._set_afk_progress(
-                    "publishing",
-                    f"{current.status} outcome; PR publication pending",
-                )
-            raise
         except WorkflowFailure as error:
             current = self.store.get_coding_job(self.job.job_name)
-            if (
-                current is not None
-                and current.status in {"ready", "needs-human"}
-                and current.github_pr_number is None
-            ):
-                self.job = current
-                self._set_afk_progress(
-                    "publishing",
-                    f"{current.status} outcome; PR publication pending",
-                )
-                raise
             self._set_afk_progress("needs-human", "verify requires human")
             self.store.finish_command_run(afk_run.id, "failed", error.exit_code or 1)
             self.store.finish_afk_coordinator(target_repo, issue_number, owner_token, "needs-human")
@@ -1128,10 +1000,9 @@ class CodingWorkflow:
                 current = self.store.get_coding_job(self.job.job_name)
                 if current is not None:
                     self.job = current
-                    self._publish_verified(current)
             raise
 
-        self._set_afk_progress("ready", "verify passed and PR published")
+        self._set_afk_progress("ready", "verify passed")
         self.store.finish_command_run(afk_run.id, "succeeded", 0)
         self.store.finish_afk_coordinator(target_repo, issue_number, owner_token, "ready")
         self._emit(f"AFK complete for {self.job.job_name}")
@@ -1408,45 +1279,6 @@ def git_object_missing(result: subprocess.CompletedProcess[str]) -> bool:
     )
 
 
-def publish_job_head_if_ahead(
-    environment: CodingEnvironment,
-    job: CodingJob,
-    binding: JobBinding,
-    *,
-    local_head: str,
-    remote_head: str,
-) -> bool:
-    if not job_head_is_ahead(environment, binding, remote_head=remote_head):
-        return False
-
-    refspec = f"HEAD:refs/heads/{job.job_branch}"
-    credentials_refreshed = False
-    push = git_output(environment, binding, "push", "origin", refspec)
-    if push.returncode != 0 and git_auth_failed(push):
-        try:
-            environment.refresh_git_credentials()
-        except RuntimeError as error:
-            raise GitPublicationRepairError(str(error)) from error
-        credentials_refreshed = True
-        push = git_output(environment, binding, "push", "origin", refspec)
-    if push.returncode != 0:
-        retry_context = " after refreshing Git credentials" if credentials_refreshed else ""
-        raise GitPublicationRepairError(
-            f"could not publish Job HEAD{retry_context}: {git_command_message(push)}"
-        )
-
-    current_head = git_output(environment, binding, "rev-parse", "HEAD")
-    if current_head.returncode != 0:
-        raise GitPublicationRepairError(
-            f"could not confirm Job HEAD after publication: {git_command_message(current_head)}"
-        )
-    if current_head.stdout.strip() != local_head:
-        raise GitPublicationRepairError(
-            "Job HEAD changed while publishing the Job branch; rerun verification"
-        )
-    return True
-
-
 def job_head_is_ahead(
     environment: CodingEnvironment,
     binding: JobBinding,
@@ -1495,101 +1327,3 @@ def github_remote_head(
         ), None
     except (GitHubAppConfigError, GitHubAppVerificationError, GitHubRepositoryError) as error:
         return None, str(error)
-
-
-def github_pr_verification_comment(store: CodingStore, job: CodingJob) -> str:
-    checklist = store.get_acceptance_checklist(job.job_name)
-    binding = store.get_job_binding(job.job_name)
-    if checklist is not None and binding is not None:
-        return render_proof_dossier(
-            build_proof_dossier(
-                store,
-                job,
-                binding,
-                commit_sha=proof_dossier_commit(store, job),
-            )
-        )
-    runs = store.list_command_runs(job.job_name)
-    failing_runs = [run for run in runs if run.exit_code not in {0, None}]
-    fix_runs = [run for run in runs if run.kind == "verify:fix"]
-    check_runs = [run for run in runs if run.kind == "check"]
-    commit = next(
-        (
-            run.git_commit_after or run.git_commit_before
-            for run in runs
-            if run.git_commit_after or run.git_commit_before
-        ),
-        job.target_start_sha,
-    )
-    lines = [
-        "Dorf verification",
-        f"Status: {job.status}",
-        f"Branch: {job.job_branch}",
-        f"Commit: {commit}",
-        f"Checks: {format_run_summary(check_runs)}",
-        f"Readiness result: {'passed' if job.status == 'ready' else 'needs human'}",
-    ]
-    if job.status == "needs-human":
-        lines.extend(
-            [
-                "Failure reason: Job needs human review",
-                "Last failing run IDs: "
-                + (", ".join(str(run.id) for run in failing_runs[:5]) or "unknown"),
-                f"Gate-fix attempts used: {len(fix_runs)}",
-                "Inspection commands:",
-            ]
-        )
-        if failing_runs:
-            lines.extend(f"- dorf show-run {job.job_name} {run.id}" for run in failing_runs[:5])
-        else:
-            lines.append(f"- dorf runs {job.job_name}")
-    return "\n".join(lines)
-
-
-def proof_dossier_commit(store: CodingStore, job: CodingJob) -> str:
-    if commit := job.metadata.get("proof_commit"):
-        return commit
-    for run in store.list_command_runs(job.job_name):
-        if run.git_commit_before == run.git_commit_after and run.git_commit_after:
-            return run.git_commit_after
-    return job.target_start_sha
-
-
-def format_run_summary(runs: list) -> str:
-    if not runs:
-        return "none recorded"
-    latest = runs[0]
-    exit_code = "none" if latest.exit_code is None else str(latest.exit_code)
-    return f"{latest.kind} run {latest.id} {latest.status} exit {exit_code}"
-
-
-def github_pr_from_payload(payload: dict[str, object]) -> tuple[int, str] | None:
-    number = payload.get("number")
-    url = payload.get("html_url")
-    if not isinstance(number, int) or not isinstance(url, str) or not url:
-        return None
-    return number, url
-
-
-def github_pr_title(job: CodingJob) -> str:
-    proposed = job.metadata.get("pr_title")
-    normalized_proposed = " ".join((proposed or "").split())
-    normalized_fallback = " ".join(job.task.split())
-    normalized = normalized_proposed or normalized_fallback
-    if not normalized:
-        normalized = " ".join(job.job_branch.split()) or "Dorf change"
-    return normalized[:256].rstrip() or "Dorf change"
-
-
-def github_pr_body(job: CodingJob) -> str:
-    body = job.metadata.get("pr_body")
-    if body is not None and body.strip():
-        return body.strip()
-    return "\n".join(
-        [
-            f"Dorf Job: {job.job_name}",
-            f"Target branch: {job.target_branch}",
-            f"Target start SHA: {job.target_start_sha}",
-            f"CodingJob branch: {job.job_branch}",
-        ]
-    )

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -44,6 +45,9 @@ type NewJob struct {
 	ProviderConnection string
 	Model              string
 	ReasoningEffort    string
+	GitHubRepository   string
+	GitHubInstallation string
+	BaseBranch         string
 }
 
 type NewMessage struct {
@@ -108,7 +112,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql", "009_github_publication.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -149,8 +153,14 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
-	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, and model")
+	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
+	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
+	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
+	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, model, canonical GitHub repository, installation, and explicit base branch")
+	}
+	if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
+		return spine.Job{}, false, err
 	}
 	if !ValidRevision(input.Revision) {
 		return spine.Job{}, false, fmt.Errorf("admitted revision must be a lowercase full commit OID (40 hex for SHA-1 or 64 hex for SHA-256)")
@@ -165,10 +175,10 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
-		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort)
-		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9) on conflict(admission_key) do nothing`,
+		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort,github_repository,github_installation_id,base_branch)
+		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12) on conflict(admission_key) do nothing`,
 		id, input.AdmissionKey, input.Goal, input.Repository, input.Revision, input.Branch,
-		input.ProviderConnection, input.Model, input.ReasoningEffort)
+		input.ProviderConnection, input.Model, input.ReasoningEffort, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch)
 	if err != nil {
 		return spine.Job{}, false, err
 	}
@@ -178,9 +188,9 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	var stored NewJob
 	var storedID string
-	if err := tx.QueryRowContext(ctx, `select id,admission_key,goal,repository,revision,branch,provider_connection,model,reasoning_effort from dorf.jobs where admission_key=$1 for update`, input.AdmissionKey).Scan(
+	if err := tx.QueryRowContext(ctx, `select id,admission_key,goal,repository,revision,branch,provider_connection,model,reasoning_effort,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,'') from dorf.jobs where admission_key=$1 for update`, input.AdmissionKey).Scan(
 		&storedID, &stored.AdmissionKey, &stored.Goal, &stored.Repository, &stored.Revision, &stored.Branch,
-		&stored.ProviderConnection, &stored.Model, &stored.ReasoningEffort); err != nil {
+		&stored.ProviderConnection, &stored.Model, &stored.ReasoningEffort, &stored.GitHubRepository, &stored.GitHubInstallation, &stored.BaseBranch); err != nil {
 		return spine.Job{}, false, err
 	}
 	if storedID != id || stored != input {
@@ -354,6 +364,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	var job spine.Job
 	err := s.DB.QueryRowContext(ctx, `
 		select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0),j.starting_revision,j.branch,
+		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),j.publication_attempt,
 		       j.provider_connection,j.model,j.reasoning_effort,j.state,j.admission_open,
 		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
 		       coalesce(sb.incus_name,''),coalesce(r.route_id,''),coalesce(se.native_session_id,''),
@@ -365,6 +376,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
 		where j.id=$1`, id).Scan(
 		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.RevisionGeneration, &job.StartingRevision, &job.Branch,
+		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID, &job.PublicationAttempt,
 		&job.ProviderConnection, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
 		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.RouteID,
 		&job.SessionID, &job.RunTerminalState, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.ReviewRepairCount)

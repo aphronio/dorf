@@ -1,12 +1,25 @@
 package main
 
 import (
+	"flag"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+func TestPublicationGrammarParsesJobBeforeFlags(t *testing.T) {
+	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	revision := set.String("revision", "", "")
+	jobID, err := parsePublicationTarget(set, []string{"job-exact", "--revision", strings.Repeat("a", 40)}, "publication publish")
+	if err != nil || jobID != "job-exact" || *revision != strings.Repeat("a", 40) {
+		t.Fatalf("job=%q revision=%q err=%v", jobID, *revision, err)
+	}
+	if _, err := parsePublicationTarget(flag.NewFlagSet("publication publish", flag.ContinueOnError), []string{"--revision", strings.Repeat("a", 40), "job-exact"}, "publication publish"); err == nil {
+		t.Fatal("flags-before-Job grammar was accepted")
+	}
+}
 
 func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T) {
 	tests := []struct {

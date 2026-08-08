@@ -294,76 +294,8 @@ class GitHubRepositoryClient:
                 return items
             page += 1
 
-    def create_branch(self, repo_full_name: str, branch: str, sha: str) -> None:
-        self._request_json(
-            "POST",
-            f"/repos/{repo_full_name}/git/refs",
-            body={"ref": f"refs/heads/{branch}", "sha": sha},
-        )
-
-    def delete_branch(self, repo_full_name: str, branch: str) -> None:
-        self._request_json(
-            "DELETE",
-            f"/repos/{repo_full_name}/git/refs/heads/{urllib.parse.quote(branch, safe='/')}",
-        )
-
-    def list_pull_requests_for_branch(
-        self,
-        repo_full_name: str,
-        branch: str,
-        *,
-        state: str = "open",
-    ) -> list[dict[str, Any]]:
-        owner = repo_full_name.split("/", 1)[0]
-        query = urllib.parse.urlencode({"state": state, "head": f"{owner}:{branch}"})
-        payload = self._request_json("GET", f"/repos/{repo_full_name}/pulls?{query}")
-        if not isinstance(payload, list):
-            raise GitHubRepositoryError("GitHub pull request list response was not a list")
-        return [item for item in payload if isinstance(item, dict)]
-
     def get_pull_request(self, repo_full_name: str, pull_number: int) -> dict[str, Any]:
         return self._request_json("GET", f"/repos/{repo_full_name}/pulls/{pull_number}")
-
-    def create_pull_request(
-        self,
-        repo_full_name: str,
-        *,
-        title: str,
-        body: str,
-        head: str,
-        base: str,
-        draft: bool,
-    ) -> dict[str, Any]:
-        return self._request_json(
-            "POST",
-            f"/repos/{repo_full_name}/pulls",
-            body={
-                "title": title,
-                "body": body,
-                "head": head,
-                "base": base,
-                "draft": draft,
-            },
-        )
-
-    def update_pull_request(
-        self,
-        repo_full_name: str,
-        pull_number: int,
-        *,
-        title: str,
-        body: str,
-        base: str,
-    ) -> dict[str, Any]:
-        return self._request_json(
-            "PATCH",
-            f"/repos/{repo_full_name}/pulls/{pull_number}",
-            body={
-                "title": title,
-                "body": body,
-                "base": base,
-            },
-        )
 
     def mark_pull_request_ready(self, repo_full_name: str, pull_number: int) -> None:
         pull = self.get_pull_request(repo_full_name, pull_number)
