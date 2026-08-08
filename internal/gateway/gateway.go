@@ -68,7 +68,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		}
 		for _, existing := range routes {
 			if existing.Consumer == consumer {
-				if existing.ConnectionName != connectionName || existing.ID != routeID(actionID) {
+				if existing.ConnectionName != connectionName || existing.ID != RouteID(actionID) {
 					return fmt.Errorf("provider consumer is bound to a different stable route")
 				}
 				route = existing
@@ -79,7 +79,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
+		route = Route{ID: RouteID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
 		routes = append(routes, route)
 		if err := g.writeRoutes(routes); err != nil {
 			return err
@@ -95,31 +95,6 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 	}
 	route.BaseURL = origin + "/v1"
 	return route, nil
-}
-
-func (g Gateway) Revoke(ctx context.Context, consumer string) (string, error) {
-	removedID := "absent"
-	err := g.lock(func() error {
-		routes, err := g.readRoutes()
-		if err != nil {
-			return err
-		}
-		remaining := routes[:0]
-		for _, route := range routes {
-			if route.Consumer == consumer {
-				removedID = route.ID
-				continue
-			}
-			remaining = append(remaining, route)
-		}
-		if len(remaining) != len(routes) {
-			if err := g.writeRoutes(remaining); err != nil {
-				return err
-			}
-		}
-		return g.activate(ctx, remaining)
-	})
-	return removedID, err
 }
 
 // RevokeExact removes only the recorded consumer/route pair. An absent
@@ -490,7 +465,8 @@ func readJSON(path string, target any) error {
 	return json.Unmarshal(data, target)
 }
 
-func routeID(actionID string) string {
+// RouteID derives the exact stable provider-route identity owned by one Action.
+func RouteID(actionID string) string {
 	sum := sha256.Sum256([]byte(actionID))
 	return "route-" + hex.EncodeToString(sum[:])[:16]
 }

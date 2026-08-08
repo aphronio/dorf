@@ -56,10 +56,10 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("routes=%d, want 1", len(routes))
 	}
-	if _, err := gateway.Revoke(context.Background(), "sandbox:job-1"); err != nil {
+	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gateway.Revoke(context.Background(), "sandbox:job-1"); err != nil {
+	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := active[len(active)-1]; len(got) != 1 || got[0] != "guard-secret" {
@@ -97,6 +97,19 @@ func TestExactRouteRevocationRefusesChangedIdentityAndReconcilesAbsence(t *testi
 	removed, err = gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID)
 	if err != nil || removed != "absent" {
 		t.Fatalf("idempotent removed=%s err=%v", removed, err)
+	}
+	rebound, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "action-rebound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebound.ID == route.ID {
+		t.Fatal("rebound route did not receive its own stable Action identity")
+	}
+	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", RouteID("action-exact")); err == nil {
+		t.Fatal("stable prior Action identity revoked a rebound consumer route")
+	}
+	if observed, present, err := gateway.Route(context.Background(), "sandbox:job-exact"); err != nil || !present || observed.ID != rebound.ID {
+		t.Fatalf("rebound route changed after fenced refusal: route=%#v present=%t err=%v", observed, present, err)
 	}
 }
 

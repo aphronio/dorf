@@ -197,12 +197,11 @@ func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spi
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	id := ""
-	if run.ReviewerRouteID == "" {
-		id, err = gatewayClient.Revoke(ctx, "review:"+run.ID)
-	} else {
-		id, err = gatewayClient.RevokeExact(ctx, "review:"+run.ID, run.ReviewerRouteID)
+	expectedRouteID, err := reviewerRouteID(job, run)
+	if err != nil {
+		return spine.Receipt{}, err
 	}
+	id, err := gatewayClient.RevokeExact(ctx, "review:"+run.ID, expectedRouteID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -212,6 +211,17 @@ func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spi
 		}
 	}
 	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
+}
+
+func reviewerRouteID(job spine.Job, run spine.AgentRun) (string, error) {
+	if run.JobID != job.ID || strings.TrimSpace(run.ID) == "" {
+		return "", fmt.Errorf("reviewer route cleanup identity does not belong to exact Job %s", job.ID)
+	}
+	if run.ReviewerRouteID != "" {
+		return run.ReviewerRouteID, nil
+	}
+	createActionID := spine.ScopedActionID(job.ID, spine.ActionRouteCreate, run.ID)
+	return gateway.RouteID(createActionID), nil
 }
 
 func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {

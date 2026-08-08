@@ -27,6 +27,24 @@ func TestJobRecordedGatewayLocatorOverridesRestartedControllerDefault(t *testing
 	}
 }
 
+func TestReviewerRouteCleanupRecoversExactIDFromStableCreateAction(t *testing.T) {
+	job := spine.Job{ID: "job-exact"}
+	run := spine.AgentRun{ID: "review-run-exact", JobID: job.ID}
+	want := gateway.RouteID(spine.ScopedActionID(job.ID, spine.ActionRouteCreate, run.ID))
+	got, err := reviewerRouteID(job, run)
+	if err != nil || got != want {
+		t.Fatalf("recovered reviewer route=%q want=%q err=%v", got, want, err)
+	}
+	run.ReviewerRouteID = "route-recorded"
+	if got, err := reviewerRouteID(job, run); err != nil || got != run.ReviewerRouteID {
+		t.Fatalf("persisted reviewer route=%q err=%v", got, err)
+	}
+	run.JobID = "job-other"
+	if _, err := reviewerRouteID(job, run); err == nil {
+		t.Fatal("another Job reviewer route identity was accepted")
+	}
+}
+
 func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
 	if err := requireBridgeRoute("http://10.42.0.1:8317/v1", "10.42.0.1"); err != nil {
 		t.Fatal(err)
