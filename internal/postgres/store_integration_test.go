@@ -655,14 +655,14 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, sandboxCreate.ID, spine.Receipt{ExternalID: "sandbox-" + job.ID}); err != nil {
+	if err := store.CompleteAction(ctx, sandboxCreate.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
 		t.Fatal(err)
 	}
 	routeCreate, err := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, routeCreate.ID, spine.Receipt{ExternalID: "route-" + job.ID}); err != nil {
+	if err := store.CompleteAction(ctx, routeCreate.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(routeCreate.ID)}); err != nil {
 		t.Fatal(err)
 	}
 	routeDelete, err := store.BeginAction(ctx, job.ID, spine.ActionRouteRevoke)
@@ -674,14 +674,14 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CleanupTaskID) })
-	if err := store.CompleteAction(ctx, routeDelete.ID, spine.Receipt{ExternalID: "route-" + job.ID, Outcome: "revoked"}); err != nil {
+	if err := store.CompleteAction(ctx, routeDelete.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(routeCreate.ID), Outcome: "revoked"}); err != nil {
 		t.Fatal(err)
 	}
 	sandboxDelete, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxDelete)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: "sandbox-" + job.ID, Outcome: "deleted"}); err != nil {
+	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID), Outcome: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
@@ -895,11 +895,11 @@ func TestMainCleanupReceiptsAreExactAndCannotMutateAnotherJob(t *testing.T) {
 			t.Fatalf("admit %s created=%t err=%v", label, created, err)
 		}
 		sandbox, _ := store.BeginAction(ctx, job.ID, spine.ActionSandboxCreate)
-		if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: "sandbox-" + label}); err != nil {
+		if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
 			t.Fatal(err)
 		}
 		route, _ := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
-		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: "route-" + label}); err != nil {
+		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(route.ID)}); err != nil {
 			t.Fatal(err)
 		}
 		job, _ = store.Job(ctx, job.ID)
@@ -928,6 +928,49 @@ func TestMainCleanupReceiptsAreExactAndCannotMutateAnotherJob(t *testing.T) {
 	sentinelAfter, _ = store.Job(ctx, sentinel.ID)
 	if sentinelAfter.RouteID != sentinel.RouteID || sentinelAfter.SandboxID != sentinel.SandboxID {
 		t.Fatalf("sentinel resource identities changed: before=%#v after=%#v", sentinel, sentinelAfter)
+	}
+}
+
+func TestMainCreateIntentsReserveExactCleanupIdentitiesBeforeReceipts(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	input := postgres.NewJob{AdmissionKey: fmt.Sprintf("main-create-intent-%d", time.Now().UnixNano()), Goal: "reserve exact cleanup identities", Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), Branch: "dorf/main-create-intent", ProviderConnection: "primary", ProviderGatewayState: "/tmp/gateway-main-create-intent", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit created=%t err=%v", created, err)
+	}
+	if _, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxCreate); err != nil {
+		t.Fatal(err)
+	}
+	routeCreate, err := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reserved.SandboxID != spine.MainSandboxName(job.ID) || reserved.SandboxState != "pending" || reserved.RouteID != spine.ProviderRouteID(routeCreate.ID) || reserved.RouteState != "pending" {
+		t.Fatalf("reserved Job resources=%#v", reserved)
+	}
+
+	routeDelete, err := store.BeginAction(ctx, job.ID, spine.ActionRouteRevoke)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, routeDelete.ID, spine.Receipt{ExternalID: reserved.RouteID, Outcome: "revoked"}); err != nil {
+		t.Fatal(err)
+	}
+	sandboxDelete, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteAction(ctx, sandboxDelete.ID, spine.Receipt{ExternalID: reserved.SandboxID, Outcome: "deleted"}); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := store.Job(ctx, job.ID)
+	if err != nil || settled.RouteState != "revoked" || settled.SandboxState != "deleted" {
+		t.Fatalf("settled Job resources=%#v err=%v", settled, err)
 	}
 }
 
@@ -1590,14 +1633,14 @@ func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: "integration-" + string(spine.ActionSandboxCreate) + "-" + job.ID}); err != nil {
+	if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
 		t.Fatal(err)
 	}
 	route, err := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: "integration-" + string(spine.ActionRouteCreate) + "-" + job.ID}); err != nil {
+	if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(route.ID)}); err != nil {
 		t.Fatal(err)
 	}
 	taskIDs := []string{job.TaskID}

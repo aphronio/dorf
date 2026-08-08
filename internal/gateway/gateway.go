@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Route struct {
@@ -467,8 +468,7 @@ func readJSON(path string, target any) error {
 
 // RouteID derives the exact stable provider-route identity owned by one Action.
 func RouteID(actionID string) string {
-	sum := sha256.Sum256([]byte(actionID))
-	return "route-" + hex.EncodeToString(sum[:])[:16]
+	return spine.ProviderRouteID(actionID)
 }
 
 func randomKey() (string, error) {

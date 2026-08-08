@@ -320,6 +320,16 @@ func ReviewSandboxName(runID string) string {
 	return "dorf-review-" + digest(runID, 20)
 }
 
+// MainSandboxName and ProviderRouteID are the exact resource identities
+// durably reserved before their external create effects.
+func MainSandboxName(jobID string) string {
+	return "dorf-" + digest(jobID, 20)
+}
+
+func ProviderRouteID(actionID string) string {
+	return "route-" + digest(actionID, 16)
+}
+
 func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
 	return "review-controller-" + digest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
 }

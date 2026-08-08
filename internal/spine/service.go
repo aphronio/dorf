@@ -831,10 +831,14 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		for _, step := range []struct {
 			kind   ActionKind
 			detail string
+			owned  bool
 		}{
-			{ActionRouteRevoke, fmt.Sprintf("reconciling main provider route %s", emptyCleanupIdentity(job.RouteID))},
-			{ActionSandboxDelete, fmt.Sprintf("reconciling main Sandbox %s", emptyCleanupIdentity(job.SandboxID))},
+			{ActionRouteRevoke, fmt.Sprintf("reconciling main provider route %s", emptyCleanupIdentity(job.RouteID)), job.RouteID != ""},
+			{ActionSandboxDelete, fmt.Sprintf("reconciling main Sandbox %s", emptyCleanupIdentity(job.SandboxID)), job.SandboxID != ""},
 		} {
+			if !step.owned {
+				continue
+			}
 			if err := s.cleanupStep(ctx, job.ID, step.detail, func() error { _, err := s.reconcile(ctx, job, step.kind); return err }); err != nil {
 				return fmt.Errorf("reconcile %s: %w", step.kind, err)
 			}

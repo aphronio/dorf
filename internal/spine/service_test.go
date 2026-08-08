@@ -482,6 +482,7 @@ func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	store := newMemoryStore()
 	job := testJob()
 	job.AdmissionOpen = false
+	job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
 	store.jobs[job.ID] = job
 	externals := newFakeExternals()
 	service := Service{Store: store, Externals: externals}
@@ -496,6 +497,21 @@ func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	}
 	if store.jobs[job.ID].CleanupAttention != "" {
 		t.Fatalf("completed cleanup retained stale attention: %q", store.jobs[job.ID].CleanupAttention)
+	}
+}
+
+func TestCleanupSkipsMainResourcesWhoseCreateIntentWasNeverRecorded(t *testing.T) {
+	store := newMemoryStore()
+	job := testJob()
+	job.AdmissionOpen = false
+	store.jobs[job.ID] = job
+	externals := newFakeExternals()
+	service := Service{Store: store, Externals: externals}
+	if err := service.Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(externals.effects) != 0 || store.jobs[job.ID].CleanupState != CleanupComplete {
+		t.Fatalf("cleanup effects=%v Job=%#v", externals.effects, store.jobs[job.ID])
 	}
 }
 
@@ -649,6 +665,7 @@ func cleanupDelivery(t *testing.T, state AgentRunState) (*memoryStore, Job, Deli
 	job.AdmissionOpen = false
 	job.CleanupState = CleanupScheduled
 	job.SessionID = "session-1"
+	job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
 	store.jobs[job.ID] = job
 	message := store.addMessage(job.ID, "first", "first input")
 	delivery, err := store.NextDelivery(context.Background(), job.ID, job.SessionID)

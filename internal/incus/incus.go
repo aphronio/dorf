@@ -3,8 +3,6 @@ package incus
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Config struct {
@@ -74,8 +74,7 @@ func ownershipErrorf(format string, args ...any) error {
 }
 
 func (s Sandbox) Name(jobID string) string {
-	sum := sha256.Sum256([]byte(jobID))
-	return "dorf-" + hex.EncodeToString(sum[:])[:20]
+	return spine.MainSandboxName(jobID)
 }
 
 func (s Sandbox) ReconcileReviewCreate(ctx context.Context, name string, metadata ReviewMetadata) (string, error) {

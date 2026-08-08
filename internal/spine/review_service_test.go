@@ -336,6 +336,7 @@ func TestReviewerResourceCleanupIgnoresHistoricalRunsRetainsEvidenceAndIsRetrySa
 	job := testJob()
 	job.AdmissionOpen = false
 	job.CleanupState = CleanupScheduled
+	job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
 	base.jobs[job.ID] = job
 	runID := ReviewAgentRunID(job.ID, job.Revision, string(policy.RoleCriticalBoundary))
 	run := AgentRun{ID: runID, JobID: job.ID, Revision: job.Revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunUncertain, Attention: "strict native identity mismatch", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", ReviewerSandboxID: ReviewSandboxName(runID), ReviewerOwnerNonce: strings.Repeat("a", 64), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified"}

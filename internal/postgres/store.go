@@ -568,6 +568,24 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, kind); err != nil {
 		return spine.Action{}, err
 	}
+	switch kind {
+	case spine.ActionSandboxCreate:
+		if err := expectOne(tx.ExecContext(ctx, `
+			insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'pending')
+			on conflict(job_id) do update set action_id=dorf.sandboxes.action_id
+			where dorf.sandboxes.action_id=excluded.action_id and dorf.sandboxes.incus_name=excluded.incus_name`,
+			jobID, desiredID, spine.MainSandboxName(jobID))); err != nil {
+			return spine.Action{}, fmt.Errorf("reserve exact main Sandbox identity: %w", err)
+		}
+	case spine.ActionRouteCreate:
+		if err := expectOne(tx.ExecContext(ctx, `
+			insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'pending')
+			on conflict(job_id) do update set action_id=dorf.routes.action_id
+			where dorf.routes.action_id=excluded.action_id and dorf.routes.route_id=excluded.route_id`,
+			jobID, desiredID, spine.ProviderRouteID(desiredID))); err != nil {
+			return spine.Action{}, fmt.Errorf("reserve exact main provider route identity: %w", err)
+		}
+	}
 	var action spine.Action
 	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null and scope_key='' returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
 		return spine.Action{}, err
@@ -1089,7 +1107,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'created') on conflict(job_id) do update set incus_name=excluded.incus_name,state='created',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
+		err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='created',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and incus_name=$3 and state in ('pending','created')`, jobID, id, receipt.ExternalID))
 	case spine.ActionRouteCreate:
 		if scope != "" {
 			var expectedSandbox string
@@ -1103,7 +1121,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'active') on conflict(job_id) do update set route_id=excluded.route_id,state='active',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
+		err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='active',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and route_id=$3 and state in ('pending','active')`, jobID, id, receipt.ExternalID))
 	case spine.ActionSessionStart:
 		if scope != "" {
 			if strings.TrimSpace(receipt.ExternalID) == "" || strings.TrimSpace(receipt.Outcome) == "" {
@@ -1160,7 +1178,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			err = fmt.Errorf("main route cleanup receipt conflicts with its persisted exact route ID")
 		}
 		if err == nil {
-			err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1 and route_id=$2`, jobID, expectedRoute))
+			err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1 and route_id=$2 and state in ('pending','active','revoked')`, jobID, expectedRoute))
 		}
 	case spine.ActionSandboxDelete:
 		if scope != "" {
@@ -1178,7 +1196,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			err = fmt.Errorf("main Sandbox cleanup receipt conflicts with its persisted exact Incus name")
 		}
 		if err == nil {
-			err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1 and incus_name=$2`, jobID, expectedSandbox))
+			err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1 and incus_name=$2 and state in ('pending','created','deleted')`, jobID, expectedSandbox))
 		}
 	case spine.ActionReviewWorkspaceCreate:
 		var path, revision string
@@ -1543,7 +1561,7 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if err := tx.QueryRowContext(ctx, `select coalesce((select state from dorf.sandboxes where job_id=$1),''),coalesce((select state from dorf.routes where job_id=$1),'')`, jobID).Scan(&sandboxState, &routeState); err != nil {
 		return err
 	}
-	if sandboxState != "deleted" || routeState != "revoked" {
+	if (sandboxState != "" && sandboxState != "deleted") || (routeState != "" && routeState != "revoked") {
 		return fmt.Errorf("cleanup cannot complete before exact Sandbox deletion and route revocation are observed")
 	}
 	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='complete',cleanup_attention=null,workflow_attention=null,cleaned_at=coalesce(cleaned_at,clock_timestamp()) where id=$1 and cleanup_state='scheduled'`, jobID)); err != nil {

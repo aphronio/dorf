@@ -45,3 +45,10 @@ comment on column dorf.jobs.cleanup_attention is
     'Current actionable cleanup diagnostic; cleared as exact cleanup converges';
 comment on table dorf.job_outcomes is
     'Immutable first-write-wins Job outcome bound to one exact retained GitHub proposal and observed PR state';
+alter table dorf.sandboxes drop constraint if exists sandboxes_state_check;
+alter table dorf.sandboxes add constraint sandboxes_state_check
+    check (state in ('pending','created','deleted'));
+
+alter table dorf.routes drop constraint if exists routes_state_check;
+alter table dorf.routes add constraint routes_state_check
+    check (state in ('pending','active','revoked'));
