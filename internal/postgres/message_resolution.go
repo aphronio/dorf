@@ -156,6 +156,9 @@ func (s Store) ResolveMessage(ctx context.Context, input MessageResolutionInput)
 		return spine.MessageResolution{}, false, err
 	}
 	defer tx.Rollback()
+	if err := acquireJobFenceTx(ctx, tx, input.JobID); err != nil {
+		return spine.MessageResolution{}, false, err
+	}
 	var admissionOpen bool
 	if err := tx.QueryRowContext(ctx, `select admission_open from dorf.jobs where id=$1 for update`, input.JobID).Scan(&admissionOpen); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

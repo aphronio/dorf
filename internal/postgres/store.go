@@ -338,13 +338,20 @@ func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) 
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, jobID); err != nil {
-		return fmt.Errorf("acquire Job execution fence: %w", err)
+	if err := acquireJobFenceTx(ctx, tx, jobID); err != nil {
+		return err
 	}
 	if err := fn(); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func acquireJobFenceTx(ctx context.Context, tx *sql.Tx, jobID string) error {
+	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-job-effect:' || $1, 0))`, jobID); err != nil {
+		return fmt.Errorf("acquire Job execution fence: %w", err)
+	}
+	return nil
 }
 
 func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {

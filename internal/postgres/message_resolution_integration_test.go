@@ -195,6 +195,141 @@ func (b resolutionTestBarrier) ReachResolution(_ context.Context, point string, 
 	return nil
 }
 
+type abandonmentRaceBarrier struct {
+	selected chan spine.Delivery
+	release  chan struct{}
+}
+
+func (b abandonmentRaceBarrier) Reach(ctx context.Context, point string, delivery spine.Delivery) error {
+	if point != spine.BarrierBeforeSubmit {
+		return nil
+	}
+	select {
+	case b.selected <- delivery:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type provenNoSubmitError struct{}
+
+func (provenNoSubmitError) Error() string          { return "injected positive no-submit proof" }
+func (provenNoSubmitError) DefiniteNoSubmit() bool { return true }
+
+type abandonmentRaceExternals struct {
+	*integrationExternals
+}
+
+func (e *abandonmentRaceExternals) AgentSubmit(_ context.Context, _ spine.Job, delivery spine.Delivery) (spine.NativeTurn, error) {
+	e.mu.Lock()
+	e.submitted = append(e.submitted, delivery.Message.Sequence)
+	e.mu.Unlock()
+	return spine.NativeTurn{}, provenNoSubmitError{}
+}
+
+func TestMessageAbandonmentSharesNativeMutationFence(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, _ := resolutionJob(t, store, "abandonment-fence-")
+	barrier := abandonmentRaceBarrier{selected: make(chan spine.Delivery, 1), release: make(chan struct{})}
+	externals := &abandonmentRaceExternals{integrationExternals: &integrationExternals{}}
+	service := spine.Service{Store: store, Externals: externals, Barrier: barrier}
+	type runResult struct {
+		disposition spine.RunDisposition
+		err         error
+	}
+	runDone := make(chan runResult, 1)
+	go func() {
+		disposition, err := service.RunUntilIdle(ctx, job.ID)
+		runDone <- runResult{disposition: disposition, err: err}
+	}()
+
+	var selected spine.Delivery
+	select {
+	case selected = <-barrier.selected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not select the pending delivery before submission")
+	}
+	input := postgres.MessageResolutionInput{JobID: job.ID, MessageID: selected.Message.ID, Decision: spine.ResolutionAbandon, Authority: "operator", Reason: "authoritative abandonment must serialize with native mutation"}
+	type resolutionResult struct {
+		receipt spine.MessageResolution
+		created bool
+		err     error
+	}
+	resolutionDone := make(chan resolutionResult, 1)
+	go func() {
+		receipt, created, err := store.ResolveMessage(ctx, input)
+		resolutionDone <- resolutionResult{receipt: receipt, created: created, err: err}
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting int
+		if err := db.QueryRowContext(ctx, `select count(*) from pg_stat_activity where datname=current_database() and pid<>pg_backend_pid() and wait_event_type='Lock' and query like '%pg_advisory_xact_lock%'`).Scan(&waiting); err != nil {
+			close(barrier.release)
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(barrier.release)
+			t.Fatal("abandonment did not reach the held Job execution fence")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case result := <-resolutionDone:
+		close(barrier.release)
+		t.Fatalf("abandonment crossed selected native delivery: %#v", result)
+	default:
+	}
+	var receipts int
+	var admissionOpen bool
+	if err := db.QueryRowContext(ctx, `select admission_open,(select count(*) from dorf.message_resolutions where job_id=$1) from dorf.jobs where id=$1`, job.ID).Scan(&admissionOpen, &receipts); err != nil || !admissionOpen || receipts != 0 {
+		close(barrier.release)
+		t.Fatalf("blocked abandonment mutated state admission_open=%t receipts=%d err=%v", admissionOpen, receipts, err)
+	}
+
+	close(barrier.release)
+	select {
+	case result := <-runDone:
+		if result.err != nil || result.disposition != spine.RunBlocked {
+			t.Fatalf("worker reconciliation=%#v", result)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not release the Job execution fence")
+	}
+	var resolved resolutionResult
+	select {
+	case resolved = <-resolutionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("abandonment did not resume after native reconciliation")
+	}
+	if resolved.err != nil || !resolved.created || resolved.receipt.Decision != spine.ResolutionAbandon {
+		t.Fatalf("serialized abandonment=%#v", resolved)
+	}
+	if got := externals.submittedSequences(); fmt.Sprint(got) != "[1]" {
+		t.Fatalf("native submissions before authoritative abandonment=%v", got)
+	}
+	if disposition, err := service.RunUntilIdle(ctx, job.ID); err != nil || disposition != spine.RunClosed {
+		t.Fatalf("post-abandonment worker disposition=%s err=%v", disposition, err)
+	}
+	if got := externals.submittedSequences(); fmt.Sprint(got) != "[1]" {
+		t.Fatalf("native submission occurred after authoritative abandonment: %v", got)
+	}
+	var runState string
+	if err := db.QueryRowContext(ctx, `select j.admission_open,ar.state,(select count(*) from dorf.message_resolutions where job_id=j.id) from dorf.jobs j join dorf.agent_runs ar on ar.job_id=j.id where j.id=$1`, job.ID).Scan(&admissionOpen, &runState, &receipts); err != nil || admissionOpen || runState != string(spine.AgentRunFailed) || receipts != 1 {
+		t.Fatalf("settled abandonment admission_open=%t run_state=%s receipts=%d err=%v", admissionOpen, runState, receipts, err)
+	}
+}
+
 func TestMessageResolutionReceiptAndWakeFaultBarriersConverge(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
