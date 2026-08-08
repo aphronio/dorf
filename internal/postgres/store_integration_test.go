@@ -771,54 +771,59 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
-func TestAdmittedJobTaskSchedulesOneExactReadyPublication(t *testing.T) {
-	db, store, client := testDatabase(t)
-	ctx := context.Background()
-	key := fmt.Sprintf("automatic-ready-publication-%d", time.Now().UnixNano())
-	revision := strings.Repeat("a", 40)
-	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{
-		AdmissionKey: key, Goal: "publish one ready Revision", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: revision, Branch: "dorf/" + key, ProviderConnection: "primary",
-		ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
-	})
-	if err != nil || !created {
-		t.Fatalf("admit=%#v created=%t err=%v", job, created, err)
-	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, job.TaskID) })
-	for kind, externalID := range map[spine.ActionKind]string{
-		spine.ActionSandboxCreate:   spine.MainSandboxName(job.ID),
-		spine.ActionRepositoryClone: "clone-" + job.ID,
-		spine.ActionRouteCreate:     spine.ProviderRouteID(spine.ActionID(job.ID, spine.ActionRouteCreate)),
-		spine.ActionSessionStart:    "session-" + job.ID,
+func TestAdmittedJobTaskRedeliveryReconcilesPublicationPhases(t *testing.T) {
+	for _, test := range []struct {
+		phase            string
+		wantPhase        string
+		wantPublications int
+	}{
+		{phase: "ready", wantPhase: "publishing", wantPublications: 1},
+		{phase: "publishing", wantPhase: "publishing"},
+		{phase: "published", wantPhase: "published"},
 	} {
-		action, actionErr := store.BeginAction(ctx, job.ID, kind)
-		if actionErr != nil {
-			t.Fatal(actionErr)
-		}
-		if actionErr := store.CompleteAction(ctx, action.ID, spine.Receipt{ExternalID: externalID}); actionErr != nil {
-			t.Fatal(actionErr)
-		}
+		t.Run(test.phase, func(t *testing.T) {
+			db, store, client := testDatabase(t)
+			ctx := context.Background()
+			key := fmt.Sprintf("publication-redelivery-%s-%d", test.phase, time.Now().UnixNano())
+			revision := strings.Repeat("a", 40)
+			job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{
+				AdmissionKey: key, Goal: "reconcile one publication boundary", Repository: "https://github.com/aphronio/dorf.git",
+				Revision: revision, Branch: "dorf/" + key, ProviderConnection: "primary",
+				ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+				GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
+			})
+			if err != nil || !created {
+				t.Fatalf("admit=%#v created=%t err=%v", job, created, err)
+			}
+			t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, job.TaskID) })
+			attachedTaskID := ""
+			if test.phase == "ready" {
+				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				attachedTaskID = "00000000-0000-0000-0000-000000000082"
+				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,publication_task_id=$3 where id=$1`, job.ID, test.phase, attachedTaskID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "publication-redelivery-" + key, BatchSize: 1}); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := store.Job(ctx, job.ID)
+			var publications int
+			if countErr := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&publications); countErr != nil {
+				t.Fatal(countErr)
+			}
+			task, taskErr := client.FetchTaskResult(ctx, config.QueueName, job.TaskID)
+			if err != nil || taskErr != nil || task.State != absurd.TaskSleeping || updated.WorkflowPhase != test.wantPhase || updated.PublicationTaskID == "" || publications != test.wantPublications || attachedTaskID != "" && updated.PublicationTaskID != attachedTaskID {
+				t.Fatalf("continued Job=%#v task=%#v publication tasks=%d attached publication=%s errors=%v/%v", updated, task, publications, attachedTaskID, err, taskErr)
+			}
+			if test.phase == "ready" {
+				t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, updated.PublicationTaskID) })
+			}
+		})
 	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-"+job.ID)
-	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,finalized_at) values($1,$2,'final','{"decision":"no-review","roles":[],"reasons":[]}'::jsonb,clock_timestamp())`, job.ID, revision); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "ready-publication-" + key, BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := store.Job(ctx, job.ID)
-	var publications int
-	if countErr := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&publications); countErr != nil {
-		t.Fatal(countErr)
-	}
-	if err != nil || updated.WorkflowPhase != "publishing" || updated.PublicationTaskID == "" || publications != 1 {
-		t.Fatalf("continued Job=%#v publication tasks=%d err=%v", updated, publications, err)
-	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, updated.PublicationTaskID) })
 }
 
 func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) {

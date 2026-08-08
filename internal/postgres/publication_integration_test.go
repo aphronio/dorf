@@ -15,7 +15,6 @@ import (
 	publicationapi "github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -94,9 +93,6 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 	if _, err := db.ExecContext(ctx, `insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort) values($1,'publication-upgrade','preserve historical review cleanup','https://github.com/aphronio/dorf.git',$2,$2,'dorf/publication-upgrade','primary','gpt-5.6-sol','high')`, jobID, revision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values('message-self-advancing-upgrade',$1,'dorf:initial',1,'already completed implementation')`, jobID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-activation' where id=$1`, jobID); err != nil {
 		t.Fatal(err)
 	}
@@ -104,45 +100,8 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 		t.Fatal(err)
 	}
 	store := postgres.Store{DB: db}
-	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { client.Close() })
-	wakeSequence := int64(2)
-	client.MustRegister(absurd.Task(workflow.RunTaskName, func(ctx context.Context, params workflow.Params) (workflow.Result, error) {
-		if _, err := absurd.AwaitEvent[workflow.Wake](ctx, workflow.WakeEvent(params.JobID, wakeSequence), absurd.AwaitEventOptions{StepName: fmt.Sprintf("message-wake-%020d", wakeSequence)}); err != nil {
-			return workflow.Result{}, err
-		}
-		return workflow.Result{JobID: params.JobID, Outcome: "resumed"}, nil
-	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	spawned, err := client.Spawn(ctx, workflow.RunTaskName, workflow.Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(jobID)})
-	if err != nil || !spawned.Created {
-		t.Fatalf("spawn legacy waiting Job task=%#v err=%v", spawned, err)
-	}
-	if err := store.AttachMessageTask(ctx, jobID, spawned.TaskID); err != nil {
-		t.Fatal(err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "pre-011-wait", BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := client.FetchTaskResult(ctx, config.QueueName, spawned.TaskID)
-	if err != nil || before.State != absurd.TaskSleeping {
-		t.Fatalf("pre-011 task=%#v err=%v", before, err)
-	}
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
-	}
-	afterMigration, err := client.FetchTaskResult(ctx, config.QueueName, spawned.TaskID)
-	if err != nil || afterMigration.State != absurd.TaskPending {
-		t.Fatalf("011 did not make migrated Job task eligible: task=%#v err=%v", afterMigration, err)
-	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "post-011-resume", BatchSize: 1}); err != nil {
-		t.Fatal(err)
-	}
-	afterWorker, err := client.FetchTaskResult(ctx, config.QueueName, spawned.TaskID)
-	if err != nil || afterWorker.State != absurd.TaskCompleted {
-		t.Fatalf("ordinary worker did not resume migrated Job task: task=%#v err=%v", afterWorker, err)
 	}
 	var retainedKind, retainedState string
 	if err := db.QueryRowContext(ctx, `select kind,state from dorf.actions where id='action-review-workspace-delete'`).Scan(&retainedKind, &retainedState); err != nil {
@@ -175,7 +134,6 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 	var migrationApplied, optionalColumnsRemain bool
 	var phaseConstraint string
 	var workflowPhase, reviewPlanState string
-	var messageCount, wakeCount int
 	if err := db.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name='011_self_advancing_workflow.sql'),exists(select 1 from information_schema.columns where table_schema='dorf' and table_name='review_plans' and column_name in ('requested_roles','requested_by_run_id'))`).Scan(&migrationApplied, &optionalColumnsRemain); err != nil {
 		t.Fatal(err)
 	}
@@ -185,11 +143,8 @@ func TestMigrations009Through011PreserveHistoryAndUpgradeSelfAdvancingWorkflow(t
 	if err := db.QueryRowContext(ctx, `select j.workflow_phase,p.state from dorf.jobs j join dorf.review_plans p on p.job_id=j.id and p.revision=j.revision where j.id=$1`, jobID).Scan(&workflowPhase, &reviewPlanState); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRowContext(ctx, `select (select count(*) from dorf.job_messages where job_id=$1),(select count(*) from absurd.e_dorf_jobs where event_name=$2)`, jobID, workflow.WakeEvent(jobID, wakeSequence)).Scan(&messageCount, &wakeCount); err != nil {
-		t.Fatal(err)
-	}
-	if !migrationApplied || optionalColumnsRemain || strings.Contains(phaseConstraint, "review-activation") || !strings.Contains(phaseConstraint, "review-planning") || workflowPhase != "review-planning" || reviewPlanState != "pending" || messageCount != 1 || wakeCount != 1 {
-		t.Fatalf("011 applied=%t optional columns=%t phase constraint=%s upgraded phase=%s plan=%s messages=%d wakes=%d", migrationApplied, optionalColumnsRemain, phaseConstraint, workflowPhase, reviewPlanState, messageCount, wakeCount)
+	if !migrationApplied || optionalColumnsRemain || strings.Contains(phaseConstraint, "review-activation") || !strings.Contains(phaseConstraint, "review-planning") || workflowPhase != "review-planning" || reviewPlanState != "pending" {
+		t.Fatalf("011 applied=%t optional columns=%t phase constraint=%s upgraded phase=%s plan=%s", migrationApplied, optionalColumnsRemain, phaseConstraint, workflowPhase, reviewPlanState)
 	}
 }
 

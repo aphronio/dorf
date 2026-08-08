@@ -136,6 +136,12 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 	if !job.AdmissionOpen {
 		return RunClosed, nil
 	}
+	switch job.WorkflowPhase {
+	case "ready", "publishing", "published":
+		// The admitted Job task owns ready-to-publication reconciliation
+		// outside the coding spine, then waits for external outcome authority.
+		return RunIdle, nil
+	}
 	if err := s.Store.StartRun(ctx, jobID); err != nil {
 		return RunIdle, err
 	}
