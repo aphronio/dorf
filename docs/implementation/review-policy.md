@@ -111,10 +111,11 @@ facts remain retained.
 
 After rebuilding and applying migration 011, an already-migrated dogfood database drops the
 superseded activation phase and optional-request columns. A Job already waiting at that checkpoint
-receives its pending deterministic plan and moves to `review-planning`; the ordinary worker then
-continues every already-authorized phase. Issue #38 may squash the greenfield migration chain at
-cutover; until then, 011 is the forward upgrade proof. `--once` remains a polling and fault-proof
-surface; repeat it to drain whichever existing durable task is eligible:
+receives its pending deterministic plan, has its exact persisted Absurd FIFO wait satisfied, and
+moves to `review-planning`; the ordinary worker then continues without a new client message. Issue
+#38 may squash the greenfield migration chain at cutover; until then, 011 is the forward upgrade
+proof. `--once` remains a polling and fault-proof surface; repeat it to drain whichever existing
+durable task is eligible:
 
 ```bash
 go build -o .dorf/bin/dorf ./cmd/dorf
