@@ -106,19 +106,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     auth = json.loads(path.read_text())
                 except (OSError, json.JSONDecodeError):
                     auth = {}
-                files.append(
-                    {
-                        "name": path.name,
-                        "provider": "codex",
-                        "status": status.get("status", "active"),
-                        "unavailable": status.get("unavailable", False),
-                        "websockets": auth.get("websockets", False),
-                        "id_token": {
-                            "plan_type": "pro",
-                            "chatgpt_account_id": "private-account-identifier",
-                        },
-                    }
-                )
+                entry = {
+                    "name": path.name,
+                    "provider": "codex",
+                    "status": status.get("status", "active"),
+                    "unavailable": status.get("unavailable", False),
+                    "id_token": {
+                        "plan_type": "pro",
+                        "chatgpt_account_id": "private-account-identifier",
+                    },
+                }
+                if "websockets" in auth:
+                    entry["websockets"] = auth["websockets"]
+                files.append(entry)
+            files.extend(status.get("extra_files", []))
             if "codex-api-key:" in config:
                 files.append(
                     {
@@ -467,6 +468,83 @@ def test_connection_route_is_accepted_then_rejected_after_revocation(tmp_path) -
 
     assert os.stat(state_path / "routes.json").st_mode & 0o777 == 0o600
     assert os.stat(state_path / "broker.yaml").st_mode & 0o777 == 0o600
+
+
+def test_subscription_route_requires_websockets_on_the_selected_backend_record(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    executable = tmp_path / "provider-broker"
+    _write_test_broker(executable)
+    state_path = tmp_path / "gateway"
+    port = _free_port()
+
+    with ProviderGateway.open(
+        state_path=state_path, executable_path=executable, port=port
+    ) as gateway:
+        gateway.connect_chatgpt_subscription(
+            name="personal-chatgpt",
+            on_authorization=lambda challenge: None,
+        )
+        record = json.loads((state_path / "connections.json").read_text())[0]
+        selected = state_path / "auth" / record["credential_ref"]
+        (state_path / "fake-auth-status.json").write_text(
+            json.dumps(
+                {
+                    "extra_files": [
+                        {"name": "capable-decoy", "provider": "codex", "websockets": True}
+                    ]
+                }
+            )
+        )
+        guard_key = json.loads((state_path / "authority.json").read_text())["guard_key"]
+        base_url = f"http://127.0.0.1:{port}/v1"
+        remediation = (
+            "Run: dorf provider connect chatgpt --subscription --name personal-chatgpt"
+        )
+
+        unsupported_capabilities = [
+            {"websockets": False},
+            {},
+            {"websockets": None},
+            {"websockets": "true"},
+            {"websockets": {"enabled": True}},
+        ]
+        for capability in unsupported_capabilities:
+            selected.write_text(json.dumps(capability))
+            assert _model_status(base_url, guard_key) == 200
+            status = gateway.connection_status("personal-chatgpt")
+            assert status.status == "capability_unavailable"
+            assert status.remediation == remediation
+            with pytest.raises(
+                GatewayUnavailableError,
+                match="does not support required Responses WebSockets",
+            ) as caught:
+                gateway.require_connection("personal-chatgpt")
+            assert caught.value.needs_human is False
+            assert caught.value.remediation == remediation
+
+            with monkeypatch.context() as no_route_credentials:
+                no_route_credentials.setattr(
+                    os,
+                    "urandom",
+                    lambda size: pytest.fail(
+                        "route credentials were generated before admission"
+                    ),
+                )
+                with pytest.raises(
+                    GatewayUnavailableError,
+                    match="does not support required Responses WebSockets",
+                ):
+                    gateway.create_route("personal-chatgpt", consumer="websocket-client")
+
+            assert not (state_path / "routes.json").exists()
+
+        selected.write_text(json.dumps({"websockets": True}))
+        assert gateway.connection_status("personal-chatgpt").status == "connected"
+        route = gateway.create_route("personal-chatgpt", consumer="websocket-client")
+        assert _model_status(route.base_url, route.api_key) == 200
+        gateway.shutdown()
 
 
 def test_openai_api_key_connection_has_a_durable_name_and_disconnects_cleanly(
