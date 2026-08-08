@@ -19,6 +19,7 @@ const (
 	messageEnablePhrase     = "issue-41-external-sigkill-only"
 	workflowEnablePhrase    = "issue-37-external-sigkill-only"
 	publicationEnablePhrase = "issue-43-external-sigkill-only"
+	cleanupEnablePhrase     = "issue-39-external-sigkill-only"
 )
 
 type Barrier struct {
@@ -38,12 +39,16 @@ func FromEnv() (spine.FaultBarrier, error) {
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierNativeActive
 	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCommitCreated || point == spine.BarrierCheckExited
 	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted || point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
-	if !messagePoint && !workflowPoint && !publicationPoint {
+	cleanupPoint := point == spine.BarrierReviewerRouteRevoked || point == spine.BarrierReviewerSandboxDeleted || point == spine.BarrierMainRouteRevoked || point == spine.BarrierMainSandboxDeleted
+	if !messagePoint && !workflowPoint && !publicationPoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
 	phrase := workflowEnablePhrase
 	if publicationPoint {
 		phrase = publicationEnablePhrase
+	}
+	if cleanupPoint {
+		phrase = cleanupEnablePhrase
 	}
 	if messagePoint {
 		phrase = messageEnablePhrase

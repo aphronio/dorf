@@ -37,16 +37,33 @@ type Authority struct {
 }
 
 type PullRequest struct {
-	Number     int64
-	URL        string
-	Title      string
-	State      string
-	Draft      bool
-	Repository string
-	Head       string
-	HeadSHA    string
-	Base       string
-	Body       string
+	Number         int64
+	URL            string
+	Title          string
+	State          string
+	Draft          bool
+	Repository     string
+	Head           string
+	HeadSHA        string
+	Base           string
+	Body           string
+	Merged         bool
+	MergeCommitOID string
+}
+
+func (c Client) PullRequest(ctx context.Context, authority Authority, number int64) (PullRequest, error) {
+	if number < 1 {
+		return PullRequest{}, fmt.Errorf("GitHub pull-request number must be positive")
+	}
+	token, err := c.mint(ctx, authority, "pull_requests", "read")
+	if err != nil {
+		return PullRequest{}, err
+	}
+	var payload pullPayload
+	if _, err := c.request(ctx, token, http.MethodGet, "/repos/"+authority.Repository+"/pulls/"+strconv.FormatInt(number, 10), nil, &payload); err != nil {
+		return PullRequest{}, err
+	}
+	return payload.pullRequest()
 }
 
 type Client struct {
@@ -186,13 +203,15 @@ func (c Client) mutatePull(ctx context.Context, authority Authority, method, end
 }
 
 type pullPayload struct {
-	Number  int64  `json:"number"`
-	HTMLURL string `json:"html_url"`
-	Title   string `json:"title"`
-	State   string `json:"state"`
-	Draft   bool   `json:"draft"`
-	Body    string `json:"body"`
-	Head    struct {
+	Number         int64  `json:"number"`
+	HTMLURL        string `json:"html_url"`
+	Title          string `json:"title"`
+	State          string `json:"state"`
+	Draft          bool   `json:"draft"`
+	Body           string `json:"body"`
+	Merged         bool   `json:"merged"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
+	Head           struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo struct {
@@ -208,7 +227,14 @@ func (p pullPayload) pullRequest() (PullRequest, error) {
 	if p.Number < 1 || p.HTMLURL == "" || p.Title == "" || p.State == "" || p.Head.Ref == "" || !fullOID(p.Head.SHA) || p.Head.Repo.FullName == "" || p.Base.Ref == "" {
 		return PullRequest{}, fmt.Errorf("GitHub pull-request response omitted exact identity")
 	}
-	return PullRequest{Number: p.Number, URL: p.HTMLURL, Title: p.Title, State: p.State, Draft: p.Draft, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, HeadSHA: p.Head.SHA, Base: p.Base.Ref, Body: p.Body}, nil
+	mergeCommit := ""
+	if p.Merged {
+		if !fullOID(p.MergeCommitSHA) {
+			return PullRequest{}, fmt.Errorf("merged GitHub pull-request response omitted an exact merge commit OID")
+		}
+		mergeCommit = p.MergeCommitSHA
+	}
+	return PullRequest{Number: p.Number, URL: p.HTMLURL, Title: p.Title, State: p.State, Draft: p.Draft, Repository: strings.ToLower(p.Head.Repo.FullName), Head: p.Head.Ref, HeadSHA: p.Head.SHA, Base: p.Base.Ref, Body: p.Body, Merged: p.Merged, MergeCommitOID: mergeCommit}, nil
 }
 
 func (c Client) mint(ctx context.Context, authority Authority, permission, level string) (string, error) {

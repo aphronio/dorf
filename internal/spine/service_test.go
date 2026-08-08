@@ -482,6 +482,7 @@ func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	store := newMemoryStore()
 	job := testJob()
 	job.AdmissionOpen = false
+	job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
 	store.jobs[job.ID] = job
 	externals := newFakeExternals()
 	service := Service{Store: store, Externals: externals}
@@ -493,6 +494,59 @@ func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {
 	}
 	if got, want := externals.effects, []ActionKind{ActionRouteRevoke, ActionSandboxDelete}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cleanup effects=%v want=%v", got, want)
+	}
+	if store.jobs[job.ID].CleanupAttention != "" {
+		t.Fatalf("completed cleanup retained stale attention: %q", store.jobs[job.ID].CleanupAttention)
+	}
+}
+
+func TestCleanupSkipsMainResourcesWhoseCreateIntentWasNeverRecorded(t *testing.T) {
+	store := newMemoryStore()
+	job := testJob()
+	job.AdmissionOpen = false
+	store.jobs[job.ID] = job
+	externals := newFakeExternals()
+	service := Service{Store: store, Externals: externals}
+	if err := service.Cleanup(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(externals.effects) != 0 || store.jobs[job.ID].CleanupState != CleanupComplete {
+		t.Fatalf("cleanup effects=%v Job=%#v", externals.effects, store.jobs[job.ID])
+	}
+}
+
+func TestMainCleanupSuccessBeforeRecordBarriersRetainPartialInventoryAndSkipSettledEffects(t *testing.T) {
+	for _, test := range []struct {
+		point         string
+		firstEffects  []ActionKind
+		finalEffects  []ActionKind
+		attentionPart string
+	}{
+		{BarrierMainRouteRevoked, []ActionKind{ActionRouteRevoke}, []ActionKind{ActionRouteRevoke, ActionRouteRevoke, ActionSandboxDelete}, "main provider route"},
+		{BarrierMainSandboxDeleted, []ActionKind{ActionRouteRevoke, ActionSandboxDelete}, []ActionKind{ActionRouteRevoke, ActionSandboxDelete, ActionSandboxDelete}, "main Sandbox"},
+	} {
+		t.Run(test.point, func(t *testing.T) {
+			store := newMemoryStore()
+			job := testJob()
+			job.AdmissionOpen, job.CleanupState = false, CleanupScheduled
+			job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
+			store.jobs[job.ID] = job
+			externals := newFakeExternals()
+			barrier := &failWorkflowBarrier{point: test.point}
+			service := Service{Store: store, Externals: externals, Barrier: barrier}
+			if err := service.Cleanup(context.Background(), job.ID); !errors.Is(err, errBarrier) {
+				t.Fatalf("first cleanup error=%v", err)
+			}
+			if !reflect.DeepEqual(externals.effects, test.firstEffects) || !strings.Contains(store.jobs[job.ID].CleanupAttention, test.attentionPart) || store.jobs[job.ID].CleanupState == CleanupComplete {
+				t.Fatalf("partial effects=%v Job=%#v", externals.effects, store.jobs[job.ID])
+			}
+			if err := service.Cleanup(context.Background(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(externals.effects, test.finalEffects) || store.jobs[job.ID].CleanupState != CleanupComplete || store.jobs[job.ID].CleanupAttention != "" {
+				t.Fatalf("converged effects=%v Job=%#v", externals.effects, store.jobs[job.ID])
+			}
+		})
 	}
 }
 
@@ -599,6 +653,9 @@ func TestCleanupRetainsResourcesWhenNativeHistoryIsUncertain(t *testing.T) {
 	if run.State != AgentRunUncertain || !strings.Contains(run.Attention, "2 native turns") || len(externals.effects) != 0 || store.jobs[job.ID].CleanupState == CleanupComplete {
 		t.Fatalf("uncertain cleanup run=%#v effects=%v job=%#v", run, externals.effects, store.jobs[job.ID])
 	}
+	if attention := store.jobs[job.ID].CleanupAttention; !strings.Contains(attention, "implementation native mutation") || !strings.Contains(attention, "2 native turns") {
+		t.Fatalf("partial cleanup diagnostic=%q", attention)
+	}
 }
 
 func cleanupDelivery(t *testing.T, state AgentRunState) (*memoryStore, Job, Delivery) {
@@ -608,6 +665,7 @@ func cleanupDelivery(t *testing.T, state AgentRunState) (*memoryStore, Job, Deli
 	job.AdmissionOpen = false
 	job.CleanupState = CleanupScheduled
 	job.SessionID = "session-1"
+	job.RouteID, job.SandboxID = "route-exact", "sandbox-exact"
 	store.jobs[job.ID] = job
 	message := store.addMessage(job.ID, "first", "first input")
 	delivery, err := store.NextDelivery(context.Background(), job.ID, job.SessionID)
@@ -909,11 +967,20 @@ func (s *memoryStore) NativeMutationDelivery(_ context.Context, jobID string) (*
 	}
 	return nil, nil
 }
+func (s *memoryStore) SetCleanupAttention(_ context.Context, jobID, detail string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job := s.jobs[jobID]
+	job.CleanupAttention = detail
+	s.jobs[jobID] = job
+	return nil
+}
 func (s *memoryStore) CompleteCleanup(_ context.Context, jobID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]
 	job.CleanupState = CleanupComplete
+	job.CleanupAttention = ""
 	s.jobs[jobID] = job
 	return nil
 }

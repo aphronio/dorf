@@ -136,6 +136,9 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if _, err := store.CancelRun(ctx, jobID); err != nil {
 			return err
 		}
+		if _, err := store.CancelPublication(ctx, jobID); err != nil {
+			return fmt.Errorf("settle attached publication task: %w", err)
+		}
 		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:" + jobID})
 		if err != nil {
 			return fmt.Errorf("schedule cleanup in Absurd: %w", err)

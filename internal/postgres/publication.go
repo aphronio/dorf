@@ -127,9 +127,8 @@ func scanPublicationTask(row rowScanner) (publicationTaskRecord, error) {
 }
 
 func validatePublicationTask(jobID, revision string, attempt int, task publicationTaskRecord) (bool, error) {
-	wantKey := PublicationTaskKey(jobID, revision, attempt)
-	if task.Name != PublicationTaskName || task.JobID != jobID || task.Revision != revision || task.Attempt != strconv.Itoa(attempt) || task.IdempotencyKey != wantKey || task.MaxAttempts != PublicationTaskMaxAttempts {
-		return false, fmt.Errorf("attached Absurd task %s does not prove exact publication authority for Job %s Revision %s attempt %d", task.ID, jobID, revision, attempt)
+	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
+		return false, err
 	}
 	switch task.State {
 	case "pending", "running", "sleeping":
@@ -145,6 +144,47 @@ func validatePublicationTask(jobID, revision string, attempt int, task publicati
 	default:
 		return false, fmt.Errorf("attached publication task %s is terminal %s while the Job remains publishing; refusing to create another task", task.ID, task.State)
 	}
+}
+
+func validatePublicationTaskIdentity(jobID, revision string, attempt int, task publicationTaskRecord) error {
+	wantKey := PublicationTaskKey(jobID, revision, attempt)
+	if task.Name != PublicationTaskName || task.JobID != jobID || task.Revision != revision || task.Attempt != strconv.Itoa(attempt) || task.IdempotencyKey != wantKey || task.MaxAttempts != PublicationTaskMaxAttempts {
+		return fmt.Errorf("attached Absurd task %s does not prove exact publication authority for Job %s Revision %s attempt %d", task.ID, jobID, revision, attempt)
+	}
+	return nil
+}
+
+func (s Store) CancelPublication(ctx context.Context, jobID string) (string, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var taskID, revision string
+	var attempt int
+	if err := tx.QueryRowContext(ctx, `select coalesce(publication_task_id,''),revision,publication_attempt from dorf.jobs where id=$1 for update`, jobID).Scan(&taskID, &revision, &attempt); err != nil {
+		return "", err
+	}
+	if taskID == "" {
+		return "", tx.Commit()
+	}
+	task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
+	if err != nil {
+		return "", err
+	}
+	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
+		return "", err
+	}
+	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
+		if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {
+			return "", fmt.Errorf("cancel attached publication task: %w", err)
+		}
+		task.State = "cancelled"
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return task.State, nil
 }
 
 func beginPublicationAction(ctx context.Context, tx *sql.Tx, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {

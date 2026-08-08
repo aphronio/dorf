@@ -8,17 +8,26 @@ legacy_paths=(
   src/dorf/repo_contract.py
   src/dorf/command_runner.py
   src/dorf/workflows/coding_commands.py
+  src/dorf/workflows/coding.py
+  src/dorf/workflows/coding_pulse.py
   tests/test_repo_contract.py
   tests/test_command_runner.py
+  tests/test_coding_workflows.py
 )
 
 legacy_symbols=(
-  'src/dorf/workflows/coding.py|def _check_gate('
-  'src/dorf/workflows/coding.py|def _ready_gate('
-  'src/dorf/workflows/coding.py|def _run_verify_fix('
-  'src/dorf/workflows/coding.py|def verify_fix_prompt('
-  'src/dorf/workflows/coding.py|def verify_job_readiness('
   'src/dorf/workflows/coding_dossier.py|_VERIFICATION_COMMANDS ='
+  'src/dorf/runtime/assigned_job.py|def end('
+  'src/dorf/runtime/assigned_job.py|def begin_job_end('
+  'src/dorf/runtime/assigned_job.py|def retry_job_cleanup_turn('
+  'src/dorf/runtime/assigned_job.py|def finish_job_end('
+  'src/dorf/runtime/store.py|def begin_job_end('
+  'src/dorf/runtime/store.py|def retry_job_cleanup_turn('
+  'src/dorf/runtime/store.py|def finish_job_end('
+  'src/dorf/workflows/coding_store.py|class FollowupFeedback:'
+  'src/dorf/workflows/coding_store.py|class AfkCoordinator:'
+  'src/dorf/workflows/coding_store.py|CREATE TABLE IF NOT EXISTS followup_feedback'
+  'src/dorf/workflows/coding_store.py|CREATE TABLE IF NOT EXISTS afk_coordinators'
 )
 
 found=0
@@ -38,6 +47,6 @@ for entry in "${legacy_symbols[@]}"; do
 done
 
 if test "$found" -ne 0; then
-  printf 'issue #37 legacy deletion is intentionally pending the real Go terminal\n' >&2
+  printf 'superseded Python workflow authority remains after the Go terminal\n' >&2
   exit 37
 fi

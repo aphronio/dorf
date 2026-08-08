@@ -209,3 +209,33 @@ func TestPullRequestResponseRequiresExactHeadSHA(t *testing.T) {
 		t.Fatal("pull request without an exact head SHA was accepted")
 	}
 }
+
+func TestExactPullRequestObservationRetainsMergedAuthority(t *testing.T) {
+	merge := strings.Repeat("b", 40)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/repos/aphronio/dorf/pulls/39" {
+			t.Fatalf("unexpected exact observation request %s %s", request.Method, request.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"number":39,"html_url":"https://github.com/aphronio/dorf/pull/39","title":"exact","state":"closed","merged":true,"merge_commit_sha":"` + merge + `","draft":false,"body":"body","head":{"ref":"dorf/issue-39","sha":"` + strings.Repeat("a", 40) + `","repo":{"full_name":"aphronio/dorf"}},"base":{"ref":"greenfield"}}`))
+	}))
+	defer server.Close()
+	client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(_ context.Context, authority Authority, permission, level string) (string, error) {
+		if authority != (Authority{"aphronio/dorf", "42"}) || permission != "pull_requests" || level != "read" {
+			t.Fatalf("authority=%#v permission=%s:%s", authority, permission, level)
+		}
+		return "ephemeral", nil
+	}}
+	pull, err := client.PullRequest(context.Background(), Authority{"aphronio/dorf", "42"}, 39)
+	if err != nil || !pull.Merged || pull.MergeCommitOID != merge || pull.State != "closed" || pull.Number != 39 {
+		t.Fatalf("pull=%#v err=%v", pull, err)
+	}
+}
+
+func TestMergedPullRequestObservationRequiresExactMergeCommitOID(t *testing.T) {
+	var payload pullPayload
+	payload.Number, payload.HTMLURL, payload.Title, payload.State, payload.Merged = 39, "url", "title", "closed", true
+	payload.Head.Ref, payload.Head.SHA, payload.Head.Repo.FullName, payload.Base.Ref = "dorf/issue-39", strings.Repeat("a", 40), "aphronio/dorf", "greenfield"
+	if _, err := payload.pullRequest(); err == nil {
+		t.Fatal("merged pull request without exact merge commit OID was accepted")
+	}
+}

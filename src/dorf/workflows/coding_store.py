@@ -62,28 +62,6 @@ class CodingCommandRun:
 
 
 @dataclass(frozen=True)
-class FollowupFeedback:
-    id: int
-    job_name: str
-    kind: str
-    ref_id: str
-    comment_id: str | None
-    status: str
-    commit_sha: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class AfkCoordinator:
-    target_repo: str
-    issue_number: int
-    owner_token: str
-    job_name: str | None
-    status: str
-
-
-@dataclass(frozen=True)
 class AcceptanceItem:
     key: str
     text: str
@@ -442,191 +420,6 @@ class CodingStore(RuntimeStore):
             after=git_commit_after,
         )
 
-    def interrupt_abandoned_afk_runs(self, job_name: str) -> list[CodingCommandRun]:
-        rows = self._connection.execute(
-            """
-            UPDATE coding_command_runs
-            SET status = 'interrupted', exit_code = 130, finished_at = ?
-            WHERE job_name = ? AND status = 'running'
-              AND (kind = 'afk' OR kind = 'check' OR kind = 'smoke')
-            RETURNING id
-            """,
-            (_now(), job_name),
-        ).fetchall()
-        self._connection.commit()
-        return [run for row in rows if (run := self.get_command_run(int(row["id"]))) is not None]
-
-    def claim_afk_coordinator(
-        self,
-        target_repo: str,
-        issue_number: int,
-        owner_token: str,
-        *,
-        takeover: bool = False,
-        expected_job_name: str | None = None,
-    ) -> AfkCoordinator:
-        self._connection.execute("BEGIN IMMEDIATE")
-        try:
-            row = self._connection.execute(
-                "SELECT * FROM afk_coordinators WHERE target_repo = ? AND issue_number = ?",
-                (target_repo, issue_number),
-            ).fetchone()
-            if row is None:
-                self._connection.execute(
-                    """
-                    INSERT INTO afk_coordinators (
-                        target_repo, issue_number, owner_token, job_name, status
-                    ) VALUES (?, ?, ?, NULL, 'running')
-                    """,
-                    (target_repo, issue_number, owner_token),
-                )
-            elif row["status"] == "running" and row["owner_token"] != owner_token and not takeover:
-                raise RuntimeError("AFK coordinator is already running")
-            elif expected_job_name is not None and row["job_name"] not in {None, expected_job_name}:
-                raise RuntimeError(f"AFK reservation belongs to {row['job_name']}")
-            else:
-                clear_finished = row["status"] != "running" and expected_job_name is None
-                self._connection.execute(
-                    """
-                    UPDATE afk_coordinators
-                    SET owner_token = ?, status = 'running',
-                        job_name = CASE WHEN ? THEN NULL ELSE job_name END
-                    WHERE target_repo = ? AND issue_number = ?
-                    """,
-                    (owner_token, clear_finished, target_repo, issue_number),
-                )
-            self._connection.commit()
-        except BaseException:
-            self._connection.rollback()
-            raise
-        claimed = self.get_afk_coordinator(target_repo, issue_number)
-        if claimed is None:
-            raise RuntimeError("claimed AFK coordinator could not be loaded")
-        return claimed
-
-    def get_afk_coordinator(self, target_repo: str, issue_number: int) -> AfkCoordinator | None:
-        row = self._connection.execute(
-            "SELECT * FROM afk_coordinators WHERE target_repo = ? AND issue_number = ?",
-            (target_repo, issue_number),
-        ).fetchone()
-        if row is None:
-            return None
-        return AfkCoordinator(
-            target_repo=row["target_repo"],
-            issue_number=row["issue_number"],
-            owner_token=row["owner_token"],
-            job_name=row["job_name"],
-            status=row["status"],
-        )
-
-    def link_afk_job(
-        self, target_repo: str, issue_number: int, owner_token: str, job_name: str
-    ) -> None:
-        cursor = self._connection.execute(
-            """
-            UPDATE afk_coordinators SET job_name = ?
-            WHERE target_repo = ? AND issue_number = ? AND owner_token = ?
-            """,
-            (job_name, target_repo, issue_number, owner_token),
-        )
-        self._connection.commit()
-        if cursor.rowcount != 1:
-            raise RuntimeError("AFK coordinator ownership was lost")
-
-    def release_unlinked_afk_coordinator(
-        self, target_repo: str, issue_number: int, owner_token: str
-    ) -> None:
-        self._connection.execute(
-            """
-            DELETE FROM afk_coordinators
-            WHERE target_repo = ? AND issue_number = ? AND owner_token = ?
-              AND job_name IS NULL
-            """,
-            (target_repo, issue_number, owner_token),
-        )
-        self._connection.commit()
-
-    def assert_afk_coordinator_owner(
-        self, target_repo: str, issue_number: int, owner_token: str
-    ) -> None:
-        row = self._connection.execute(
-            """
-            SELECT 1 FROM afk_coordinators
-            WHERE target_repo = ? AND issue_number = ? AND owner_token = ?
-              AND status = 'running'
-            """,
-            (target_repo, issue_number, owner_token),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError("AFK coordinator ownership was lost")
-
-    def finish_afk_coordinator(
-        self, target_repo: str, issue_number: int, owner_token: str, status: str
-    ) -> None:
-        cursor = self._connection.execute(
-            """
-            UPDATE afk_coordinators SET status = ?
-            WHERE target_repo = ? AND issue_number = ? AND owner_token = ?
-            """,
-            (status, target_repo, issue_number, owner_token),
-        )
-        self._connection.commit()
-        if cursor.rowcount != 1:
-            raise RuntimeError("AFK coordinator ownership was lost")
-
-    def get_followup_feedback(
-        self, job_name: str, kind: str, ref_id: str
-    ) -> FollowupFeedback | None:
-        row = self._connection.execute(
-            """
-            SELECT * FROM followup_feedback
-            WHERE job_name = ? AND kind = ? AND ref_id = ?
-            """,
-            (job_name, kind, ref_id),
-        ).fetchone()
-        return _followup_feedback(row) if row is not None else None
-
-    def list_followup_feedback(self, job_name: str) -> list[FollowupFeedback]:
-        rows = self._connection.execute(
-            """
-            SELECT * FROM followup_feedback
-            WHERE job_name = ? ORDER BY created_at DESC, id DESC
-            """,
-            (job_name,),
-        ).fetchall()
-        return [_followup_feedback(row) for row in rows]
-
-    def record_followup_feedback(
-        self,
-        job_name: str,
-        *,
-        kind: str,
-        ref_id: str,
-        comment_id: str | None,
-        status: str,
-        commit_sha: str | None,
-    ) -> FollowupFeedback:
-        now = _now()
-        self._connection.execute(
-            """
-            INSERT INTO followup_feedback (
-                job_name, kind, ref_id, comment_id, status, commit_sha,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(job_name, kind, ref_id) DO UPDATE SET
-                comment_id = excluded.comment_id,
-                status = excluded.status,
-                commit_sha = excluded.commit_sha,
-                updated_at = excluded.updated_at
-            """,
-            (job_name, kind, ref_id, comment_id, status, commit_sha, now, now),
-        )
-        self._connection.commit()
-        recorded = self.get_followup_feedback(job_name, kind, ref_id)
-        if recorded is None:
-            raise RuntimeError("recorded followup feedback could not be loaded")
-        return recorded
-
     def _migrate(self) -> None:
         super()._migrate()
         self._connection.execute(
@@ -656,34 +449,6 @@ class CodingStore(RuntimeStore):
                 output_path TEXT NOT NULL,
                 git_commit_before TEXT,
                 git_commit_after TEXT
-            )
-            """
-        )
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS followup_feedback (
-                id INTEGER PRIMARY KEY,
-                job_name TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                ref_id TEXT NOT NULL,
-                comment_id TEXT,
-                status TEXT NOT NULL,
-                commit_sha TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(job_name, kind, ref_id)
-            )
-            """
-        )
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS afk_coordinators (
-                target_repo TEXT NOT NULL,
-                issue_number INTEGER NOT NULL,
-                owner_token TEXT NOT NULL,
-                job_name TEXT,
-                status TEXT NOT NULL,
-                PRIMARY KEY (target_repo, issue_number)
             )
             """
         )
@@ -728,20 +493,6 @@ def _coding_run(row) -> CodingCommandRun:
         output_path=row["output_path"],
         git_commit_before=row["git_commit_before"],
         git_commit_after=row["git_commit_after"],
-    )
-
-
-def _followup_feedback(row) -> FollowupFeedback:
-    return FollowupFeedback(
-        id=row["id"],
-        job_name=row["job_name"],
-        kind=row["kind"],
-        ref_id=row["ref_id"],
-        comment_id=row["comment_id"],
-        status=row["status"],
-        commit_sha=row["commit_sha"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
     )
 
 

@@ -224,10 +224,6 @@ class JobAgent(Protocol):
     ) -> AgentTurnRecovery: ...
 
 
-class JobUnsettledError(RuntimeError):
-    pass
-
-
 class JobStore(Protocol):
     database_path: Path
 
@@ -256,14 +252,6 @@ class JobStore(Protocol):
     def get_job_turn_by_input(self, job_name: str, input_id: str) -> JobTurn | None: ...
 
     def reset_unsubmitted_job_turn(self, turn_id: int) -> None: ...
-
-    def begin_job_end(self, job_name: str, *, interrupt: bool) -> JobInput: ...
-
-    def retry_job_cleanup_turn(self, input_id: str) -> None: ...
-
-    def finish_job_end(
-        self, job_name: str, cleanup_input_id: str, *, interrupted: bool
-    ) -> JobBinding: ...
 
     def admit_job_turn(self, job_input: JobInput, *, output_path: str) -> tuple[JobTurn, bool]: ...
 
@@ -516,104 +504,6 @@ class JobRuntime:
             room_observation=observation,
             room_observation_error=observation_error,
         )
-
-    def end(self, job_name: str, *, interrupt: bool = False) -> JobBinding:
-        """End one Job after a stable cooperative cleanup turn and exact workspace cleanup."""
-        binding = self._store.get_job_binding(job_name)
-        if binding is None:
-            raise RuntimeError(f"Job not found: {job_name}")
-        if binding.job.status == "ended":
-            return binding
-        inputs = self._store.list_job_inputs(job_name)
-        turns = self._store.list_job_turns(job_name)
-        turns_by_input = {turn.input_id: turn for turn in turns}
-        unsettled = [
-            item
-            for item in inputs
-            if item.kind != "cleanup"
-            and (
-                item.id not in turns_by_input
-                or turns_by_input[item.id].status in {"running", "recovery-required"}
-            )
-        ]
-        if unsettled and not interrupt:
-            item = unsettled[0]
-            turn = turns_by_input.get(item.id)
-            state = turn.status if turn is not None else "queued"
-            raise JobUnsettledError(
-                f"Job input {item.sequence} is {state}; use job wait {job_name} "
-                f"or job end {job_name} --interrupt"
-            )
-        room_is_lost = binding.worker.current_room_id is None and binding.room.status == "absent"
-        if room_is_lost and not interrupt:
-            raise RuntimeError(
-                f"Job Room is absent; use job end {job_name} --interrupt to acknowledge loss"
-            )
-        if interrupt and not room_is_lost:
-            for turn in turns:
-                if (
-                    turn.status in {"running", "recovery-required"}
-                    and turn.native_turn_id is not None
-                ):
-                    try:
-                        self._agent.interrupt_job_conversation_turn(binding, turn)
-                    except Exception as error:
-                        raise RuntimeError(
-                            f"Could not interrupt active native Job turn {turn.native_turn_id}: "
-                            f"{error}"
-                        ) from error
-        cleanup = self._store.begin_job_end(job_name, interrupt=interrupt)
-        if not interrupt:
-            cleanup_turn = self._store.get_job_turn_by_input(job_name, cleanup.id)
-            if cleanup_turn is not None and cleanup_turn.status in {"failed", "interrupted"}:
-                self._store.retry_job_cleanup_turn(cleanup.id)
-                cleanup_turn = None
-            if cleanup_turn is None or cleanup_turn.status != "succeeded":
-                cleanup_turn = self.deliver_input(job_name, cleanup.id)
-            if cleanup_turn.status != "succeeded":
-                raise RuntimeError(
-                    f"Job cleanup turn did not succeed: {cleanup_turn.status}: "
-                    f"{cleanup_turn.error or 'no detail'}"
-                )
-        current = self._store.get_job_binding(job_name)
-        if current is None:
-            raise RuntimeError(f"Job binding disappeared during end: {job_name}")
-        if not room_is_lost:
-            room_binding = WorkerBinding(current.worker, current.room)
-            cleanup_result = self._environment.execute(
-                room_binding,
-                [
-                    "rm",
-                    "-rf",
-                    "--",
-                    current.assignment.workspace,
-                    f"/run/dorf/jobs/{job_name}",
-                ],
-            )
-            if cleanup_result.returncode != 0:
-                detail = (
-                    cleanup_result.stderr or cleanup_result.stdout or "workspace cleanup failed"
-                ).strip()
-                raise RuntimeError(f"Could not remove Job workspace: {detail}")
-        ended = self._store.finish_job_end(job_name, cleanup.id, interrupted=interrupt)
-        self._store.record_job_event(
-            job_name,
-            event_id=f"evt-job-ended-{ended.assignment.id}",
-            source="runtime",
-            provenance="fact",
-            kind="job-ended",
-            summary=(
-                "Job ended after its Room was lost"
-                if room_is_lost
-                else "Job ended and Assignment workspace removed"
-            ),
-            related={
-                "assignment": ended.assignment.id,
-                "room": ended.room.id,
-                "worker": ended.worker.name,
-            },
-        )
-        return ended
 
     def recover_turns(self, job_name: str) -> list[JobTurn]:
         """Reconcile unsettled Job turns without blindly resubmitting input."""

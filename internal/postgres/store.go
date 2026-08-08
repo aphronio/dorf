@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -38,17 +39,18 @@ func MessageTaskKey(jobID string) string { return "run:v2:" + jobID }
 type Store struct{ DB *sql.DB }
 
 type NewJob struct {
-	AdmissionKey       string
-	Goal               string
-	Repository         string
-	Revision           string
-	Branch             string
-	ProviderConnection string
-	Model              string
-	ReasoningEffort    string
-	GitHubRepository   string
-	GitHubInstallation string
-	BaseBranch         string
+	AdmissionKey         string
+	Goal                 string
+	Repository           string
+	Revision             string
+	Branch               string
+	ProviderConnection   string
+	ProviderGatewayState string
+	Model                string
+	ReasoningEffort      string
+	GitHubRepository     string
+	GitHubInstallation   string
+	BaseBranch           string
 }
 
 type NewMessage struct {
@@ -74,6 +76,7 @@ type TaskEvidence struct {
 	State       string `json:"state"`
 	Attempts    int    `json:"attempts"`
 	Checkpoints int    `json:"checkpoints"`
+	LiveClaims  int    `json:"live_claims"`
 }
 
 type PublicationTaskEvidence struct {
@@ -82,6 +85,7 @@ type PublicationTaskEvidence struct {
 	State          string `json:"state"`
 	Attempts       int    `json:"attempts"`
 	Checkpoints    int    `json:"checkpoints"`
+	LiveClaims     int    `json:"live_claims"`
 	Attempt        int    `json:"publication_attempt"`
 	Current        bool   `json:"current"`
 }
@@ -123,7 +127,7 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql", "009_github_publication.sql"} {
+	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql", "009_github_publication.sql", "010_job_outcomes_cleanup.sql"} {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
@@ -162,13 +166,14 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.Revision = strings.TrimSpace(input.Revision)
 	input.Branch = strings.TrimSpace(input.Branch)
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
+	input.ProviderGatewayState = filepath.Clean(strings.TrimSpace(input.ProviderGatewayState))
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
 	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
-	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, model, canonical GitHub repository, installation, and explicit base branch")
+	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || !filepath.IsAbs(input.ProviderGatewayState) {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, resolved absolute Provider Gateway state, model, canonical GitHub repository, installation, and explicit base branch")
 	}
 	if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
 		return spine.Job{}, false, err
@@ -186,10 +191,10 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `
-		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,model,reasoning_effort,github_repository,github_installation_id,base_branch)
-		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12) on conflict(admission_key) do nothing`,
+		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,provider_gateway_state,model,reasoning_effort,github_repository,github_installation_id,base_branch)
+		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13) on conflict(admission_key) do nothing`,
 		id, input.AdmissionKey, input.Goal, input.Repository, input.Revision, input.Branch,
-		input.ProviderConnection, input.Model, input.ReasoningEffort, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch)
+		input.ProviderConnection, input.ProviderGatewayState, input.Model, input.ReasoningEffort, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch)
 	if err != nil {
 		return spine.Job{}, false, err
 	}
@@ -199,9 +204,9 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	var stored NewJob
 	var storedID string
-	if err := tx.QueryRowContext(ctx, `select id,admission_key,goal,repository,revision,branch,provider_connection,model,reasoning_effort,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,'') from dorf.jobs where admission_key=$1 for update`, input.AdmissionKey).Scan(
+	if err := tx.QueryRowContext(ctx, `select id,admission_key,goal,repository,revision,branch,provider_connection,coalesce(provider_gateway_state,''),model,reasoning_effort,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,'') from dorf.jobs where admission_key=$1 for update`, input.AdmissionKey).Scan(
 		&storedID, &stored.AdmissionKey, &stored.Goal, &stored.Repository, &stored.Revision, &stored.Branch,
-		&stored.ProviderConnection, &stored.Model, &stored.ReasoningEffort, &stored.GitHubRepository, &stored.GitHubInstallation, &stored.BaseBranch); err != nil {
+		&stored.ProviderConnection, &stored.ProviderGatewayState, &stored.Model, &stored.ReasoningEffort, &stored.GitHubRepository, &stored.GitHubInstallation, &stored.BaseBranch); err != nil {
 		return spine.Job{}, false, err
 	}
 	if storedID != id || stored != input {
@@ -376,10 +381,10 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	err := s.DB.QueryRowContext(ctx, `
 		select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0),j.starting_revision,j.branch,
 		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),j.publication_attempt,
-		       j.provider_connection,j.model,j.reasoning_effort,j.state,j.admission_open,
+		       j.provider_connection,coalesce(j.provider_gateway_state,''),j.model,j.reasoning_effort,j.state,j.admission_open,
 		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
-		       coalesce(sb.incus_name,''),coalesce(r.route_id,''),coalesce(se.native_session_id,''),
-		       coalesce(j.run_terminal_state,''),j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,''),j.review_repair_count
+		       coalesce(sb.incus_name,''),coalesce(sb.state,''),coalesce(r.route_id,''),coalesce(r.state,''),coalesce(se.native_session_id,''),
+		       coalesce(j.run_terminal_state,''),j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,''),coalesce(j.cleanup_attention,''),j.review_repair_count
 		from dorf.jobs j
 		left join dorf.sandboxes sb on sb.job_id=j.id
 		left join dorf.routes r on r.job_id=j.id
@@ -388,9 +393,9 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		where j.id=$1`, id).Scan(
 		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.RevisionGeneration, &job.StartingRevision, &job.Branch,
 		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID, &job.PublicationAttempt,
-		&job.ProviderConnection, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
-		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.RouteID,
-		&job.SessionID, &job.RunTerminalState, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.ReviewRepairCount)
+		&job.ProviderConnection, &job.ProviderGatewayState, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
+		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.SandboxState, &job.RouteID, &job.RouteState,
+		&job.SessionID, &job.RunTerminalState, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.CleanupAttention, &job.ReviewRepairCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.Job{}, ErrNotFound
 	}
@@ -535,11 +540,22 @@ func (s Store) StartRun(ctx context.Context, jobID string) error {
 }
 
 func (s Store) CloseAdmission(ctx context.Context, jobID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set admission_open=false where id=$1`, jobID))
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set admission_open=false,workflow_attention=null where id=$1`, jobID))
 }
 
 func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_task_id=coalesce(cleanup_task_id,$2),cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end where id=$1 and (cleanup_task_id is null or cleanup_task_id=$2)`, jobID, taskID))
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := requireCleanupTask(ctx, tx, taskID, jobID); err != nil {
+		return err
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_task_id=coalesce(cleanup_task_id,$2),cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end where id=$1 and (cleanup_task_id is null or cleanup_task_id=$2)`, jobID, taskID)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
@@ -551,6 +567,24 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, kind); err != nil {
 		return spine.Action{}, err
+	}
+	switch kind {
+	case spine.ActionSandboxCreate:
+		if err := expectOne(tx.ExecContext(ctx, `
+			insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'pending')
+			on conflict(job_id) do update set action_id=dorf.sandboxes.action_id
+			where dorf.sandboxes.action_id=excluded.action_id and dorf.sandboxes.incus_name=excluded.incus_name`,
+			jobID, desiredID, spine.MainSandboxName(jobID))); err != nil {
+			return spine.Action{}, fmt.Errorf("reserve exact main Sandbox identity: %w", err)
+		}
+	case spine.ActionRouteCreate:
+		if err := expectOne(tx.ExecContext(ctx, `
+			insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'pending')
+			on conflict(job_id) do update set action_id=dorf.routes.action_id
+			where dorf.routes.action_id=excluded.action_id and dorf.routes.route_id=excluded.route_id`,
+			jobID, desiredID, spine.ProviderRouteID(desiredID))); err != nil {
+			return spine.Action{}, fmt.Errorf("reserve exact main provider route identity: %w", err)
+		}
 	}
 	var action spine.Action
 	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null and scope_key='' returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
@@ -1073,7 +1107,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'created') on conflict(job_id) do update set incus_name=excluded.incus_name,state='created',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
+		err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='created',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and incus_name=$3 and state in ('pending','created')`, jobID, id, receipt.ExternalID))
 	case spine.ActionRouteCreate:
 		if scope != "" {
 			var expectedSandbox string
@@ -1087,7 +1121,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'active') on conflict(job_id) do update set route_id=excluded.route_id,state='active',observed_at=clock_timestamp()`, jobID, id, receipt.ExternalID)
+		err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='active',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and route_id=$3 and state in ('pending','active')`, jobID, id, receipt.ExternalID))
 	case spine.ActionSessionStart:
 		if scope != "" {
 			if strings.TrimSpace(receipt.ExternalID) == "" || strings.TrimSpace(receipt.Outcome) == "" {
@@ -1139,7 +1173,13 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1`, jobID)
+		var expectedRoute string
+		if err = tx.QueryRowContext(ctx, `select route_id from dorf.routes where job_id=$1`, jobID).Scan(&expectedRoute); err == nil && (receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != expectedRoute)) {
+			err = fmt.Errorf("main route cleanup receipt conflicts with its persisted exact route ID")
+		}
+		if err == nil {
+			err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1 and route_id=$2 and state in ('pending','active','revoked')`, jobID, expectedRoute))
+		}
 	case spine.ActionSandboxDelete:
 		if scope != "" {
 			var expected string
@@ -1151,7 +1191,13 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			}
 			break
 		}
-		_, err = tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1`, jobID)
+		var expectedSandbox string
+		if err = tx.QueryRowContext(ctx, `select incus_name from dorf.sandboxes where job_id=$1`, jobID).Scan(&expectedSandbox); err == nil && (receipt.ExternalID != expectedSandbox || receipt.Outcome != "deleted") {
+			err = fmt.Errorf("main Sandbox cleanup receipt conflicts with its persisted exact Incus name")
+		}
+		if err == nil {
+			err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1 and incus_name=$2 and state in ('pending','created','deleted')`, jobID, expectedSandbox))
+		}
 	case spine.ActionReviewWorkspaceCreate:
 		var path, revision string
 		if err = tx.QueryRowContext(ctx, `select ar.workspace,rr.revision from dorf.review_resources rr join dorf.agent_runs ar on ar.id=rr.run_id where rr.materialize_action_id=$1 and rr.run_id=$2`, id, scope).Scan(&path, &revision); err == nil && receipt.ExternalID != path {
@@ -1461,12 +1507,49 @@ func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine
 	return &delivery, nil
 }
 
+func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) error {
+	detail = strings.TrimSpace(detail)
+	if len(detail) > 4096 {
+		detail = detail[:4096]
+	}
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_attention=nullif($2,'') where id=$1 and cleanup_state<>'complete'`, jobID, detail))
+}
+
 func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var admissionOpen bool
+	var cleanupState, taskID, publicationTaskID, cleanupTaskID, workflowAttention string
+	if err := tx.QueryRowContext(ctx, `select admission_open,cleanup_state,coalesce(task_id,''),coalesce(publication_task_id,''),coalesce(cleanup_task_id,''),coalesce(workflow_attention,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&admissionOpen, &cleanupState, &taskID, &publicationTaskID, &cleanupTaskID, &workflowAttention); err != nil {
+		return err
+	}
+	if admissionOpen || cleanupState != string(spine.CleanupScheduled) || workflowAttention != "" {
+		return fmt.Errorf("cleanup cannot complete while admission, workflow attention, or cleanup scheduling remains unsettled")
+	}
+	if err := requireTerminalJobTask(ctx, tx, taskID, MessageTaskName, jobID, MessageTaskKey(jobID)); err != nil {
+		return fmt.Errorf("ordinary Job task remains unsettled: %w", err)
+	}
+	if publicationTaskID != "" {
+		if err := requireTerminalPublicationTask(ctx, tx, publicationTaskID, jobID); err != nil {
+			return fmt.Errorf("attached publication task remains unsettled: %w", err)
+		}
+	}
+	if cleanupTaskID == "" {
+		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
+	}
+	if err := requireCleanupTask(ctx, tx, cleanupTaskID, jobID); err != nil {
+		return err
+	}
+	var nativeMutations int
+	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.agent_runs where job_id=$1 and role in ('implement','repair') and state in ('submitting','active','uncertain')`, jobID).Scan(&nativeMutations); err != nil {
+		return err
+	}
+	if nativeMutations != 0 {
+		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation native mutations", nativeMutations)
+	}
 	var unsettled int
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_resources where job_id=$1 and (route_state<>'revoked' or sandbox_state<>'deleted')`, jobID).Scan(&unsettled); err != nil {
 		return err
@@ -1478,13 +1561,71 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if err := tx.QueryRowContext(ctx, `select coalesce((select state from dorf.sandboxes where job_id=$1),''),coalesce((select state from dorf.routes where job_id=$1),'')`, jobID).Scan(&sandboxState, &routeState); err != nil {
 		return err
 	}
-	if sandboxState != "deleted" || routeState != "revoked" {
+	if (sandboxState != "" && sandboxState != "deleted") || (routeState != "" && routeState != "revoked") {
 		return fmt.Errorf("cleanup cannot complete before exact Sandbox deletion and route revocation are observed")
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='complete',cleaned_at=clock_timestamp() where id=$1`, jobID)); err != nil {
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='complete',cleanup_attention=null,workflow_attention=null,cleaned_at=coalesce(cleaned_at,clock_timestamp()) where id=$1 and cleanup_state='scheduled'`, jobID)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func requireTerminalJobTask(ctx context.Context, tx *sql.Tx, taskID, taskName, jobID, key string) error {
+	if taskID == "" {
+		return fmt.Errorf("task attachment is missing")
+	}
+	var name, state, owner, idempotency string
+	if err := tx.QueryRowContext(ctx, `select task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&name, &state, &owner, &idempotency); err != nil {
+		return err
+	}
+	if name != taskName || owner != jobID || idempotency != key {
+		return fmt.Errorf("task %s does not belong to exact Job %s", taskID, jobID)
+	}
+	if state != "completed" && state != "failed" && state != "cancelled" {
+		return fmt.Errorf("task %s is %s", taskID, state)
+	}
+	return requireNoLiveTaskRuns(ctx, tx, taskID)
+}
+
+func requireTerminalPublicationTask(ctx context.Context, tx *sql.Tx, taskID, jobID string) error {
+	var revision string
+	var attempt int
+	if err := tx.QueryRowContext(ctx, `select revision,publication_attempt from dorf.jobs where id=$1`, jobID).Scan(&revision, &attempt); err != nil {
+		return err
+	}
+	task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
+	if err != nil {
+		return err
+	}
+	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
+		return err
+	}
+	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
+		return fmt.Errorf("task %s is %s", taskID, task.State)
+	}
+	return requireNoLiveTaskRuns(ctx, tx, taskID)
+}
+
+func requireNoLiveTaskRuns(ctx context.Context, tx *sql.Tx, taskID string) error {
+	var live int
+	if err := tx.QueryRowContext(ctx, `select count(*) from absurd.r_dorf_jobs where task_id=$1::uuid and state not in ('completed','failed','cancelled')`, taskID).Scan(&live); err != nil {
+		return err
+	}
+	if live != 0 {
+		return fmt.Errorf("task %s retains %d live run claims", taskID, live)
+	}
+	return nil
+}
+
+func requireCleanupTask(ctx context.Context, tx *sql.Tx, taskID, jobID string) error {
+	var name, owner, key string
+	if err := tx.QueryRowContext(ctx, `select task_name,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&name, &owner, &key); err != nil {
+		return err
+	}
+	if name != "dorf-job-cleanup-v2" || owner != jobID || key != "cleanup:"+jobID {
+		return fmt.Errorf("cleanup task %s does not prove exact Job %s authority", taskID, jobID)
+	}
+	return nil
 }
 
 func (s Store) CancelRun(ctx context.Context, jobID string) (string, error) {
@@ -1502,6 +1643,15 @@ func (s Store) CancelRun(ctx context.Context, jobID string) (string, error) {
 	}
 	if taskID == "" {
 		return "", fmt.Errorf("Job %s has no Absurd run task to cancel", jobID)
+	}
+	task, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid for update`, taskID))
+	if err != nil {
+		return "", fmt.Errorf("inspect exact ordinary Job task: %w", err)
+	}
+	validCurrent := task.Name == MessageTaskName && task.JobID == jobID && task.IdempotencyKey == MessageTaskKey(jobID)
+	validLegacy := task.Name == legacyRunTaskName && task.JobID == jobID && task.IdempotencyKey == "run:"+jobID
+	if !validCurrent && !validLegacy {
+		return "", fmt.Errorf("attached ordinary task %s does not belong to exact Job %s", taskID, jobID)
 	}
 	if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {
 		return "", fmt.Errorf("cancel Absurd run task: %w", err)
@@ -1603,7 +1753,10 @@ func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, e
 		return TaskEvidence{}, nil
 	}
 	var evidence TaskEvidence
-	err := s.DB.QueryRowContext(ctx, `select t.task_id::text,t.state,t.attempts,count(c.task_id) from absurd.t_dorf_jobs t left join absurd.c_dorf_jobs c on c.task_id=t.task_id where t.task_id=$1::uuid group by t.task_id,t.state,t.attempts`, taskID).Scan(&evidence.TaskID, &evidence.State, &evidence.Attempts, &evidence.Checkpoints)
+	err := s.DB.QueryRowContext(ctx, `select t.task_id::text,t.state,t.attempts,
+		(select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
+		(select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
+		from absurd.t_dorf_jobs t where t.task_id=$1::uuid`, taskID).Scan(&evidence.TaskID, &evidence.State, &evidence.Attempts, &evidence.Checkpoints, &evidence.LiveClaims)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TaskEvidence{TaskID: taskID, State: "missing"}, nil
 	}
@@ -1615,12 +1768,12 @@ func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, e
 func (s Store) PublicationTaskHistory(ctx context.Context, job spine.Job) ([]PublicationTaskEvidence, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		select t.task_id::text,t.idempotency_key,t.state,t.attempts,
-		       coalesce(t.params->>'attempt',''),count(c.task_id)
+		       coalesce(t.params->>'attempt',''),
+		       (select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
+		       (select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
 		from absurd.t_dorf_jobs t
-		left join absurd.c_dorf_jobs c on c.task_id=t.task_id
 		where t.task_name=$1 and t.params->>'job_id'=$2 and t.params->>'revision'=$3
 		  and t.max_attempts=$4
-		group by t.task_id,t.idempotency_key,t.state,t.attempts,t.params
 		order by t.idempotency_key,t.task_id`, PublicationTaskName, job.ID, job.Revision, PublicationTaskMaxAttempts)
 	if err != nil {
 		return nil, err
@@ -1630,7 +1783,7 @@ func (s Store) PublicationTaskHistory(ctx context.Context, job spine.Job) ([]Pub
 	for rows.Next() {
 		var item PublicationTaskEvidence
 		var attempt string
-		if err := rows.Scan(&item.TaskID, &item.IdempotencyKey, &item.State, &item.Attempts, &attempt, &item.Checkpoints); err != nil {
+		if err := rows.Scan(&item.TaskID, &item.IdempotencyKey, &item.State, &item.Attempts, &attempt, &item.Checkpoints, &item.LiveClaims); err != nil {
 			return nil, err
 		}
 		item.Attempt, err = strconv.Atoi(attempt)

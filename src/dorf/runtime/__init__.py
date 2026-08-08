@@ -18,7 +18,6 @@ from .assigned_job import (
     JobInspection,
     JobRuntime,
     JobTurn,
-    JobUnsettledError,
     NewJob,
     job_turn_output_path,
 )
@@ -87,7 +86,6 @@ __all__ = [
     "JobRecord",
     "JobRuntime",
     "JobTurn",
-    "JobUnsettledError",
     "MAX_MODEL_ARTIFACT_BYTES",
     "NewJob",
     "NewWorker",

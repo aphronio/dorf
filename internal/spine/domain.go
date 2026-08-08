@@ -62,35 +62,39 @@ const (
 )
 
 type Job struct {
-	ID                 string       `json:"id"`
-	AdmissionKey       string       `json:"admission_key"`
-	Goal               string       `json:"goal"`
-	Repository         string       `json:"repository"`
-	Revision           string       `json:"revision"`
-	RevisionGeneration int          `json:"revision_generation"`
-	StartingRevision   string       `json:"starting_revision"`
-	Branch             string       `json:"branch"`
-	GitHubRepository   string       `json:"github_repository,omitempty"`
-	GitHubInstallation string       `json:"github_installation_id,omitempty"`
-	BaseBranch         string       `json:"base_branch,omitempty"`
-	PublicationTaskID  string       `json:"publication_task_id,omitempty"`
-	PublicationAttempt int          `json:"publication_attempt"`
-	ProviderConnection string       `json:"provider_connection"`
-	Model              string       `json:"model"`
-	ReasoningEffort    string       `json:"reasoning_effort"`
-	State              JobState     `json:"state"`
-	AdmissionOpen      bool         `json:"admission_open"`
-	CleanupState       CleanupState `json:"cleanup_state"`
-	TaskID             string       `json:"task_id"`
-	CleanupTaskID      string       `json:"cleanup_task_id,omitempty"`
-	SandboxID          string       `json:"sandbox_id,omitempty"`
-	RouteID            string       `json:"route_id,omitempty"`
-	SessionID          string       `json:"session_id,omitempty"`
-	RunTerminalState   string       `json:"run_terminal_state,omitempty"`
-	WorkflowPhase      string       `json:"workflow_phase"`
-	RepairCount        int          `json:"repair_count"`
-	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
-	ReviewRepairCount  int          `json:"review_repair_count"`
+	ID                   string       `json:"id"`
+	AdmissionKey         string       `json:"admission_key"`
+	Goal                 string       `json:"goal"`
+	Repository           string       `json:"repository"`
+	Revision             string       `json:"revision"`
+	RevisionGeneration   int          `json:"revision_generation"`
+	StartingRevision     string       `json:"starting_revision"`
+	Branch               string       `json:"branch"`
+	GitHubRepository     string       `json:"github_repository,omitempty"`
+	GitHubInstallation   string       `json:"github_installation_id,omitempty"`
+	BaseBranch           string       `json:"base_branch,omitempty"`
+	PublicationTaskID    string       `json:"publication_task_id,omitempty"`
+	PublicationAttempt   int          `json:"publication_attempt"`
+	ProviderConnection   string       `json:"provider_connection"`
+	ProviderGatewayState string       `json:"provider_gateway_state,omitempty"`
+	Model                string       `json:"model"`
+	ReasoningEffort      string       `json:"reasoning_effort"`
+	State                JobState     `json:"state"`
+	AdmissionOpen        bool         `json:"admission_open"`
+	CleanupState         CleanupState `json:"cleanup_state"`
+	TaskID               string       `json:"task_id"`
+	CleanupTaskID        string       `json:"cleanup_task_id,omitempty"`
+	SandboxID            string       `json:"sandbox_id,omitempty"`
+	SandboxState         string       `json:"sandbox_state,omitempty"`
+	RouteID              string       `json:"route_id,omitempty"`
+	RouteState           string       `json:"route_state,omitempty"`
+	SessionID            string       `json:"session_id,omitempty"`
+	RunTerminalState     string       `json:"run_terminal_state,omitempty"`
+	WorkflowPhase        string       `json:"workflow_phase"`
+	RepairCount          int          `json:"repair_count"`
+	WorkflowAttention    string       `json:"workflow_attention,omitempty"`
+	CleanupAttention     string       `json:"cleanup_attention,omitempty"`
+	ReviewRepairCount    int          `json:"review_repair_count"`
 }
 
 type Message struct {
@@ -253,6 +257,31 @@ type GitHubProposal struct {
 	Stale              bool   `json:"stale"`
 }
 
+type JobOutcomeKind string
+
+const (
+	OutcomeAccepted  JobOutcomeKind = "accepted"
+	OutcomeRejected  JobOutcomeKind = "rejected"
+	OutcomeAbandoned JobOutcomeKind = "abandoned"
+)
+
+type JobOutcome struct {
+	JobID            string         `json:"job_id"`
+	Kind             JobOutcomeKind `json:"outcome"`
+	Repository       string         `json:"repository"`
+	InstallationID   string         `json:"installation_id"`
+	BaseBranch       string         `json:"base_branch"`
+	HeadBranch       string         `json:"head_branch"`
+	Number           int64          `json:"pr_number"`
+	URL              string         `json:"pr_url"`
+	ProposedRevision string         `json:"proposed_revision"`
+	ObservedHead     string         `json:"observed_head"`
+	ObservedState    string         `json:"observed_state"`
+	ObservedMerged   bool           `json:"observed_merged"`
+	MergeCommitOID   string         `json:"merge_commit_oid,omitempty"`
+	ObservedAt       time.Time      `json:"observed_at"`
+}
+
 type NativeTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
@@ -289,6 +318,16 @@ func ReviewAgentRunID(jobID, revision, role string) string {
 
 func ReviewSandboxName(runID string) string {
 	return "dorf-review-" + digest(runID, 20)
+}
+
+// MainSandboxName and ProviderRouteID are the exact resource identities
+// durably reserved before their external create effects.
+func MainSandboxName(jobID string) string {
+	return "dorf-" + digest(jobID, 20)
+}
+
+func ProviderRouteID(actionID string) string {
+	return "route-" + digest(actionID, 16)
 }
 
 func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {

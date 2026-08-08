@@ -51,6 +51,11 @@ func Load() (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DORF_DATABASE_URL is required (use a local PostgreSQL DSN; Dorf does not start Docker or use a cloud account)")
 	}
+	cfg.GatewayStatePath, err = filepath.Abs(cfg.GatewayStatePath)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve Provider Gateway state locator: %w", err)
+	}
+	cfg.GatewayStatePath = filepath.Clean(cfg.GatewayStatePath)
 	if !filepath.IsAbs(cfg.EvidenceRoot) {
 		return Config{}, fmt.Errorf("DORF_EVIDENCE_ROOT must be an absolute deployment-owned path")
 	}

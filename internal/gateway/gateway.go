@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Route struct {
@@ -68,7 +69,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		}
 		for _, existing := range routes {
 			if existing.Consumer == consumer {
-				if existing.ConnectionName != connectionName || existing.ID != routeID(actionID) {
+				if existing.ConnectionName != connectionName || existing.ID != RouteID(actionID) {
 					return fmt.Errorf("provider consumer is bound to a different stable route")
 				}
 				route = existing
@@ -79,7 +80,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
+		route = Route{ID: RouteID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
 		routes = append(routes, route)
 		if err := g.writeRoutes(routes); err != nil {
 			return err
@@ -97,25 +98,38 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 	return route, nil
 }
 
-func (g Gateway) Revoke(ctx context.Context, consumer string) (string, error) {
+// RevokeExact removes only the recorded consumer/route pair. An absent
+// consumer reconciles a prior success-before-record loss; a changed identity
+// fails closed without touching any route.
+func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID string) (string, error) {
+	if strings.TrimSpace(consumer) == "" || strings.TrimSpace(expectedRouteID) == "" {
+		return "", fmt.Errorf("exact provider route revocation requires consumer and route ID")
+	}
 	removedID := "absent"
 	err := g.lock(func() error {
 		routes, err := g.readRoutes()
 		if err != nil {
 			return err
 		}
-		remaining := routes[:0]
-		for _, route := range routes {
+		index := -1
+		for i, route := range routes {
 			if route.Consumer == consumer {
-				removedID = route.ID
-				continue
+				if route.ID != expectedRouteID {
+					return fmt.Errorf("provider consumer %q is bound to route %s, not recorded route %s", consumer, route.ID, expectedRouteID)
+				}
+				index = i
 			}
-			remaining = append(remaining, route)
+			if route.ID == expectedRouteID && route.Consumer != consumer {
+				return fmt.Errorf("recorded provider route %s belongs to consumer %q, not %q", expectedRouteID, route.Consumer, consumer)
+			}
 		}
-		if len(remaining) != len(routes) {
-			if err := g.writeRoutes(remaining); err != nil {
-				return err
-			}
+		if index < 0 {
+			return g.activate(ctx, routes)
+		}
+		removedID = expectedRouteID
+		remaining := append(routes[:index:index], routes[index+1:]...)
+		if err := g.writeRoutes(remaining); err != nil {
+			return err
 		}
 		return g.activate(ctx, remaining)
 	})
@@ -452,9 +466,9 @@ func readJSON(path string, target any) error {
 	return json.Unmarshal(data, target)
 }
 
-func routeID(actionID string) string {
-	sum := sha256.Sum256([]byte(actionID))
-	return "route-" + hex.EncodeToString(sum[:])[:16]
+// RouteID derives the exact stable provider-route identity owned by one Action.
+func RouteID(actionID string) string {
+	return spine.ProviderRouteID(actionID)
 }
 
 func randomKey() (string, error) {

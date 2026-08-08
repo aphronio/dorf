@@ -34,3 +34,19 @@ func TestLoadUsesSetupOwnedXDGAppJSON(t *testing.T) {
 		t.Fatalf("GitHub private key=%q want %q", cfg.GitHubPrivateKey, want)
 	}
 }
+
+func TestLoadResolvesProviderGatewayStateToAbsoluteLocator(t *testing.T) {
+	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
+	t.Setenv("DORF_PROVIDER_GATEWAY_STATE", "relative-gateway-state")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.Abs("relative-gateway-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GatewayStatePath != want || !filepath.IsAbs(cfg.GatewayStatePath) {
+		t.Fatalf("gateway locator=%q want=%q", cfg.GatewayStatePath, want)
+	}
+}

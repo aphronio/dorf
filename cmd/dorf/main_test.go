@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -29,6 +30,15 @@ func TestPublicationGrammarExposesOnlyPublish(t *testing.T) {
 		err := publicationCommand(context.Background(), postgres.Store{}, nil, nil, args, io.Discard, io.Discard)
 		if err == nil || err.Error() != "publication requires: publish JOB_ID --revision EXACT_OID" {
 			t.Fatalf("args=%v error=%v", args, err)
+		}
+	}
+}
+
+func TestOutcomeGrammarExposesOneExactBoundary(t *testing.T) {
+	for _, args := range [][]string{nil, {"job-only"}, {"job", "accepted", "extra"}} {
+		err := outcomeCommand(context.Background(), postgres.Store{}, nil, githubapi.Client{}, args, io.Discard)
+		if err == nil || err.Error() != "outcome requires: JOB_ID <accepted|rejected|abandoned>" {
+			t.Fatalf("args=%v err=%v", args, err)
 		}
 	}
 }
