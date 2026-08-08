@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/evidence"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -310,7 +311,11 @@ func projectGoal(goal string) string {
 	if len(goal) <= limit {
 		return goal
 	}
-	return strings.TrimSpace(goal[:limit]) + "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
+	end := limit
+	for end > 0 && !utf8.RuneStart(goal[end]) {
+		end--
+	}
+	return strings.TrimSpace(goal[:end]) + "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
 }
 
 type GitRepository struct {

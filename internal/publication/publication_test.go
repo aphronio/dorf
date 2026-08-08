@@ -2,8 +2,10 @@ package publication
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
@@ -93,6 +95,63 @@ func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T
 		if strings.Contains(strings.ToLower(first), forbidden) {
 			t.Fatalf("body contains forbidden %q", forbidden)
 		}
+	}
+}
+
+func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *testing.T) {
+	const truncated = "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
+	tests := []struct {
+		name, goal, projected string
+	}{
+		{"multibyte rune crosses byte limit", strings.Repeat("a", 1199) + "界tail", strings.Repeat("a", 1199) + truncated},
+		{"ASCII exactly at byte limit", strings.Repeat("a", 1200), strings.Repeat("a", 1200)},
+		{"short Unicode", "修复精确发布边界 🙂", "修复精确发布边界 🙂"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := projectGoal(test.goal); got != test.projected || !utf8.ValidString(got) {
+				t.Fatalf("projected valid UTF-8=%v\ngot=%q\nwant=%q", utf8.ValidString(got), got, test.projected)
+			}
+			revision := strings.Repeat("a", 40)
+			job := spine.Job{ID: "job-unicode", Goal: test.goal, GitHubRepository: "aphronio/dorf", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
+			readiness := spine.ReadinessAssessment{Status: "ready", Ready: true, Revision: revision, Reason: "exact proof"}
+			body := Body(job, readiness, nil, nil, nil)
+			digest := BodyDigest(body)
+			if !utf8.ValidString(body) || digest != BodyDigest(body) {
+				t.Fatalf("body valid=%v digest=%s", utf8.ValidString(body), digest)
+			}
+			encoded, err := json.Marshal(struct {
+				Body string `json:"body"`
+			}{Body: body})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded struct {
+				Body string `json:"body"`
+			}
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Body != body || BodyDigest(decoded.Body) != digest {
+				t.Fatal("JSON request text or digest differs from the local deterministic body")
+			}
+			pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: decoded.Body}
+			if decision, _, err := planPull(job, nil, nil, body); err != nil || decision != "create" {
+				t.Fatalf("initial decision=%s err=%v", decision, err)
+			}
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, nil, body); err != nil || decision != "adopt" {
+				t.Fatalf("create reconciliation=%s err=%v", decision, err)
+			}
+			pull.Body = "stale body"
+			stored := &spine.GitHubProposal{Number: pull.Number}
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, body); err != nil || decision != "update" {
+				t.Fatalf("refresh decision=%s err=%v", decision, err)
+			}
+			pull.Body = decoded.Body
+			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, body); err != nil || decision != "adopt" {
+				t.Fatalf("update reconciliation=%s err=%v", decision, err)
+			}
+		})
 	}
 }
 
