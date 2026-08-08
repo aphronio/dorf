@@ -49,9 +49,6 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	if first.ID != second.ID || first.APIKey != second.APIKey {
 		t.Fatalf("route was duplicated: %#v %#v", first, second)
 	}
-	if !first.SupportsWebSockets || !second.SupportsWebSockets {
-		t.Fatalf("ChatGPT route did not retain verified WebSocket capability: %#v %#v", first, second)
-	}
 	var routes []Route
 	if err := readJSON(filepath.Join(state, "routes.json"), &routes); err != nil {
 		t.Fatal(err)
@@ -70,7 +67,7 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRouteRetainsHTTPWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
+func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v0/management/auth-files" && r.Method == http.MethodGet:
@@ -84,12 +81,15 @@ func TestRouteRetainsHTTPWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	defer server.Close()
 	gateway := Gateway{StatePath: gatewayState(t, server.URL), Client: server.Client()}
 
-	route, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "action-http")
-	if err != nil {
+	if _, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "action-http"); err == nil {
+		t.Fatal("route was admitted without verified upstream WebSockets")
+	}
+	var routes []Route
+	if err := readJSON(filepath.Join(gateway.StatePath, "routes.json"), &routes); err != nil {
 		t.Fatal(err)
 	}
-	if route.SupportsWebSockets {
-		t.Fatalf("route enabled WebSockets without verified upstream capability: %#v", route)
+	if len(routes) != 0 {
+		t.Fatalf("routes=%d, want none after capability rejection", len(routes))
 	}
 }
 

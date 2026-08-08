@@ -20,12 +20,11 @@ import (
 )
 
 type Route struct {
-	ID                 string `json:"id"`
-	ConnectionName     string `json:"connection_name"`
-	Consumer           string `json:"consumer"`
-	APIKey             string `json:"api_key"`
-	BaseURL            string `json:"-"`
-	SupportsWebSockets bool   `json:"-"`
+	ID             string `json:"id"`
+	ConnectionName string `json:"connection_name"`
+	Consumer       string `json:"consumer"`
+	APIKey         string `json:"api_key"`
+	BaseURL        string `json:"-"`
 }
 
 type connection struct {
@@ -64,6 +63,9 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
+		if !supportsWebSockets {
+			return fmt.Errorf("provider connection %q does not support required Responses WebSockets", connectionName)
+		}
 		routes, err := g.readRoutes()
 		if err != nil {
 			return err
@@ -74,7 +76,6 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 					return fmt.Errorf("provider consumer is bound to a different stable route")
 				}
 				route = existing
-				route.SupportsWebSockets = supportsWebSockets
 				return g.activate(ctx, routes)
 			}
 		}
@@ -82,7 +83,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key, SupportsWebSockets: supportsWebSockets}
+		route = Route{ID: routeID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
 		routes = append(routes, route)
 		if err := g.writeRoutes(routes); err != nil {
 			return err
@@ -152,9 +153,12 @@ func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error
 	if err != nil {
 		return Route{}, false, err
 	}
-	found.SupportsWebSockets, err = g.supportsWebSockets(ctx, connection)
+	supportsWebSockets, err := g.supportsWebSockets(ctx, connection)
 	if err != nil {
 		return Route{}, false, err
+	}
+	if !supportsWebSockets {
+		return Route{}, false, fmt.Errorf("provider connection %q does not support required Responses WebSockets", found.ConnectionName)
 	}
 	return found, true, nil
 }

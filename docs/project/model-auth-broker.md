@@ -49,8 +49,8 @@ Concrete choices:
 2. **Sandbox wiring.** Per sandbox, provisioning writes `config.toml` with a custom
    `model_provider` (`base_url`, `env_key`, `wire_api = "responses"`) and injects one scoped
    broker key as the named env var. `requires_openai_auth` stays false. Responses WebSockets are
-   enabled only when the broker reports `websockets = true` for the selected ChatGPT auth record;
-   otherwise the Room retains HTTP/SSE without a failed WebSocket attempt. Sandboxes carry no
+   required: route admission fails unless the broker reports `websockets = true` for the selected
+   ChatGPT auth record, and every admitted Room sets `supports_websockets = true`. Sandboxes carry no
    `auth.json` and no OpenAI material; a leaked scoped key cannot reach the ChatGPT account.
 3. **Credential-free images.** D008's secret-bearing Incus image is retired for the Codex leg.
 4. **Broker-only egress.** Sandboxes may be network-restricted to the broker alone; validated that
@@ -75,8 +75,8 @@ Each was exercised live against codex-cli 0.138.0 and 0.146.0 with an isolated, 
 `CODEX_HOME`:
 
 - Wire parity: correct responses, token-usage reporting, high reasoning effort, streaming.
-- Transport: HTTP/SSE by default; Responses-over-WebSocket after `supports_websockets = true`
-  (0.146.0), both through the broker.
+- Transport: Responses-over-WebSocket through the broker with `supports_websockets = true`
+  (0.146.0); Dorf requires this capability rather than composing an HTTP/SSE fallback.
 - Model mapping: none needed; codex defaults (`gpt-5.5` on 0.138.0, `gpt-5.6-sol` on 0.146.0) are
   served; 10 subscription models exposed; explicit `model =` overrides work.
 - Stray calls: three unauthenticated metadata calls to chatgpt.com (featured plugins, feature

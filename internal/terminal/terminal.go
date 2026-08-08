@@ -72,7 +72,7 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	if err := e.Sandbox.InstallRoute(ctx, e.Sandbox.Name(job.ID), route.BaseURL, route.APIKey, route.SupportsWebSockets); err != nil {
+	if err := e.Sandbox.InstallRoute(ctx, e.Sandbox.Name(job.ID), route.BaseURL, route.APIKey); err != nil {
 		return spine.Receipt{}, err
 	}
 	return spine.Receipt{ExternalID: route.ID}, nil
