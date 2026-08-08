@@ -30,6 +30,8 @@ const (
 	ActionRepositoryClone       ActionKind = "repository-clone"
 	ActionRepositorySetup       ActionKind = "repository-setup"
 	ActionRepositoryCommit      ActionKind = "repository-commit"
+	ActionRepositoryPush        ActionKind = "repository-push"
+	ActionGitHubPullRequest     ActionKind = "github-pull-request"
 	ActionReviewWorkspaceCreate ActionKind = "review-workspace-create"
 	ActionRouteCreate           ActionKind = "provider-route-create"
 	ActionSessionStart          ActionKind = "codex-session-start"
@@ -68,6 +70,11 @@ type Job struct {
 	RevisionGeneration int          `json:"revision_generation"`
 	StartingRevision   string       `json:"starting_revision"`
 	Branch             string       `json:"branch"`
+	GitHubRepository   string       `json:"github_repository,omitempty"`
+	GitHubInstallation string       `json:"github_installation_id,omitempty"`
+	BaseBranch         string       `json:"base_branch,omitempty"`
+	PublicationTaskID  string       `json:"publication_task_id,omitempty"`
+	PublicationAttempt int          `json:"publication_attempt"`
 	ProviderConnection string       `json:"provider_connection"`
 	Model              string       `json:"model"`
 	ReasoningEffort    string       `json:"reasoning_effort"`
@@ -230,6 +237,20 @@ type Evidence struct {
 type Receipt struct {
 	ExternalID string
 	Outcome    string
+}
+
+type GitHubProposal struct {
+	JobID              string `json:"job_id"`
+	Repository         string `json:"repository"`
+	InstallationID     string `json:"installation_id"`
+	BaseBranch         string `json:"base_branch"`
+	HeadBranch         string `json:"head_branch"`
+	Number             int64  `json:"pr_number"`
+	URL                string `json:"pr_url"`
+	ProposedRevision   string `json:"proposed_revision"`
+	ObservedRemoteHead string `json:"observed_remote_head"`
+	BodyDigest         string `json:"body_digest"`
+	Stale              bool   `json:"stale"`
 }
 
 type NativeTurn struct {

@@ -19,9 +19,11 @@ import (
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
+	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
+	"github.com/aphronio/dorf/internal/publication"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -79,6 +81,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
 	case "review":
 		return reviewCommand(ctx, store, service, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
+	case "publication":
+		return publicationCommand(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
 	default:
 		_ = service
 		return usage(stderr)
@@ -100,7 +104,10 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, 
 	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}
 	store := postgres.Store{DB: db}
 	service := spine.Service{Store: store, Externals: externals, Repository: externals, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
+	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
+	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	workflow.Register(client, service, store)
+	publication.Register(client, publicationService)
 	return client, service, nil
 }
 
@@ -123,7 +130,7 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	if err := store.Migrate(ctx); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 008_message_delivery.sql; Absurd 0.5.0 queue dorf_jobs")
+	fmt.Fprintln(stdout, "PostgreSQL ready: Dorf migrations through 009_github_publication.sql; Absurd 0.5.0 queue dorf_jobs")
 	return nil
 }
 
@@ -157,6 +164,9 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	repository := set.String("repo", "", "clone URL")
 	revision := set.String("revision", "", "exact commit or admitted starting Revision")
 	branch := set.String("branch", "", "Job branch (default dorf/<Job ID>)")
+	githubRepository := set.String("github-repo", "", "canonical lower-case GitHub owner/repository")
+	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
+	base := set.String("base", "", "explicit immutable GitHub base branch")
 	provider := set.String("provider", "", "named Provider Connection")
 	model := set.String("model", "", "Codex model")
 	effort := set.String("reasoning", "high", "Codex reasoning effort")
@@ -170,7 +180,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	if strings.TrimSpace(*branch) == "" && strings.TrimSpace(*key) != "" {
 		*branch = "dorf/" + spine.JobID(strings.TrimSpace(*key))
 	}
-	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort})
+	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
 	if err != nil {
 		return err
 	}
@@ -311,6 +321,10 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 		}
 	}
 	assessment := spine.AssessReviewReadiness(job, declared, checks, evidenceRecords, evidenceStore, currentPlan, reviewRuns)
+	proposal, err := store.Proposal(ctx, job.ID)
+	if err != nil {
+		return err
+	}
 	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
 	if err != nil {
 		return err
@@ -319,13 +333,22 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	view := map[string]any{"job": job, "readiness": assessment, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	publicationEvidence, err := store.PublicationTaskHistory(ctx, job)
+	if err != nil {
+		return err
+	}
+	view := map[string]any{"job": job, "readiness": assessment, "proposal": proposal, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
 	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s\n  route: %s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.RouteID), empty(job.SessionID))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+	}
+	if proposal == nil {
+		fmt.Fprintln(stdout, "  proposal: none")
+	} else {
+		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s remote=%s body=%s stale=%t\n", proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.ObservedRemoteHead, proposal.BodyDigest, proposal.Stale)
 	}
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints)
 	if job.RunTerminalState != "" {
@@ -337,6 +360,9 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	}
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints)
+	}
+	for _, task := range publicationEvidence {
+		fmt.Fprintf(stdout, "  Absurd publication: %s key=%s generation=%d state=%s attempts=%d checkpoints=%d current=%t\n", task.TaskID, task.IdempotencyKey, task.Attempt, task.State, task.Attempts, task.Checkpoints, task.Current)
 	}
 	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
 	for _, message := range messages {
@@ -533,6 +559,41 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled, "synchronous": *now})
 }
 
+func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "publish" {
+		return fmt.Errorf("publication requires: publish JOB_ID --revision EXACT_OID")
+	}
+	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	revision := set.String("revision", "", "exact ready Revision")
+	jobID, err := parsePublicationTarget(set, args[1:], "publication publish")
+	if err != nil {
+		return err
+	}
+	if !postgres.ValidRevision(*revision) {
+		return fmt.Errorf("publication publish requires one Job ID and --revision with a lowercase full commit OID")
+	}
+	params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "attempt": params.Attempt, "task_id": taskID, "created": created, "scheduled": true})
+}
+
+func parsePublicationTarget(set *flag.FlagSet, args []string, command string) (string, error) {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" || strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("%s requires one Job ID before its flags", command)
+	}
+	jobID := strings.TrimSpace(args[0])
+	if err := set.Parse(args[1:]); err != nil {
+		return "", err
+	}
+	if set.NArg() != 0 {
+		return "", fmt.Errorf("%s accepts exactly one Job ID before its flags", command)
+	}
+	return jobID, nil
+}
+
 func readInput(path, command, noun string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("%s requires a file with complete %s", command, noun)
@@ -655,6 +716,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <migrate|doctor|admit|message|setup-retry|worker|inspect|evidence|review|publication|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

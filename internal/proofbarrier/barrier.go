@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	messageEnablePhrase  = "issue-41-external-sigkill-only"
-	workflowEnablePhrase = "issue-37-external-sigkill-only"
+	messageEnablePhrase     = "issue-41-external-sigkill-only"
+	workflowEnablePhrase    = "issue-37-external-sigkill-only"
+	publicationEnablePhrase = "issue-43-external-sigkill-only"
 )
 
 type Barrier struct {
@@ -36,10 +37,14 @@ func FromEnv() (spine.FaultBarrier, error) {
 	}
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierNativeActive
 	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCommitCreated || point == spine.BarrierCheckExited
-	if !messagePoint && !workflowPoint {
+	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted || point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
+	if !messagePoint && !workflowPoint && !publicationPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
 	phrase := workflowEnablePhrase
+	if publicationPoint {
+		phrase = publicationEnablePhrase
+	}
 	if messagePoint {
 		phrase = messageEnablePhrase
 	}
@@ -72,11 +77,12 @@ func (b Barrier) ReachWorkflow(ctx context.Context, point, jobID, identity strin
 	if point != b.Point || jobID != b.JobID {
 		return nil
 	}
-	return b.reach(ctx, jobID, identity, point, fmt.Sprintf("job=%s\nidentity=%s\npoint=%s\n", jobID, identity, point))
+	scheduling := point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
+	return b.reach(ctx, jobID, identity, point, fmt.Sprintf("job=%s\nidentity=%s\npoint=%s\n", jobID, identity, point), !scheduling)
 }
 
-func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload string) error {
-	if b.Wait <= 0 || b.Wait > 30*time.Second || b.Lease <= b.Wait || b.Lease > time.Minute {
+func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload string, heartbeat bool) error {
+	if b.Wait <= 0 || b.Wait > 30*time.Second || heartbeat && (b.Lease <= b.Wait || b.Lease > time.Minute) {
 		return fmt.Errorf("unsafe proof barrier timing")
 	}
 	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
@@ -90,8 +96,10 @@ func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload stri
 	} else if recovered {
 		return nil
 	}
-	if err := absurd.Heartbeat(ctx, b.Lease); err != nil {
-		return fmt.Errorf("shorten proof claim lease: %w", err)
+	if heartbeat {
+		if err := absurd.Heartbeat(ctx, b.Lease); err != nil {
+			return fmt.Errorf("shorten proof claim lease: %w", err)
+		}
 	}
 	if err := os.WriteFile(ready, []byte(payload), 0o600); err != nil {
 		return err
@@ -109,7 +117,10 @@ func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload stri
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return fmt.Errorf("proof barrier %s timed out before its shortened claim lease; SIGKILL was not observed", point)
+	if heartbeat {
+		return fmt.Errorf("proof barrier %s timed out before its shortened claim lease; SIGKILL was not observed", point)
+	}
+	return fmt.Errorf("proof barrier %s timed out; SIGKILL was not observed", point)
 }
 
 func (b Barrier) Reach(ctx context.Context, point string, delivery spine.Delivery) error {

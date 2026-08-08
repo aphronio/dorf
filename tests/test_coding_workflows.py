@@ -192,32 +192,10 @@ def make_coding_job(tmp_path: Path):
 
 class GitHubClient:
     def __init__(self) -> None:
-        self.created = []
         self.comments = []
-        self.drafted = []
-        self.branch_sha = "b" * 40
-
-    def list_pull_requests_for_branch(self, *args, **kwargs):
-        return []
-
-    def create_pull_request(self, repo, **payload):
-        self.created.append((repo, payload))
-        return {"number": 42, "html_url": "https://github.test/pull/42"}
-
-    def update_pull_request(self, repo, number, **payload):
-        return {"number": number, "html_url": "https://github.test/pull/42"}
-
-    def mark_pull_request_ready(self, repo, number):
-        pass
-
-    def mark_pull_request_draft(self, repo, number):
-        self.drafted.append((repo, number))
 
     def add_pull_request_comment(self, repo, number, body):
         self.comments.append(body)
-
-    def get_branch_sha(self, repo, branch):
-        return self.branch_sha
 
     def get_pull_request(self, repo, number):
         return {"number": number, "state": "open", "head": {"sha": "b" * 40}}
@@ -302,20 +280,6 @@ def test_followup_without_new_feedback_reads_current_assignment_and_keeps_job_op
     assert outcome.messages[-1].text == "No new PR feedback for checkout-perf."
     assert store.get_job(job.job_name).status == "open"
     assert store.get_job_binding(job.job_name) == binding
-
-
-def test_verify_publishes_ready_pr_without_ending_job_or_worker(tmp_path) -> None:
-    store, environment, _agent, runtime, job, _binding = make_coding_job(tmp_path)
-    github = GitHubClient()
-
-    outcome = workflow(store, environment, runtime, job, github).verify()
-
-    assert outcome.messages[-1].text == "Verify passed for checkout-perf"
-    assert store.get_coding_job("checkout-perf").status == "ready"
-    assert store.get_coding_job("checkout-perf").github_pr_number == 42
-    assert store.get_job("checkout-perf").status == "open"
-    assert store.get_worker("coder-checkout-perf").status == "assigned"
-    assert not any("codex exec" in item[1][-1] for item in environment.processes)
 
 
 def test_verify_reports_unrecovered_job_turn_without_accessing_session_fields(tmp_path) -> None:

@@ -1,12 +1,37 @@
 package main
 
 import (
+	"context"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+func TestPublicationGrammarParsesJobBeforeFlags(t *testing.T) {
+	set := flag.NewFlagSet("publication publish", flag.ContinueOnError)
+	revision := set.String("revision", "", "")
+	jobID, err := parsePublicationTarget(set, []string{"job-exact", "--revision", strings.Repeat("a", 40)}, "publication publish")
+	if err != nil || jobID != "job-exact" || *revision != strings.Repeat("a", 40) {
+		t.Fatalf("job=%q revision=%q err=%v", jobID, *revision, err)
+	}
+	if _, err := parsePublicationTarget(flag.NewFlagSet("publication publish", flag.ContinueOnError), []string{"--revision", strings.Repeat("a", 40), "job-exact"}, "publication publish"); err == nil {
+		t.Fatal("flags-before-Job grammar was accepted")
+	}
+}
+
+func TestPublicationGrammarExposesOnlyPublish(t *testing.T) {
+	for _, args := range [][]string{nil, {"bind", "job-exact", "--github-repo", "aphronio/dorf"}, {"other"}} {
+		err := publicationCommand(context.Background(), postgres.Store{}, nil, nil, args, io.Discard, io.Discard)
+		if err == nil || err.Error() != "publication requires: publish JOB_ID --revision EXACT_OID" {
+			t.Fatalf("args=%v error=%v", args, err)
+		}
+	}
+}
 
 func TestInspectionExplainsQueuedActiveTerminalBlockedAndUncertain(t *testing.T) {
 	tests := []struct {

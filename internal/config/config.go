@@ -24,6 +24,9 @@ type Config struct {
 	AppServerPort    int
 	TurnTimeout      time.Duration
 	EvidenceRoot     string
+	GitHubMetadata   string
+	GitHubPrivateKey string
+	GitHubAPIURL     string
 }
 
 func Load() (Config, error) {
@@ -41,6 +44,9 @@ func Load() (Config, error) {
 		AppServerPort:    4500,
 		TurnTimeout:      45 * time.Minute,
 		EvidenceRoot:     value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
+		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
+		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
+		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DORF_DATABASE_URL is required (use a local PostgreSQL DSN; Dorf does not start Docker or use a cloud account)")
@@ -63,6 +69,13 @@ func Load() (Config, error) {
 		cfg.AppServerPort = port
 	}
 	return cfg, nil
+}
+
+func configHome(home string) string {
+	if configured := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configured != "" {
+		return configured
+	}
+	return filepath.Join(home, ".config")
 }
 
 func value(name, fallback string) string {

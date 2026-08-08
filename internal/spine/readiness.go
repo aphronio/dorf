@@ -160,7 +160,7 @@ func AssessReadiness(job Job, declared []DeclaredCheck, checks []Check, records 
 		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
 		return assessment
 	}
-	if job.WorkflowPhase != "ready" {
+	if !readinessPreserved(job.WorkflowPhase) {
 		assessment.Reason = "deterministic setup, commit, or Checks are incomplete"
 		return assessment
 	}
@@ -241,7 +241,7 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 			return assessment
 		}
 	}
-	if job.WorkflowPhase != "ready" {
+	if !readinessPreserved(job.WorkflowPhase) {
 		assessment.Status, assessment.Ready = "not_ready", false
 		assessment.Reason = "review planning, triage, selected AgentRuns, or same-Session repair is incomplete"
 		return assessment
@@ -253,6 +253,15 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		assessment.Reason = "Checks have observed Evidence and every selected Revision-bound review AgentRun is settled; reviewer output remains claim Evidence"
 	}
 	return assessment
+}
+
+func readinessPreserved(phase string) bool {
+	switch phase {
+	case "ready", "publishing", "publication-blocked", "published":
+		return true
+	default:
+		return false
+	}
 }
 
 func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs evidence.Store, declaredChecks []string, plan *ReviewPlanRecord) ReviewEvidenceVerification {
