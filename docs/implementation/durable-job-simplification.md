@@ -152,9 +152,17 @@ AgentRun
   +-- workspace
 
 Message
-  +-- user text, Check output, or reviewer text
-  +-- target implementation Session
+  +-- text
+  +-- source kind: human, Check, or AgentRun
+  +-- source ID
+  +-- Job-local sequence
 ```
+
+`Feedback` describes how a Message is being used; it is not another durable primitive. The source
+identifies the human request, Check, or AgentRun that produced it. The AgentRun that consumes the
+Message supplies the other half of the history: `source -> Message -> handling AgentRun`. Rename the
+existing caller-oriented field to this source vocabulary rather than storing both. Add reply or
+thread fields only when a real outward-response feature needs them.
 
 ### Slice 3A: Use one AgentRun runner
 
@@ -168,6 +176,8 @@ Goal: make submission, native recovery, waiting, and terminal recording one dura
       validation outside the runner as preparation facts.
 - [ ] Keep reviewer output as opaque text; persist the cross-AgentRun handoff as a Message, with no
       review-result parser or finding schema.
+- [ ] Give every Message explicit source kind and source ID; use the same pair as its stable
+      admission identity and remove the caller-only naming.
 - [ ] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
 - [ ] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
 - [ ] Delete the separate implementation and review submission/recovery state machines.

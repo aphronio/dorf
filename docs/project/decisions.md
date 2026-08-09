@@ -1117,6 +1117,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   are consumed by the original implementation Session through the normal AgentRun path. A review
   AgentRun returns ordinary text. Dorf does not parse a universal `ReviewResult`, classify findings,
   or create separate respond-to-review, respond-to-check, or repair AgentRun types.
+- **Message identity:** A Message records text, Job-local sequence, source kind, and source ID. The
+  source is the human request, Check, or AgentRun that produced it, and the consuming AgentRun points
+  back to the Message. `Feedback` is a use of Message, not another stored type. Do not add reply or
+  thread fields until an outward-response feature needs them.
 - **Review selection:** Deterministic policy selects known specialist Roles. Unknown risk selects one
   bounded general read-only reviewer rather than a triage AgentRun whose prose must be parsed to route
   more work. Role, prompt, Revision, workspace, and capability envelope specialize an AgentRun; they
