@@ -3,7 +3,7 @@
 Dorf's supported product is the Go application in `cmd/dorf` and `internal`. Use Go 1.25 or newer.
 
 ```bash
-go mod download
+scripts/dev/prepare.sh
 go test ./...
 go vet ./...
 go build -o .dorf/bin/dorf ./cmd/dorf
@@ -48,5 +48,7 @@ Changes touching architecture, durable authority, setup, image distribution, Pro
 release behavior must read the corresponding documents linked from [AGENTS.md](AGENTS.md). Prefer a
 small runnable vertical slice and delete superseded code and tests once its real terminal works.
 
-Run one broad suite at a time on small development machines. PostgreSQL integration tests run only
-when `DORF_TEST_DATABASE_URL` names a disposable test database.
+Run one broad suite at a time on small development machines. Repository preparation installs the
+pinned Go and Absurd tools plus PostgreSQL when the VM does not already have them, then converges a
+disposable `dorf_test` database. PostgreSQL integration tests run only when
+`DORF_TEST_DATABASE_URL` names that disposable database.

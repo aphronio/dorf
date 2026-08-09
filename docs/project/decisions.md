@@ -1050,3 +1050,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   required evidence, measured reviewer isolation cost justifies a different model, or the smaller
   post-realignment store still contains enough repetitive typed query plumbing for `sqlc` to remove
   more code than its generator and generated surface add.
+
+## D049 — Repositories own their development-tool setup
+
+- **Status:** Accepted setup boundary — 2026-08-09
+- **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
+  inspection needs. Keep the existing schema-4 image and release assets unchanged. Dorf's declared
+  `commands.prepare` invokes a repository-owned script that installs missing pinned tools,
+  converges a disposable local database and Absurd schema, and downloads modules. Installation and
+  initialization are deterministic Actions; no AgentRun decides or performs them conversationally.
+- **Cost:** Every fresh Sandbox may pay package-download and initialization time. That cost is
+  accepted now because the setup remains visible, editable with the repository, and independent of
+  a Dorf-wide image release.
+- **Why:** Different repositories need different toolchains. Encoding all of them in one shared
+  image couples repository evolution to image publication and grows a supposedly reusable base.
+  A repository contract is the simplest correct ownership boundary while there are no measured
+  startup constraints.
+- **Reconsider when:** Repeated measurements show setup materially dominates Job latency or network
+  reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
+  successfully prepared repository environment behind the same `commands.prepare` contract.

@@ -57,7 +57,7 @@ task state, GitHub proposal/outcome facts, and cleanup state.
 The repository contract is Go-only:
 
 ```bash
-go mod download
+scripts/dev/prepare.sh
 go test ./...
 go vet ./...
 scripts/build-release.sh dist/release

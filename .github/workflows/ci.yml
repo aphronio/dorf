@@ -24,6 +24,8 @@ jobs:
           cache: true
       - name: Download exact modules
         run: go mod download
+      - name: Validate repository setup script
+        run: bash -n scripts/dev/*.sh
       - name: Test
         run: go test ./...
       - name: Vet

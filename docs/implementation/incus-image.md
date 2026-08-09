@@ -1,13 +1,15 @@
 # Dorf Incus Image
 
 This is implementation guidance for the credential-free `dorf-codex` VM image used by the
-Go application's Incus Sandbox. Sandbox provisioning must not install packages
-from the network.
+Go application's Incus Sandbox. Keep this shared image stable instead of adding every managed
+repository's development dependencies to it. After clone, deterministic repository preparation may
+install that repository's pinned packages and tools from the network.
 
 The default public path consumes a Dorf-built image. It includes Git, pinned Go 1.26.5, uv, Node,
-and Codex: the complete ordinary coding workstation needed to clone a managed repository and run
-its declared preparation and check commands without agent-led tool installation. Build-only npm is
-removed. The local builder remains available for development:
+and Codex: the existing baseline needed to clone a managed repository and run its deterministic
+preparation command. Tools specific to Dorf itself, including Absurd and PostgreSQL, belong to
+Dorf's repository-owned setup even when an existing image already happens to contain Go. Build-only
+npm is removed. The local builder remains available for development:
 
 ```bash
 scripts/incus/build-dorf-codex-image.sh
