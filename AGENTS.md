@@ -25,9 +25,9 @@ Keep this file as the compact operating guide. Read deeper context only when the
 - [Provider Gateway](docs/project/provider-gateway.md): shared provider connections, scoped
   inference routes, local broker ownership, and the client/Sandbox composition boundary; read for
   model-provider authentication, routing, or broker work. D036 retains the durable project decision.
-- [Orchestration](docs/project/orchestration.md): durable operating protocol for sequencing an epic,
-  choosing agent settings, maintaining dogfood evidence, and recovering after interruption or
-  context compaction; read it when acting as an epic orchestrator.
+- [Orchestration](docs/project/orchestration.md): stable protocol for taking a bounded issue from
+  observed state to a verified terminal and recovering after interruption; read it when acting as
+  an epic orchestrator.
 - [Core Setup](docs/implementation/core-setup.md): accepted core-only first-run and summon DX,
   official latest-validated Codex image, guided Incus installation, convergent setup, and
   agent-readable diagnostics; read before changing host setup, image distribution, default
@@ -36,8 +36,6 @@ Keep this file as the compact operating guide. Read deeper context only when the
   read for image, toolchain, credential, or Incus setup changes.
 - [Buzz Deployment](docs/implementation/buzz.md): persistent pinned Buzz deployment and private
   Tailscale access; read for Buzz infrastructure, lifecycle, credentials, or dogfood setup.
-- [Go Job Spine](docs/implementation/go-spine.md): issue #40 local PostgreSQL/Absurd setup and exact
-  Go-only Incus, Codex, redelivery, inspection, and cleanup proof commands.
 - [Release Process](docs/releasing.md): Go artifact and credential-free Incus image verification and
   publication; read before release changes.
 
@@ -66,6 +64,9 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 ## Command Expectations
 
 Use the Go commands declared by the repository contract and keep every slice runnable.
+Run PostgreSQL-backed integration tests locally before pushing changes to durable storage or
+sequencing. CI repeats deterministic unit and PostgreSQL integration coverage as an independent
+merge gate; real Incus, Codex, and GitHub proof remains proportional to the boundary changed.
 
 Use the GitHub CLI (`gh`) for GitHub operations such as viewing, closing, or updating issues and pull requests. Do not use the Codex GitHub app for those operations in this repository.
 

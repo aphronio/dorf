@@ -939,7 +939,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D047 — Replace the Python runtime with a greenfield Go and Absurd system
 
-- **Status:** Accepted greenfield direction — 2026-08-06; review authority simplified 2026-08-08
+- **Status:** Accepted foundation — 2026-08-06; review-request and Absurd-usage clauses superseded
+  by D048 — 2026-08-09
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
@@ -952,12 +953,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   create a durable `Worker` identity until a real product requirement needs personality or memory
   across Jobs. Do not introduce `Assignment` or `RoleRun` as aliases for facts that these names
   already express.
-- **Review policy:** Start with a pure deterministic classifier over observed change facts. Mandatory
-  rules select security, browser, performance, or other bounded review Roles when their explicit
-  conditions match; documentation-only changes with green Checks may select none. Only an unknown
-  classification may invoke one bounded semantic triage AgentRun. Implementation prose is not a
-  policy input, and there is no optional-request mechanism. The durable Job coordinates mechanics,
-  so there is no default Coordinator Agent and no review-after-every-change ritual.
+- **Review policy (superseded by D048):** Start with a pure deterministic classifier over observed
+  change facts. Mandatory rules select security, browser, performance, or other bounded review Roles
+  when their explicit conditions match; documentation-only changes with green Checks may select
+  none. Only an unknown classification may invoke one bounded semantic triage AgentRun.
+  Implementation prose is not a policy input, and there is no optional-request mechanism. The
+  durable Job coordinates mechanics, so there is no default Coordinator Agent and no
+  review-after-every-change ritual.
 - **Replacement strategy:** Build vertical slices on a `greenfield` integration branch. Each slice
   must reach the smallest real Incus, Codex, repository, and GitHub terminal it claims, then delete
   the Python component and implementation-coupled tests it replaces. The old implementation is
@@ -1000,3 +1002,49 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   identifies a concrete authoritative input that deterministic facts plus bounded triage cannot
   express and that justifies a structured additional-review contract rather than parsing agent
   prose.
+
+## D048 — Simplify the post-cutover core around Absurd and explicit workflow semantics
+
+- **Status:** Accepted audit correction — 2026-08-09
+- **Durable sequencing:** Use Absurd's public task, named-step, event, cancellation, and inspection
+  surfaces for generic execution mechanics. Dorf retains Job and Revision facts, deterministic
+  policy, stable external Action identities, receipts, and reconciliation because those are product
+  semantics or cross-system uncertainty. Production behavior and authority must not query or mutate
+  Absurd's raw internal tables or mirror its checkpoints, retries, leases, task state, or recovery
+  controller into Dorf-owned schema. Version-pinned white-box tests and operator diagnostics may
+  inspect those tables without making them product authority.
+- **Message order:** Every accepted message keeps a monotonic Job-local admission sequence. Follow-up
+  turns are FIFO. A `steer` is an explicit priority lane for the active native turn and may overtake
+  queued follow-ups; inspection must expose its intent, target, and original admission sequence.
+- **Review composition:** Deterministic policy supplies the mandatory Role floor. An implementation
+  AgentRun may additionally make a structured, bounded request for an allowlisted Role and optional
+  focus. The request cannot remove mandatory review, change capabilities, grant authority, create a
+  Role, or authorize recursive or unbounded work. Each selected Role receives its own disposable
+  Sandbox and scoped provider route, including read-only review, and those live resources are
+  reclaimed after the Role's Evidence is retained.
+- **Greenfield schema:** Before the first release, replace the prototype migration chain with one
+  clean baseline schema; there is no data or upgrade path to preserve. Defer `sqlc` until after the
+  Absurd realignment and schema squash. Generated type-safe query wrappers can remove scan
+  boilerplate, but they do not simplify the state model, perform migrations, or replace behavioral
+  PostgreSQL tests. Reconsider only if substantial repetitive query plumbing remains in the smaller
+  store.
+- **Verification:** Agents run deterministic unit and PostgreSQL integration tests locally before
+  pushing relevant changes. CI repeats those portable suites as an independent merge gate. Real
+  Incus, Codex, provider, and GitHub terminals remain targeted dogfood for changes to those
+  authorities rather than simulated requirements for every CI run.
+- **Cutover correction:** The final acceptance proposal remains blocked until the audited functional
+  gaps are closed: private-repository clone authority, exact initial-turn identity, lease-safe
+  mutation ownership, human-requested same-Job revisions, explicit pre-proposal terminal outcome,
+  and prompt reviewer-resource cleanup. The correction must preserve the proven exact-Revision,
+  Action-reconciliation, publication, outcome, and zero-ghost properties while materially reducing
+  the application-owned durable state machine.
+- **Why:** The greenfield implementation proved the complete shape, but the proof also exposed that
+  Dorf rebuilt generic durable mechanics beside Absurd and accumulated prototype schema and
+  implementation narration. Returning those mechanics to the chosen library leaves Dorf's code
+  focused on product facts and unavoidable external-system boundaries. Explicit steer and review
+  request semantics preserve useful intentional behavior without hiding it behind an inaccurate
+  FIFO or prose-policy description.
+- **Reconsider when:** Absurd's public APIs cannot express a proven recovery terminal without losing
+  required evidence, measured reviewer isolation cost justifies a different model, or the smaller
+  post-realignment store still contains enough repetitive typed query plumbing for `sqlc` to remove
+  more code than its generator and generated surface add.

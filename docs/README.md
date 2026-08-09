@@ -10,6 +10,5 @@
 | Understand accepted choices | [Decision log](project/decisions.md) |
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
 | Build the credential-free Incus image | [Incus image](implementation/incus-image.md) |
-| Reproduce the full Go terminal | [Go Job spine](implementation/go-spine.md) |
 
 Material under `docs/research/` is archival ecosystem research, not a supported Dorf path.

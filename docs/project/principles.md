@@ -28,8 +28,10 @@ sequencing, setup, policy facts, Git operations, checks, evidence hashing, publi
 cleanup are code-owned. Agents are reserved for implementation, ambiguity, triage, review, and
 other judgment.
 
-Review authority comes from deterministic mandatory policy plus bounded triage for an unknown
-classification. Agent prose is not policy input and cannot waive or add a safety or review rule.
+Review authority starts with deterministic mandatory policy. An implementation AgentRun may also
+make a structured, bounded request for an allowlisted review Role or focus, and an unknown
+classification may invoke bounded triage. Unstructured agent prose is not policy input; no agent
+request can waive a Check, mandatory Role, capability boundary, or spend limit.
 
 ## Disposable developer workstations
 
@@ -71,6 +73,11 @@ Test substantial product decisions, plausible regressions, and rare high-impact 
 authority, concurrency, idempotency, recovery, and cleanup. Prefer behavior through the public
 boundary and fault injection over tests coupled to database rows or private functions. Delete tests
 with superseded behavior.
+
+Agents run deterministic tests locally for fast feedback before pushing. CI independently repeats
+the portable unit and PostgreSQL integration suites so merge confidence does not depend on one
+workstation's state or on whether a local command was skipped. Live Incus, Codex, and GitHub proofs
+remain targeted terminals for changes that touch those authorities, not default CI simulations.
 
 ## Evidence over narration
 

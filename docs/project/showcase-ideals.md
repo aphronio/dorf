@@ -67,10 +67,10 @@ implementation commit ──┼─ diff correctness AgentRun ──────�
 ```
 
 Give each selected Role a bounded AgentRun against the exact Revision, with role-appropriate tools,
-a scoped provider route, and explicit cleanup. Use a separate disposable Sandbox only when the Role
-needs executable isolation or mutable tools; a read-only reviewer may consume an immutable checkout
-or diff without paying Sandbox startup cost. Reconsider either posture from measured independence,
-evidence quality, concurrency safety, defect yield, latency, and cost rather than ritual.
+a scoped provider route, and explicit cleanup. The first product gives every selected Role its own
+disposable Sandbox, including read-only reviewers. That uniform isolation boundary is an intentional
+simplicity trade: one Role, one environment, one route, one cleanup receipt. Reconsider shared or
+Sandbox-free review only when measured startup cost or latency outweighs the clarity and isolation.
 
 The original coding Job, branch, and proposal remain authoritative. A verifier AgentRun is attached
 to one Revision, not another Job, branch, or proposal. Its feedback returns to the implementation

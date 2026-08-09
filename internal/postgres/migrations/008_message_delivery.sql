@@ -11,5 +11,5 @@ alter table dorf.job_messages
 
 alter table dorf.agent_runs drop constraint if exists agent_runs_native_turn_id_key;
 
-comment on table dorf.job_messages is 'Immutable Dorf-owned client input, explicit harness delivery intent, and per-Job FIFO position';
+comment on table dorf.job_messages is 'Immutable Dorf-owned client input and monotonic admission sequence; follow turns are FIFO while steer targets the active turn through an explicit priority lane';
 comment on table dorf.agent_runs is 'Per-input harness acceptance binding and native outcome evidence only; Codex owns transcript and context';

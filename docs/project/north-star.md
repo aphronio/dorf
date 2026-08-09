@@ -58,16 +58,17 @@ flowchart TD
     Cleanup --> Receipt["Evidence-backed terminal receipt"]
 ```
 
-Review is optional and explainable. The implementation agent may request it; deterministic policy
-may require it; ambiguous classification may ask one triage agent. No agent replaces the durable Job
-as coordinator.
+Review is optional and explainable. The implementation agent may make a structured request for an
+allowlisted Role or bounded focus; deterministic policy may require Roles independently; ambiguous
+classification may ask one triage agent. A request can add scrutiny but cannot waive policy or
+expand capability. No agent replaces the durable Job as coordinator.
 
 ## The deterministic and agentic boundary
 
 | Programmatic and deterministic | Agentic judgment |
 | --- | --- |
 | Validate input and authority | Understand the goal and codebase |
-| Allocate stable identities and FIFO order | Design and implement the change |
+| Allocate stable identities, FIFO follow order, and explicit steer priority | Design and implement the change |
 | Create, inspect, and destroy Sandboxes | Resolve ambiguity with documented assumptions |
 | Clone, set up, commit, diff, push, and publish | Decide whether an unfamiliar change needs specialist review |
 | Run declared tests, linters, smoke checks, and probes | Perform QA, security, architecture, or performance review |

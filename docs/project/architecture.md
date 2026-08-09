@@ -57,14 +57,18 @@ durable task sequences explicit, named phases; it does not contain a generic use
 - Admission records the complete goal before agent work begins and schedules the Job with a stable
   idempotency identity. If recording and scheduling cannot be made one transaction, recovery
   reconciles the two facts rather than assuming both happened.
-- Deterministic work executes as ordinary Go Actions and Checks inside named Absurd steps.
+- Deterministic sequencing executes through Absurd's public named-step APIs. Dorf keeps only the
+  domain facts and Action receipts needed to understand the product or reconcile an external
+  effect; it does not mirror generic step, retry, lease, cancellation, or task-inspection state.
 - Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
   expected output contract.
 - A Job-local Session may be reused for implementation and repair. Absurd retry of infrastructure
   is not a new AgentRun.
-- Accepted client messages enter a Job-owned FIFO with independent message identity. A wake event
-  makes the durable task eligible; delivery is reconciled against the harness-native turn identity
-  before retry.
+- Accepted client messages receive an immutable Job-local sequence and identity. Follow-up turns
+  preserve FIFO order. A `steer` is an explicit priority lane targeting the active native turn, so
+  it may overtake already queued follow-ups; inspection must retain both the admission sequence and
+  targeted turn so this is never presented as ordinary FIFO delivery. A wake event only makes work
+  eligible, and delivery is reconciled against the harness-native turn identity before retry.
 - A changed Revision invalidates Evidence whose claim depended on the previous Revision. It does not
   invalidate unrelated immutable facts.
 
@@ -82,14 +86,18 @@ the unavoidable boundary where an external system succeeds and its response is l
 ## Review composition
 
 Review is selected, not ritualized. A pure Go `ReviewPolicy(ChangeFacts) -> ReviewPlan` starts with
-explicit rules. Mandatory rules cannot be suppressed or extended by implementation prose. Unknown
-classifications may invoke one bounded `ReviewTriage` AgentRun; there is no general Coordinator
-Agent because the durable Job already coordinates mechanics.
+explicit rules. An implementation AgentRun may add an allowlisted Role and optional bounded focus
+through a structured request. The request is advisory input, not a new capability: it cannot
+suppress mandatory policy, waive Checks, create a Role, or grant tools, credentials, retries, or
+spend. Unknown classifications may invoke one bounded `ReviewTriage` AgentRun; there is no general
+Coordinator Agent because the durable Job already coordinates mechanics.
 
-Each selected review is an AgentRun against an immutable Revision. Read-only reviews may run in
-parallel when their capabilities and evidence are independent. Findings return to the original
-implementation Session for one adjudication and repair cycle. Policy may request targeted
-re-verification of affected claims; it must not default to repeated full-context review.
+Each selected Role is an AgentRun against an immutable Revision in its own disposable Sandbox and
+scoped provider route. This deliberately uniform isolation model also applies to read-only review.
+Independent Roles may run in parallel, and each Role's live resources are reclaimed after its
+evidence is retained. Findings return to the original implementation Session for one adjudication
+and repair cycle. Policy may request targeted re-verification of affected claims; it must not
+default to repeated full-context review.
 
 ## Failure and code evolution
 
@@ -149,6 +157,10 @@ score to optimize at the expense of correctness.
   local data.
 - Do not create a generic durable-engine interface. Keep Absurd-specific sequencing localized and
   keep domain facts, deterministic policy, Actions, Checks, and external reconciliation independent.
+- Use Absurd's public task, step, event, cancellation, and inspection APIs for production behavior.
+  Raw Absurd tables may support version-pinned white-box tests or operator tooling, but must not be
+  Dorf's workflow authority. Do not recreate its generic retry, checkpoint, lease, or recovery
+  machinery in Dorf-owned schema.
 - Preserve useful provisioning assets and observed behavior, not old module boundaries.
 - Delete a Python component and its implementation-coupled tests after the Go path has reached the
   corresponding real terminal.

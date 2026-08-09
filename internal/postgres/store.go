@@ -1234,6 +1234,9 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 		return nil, err
 	}
 	var message spine.Message
+	// A steer is a distinct priority lane aimed at the active native turn. It may
+	// overtake older queued follow-ups; the immutable sequence still records
+	// admission order, while follow-up turn starts remain FIFO.
 	err = tx.QueryRowContext(ctx, `
 		with current_turn_start as (
 			select m.id as message_id,ar.native_turn_id,ar.state
@@ -1287,7 +1290,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	}
 	allowed := run.Role == "implement" && (workflowPhase == "setup" || workflowPhase == "implementing") || run.Role == "repair" && (workflowPhase == "repairing" || workflowPhase == "review-repairing")
 	if !allowed {
-		reason := fmt.Sprintf("preserved FIFO sequence %d as attention: %s AgentRun cannot start during workflow phase %s", message.Sequence, run.Role, workflowPhase)
+		reason := fmt.Sprintf("preserved admission sequence %d as attention: %s AgentRun cannot start during workflow phase %s", message.Sequence, run.Role, workflowPhase)
 		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 and state not in ('completed','failed','interrupted')`, run.ID, reason); err != nil {
 			return nil, err
 		}
