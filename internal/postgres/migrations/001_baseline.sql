@@ -24,7 +24,6 @@ create table dorf.jobs (
     provider_gateway_state text,
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
-    state text not null default 'admitted' check (state in ('admitted','running','observed','failed')),
     admission_open boolean not null default true,
     cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
     task_id text unique,
@@ -41,7 +40,6 @@ create table dorf.jobs (
     review_repair_source_run_id text,
     cleanup_attention text,
     admitted_at timestamptz not null default clock_timestamp(),
-    observed_at timestamptz,
     cleaned_at timestamptz,
     constraint jobs_github_authority_complete_check check (
         (github_repository is null and github_installation_id is null and base_branch is null) or
@@ -80,17 +78,15 @@ create table dorf.actions (
     message_id text references dorf.job_messages(id),
     kind text not null check (kind in (
         'sandbox-create','repository-clone','repository-setup','repository-commit',
-        'repository-push','github-pull-request','review-workspace-create','review-workspace-delete',
+        'repository-push','github-pull-request','review-workspace-create',
         'provider-route-create','codex-session-start','codex-turn-start',
         'provider-route-revoke','sandbox-delete'
     )),
     state text not null check (state in ('pending','succeeded','failed','uncertain')),
     external_id text,
     external_outcome text,
-    attempts integer not null default 0 check (attempts >= 0),
     scope_key text not null default '',
     created_at timestamptz not null default clock_timestamp(),
-    updated_at timestamptz not null default clock_timestamp(),
     constraint actions_turn_message_check check (
         (kind='codex-turn-start' and ((message_id is not null and scope_key='') or
                                      (message_id is null and scope_key<>''))) or
@@ -188,7 +184,6 @@ create table dorf.repository_commands (
     job_id text not null references dorf.jobs(id),
     name text not null check (name in ('prepare','check','smoke')),
     command text not null check (length(command)>0),
-    starting_revision text not null check (starting_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     primary key(job_id,name)
 );
 
@@ -201,7 +196,6 @@ create table dorf.checks (
     state text not null check (state in ('running','passed','failed')),
     exit_code integer,
     evidence_id text,
-    attention text,
     started_at timestamptz,
     finished_at timestamptz,
     unique(job_id,revision,name)
@@ -232,7 +226,7 @@ alter table dorf.agent_runs add constraint agent_runs_observed_evidence_id_fkey 
 create table dorf.review_plans (
     job_id text not null references dorf.jobs(id),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    state text not null check (state in ('pending','triage-pending','final','blocked')),
+    state text not null check (state in ('pending','triage-pending','final')),
     facts jsonb,
     initial_policy jsonb,
     final_plan jsonb,
@@ -282,7 +276,6 @@ create table dorf.review_findings (
     affected_checks jsonb not null default '[]'::jsonb,
     evidence_id text not null unique references dorf.evidence(id),
     adjudication text not null default 'not-needed' check (adjudication in ('not-needed','pending','accepted','rejected')),
-    stale boolean not null default false,
     recorded_at timestamptz not null default clock_timestamp()
 );
 

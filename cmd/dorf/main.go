@@ -397,7 +397,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "created": created, "state": job.State, "task_id": job.TaskID, "scheduled": true})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "created": created, "task_id": job.TaskID, "scheduled": true})
 }
 
 func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -559,7 +559,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  state: %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  gateway state: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.State, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.ProviderGatewayState), empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  gateway state: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.ProviderGatewayState), empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -593,7 +593,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
 	}
 	for _, action := range actions {
-		fmt.Fprintf(stdout, "  observed action %s: %s attempts=%d external=%s evidence=%s\n", action.Kind, action.State, action.Attempts, empty(action.ExternalID), empty(action.EvidenceDigest))
+		fmt.Fprintf(stdout, "  observed action %s: %s external=%s evidence=%s\n", action.Kind, action.State, empty(action.ExternalID), empty(action.EvidenceDigest))
 	}
 	for _, check := range checks {
 		scope := "historical"

@@ -13,7 +13,6 @@ import (
 type Store interface {
 	Job(context.Context, string) (Job, error)
 	WithJobFence(context.Context, string, func() error) error
-	StartRun(context.Context, string) error
 	BeginAction(context.Context, string, ActionKind) (Action, error)
 	BeginSetup(context.Context, string) (Action, error)
 	CompleteAction(context.Context, string, Receipt) error
@@ -141,9 +140,6 @@ func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, e
 		// The admitted Job task owns ready-to-publication reconciliation
 		// outside the coding spine, then waits for external outcome authority.
 		return RunIdle, nil
-	}
-	if err := s.Store.StartRun(ctx, jobID); err != nil {
-		return RunIdle, err
 	}
 	for _, kind := range []ActionKind{ActionSandboxCreate, ActionRepositoryClone, ActionRouteCreate} {
 		if kind == ActionRouteCreate && s.Repository != nil {

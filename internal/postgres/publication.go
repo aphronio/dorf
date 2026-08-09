@@ -96,7 +96,7 @@ func beginPublicationAction(ctx context.Context, tx *sql.Tx, jobID string, kind 
 		return spine.Action{}, err
 	}
 	var action spine.Action
-	err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, id, jobID, kind, revision).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
+	err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 for update`, id, jobID, kind, revision).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
 	return action, err
 }
 
@@ -123,7 +123,7 @@ func (s Store) ResumePublication(ctx context.Context, jobID, revision string) er
 }
 
 func (s Store) RecordPush(ctx context.Context, actionID, revision string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='remote-head-exact',updated_at=clock_timestamp() where id=$1 and kind='repository-push' and scope_key=$2`, actionID, revision))
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='remote-head-exact' where id=$1 and kind='repository-push' and scope_key=$2`, actionID, revision))
 }
 
 func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spine.GitHubProposal) error {
@@ -169,7 +169,7 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	if err != nil {
 		return err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3,updated_at=clock_timestamp() where id=$1 and job_id=$4 and kind='github-pull-request' and scope_key=$5`, actionID, strconvFormat(proposal.Number), proposal.BodyDigest, proposal.JobID, proposal.ProposedRevision)); err != nil {
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3 where id=$1 and job_id=$4 and kind='github-pull-request' and scope_key=$5`, actionID, strconvFormat(proposal.Number), proposal.BodyDigest, proposal.JobID, proposal.ProposedRevision)); err != nil {
 		return err
 	}
 	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='published',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='publishing'`, proposal.JobID, proposal.ProposedRevision)); err != nil {

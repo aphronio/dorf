@@ -298,7 +298,7 @@ func preparePublicationFaultJob(t *testing.T, db *sql.DB, store postgres.Store, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command,starting_revision) values($1,'check',$2,$3)`, job.ID, command, job.StartingRevision); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command) values($1,'check',$2)`, job.ID, command); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `insert into dorf.checks(id,job_id,name,command,revision,state,exit_code,started_at,finished_at) values($1,$2,'check',$3,$4,'passed',0,$5,$5)`, checkID, job.ID, command, job.Revision, now); err != nil {

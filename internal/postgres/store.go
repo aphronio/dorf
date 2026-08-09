@@ -83,7 +83,6 @@ type ActionView struct {
 	Kind           spine.ActionKind  `json:"kind"`
 	State          spine.ActionState `json:"state"`
 	ExternalID     string            `json:"external_id,omitempty"`
-	Attempts       int               `json:"attempts"`
 	Scope          string            `json:"scope,omitempty"`
 	EvidenceDigest string            `json:"evidence_digest,omitempty"`
 }
@@ -392,7 +391,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	err := s.DB.QueryRowContext(ctx, `
 		select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0),j.starting_revision,j.branch,
 		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),
-		       j.provider_connection,coalesce(j.provider_gateway_state,''),j.model,j.reasoning_effort,j.state,j.admission_open,
+		       j.provider_connection,coalesce(j.provider_gateway_state,''),j.model,j.reasoning_effort,j.admission_open,
 		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
 		       coalesce(sb.incus_name,''),coalesce(sb.state,''),coalesce(r.route_id,''),coalesce(r.state,''),coalesce(se.native_session_id,''),
 		       j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,''),coalesce(j.cleanup_attention,''),j.review_repair_count
@@ -404,7 +403,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		where j.id=$1`, id).Scan(
 		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.RevisionGeneration, &job.StartingRevision, &job.Branch,
 		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID,
-		&job.ProviderConnection, &job.ProviderGatewayState, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
+		&job.ProviderConnection, &job.ProviderGatewayState, &job.Model, &job.ReasoningEffort, &job.AdmissionOpen,
 		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.SandboxState, &job.RouteID, &job.RouteState,
 		&job.SessionID, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.CleanupAttention, &job.ReviewRepairCount)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -438,10 +437,6 @@ func acquireJobFenceTx(ctx context.Context, tx *sql.Tx, jobID string) error {
 	return nil
 }
 
-func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and (task_id is null or task_id=$2)`, jobID, taskID))
-}
-
 // AttachMessageTask binds the public Spawn result for the one exact consumer
 // admitted for this Job. The deterministic Absurd idempotency key supplies
 // task identity; Dorf only compare-and-sets its cross-authority binding.
@@ -450,10 +445,6 @@ func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID stri
 }
 
 type rowScanner interface{ Scan(...any) error }
-
-func (s Store) StartRun(ctx context.Context, jobID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set state='running' where id=$1 and admission_open and cleanup_state='pending'`, jobID))
-}
 
 func (s Store) CloseAdmission(ctx context.Context, jobID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set admission_open=false,workflow_attention=null where id=$1`, jobID))
@@ -492,7 +483,7 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 		}
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where job_id=$1 and kind=$2 and message_id is null and scope_key='' returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where job_id=$1 and kind=$2 and message_id is null and scope_key='' for update`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
 		return spine.Action{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -525,7 +516,7 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 		currentID = desiredID
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 and job_id=$2 and kind=$3 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, currentID, jobID, spine.ActionRepositorySetup).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and message_id is null for update`, currentID, jobID, spine.ActionRepositorySetup).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
 		return spine.Action{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -667,7 +658,7 @@ func (s Store) BeginCommit(ctx context.Context, jobID, parent string) (spine.Act
 		return spine.Action{}, false, err
 	}
 	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 and message_id is null returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, desiredID, jobID, spine.ActionRepositoryCommit, parent).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 and message_id is null for update`, desiredID, jobID, spine.ActionRepositoryCommit, parent).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
 		return spine.Action{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -725,24 +716,20 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
 		return err
 	}
-	var startingRevision string
-	if err := tx.QueryRowContext(ctx, `select starting_revision from dorf.jobs where id=$1`, jobID).Scan(&startingRevision); err != nil {
-		return err
-	}
 	commands := append([]spine.DeclaredCheck{{Name: "prepare", Command: observation.Command}}, checks...)
 	for _, command := range commands {
 		if command.Name != "prepare" && command.Name != "check" && command.Name != "smoke" || strings.TrimSpace(command.Command) == "" {
 			return fmt.Errorf("invalid pinned repository command %q", command.Name)
 		}
-		if _, err := tx.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command,starting_revision) values($1,$2,$3,$4) on conflict do nothing`, jobID, command.Name, command.Command, startingRevision); err != nil {
+		if _, err := tx.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command) values($1,$2,$3) on conflict do nothing`, jobID, command.Name, command.Command); err != nil {
 			return err
 		}
-		var storedCommand, storedRevision string
-		if err := tx.QueryRowContext(ctx, `select command,starting_revision from dorf.repository_commands where job_id=$1 and name=$2`, jobID, command.Name).Scan(&storedCommand, &storedRevision); err != nil {
+		var storedCommand string
+		if err := tx.QueryRowContext(ctx, `select command from dorf.repository_commands where job_id=$1 and name=$2`, jobID, command.Name).Scan(&storedCommand); err != nil {
 			return err
 		}
-		if storedCommand != command.Command || storedRevision != startingRevision {
-			return fmt.Errorf("repository command %s conflicts with its pinned starting Revision", command.Name)
+		if storedCommand != command.Command {
+			return fmt.Errorf("repository command %s conflicts with its pinned command", command.Name)
 		}
 	}
 	state, phase, attention := "succeeded", "implementing", ""
@@ -750,7 +737,7 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		state, phase = "failed", "blocked"
 		attention = fmt.Sprintf("repository setup failed with exit %d; Evidence %s", observation.ExitCode, evidence.Digest)
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=$2,external_id=$3,external_outcome=$4,updated_at=clock_timestamp() where id=$1`, actionID, state, evidence.Digest, fmt.Sprintf("exit=%d", observation.ExitCode)); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=$2,external_id=$3,external_outcome=$4 where id=$1`, actionID, state, evidence.Digest, fmt.Sprintf("exit=%d", observation.ExitCode)); err != nil {
 		return err
 	}
 	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,workflow_attention=nullif($3,'') where id=$1 and workflow_phase in ('setup','blocked')`, jobID, phase, attention)); err != nil {
@@ -806,7 +793,7 @@ func (s Store) RecordRevision(ctx context.Context, actionID string, observation 
 	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,parent_oid,tree_oid,branch,generation,action_id) values($1,$2,$3,$4,$5,$6,$7) on conflict(job_id,oid) do nothing`, jobID, observation.Revision, observation.Parent, observation.Tree, observation.Branch, generation, actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3,updated_at=clock_timestamp() where id=$1`, actionID, observation.Revision, observation.Tree); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3 where id=$1`, actionID, observation.Revision, observation.Tree); err != nil {
 		return err
 	}
 	var reviewRepairSource string
@@ -814,7 +801,7 @@ func (s Store) RecordRevision(ctx context.Context, actionID string, observation 
 		return err
 	}
 	if reviewRepairSource != "" {
-		if _, err := tx.ExecContext(ctx, `update dorf.review_findings set adjudication='accepted',stale=true where run_id=$1`, reviewRepairSource); err != nil {
+		if _, err := tx.ExecContext(ctx, `update dorf.review_findings set adjudication='accepted' where run_id=$1`, reviewRepairSource); err != nil {
 			return err
 		}
 	}
@@ -872,7 +859,7 @@ func (s Store) RecordCheck(ctx context.Context, check spine.Check, evidence spin
 	if observation.ExitCode != 0 {
 		state = "failed"
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.checks set state=$2,exit_code=$3,evidence_id=$4,started_at=$5,finished_at=$6,attention=null where id=$1`, check.ID, state, observation.ExitCode, evidence.ID, observation.StartedAt, observation.FinishedAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.checks set state=$2,exit_code=$3,evidence_id=$4,started_at=$5,finished_at=$6 where id=$1`, check.ID, state, observation.ExitCode, evidence.ID, observation.StartedAt, observation.FinishedAt); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -997,7 +984,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 	defer tx.Rollback()
 	var jobID, scope string
 	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=nullif($3,''),updated_at=clock_timestamp() where id=$1 returning job_id,kind,scope_key`, id, receipt.ExternalID, receipt.Outcome).Scan(&jobID, &kind, &scope); err != nil {
+	if err := tx.QueryRowContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=nullif($3,'') where id=$1 returning job_id,kind,scope_key`, id, receipt.ExternalID, receipt.Outcome).Scan(&jobID, &kind, &scope); err != nil {
 		return err
 	}
 	switch kind {
@@ -1127,7 +1114,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 }
 
 func (s Store) UncertainAction(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `update dorf.actions set state='uncertain',updated_at=clock_timestamp() where id=$1 and state<>'succeeded'`, id)
+	_, err := s.DB.ExecContext(ctx, `update dorf.actions set state='uncertain' where id=$1 and state<>'succeeded'`, id)
 	return err
 }
 
@@ -1244,7 +1231,7 @@ func (s Store) PrepareAgentRun(ctx context.Context, runID, baselineTurnID string
 }
 
 func (s Store) BeginTurnSubmission(ctx context.Context, runID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='pending',attempts=attempts+1,updated_at=clock_timestamp() where id=(select action_id from dorf.agent_runs where id=$1) and state in ('pending','uncertain')`, runID))
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='pending' where id=(select action_id from dorf.agent_runs where id=$1) and state in ('pending','uncertain')`, runID))
 }
 
 func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string) error {
@@ -1270,7 +1257,7 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state=$3,native_outcome=nullif($4,''),attention=nullif($5,''),finished_at=case when $3 in ('completed','failed','interrupted') then coalesce(finished_at,clock_timestamp()) else finished_at end,updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID, state, outcome, attention).Scan(&actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='submitted',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='submitted' where id=$1`, actionID, turnID); err != nil {
 		return err
 	}
 	if outcome != "" {
@@ -1306,7 +1293,7 @@ func (s Store) BindNativeSteer(ctx context.Context, runID, turnID, status string
 	if outcome != "" && persistedOutcome != outcome {
 		return fmt.Errorf("AgentRun %s native outcome %s conflicts with observed %s", runID, persistedOutcome, outcome)
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='steered',updated_at=clock_timestamp() where id=$1`, actionID, turnID); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='steered' where id=$1`, actionID, turnID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1322,7 +1309,7 @@ func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
 	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='failed',native_outcome=case when native_turn_id is null then null else 'failed' end,attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=case when exists(select 1 from dorf.agent_runs where id=$1 and native_turn_id is null) then 'uncertain' else 'failed' end,external_outcome=$2,updated_at=clock_timestamp() where id=$3`, runID, reason, actionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=case when exists(select 1 from dorf.agent_runs where id=$1 and native_turn_id is null) then 'uncertain' else 'failed' end,external_outcome=$2 where id=$3`, runID, reason, actionID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1338,7 +1325,7 @@ func (s Store) UncertainAgentRun(ctx context.Context, runID, reason string) erro
 	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2,updated_at=clock_timestamp() where id=$1 and state<>'succeeded'`, actionID, reason); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2 where id=$1 and state<>'succeeded'`, actionID, reason); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1468,7 +1455,7 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 }
 
 func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) {
-	rows, err := s.DB.QueryContext(ctx, `select a.id,coalesce(a.message_id,''),a.kind,a.state,coalesce(a.external_id,''),a.attempts,a.scope_key,coalesce(e.digest,'') from dorf.actions a left join dorf.evidence e on e.action_id=a.id where a.job_id=$1 order by a.created_at,a.id`, jobID)
+	rows, err := s.DB.QueryContext(ctx, `select a.id,coalesce(a.message_id,''),a.kind,a.state,coalesce(a.external_id,''),a.scope_key,coalesce(e.digest,'') from dorf.actions a left join dorf.evidence e on e.action_id=a.id where a.job_id=$1 order by a.created_at,a.id`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1476,7 +1463,7 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) 
 	var actions []ActionView
 	for rows.Next() {
 		var action ActionView
-		if err := rows.Scan(&action.ID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Attempts, &action.Scope, &action.EvidenceDigest); err != nil {
+		if err := rows.Scan(&action.ID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Scope, &action.EvidenceDigest); err != nil {
 			return nil, err
 		}
 		actions = append(actions, action)

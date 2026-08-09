@@ -6,15 +6,6 @@ import (
 	"time"
 )
 
-type JobState string
-
-const (
-	JobAdmitted JobState = "admitted"
-	JobRunning  JobState = "running"
-	JobObserved JobState = "observed"
-	JobFailed   JobState = "failed"
-)
-
 type CleanupState string
 
 const (
@@ -78,7 +69,6 @@ type Job struct {
 	ProviderGatewayState string       `json:"provider_gateway_state,omitempty"`
 	Model                string       `json:"model"`
 	ReasoningEffort      string       `json:"reasoning_effort"`
-	State                JobState     `json:"state"`
 	AdmissionOpen        bool         `json:"admission_open"`
 	CleanupState         CleanupState `json:"cleanup_state"`
 	TaskID               string       `json:"task_id"`

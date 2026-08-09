@@ -237,7 +237,7 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	}
 	actions, err := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
-	if err != nil || !found || action.State != spine.ActionSucceeded || action.ExternalID != "accepted:"+action.ID || action.Attempts != 2 || effect.mutationCount() != 1 {
+	if err != nil || !found || action.State != spine.ActionSucceeded || action.ExternalID != "accepted:"+action.ID || effect.mutationCount() != 1 {
 		t.Fatalf("reconciled actions=%#v mutations=%d err=%v", actions, effect.mutationCount(), err)
 	}
 }

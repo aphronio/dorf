@@ -795,14 +795,6 @@ func (s *memoryStore) WithJobFence(_ context.Context, _ string, fn func() error)
 	defer s.fence.Unlock()
 	return fn()
 }
-func (s *memoryStore) StartRun(_ context.Context, id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	job := s.jobs[id]
-	job.State = JobRunning
-	s.jobs[id] = job
-	return nil
-}
 func (s *memoryStore) BeginAction(_ context.Context, jobID string, kind ActionKind) (Action, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1342,5 +1334,5 @@ func (f *fakeExternals) SandboxDelete(_ context.Context, _ Job, action Action) (
 }
 
 func testJob() Job {
-	return Job{ID: "job-0123456789abcdef", Goal: "goal", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/proof", Model: "gpt-5.6-sol", ReasoningEffort: "high", State: JobAdmitted, AdmissionOpen: true, CleanupState: CleanupPending}
+	return Job{ID: "job-0123456789abcdef", Goal: "goal", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/proof", Model: "gpt-5.6-sol", ReasoningEffort: "high", AdmissionOpen: true, CleanupState: CleanupPending}
 }

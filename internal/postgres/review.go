@@ -305,6 +305,10 @@ func scanReviewRun(row rowScanner) (spine.AgentRun, error) {
 }
 
 func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.ReviewRunView, error) {
+	var currentRevision string
+	if err := s.DB.QueryRowContext(ctx, `select revision from dorf.jobs where id=$1`, jobID).Scan(&currentRevision); err != nil {
+		return nil, err
+	}
 	rows, err := s.DB.QueryContext(ctx, reviewRunSelect+` where ar.job_id=$1 and ar.revision=$2 order by ar.role`, jobID, revision)
 	if err != nil {
 		return nil, err
@@ -316,16 +320,16 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 		if err != nil {
 			return nil, err
 		}
-		view := spine.ReviewRunView{AgentRun: run}
-		var material, stale bool
+		view := spine.ReviewRunView{AgentRun: run, Stale: run.Revision != currentRevision}
+		var material bool
 		var summary, rationale, evidenceID, adjudication string
 		var affectedRoles, affectedChecks []byte
-		err = s.DB.QueryRowContext(ctx, `select material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication,stale from dorf.review_findings where run_id=$1`, run.ID).Scan(&material, &summary, &rationale, &affectedRoles, &affectedChecks, &evidenceID, &adjudication, &stale)
+		err = s.DB.QueryRowContext(ctx, `select material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication from dorf.review_findings where run_id=$1`, run.ID).Scan(&material, &summary, &rationale, &affectedRoles, &affectedChecks, &evidenceID, &adjudication)
 		if err == nil {
-			finding := &spine.ReviewFinding{RunID: run.ID, Revision: run.Revision, Role: policy.Role(run.Role), Material: material, Summary: summary, Rationale: rationale, EvidenceID: evidenceID, Adjudication: adjudication, Stale: stale}
+			finding := &spine.ReviewFinding{RunID: run.ID, Revision: run.Revision, Role: policy.Role(run.Role), Material: material, Summary: summary, Rationale: rationale, EvidenceID: evidenceID, Adjudication: adjudication, Stale: view.Stale}
 			_ = json.Unmarshal(affectedRoles, &finding.AffectedRoles)
 			_ = json.Unmarshal(affectedChecks, &finding.AffectedChecks)
-			view.Finding, view.Stale = finding, stale
+			view.Finding = finding
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
@@ -335,10 +339,6 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 }
 
 func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
-	var currentRevision string
-	if err := s.DB.QueryRowContext(ctx, `select revision from dorf.jobs where id=$1`, jobID).Scan(&currentRevision); err != nil {
-		return nil, err
-	}
 	rows, err := s.DB.QueryContext(ctx, `select distinct revision from dorf.agent_runs where job_id=$1 and revision is not null order by revision`, jobID)
 	if err != nil {
 		return nil, err
@@ -360,11 +360,6 @@ func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewR
 		runs, err := s.ReviewRuns(ctx, jobID, revision)
 		if err != nil {
 			return nil, err
-		}
-		for i := range runs {
-			if runs[i].Revision != currentRevision {
-				runs[i].Stale = true
-			}
 		}
 		result = append(result, runs...)
 	}
@@ -418,7 +413,7 @@ func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.A
 		return spine.Action{}, err
 	}
 	var action spine.Action
-	err = tx.QueryRowContext(ctx, `update dorf.actions set attempts=attempts+case when state in ('succeeded','failed') then 0 else 1 end,updated_at=clock_timestamp() where id=$1 returning id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key`, actionID).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
+	err = tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 for update`, actionID).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
 	if err != nil {
 		return spine.Action{}, err
 	}
@@ -455,10 +450,10 @@ func (s Store) UncertainReviewSubmission(ctx context.Context, runID, sessionActi
 		return err
 	}
 	outcome := spine.ReviewSubmissionUncertainOutcome + ": " + reason
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$3,updated_at=clock_timestamp() where id=$1 and scope_key=$2 and kind='codex-session-start' and state in ('pending','uncertain')`, sessionActionID, runID, outcome)); err != nil {
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$3 where id=$1 and scope_key=$2 and kind='codex-session-start' and state in ('pending','uncertain')`, sessionActionID, runID, outcome)); err != nil {
 		return err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2,updated_at=clock_timestamp() where id=$1 and state in ('pending','uncertain')`, turnActionID, outcome)); err != nil {
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2 where id=$1 and state in ('pending','uncertain')`, turnActionID, outcome)); err != nil {
 		return err
 	}
 	if err := expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 and session_id is null and native_turn_id is null`, runID, reason)); err != nil {
@@ -490,7 +485,7 @@ func (s Store) InterruptReviewRun(ctx context.Context, runID, reason string) err
 	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='interrupted',native_outcome=case when native_turn_id is null then null else 'interrupted' end,attention=$2,finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end,updated_at=clock_timestamp() where id=$1 and state in ('pending','submitting','active','uncertain') returning action_id`, runID, reason).Scan(&actionID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='failed',external_outcome=$2,updated_at=clock_timestamp() where id=$1 and state in ('pending','uncertain')`, actionID, reason); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='failed',external_outcome=$2 where id=$1 and state in ('pending','uncertain')`, actionID, reason); err != nil {
 		return err
 	}
 	return tx.Commit()
