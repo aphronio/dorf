@@ -27,12 +27,6 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	}
 	revisionA := strings.Repeat("a", 40)
 	revisionB := strings.Repeat("b", 40)
-	if ScopedActionID(jobA, ActionRepositoryCommit, revisionA) != ScopedActionID(jobA, ActionRepositoryCommit, revisionA) {
-		t.Fatal("commit Action identity changed across attempts")
-	}
-	if ScopedActionID(jobA, ActionRepositoryCommit, revisionA) == ScopedActionID(jobA, ActionRepositoryCommit, revisionB) {
-		t.Fatal("distinct parent Revisions share a commit Action identity")
-	}
 	if CheckID(jobA, revisionA, "check") != CheckID(jobA, revisionA, "check") || CheckID(jobA, revisionA, "check") == CheckID(jobA, revisionB, "check") || CheckID(jobA, revisionA, "check") == CheckID(jobA, revisionA, "smoke") {
 		t.Fatal("Check identity is not stable and scoped to semantic name plus exact Revision")
 	}

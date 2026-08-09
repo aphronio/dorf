@@ -608,63 +608,52 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	return action, message, true, nil
 }
 
-// BeginCommit atomically closes implementation steering and reserves the
-// Revision Action only after every already-admitted FIFO input is terminal.
-// The additive committing phase is intentionally compatible with live v2
-// message tasks: the same executor resumes it from the stable scoped Action.
-func (s Store) BeginCommit(ctx context.Context, jobID, parent string) (spine.Action, bool, error) {
+func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (spine.AgentRun, bool, error) {
+	var unsettled int
+	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))`, jobID).Scan(&unsettled); err != nil {
+		return spine.AgentRun{}, false, err
+	}
+	if unsettled != 0 {
+		return spine.AgentRun{}, false, nil
+	}
+	var run spine.AgentRun
+	if err := tx.QueryRowContext(ctx, `select ar.id,ar.job_id,ar.state,ar.role from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and m.delivery_intent='follow' order by m.sequence desc limit 1`, jobID).Scan(&run.ID, &run.JobID, &run.State, &run.Role); err != nil {
+		return spine.AgentRun{}, false, err
+	}
+	if run.State != spine.AgentRunCompleted || run.Role != "implement" && run.Role != "repair" {
+		return spine.AgentRun{}, false, nil
+	}
+	return run, true, nil
+}
+
+// RevisionCandidate identifies the completed implementation or repair AgentRun
+// whose final clean Git state may become the next accepted Revision. It does
+// not reserve an Action or close message admission; RecordRevision repeats the
+// same checks atomically so a late accepted Message cannot be skipped.
+func (s Store) RevisionCandidate(ctx context.Context, jobID, comparisonBase string) (spine.AgentRun, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return spine.Action{}, false, err
+		return spine.AgentRun{}, false, err
 	}
 	defer tx.Rollback()
 	var revision, phase string
 	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase); err != nil {
-		return spine.Action{}, false, err
+		return spine.AgentRun{}, false, err
 	}
-	if revision != parent {
-		return spine.Action{}, false, fmt.Errorf("commit parent %s conflicts with current Revision %s", parent, revision)
+	if revision != comparisonBase {
+		return spine.AgentRun{}, false, fmt.Errorf("Revision comparison base %s conflicts with current Revision %s", comparisonBase, revision)
 	}
-	if phase != "implementing" && phase != "repairing" && phase != "review-repairing" && phase != "committing" {
-		return spine.Action{}, false, fmt.Errorf("Revision commit is not admissible during workflow phase %s", phase)
+	if phase != "implementing" && phase != "repairing" && phase != "review-repairing" {
+		return spine.AgentRun{}, false, fmt.Errorf("Revision observation is not admissible during workflow phase %s", phase)
 	}
-	if phase != "committing" {
-		var unsettled int
-		if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))`, jobID).Scan(&unsettled); err != nil {
-			return spine.Action{}, false, err
-		}
-		if unsettled != 0 {
-			if err := tx.Commit(); err != nil {
-				return spine.Action{}, false, err
-			}
-			return spine.Action{}, false, nil
-		}
-		var latestFollowState string
-		if err := tx.QueryRowContext(ctx, `select ar.state from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and m.delivery_intent='follow' order by m.sequence desc limit 1`, jobID).Scan(&latestFollowState); err != nil {
-			return spine.Action{}, false, err
-		}
-		if latestFollowState != string(spine.AgentRunCompleted) {
-			if err := tx.Commit(); err != nil {
-				return spine.Action{}, false, err
-			}
-			return spine.Action{}, false, nil
-		}
-		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='committing' where id=$1 and revision=$2 and workflow_phase in ('implementing','repairing','review-repairing')`, jobID, parent)); err != nil {
-			return spine.Action{}, false, err
-		}
-	}
-	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositoryCommit, parent)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, spine.ActionRepositoryCommit, parent); err != nil {
-		return spine.Action{}, false, err
-	}
-	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 and message_id is null for update`, desiredID, jobID, spine.ActionRepositoryCommit, parent).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
-		return spine.Action{}, false, err
+	run, ready, err := revisionCandidateTx(ctx, tx, jobID)
+	if err != nil {
+		return spine.AgentRun{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return spine.Action{}, false, err
+		return spine.AgentRun{}, false, err
 	}
-	return action, true, nil
+	return run, ready, nil
 }
 
 func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spine.Evidence) error {
@@ -769,46 +758,86 @@ func (s Store) DeclaredChecks(ctx context.Context, jobID string) ([]spine.Declar
 	return checks, nil
 }
 
-func (s Store) RecordRevision(ctx context.Context, actionID string, observation spine.CommitObservation, evidence spine.Evidence) error {
+func (s Store) RecordRevision(ctx context.Context, jobID, runID string, observation spine.RevisionObservation, evidence spine.Evidence) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	var jobID, scope, currentRevision, branch, phase string
-	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,a.scope_key,j.revision,j.branch,j.workflow_phase from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &scope, &currentRevision, &branch, &phase); err != nil {
-		return err
+	var currentRevision, branch, phase, reviewRepairSource string
+	if err := tx.QueryRowContext(ctx, `select revision,branch,workflow_phase,coalesce(review_repair_source_run_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &branch, &phase, &reviewRepairSource); err != nil {
+		return false, err
 	}
-	if kind != spine.ActionRepositoryCommit || scope != observation.Parent || currentRevision != observation.Parent || branch != observation.Branch || phase != "committing" || evidence.ActionID != actionID || evidence.Revision != observation.Revision {
-		return fmt.Errorf("Git Revision observation conflicts with durable parent, branch, or Action")
+	if currentRevision != observation.ComparisonBase || branch != observation.Branch || phase != "implementing" && phase != "repairing" && phase != "review-repairing" ||
+		evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.CheckID != "" || evidence.Revision != observation.Revision ||
+		!ValidRevision(observation.ComparisonBase) || !ValidRevision(observation.Revision) || !ValidRevision(observation.Tree) || observation.Revision == observation.ComparisonBase {
+		return false, fmt.Errorf("Git Revision observation conflicts with durable comparison base, branch, AgentRun, or Evidence")
+	}
+	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
+	if err != nil {
+		return false, err
+	}
+	if !ready || candidate.ID != runID {
+		return false, nil
 	}
 	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
-		return err
+		return false, err
 	}
 	var generation int
 	if err := tx.QueryRowContext(ctx, `select coalesce(max(generation),0)+1 from dorf.revisions where job_id=$1`, jobID).Scan(&generation); err != nil {
-		return err
+		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,parent_oid,tree_oid,branch,generation,action_id) values($1,$2,$3,$4,$5,$6,$7) on conflict(job_id,oid) do nothing`, jobID, observation.Revision, observation.Parent, observation.Tree, observation.Branch, generation, actionID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3 where id=$1`, actionID, observation.Revision, observation.Tree); err != nil {
-		return err
-	}
-	var reviewRepairSource string
-	if err := tx.QueryRowContext(ctx, `select coalesce(review_repair_source_run_id,'') from dorf.jobs where id=$1`, jobID).Scan(&reviewRepairSource); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,comparison_base_oid,tree_oid,branch,generation,evidence_id) values($1,$2,$3,$4,$5,$6,$7)`, jobID, observation.Revision, observation.ComparisonBase, observation.Tree, observation.Branch, generation, evidence.ID); err != nil {
+		return false, err
 	}
 	if reviewRepairSource != "" {
 		if _, err := tx.ExecContext(ctx, `update dorf.review_findings set adjudication='accepted' where run_id=$1`, reviewRepairSource); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set revision=$2,workflow_phase='checking',workflow_attention=null where id=$1 and revision=$3`, jobID, observation.Revision, observation.Parent)); err != nil {
-		return err
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set revision=$2,workflow_phase='checking',workflow_attention=null where id=$1 and revision=$3`, jobID, observation.Revision, observation.ComparisonBase)); err != nil {
+		return false, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// BlockNoRevision records a completed no-change implementation result only if
+// the same AgentRun is still the latest accepted candidate. A Message admitted
+// after Git observation therefore wins the Job-row race and must run first.
+func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase, reason string) (bool, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return false, fmt.Errorf("no-Revision attention requires a reason")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var revision, phase string
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase); err != nil {
+		return false, err
+	}
+	if revision != comparisonBase || phase != "implementing" && phase != "repairing" {
+		return false, fmt.Errorf("no-Revision result conflicts with current Revision %s or workflow phase %s", revision, phase)
+	}
+	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
+	if err != nil {
+		return false, err
+	}
+	if !ready || candidate.ID != runID {
+		return false, nil
+	}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1 and revision=$3 and workflow_phase in ('implementing','repairing')`, jobID, reason, comparisonBase)); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command string) (spine.Check, error) {
@@ -898,7 +927,7 @@ func (s Store) AdmitRepair(ctx context.Context, check spine.Check) (spine.Messag
 	if err != nil {
 		return spine.Message{}, false, err
 	}
-	input := fmt.Sprintf("Focused repair: the deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Repair only that failure, keep the bounded change intact, do not create a commit, and return control so Dorf can commit and rerun affected verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
+	input := fmt.Sprintf("Focused repair: the deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Repair only that failure, keep the bounded change intact, commit the repair, and return control so Dorf can observe the new Revision and rerun affected verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
 	message := spine.Message{ID: spine.MessageID(check.JobID, callerID), JobID: check.JobID, CallerID: callerID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, message.JobID, message.CallerID, message.Sequence, message.Input); err != nil {
 		return spine.Message{}, false, err

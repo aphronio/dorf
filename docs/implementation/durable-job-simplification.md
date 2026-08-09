@@ -26,8 +26,10 @@ Goal
   -> separate observable, retryable Cleanup
 ```
 
-Dorf never creates an implementation commit on the agent's behalf. Dorf validates the branch, parent,
-commit, tree, and workspace, then records the observed commit as an immutable Revision.
+Dorf never creates an implementation commit on the agent's behalf. An implementation or repair AgentRun
+may create one commit or several. Dorf validates the branch, clean workspace, commit and tree, and proves
+that the final Git HEAD descends from the previously accepted Revision. It then records that final HEAD as
+the next immutable Revision.
 
 ## Working rules
 
@@ -39,6 +41,8 @@ commit, tree, and workspace, then records the observed commit as an immutable Re
 - [ ] Keep Absurd responsible for task eligibility, claims, checkpoints, waits, retries, and cancellation.
 - [ ] Run the portable and PostgreSQL-backed suites after every slice.
 - [ ] Do not add data compatibility work for the prototype schema.
+- [ ] Report production, schema, and test LOC change after every slice, both for that slice and
+      cumulatively from the baseline commit.
 
 ## Slice 1: Remove unquestionably dead state
 
@@ -55,21 +59,72 @@ Terminal: the existing workflow behaves identically with a smaller schema and re
 
 ## Slice 2: Make the coding path explicit
 
-Goal: express `Sandbox -> Implementation AgentRun -> observed Revision -> Checks` as named Absurd
-Steps.
+Goal: make ownership obvious before simplifying the full workflow.
 
-- [ ] Introduce one readable `RunJob` coordinator for this path.
-- [ ] Give repeated Steps stable names based on Message, AgentRun, Revision, or Check identity.
-- [ ] Use small typed Step results.
-- [ ] Centralize the external Action pattern: reserve, reconcile, perform if missing, final claim check,
-      record receipt, then complete the checkpoint.
-- [ ] Adopt a clean, directly provable agent-created commit as the immutable Revision.
-- [ ] Keep locks and transactions short; do not hold them across Incus, Codex, Git, or GitHub calls.
-- [ ] Delete Dorf commit creation, commit workflow phases, and their recovery machinery.
-- [ ] Delete tests whose promise was that Dorf creates the implementation commit.
+```text
+Coding workflow
+  -> asks the durable core to retain Job, Message, AgentRun, Action, Check, Evidence,
+     Attention, and Outcome facts
+  -> uses Absurd for durable execution
+  -> uses concrete Incus, Codex, Git, and repository-command edges
+```
 
-Terminal: a real implementation AgentRun may commit, Dorf observes exactly one valid Revision, and
-Checks run against that exact Revision.
+The durable core does not know the order of a coding workflow. `Revision`, `ReviewPolicy`, and
+`Proposal` are coding concepts. An `Action` intentionally changes external state. A `Check` verifies
+something without intending to change lasting external state. A repository `CommandRun` is one way
+the coding edge can execute a Check; it is not a new durable-core primitive.
+
+Do not build a generic workflow engine, adapter registry, or abstract second workflow in this slice.
+Keep the implementation concrete until another real workflow proves a reusable seam.
+
+### Slice 2A: Let the AgentRun own commits
+
+Goal: replace Dorf-created commits with a clear observation boundary.
+
+- [x] Update the North Star and decision log: implementation and repair AgentRuns decide when and what
+      to commit; Dorf observes and validates their result.
+- [x] Allow an AgentRun to create one commit or several.
+- [x] After the AgentRun completes, inspect the coding branch and require a clean workspace.
+- [x] Prove that final Git HEAD differs from and descends from the previously accepted Revision.
+- [x] Validate that the final commit and tree exist, then record final HEAD as the next immutable
+      Revision with Evidence.
+- [x] Rename any stored or API relationship that incorrectly promises a direct parent; retain the
+      previous accepted Revision as the comparison base.
+- [x] Delete the Dorf commit Action, commit command/script, commit workflow phase, and their recovery
+      machinery.
+- [x] Delete tests whose promise was that Dorf creates an implementation commit or that every Revision
+      has exactly one new commit.
+- [x] Keep the complete coding workflow runnable and run Checks against the observed exact Revision.
+
+Terminal: a real implementation or repair AgentRun creates one or more commits, Dorf records its clean
+final descendant as one immutable Revision, and Checks run against that exact Revision.
+
+### Slice 2B: Move coding order into one readable workflow
+
+Goal: express `provision Sandbox -> setup -> Implementation AgentRun -> observe Revision -> Checks`
+as one concrete coding coordinator backed by named Absurd Steps.
+
+- [ ] Introduce one readable `RunJob` coordinator in the coding workflow layer for this path.
+- [ ] Keep Absurd task, checkpoint, heartbeat, wait, retry, and cancellation mechanics localized at
+      the workflow/runtime boundary.
+- [ ] Give repeated Steps explicit stable names based on Message, AgentRun, Revision, Check, or Action
+      identity; never rely on call occurrence counters.
+- [ ] Use small typed Step results that point back to authoritative Dorf facts.
+- [ ] Centralize the external Action pattern: reserve stable identity, reconcile external truth,
+      perform only if missing, perform a final claim check, record the receipt, then complete the Step.
+- [ ] Use the same Action executor for Sandbox, route, and other code-owned external mutations in this
+      path.
+- [ ] Execute repository setup and declared repository checks as concrete CommandRuns at the coding
+      edge, represented durably as Actions or Checks according to whether lasting mutation is intended.
+- [ ] Keep locks and database transactions short; do not hold them across Incus, Codex, Git, or command
+      execution.
+- [ ] Delete the matching coding phases and orchestration branches from the mixed service layer as the
+      coordinator becomes authoritative.
+- [ ] Delete private phase-transition and duplicate recovery tests replaced by product-path and shared
+      Action-reconciliation tests.
+
+Terminal: the first half of `RunJob` reads in product order, survives interruption through stable
+Steps, and contains no second Dorf-owned program counter for the replaced path.
 
 ## Slice 3: Centralize review and repair
 

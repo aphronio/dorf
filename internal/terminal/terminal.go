@@ -60,8 +60,8 @@ func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action sp
 	return observation, checks, err
 }
 
-func (e Externals) RepositoryCommit(ctx context.Context, job spine.Job, action spine.Action) (spine.CommitObservation, []byte, error) {
-	return e.repository().Commit(ctx, e.Sandbox.Name(job.ID), action.ID, job.ID, job.Branch, job.Revision, job.RevisionGeneration+1)
+func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job) (spine.RevisionObservation, []byte, error) {
+	return e.repository().ObserveRevision(ctx, e.Sandbox.Name(job.ID), job.Branch, job.Revision)
 }
 
 func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spine.Check) (spine.CommandObservation, error) {
@@ -70,10 +70,6 @@ func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spi
 
 func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (policy.ChangeFacts, error) {
 	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
-}
-
-func (e Externals) RepositoryHasChanges(ctx context.Context, job spine.Job) (bool, error) {
-	return e.repository().HasChanges(ctx, e.Sandbox.Name(job.ID), job.Revision)
 }
 
 func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
@@ -286,7 +282,7 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 }
 
 func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, spine.NativeTurn, error) {
-	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
+	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (string, []spine.NativeTurn, error) {
@@ -298,7 +294,14 @@ func (e Externals) AgentTurns(ctx context.Context, job spine.Job, sessionID stri
 }
 
 func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.NativeTurn, error) {
-	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.SessionID, delivery.AgentRun.ID, delivery.Message.Input, job.Model, job.ReasoningEffort)
+	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.SessionID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
+}
+
+func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
+	if delivery.AgentRun.Role != "implement" && delivery.AgentRun.Role != "repair" {
+		return delivery.Message.Input
+	}
+	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", delivery.Message.Input, job.Branch, job.Revision)
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {

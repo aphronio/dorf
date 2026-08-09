@@ -940,7 +940,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D047 — Replace the Python runtime with a greenfield Go and Absurd system
 
 - **Status:** Accepted foundation — 2026-08-06; review-request and Absurd-usage clauses superseded
-  by D048 — 2026-08-09
+  by D048 — 2026-08-09; implementation and repair commit ownership clarified by D050 — 2026-08-10
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
@@ -1069,3 +1069,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Repeated measurements show setup materially dominates Job latency or network
   reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
   successfully prepared repository environment behind the same `commands.prepare` contract.
+
+## D050 — Implementation and repair AgentRuns own commits
+
+- **Status:** Accepted workflow correction — 2026-08-10
+- **Decision:** An implementation or repair AgentRun owns the code change and, when it changes code,
+  creates one or many commits in the Job checkout. Its successful change contract requires a clean
+  checkout and a final `HEAD` that is a proper descendant of the AgentRun's input Revision. Dorf
+  validates those facts and records the observed `HEAD` as the next exact Revision; it does not
+  manufacture, squash, or amend the agent's commits. A review repair may instead reject a
+  false-positive finding by returning a clean checkout with unchanged `HEAD`; that creates no new
+  Revision.
+- **Action boundary:** An Action is a code-owned operation that changes external state. Submitting
+  the bounded agent turn is therefore an Action, but tool calls and commits made inside that
+  AgentRun are not separate Actions. Their transcript remains harness-owned, their commits remain
+  Git-owned, and Dorf retains the observed Revision and Revision-pinned Evidence it needs.
+- **Why:** Commit structure is part of implementation judgment and may naturally require more than
+  one commit. Treating commit creation as a later deterministic Dorf step both erases that judgment
+  and misstates the recovery boundary. Validating clean descendant Git state gives the workflow an
+  exact handoff without making Dorf the author of the change.
+- **Reconsider when:** A supported harness cannot reliably commit inside the Sandbox, or a concrete
+  acceptance surface requires a separately reviewed normalization step that preserves authorship
+  and exact source-Revision provenance.

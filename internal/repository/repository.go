@@ -130,7 +130,7 @@ func (m Manager) ChangeFacts(ctx context.Context, sandboxName, baseRevision, rev
 	if !fullOID(baseRevision) || !fullOID(revision) {
 		return policy.ChangeFacts{}, fmt.Errorf("ChangeFacts require full immutable Git Revisions")
 	}
-	if err := m.validateGit(ctx, sandboxName, revision, false); err != nil {
+	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
 		return policy.ChangeFacts{}, &AttentionError{Reason: err.Error()}
 	}
 	contract, err := m.LoadContract(ctx, sandboxName)
@@ -149,20 +149,6 @@ func (m Manager) ChangeFacts(ctx context.Context, sandboxName, baseRevision, rev
 		parts = parts[:len(parts)-1]
 	}
 	return policy.FactsFromPaths(baseRevision, revision, parts, true, contract.DeclaredPerformance)
-}
-
-func (m Manager) HasChanges(ctx context.Context, sandboxName, revision string) (bool, error) {
-	if err := m.validateGit(ctx, sandboxName, revision, true); err != nil {
-		return false, &AttentionError{Reason: err.Error()}
-	}
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "git", "-C", m.Workspace, "status", "--porcelain=v1", "--untracked-files=all")
-	if err != nil {
-		return false, err
-	}
-	if result.ExitCode != 0 {
-		return false, &AttentionError{Reason: "observe review adjudication Git state: " + strings.TrimSpace(result.Stderr)}
-	}
-	return strings.TrimSpace(result.Stdout) != "", nil
 }
 
 func stripComment(line string) string {
@@ -231,7 +217,7 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	if !safeIdentity.MatchString(identity) {
 		return spine.CommandObservation{}, fmt.Errorf("unsafe command identity %q", identity)
 	}
-	if err := m.validateGit(ctx, sandboxName, revision, false); err != nil {
+	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
 		return spine.CommandObservation{}, &AttentionError{Reason: err.Error()}
 	}
 	digestBytes := sha256.Sum256([]byte(command))
@@ -265,7 +251,7 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
-	if err := m.validateGit(ctx, sandboxName, revision, false); err != nil {
+	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
 		return spine.CommandObservation{}, &AttentionError{Reason: err.Error()}
 	}
 	stdout, stderr, redactions := redact(stdout, stderr, redactionSecrets)
@@ -323,40 +309,36 @@ func (m Manager) receiptFile(ctx context.Context, sandboxName, identity, name st
 	return result.Stdout, nil
 }
 
-func (m Manager) Commit(ctx context.Context, sandboxName, actionID, jobID, branch, parent string, generation int) (spine.CommitObservation, []byte, error) {
-	if !safeIdentity.MatchString(actionID) {
-		return spine.CommitObservation{}, nil, fmt.Errorf("unsafe commit Action identity")
+func (m Manager) ObserveRevision(ctx context.Context, sandboxName, branch, comparisonBase string) (spine.RevisionObservation, []byte, error) {
+	if !fullOID(comparisonBase) {
+		return spine.RevisionObservation{}, nil, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
-	message := fmt.Sprintf("Dorf Job %s revision %d", jobID, generation)
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", commitReceiptScript, "dorf-commit", actionID, m.Workspace, branch, parent, message)
+	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
 	if err != nil {
-		return spine.CommitObservation{}, nil, err
+		return spine.RevisionObservation{}, nil, err
 	}
 	if result.ExitCode != 0 {
-		return spine.CommitObservation{}, nil, &AttentionError{Reason: fmt.Sprintf("Git commit reconciliation needs attention: %s", strings.TrimSpace(result.Stderr))}
+		return spine.RevisionObservation{}, nil, &AttentionError{Reason: fmt.Sprintf("observe Git Revision needs attention: %s", strings.TrimSpace(result.Stderr))}
 	}
 	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
 	if len(lines) != 6 {
-		return spine.CommitObservation{}, nil, &AttentionError{Reason: "Git commit receipt is incomplete"}
+		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation is incomplete"}
 	}
 	startedNS, startErr := strconv.ParseInt(lines[4], 10, 64)
 	finishedNS, finishErr := strconv.ParseInt(lines[5], 10, 64)
 	if startErr != nil || finishErr != nil || finishedNS < startedNS {
-		return spine.CommitObservation{}, nil, &AttentionError{Reason: "Git commit receipt has invalid bounded timing"}
+		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation has invalid bounded timing"}
 	}
-	observation := spine.CommitObservation{Parent: lines[0], Revision: lines[1], Tree: lines[2], Branch: lines[3], StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC()}
-	if observation.Parent != parent || observation.Branch != branch || !fullOID(observation.Revision) || !fullOID(observation.Tree) {
-		return spine.CommitObservation{}, nil, &AttentionError{Reason: "Git commit receipt conflicts with admitted branch or parent"}
+	observation := spine.RevisionObservation{ComparisonBase: lines[0], Revision: lines[1], Tree: lines[2], Branch: lines[3], StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC()}
+	if observation.ComparisonBase != comparisonBase || observation.Branch != branch || !fullOID(observation.Revision) || !fullOID(observation.Tree) {
+		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation conflicts with admitted branch or comparison base"}
 	}
 	encoded, err := json.Marshal(observation)
 	return observation, encoded, err
 }
 
-func (m Manager) validateGit(ctx context.Context, sandboxName, revision string, allowDirty bool) error {
-	script := "set -eu; cd \"$2\"; head=$(git rev-parse HEAD); test \"$head\" = \"$1\" || { echo \"HEAD=$head expected=$1\" >&2; exit 10; }; branch=$(git symbolic-ref --short HEAD); test -n \"$branch\" || { echo 'detached or unborn branch' >&2; exit 11; }; "
-	if !allowDirty {
-		script += "status=$(git status --porcelain=v1 --untracked-files=all); test -z \"$status\" || { echo \"dirty checkout: $status\" >&2; exit 12; }"
-	}
+func (m Manager) validateGit(ctx context.Context, sandboxName, revision string) error {
+	script := "set -eu; cd \"$2\"; head=$(git rev-parse HEAD); test \"$head\" = \"$1\" || { echo \"HEAD=$head expected=$1\" >&2; exit 10; }; branch=$(git symbolic-ref --short HEAD); test -n \"$branch\" || { echo 'detached or unborn branch' >&2; exit 11; }; status=$(git status --porcelain=v1 --untracked-files=all); test -z \"$status\" || { echo \"dirty checkout: $status\" >&2; exit 12; }"
 	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
 	if err != nil {
 		return err
@@ -394,43 +376,23 @@ if test ! -f "$marker"; then
 fi
 cat "$marker"`
 
-const commitReceiptScript = `set -eu
-action=$1; workspace=$2; branch=$3; parent=$4; message=$5
-root=/tmp/dorf/git-receipts
-marker=$root/$action
-mkdir -p "$root"
+const revisionObservationScript = `set -eu
+workspace=$1; branch=$2; comparison_base=$3
+export GIT_OPTIONAL_LOCKS=0
 cd "$workspace"
-current_branch=$(git symbolic-ref --short HEAD) || { echo 'detached or unborn branch' >&2; exit 20; }
-test "$current_branch" = "$branch" || { echo "branch is $current_branch, expected $branch" >&2; exit 21; }
-if test -f "$marker"; then
-  stored_parent=$(sed -n '1p' "$marker"); commit=$(sed -n '2p' "$marker"); tree=$(sed -n '3p' "$marker"); stored_branch=$(sed -n '4p' "$marker")
-  test "$stored_parent" = "$parent" && test "$stored_branch" = "$branch" || { echo 'commit intent conflicts with admitted Git facts' >&2; exit 22; }
-  head=$(git rev-parse HEAD)
-  if test "$head" = "$parent"; then
-    test "$(git write-tree)" = "$tree" || { echo 'index tree changed after commit intent' >&2; exit 23; }
-    git update-ref "refs/heads/$branch" "$commit" "$parent"
-  elif test "$head" != "$commit"; then
-    echo "branch diverged to $head" >&2; exit 24
-  fi
-else
-  start=$(date +%s%N)
-  head=$(git rev-parse HEAD) || { echo 'unborn branch' >&2; exit 25; }
-  test "$head" = "$parent" || { echo "branch diverged to $head" >&2; exit 26; }
-  test -n "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'implementation produced no change' >&2; exit 27; }
-  git add -A
-  tree=$(git write-tree)
-  parent_tree=$(git show -s --format=%T "$parent")
-  test "$tree" != "$parent_tree" || { echo 'implementation tree matches its parent' >&2; exit 28; }
-  parent_time=$(git show -s --format=%ct "$parent")
-  commit_time=$((parent_time + 1))
-  commit=$(printf '%s\n' "$message" | GIT_AUTHOR_NAME=Dorf GIT_AUTHOR_EMAIL=dorf@localhost GIT_AUTHOR_DATE="@$commit_time +0000" GIT_COMMITTER_NAME=Dorf GIT_COMMITTER_EMAIL=dorf@localhost GIT_COMMITTER_DATE="@$commit_time +0000" git commit-tree "$tree" -p "$parent")
-  finish=$(date +%s%N)
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$parent" "$commit" "$tree" "$branch" "$start" "$finish" > "$marker.new"
-  mv -f "$marker.new" "$marker"
-  git update-ref "refs/heads/$branch" "$commit" "$parent"
+start=$(date +%s%N)
+current_ref=$(git symbolic-ref -q HEAD) || { echo 'detached or unborn branch' >&2; exit 20; }
+test "$current_ref" = "refs/heads/$branch" || { echo "branch is $current_ref, expected refs/heads/$branch" >&2; exit 21; }
+test "$(git cat-file -t "$comparison_base" 2>/dev/null)" = commit || { echo 'comparison base is not an existing commit' >&2; exit 22; }
+head=$(git rev-parse --verify HEAD) || { echo 'unborn branch' >&2; exit 23; }
+test "$(git cat-file -t "$head" 2>/dev/null)" = commit || { echo 'HEAD is not a commit' >&2; exit 24; }
+tree=$(git show -s --format=%T "$head") || { echo 'cannot observe HEAD tree' >&2; exit 25; }
+test "$(git cat-file -t "$tree" 2>/dev/null)" = tree || { echo 'HEAD tree is not a tree object' >&2; exit 26; }
+test -z "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'checkout is dirty' >&2; exit 27; }
+if test "$head" != "$comparison_base"; then
+  git merge-base --is-ancestor "$comparison_base" "$head" || { echo 'HEAD does not descend from comparison base' >&2; exit 28; }
 fi
-test "$(git rev-parse HEAD)" = "$commit" || { echo 'HEAD does not match commit receipt' >&2; exit 29; }
-test "$(git rev-parse HEAD^)" = "$parent" || { echo 'commit parent is ambiguous' >&2; exit 30; }
-test "$(git show -s --format=%T HEAD)" = "$tree" || { echo 'commit tree is ambiguous' >&2; exit 31; }
-test -z "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'checkout is dirty after commit' >&2; exit 32; }
-cat "$marker"`
+test "$(git symbolic-ref -q HEAD)" = "$current_ref" && test "$(git rev-parse --verify HEAD)" = "$head" || { echo 'branch changed during observation' >&2; exit 29; }
+test -z "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'checkout changed during observation' >&2; exit 30; }
+finish=$(date +%s%N)
+printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$comparison_base" "$head" "$tree" "$branch" "$start" "$finish"`

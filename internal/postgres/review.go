@@ -646,7 +646,7 @@ func (s Store) AdmitReviewRepair(ctx context.Context, jobID, findingRunID string
 	if err != nil {
 		return spine.Message{}, false, err
 	}
-	input := fmt.Sprintf("Adjudicate the single material %s review claim for exact Revision %s. Claim Evidence %s. Summary: %s. Rationale: %s. If valid, make only the focused repair in the original implementation workspace. If it is a false positive, leave the checkout byte-clean and explain why. Do not commit; return control to Dorf for observed Git and targeted verification.", role, revision, evidenceID, summary, rationale)
+	input := fmt.Sprintf("Adjudicate the single material %s review claim for exact Revision %s. Claim Evidence %s. Summary: %s. Rationale: %s. If valid, make only the focused repair in the original implementation workspace and commit it. If it is a false positive, leave HEAD unchanged and the checkout clean, then explain why. Return control to Dorf for exact Git observation and targeted verification.", role, revision, evidenceID, summary, rationale)
 	message := spine.Message{ID: spine.MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
 	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, jobID, callerID, sequence, input); err != nil {
 		return spine.Message{}, false, err

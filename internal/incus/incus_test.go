@@ -141,6 +141,9 @@ func TestRepositoryCloneVerifiesExactAdmittedHead(t *testing.T) {
 	if !hasCall(runner.calls, "git -C /workspace/job rev-parse HEAD") {
 		t.Fatal("Sandbox HEAD was not observed after checkout")
 	}
+	if !hasCall(runner.calls, "git -C /workspace/job config --local user.name Dorf Agent") || !hasCall(runner.calls, "git -C /workspace/job config --local user.email dorf-agent@localhost") {
+		t.Fatal("repository-local agent commit identity was not configured")
+	}
 
 	runner = &scriptedRunner{head: strings.Repeat("b", 40)}
 	sandbox.Runner = runner

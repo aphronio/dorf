@@ -62,6 +62,10 @@ durable task sequences explicit, named phases; it does not contain a generic use
   effect; it does not mirror generic step, retry, lease, cancellation, or task-inspection state.
 - Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
   expected output contract.
+- Change-producing implementation and repair AgentRuns create one or many commits. On successful
+  completion, Dorf validates a clean checkout and a final `HEAD` that is a proper descendant of the
+  input Revision, then records that exact commit as the next Revision. A review repair that rejects
+  a false-positive finding may complete with clean, unchanged `HEAD` and creates no Revision.
 - A Job-local Session may be reused for implementation and repair. Absurd retry of infrastructure
   is not a new AgentRun.
 - Accepted client messages receive an immutable Job-local sequence and identity. Follow-up turns
@@ -75,9 +79,11 @@ durable task sequences explicit, named phases; it does not contain a generic use
 
 ## Deterministic effects
 
-Every external side effect receives a stable Action identity derived from the Job and its intended
-meaning. Dorf records enough information to classify it as pending, succeeded, failed, or uncertain.
-On an uncertain result, recovery inspects the external authority before repeating the effect.
+Every code-owned operation that changes external state receives a stable Action identity derived
+from the Job and its intended meaning. Dorf records enough information to classify the Action as
+pending, succeeded, failed, or uncertain. On an uncertain result, recovery inspects the external
+authority before repeating the operation. Agent tool calls and implementation or repair commits are
+AgentRun work, not Actions; Dorf observes their resulting Git state at the AgentRun boundary.
 
 This applies at least to Sandbox creation and destruction, repository clone and push, agent-turn
 submission, scoped credential or provider-route creation, and pull-request publication. Absurd

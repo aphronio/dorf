@@ -161,7 +161,7 @@ func AssessReadiness(job Job, declared []DeclaredCheck, checks []Check, records 
 		return assessment
 	}
 	if !readinessPreserved(job.WorkflowPhase) {
-		assessment.Reason = "deterministic setup, commit, or Checks are incomplete"
+		assessment.Reason = "deterministic setup, Revision observation, or Checks are incomplete"
 		return assessment
 	}
 	assessment.Status, assessment.Ready = "ready", true
@@ -218,7 +218,7 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	if plan.TriageRunID != "" {
 		triage, ok := byID[plan.TriageRunID]
 		if !ok || triage.State != AgentRunCompleted || !verifyRun(triage) {
-			if assessment.Reason == "" || assessment.Reason == "deterministic setup, commit, or Checks are incomplete" {
+			if assessment.Reason == "" || assessment.Reason == "deterministic setup, Revision observation, or Checks are incomplete" {
 				assessment.Status, assessment.Ready = "not_ready", false
 				assessment.Reason = "persisted triage AgentRun is not settled with verified claim and observed Evidence"
 			}

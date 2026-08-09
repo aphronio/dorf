@@ -37,7 +37,7 @@ func FromEnv() (spine.FaultBarrier, error) {
 		return nil, nil
 	}
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierNativeActive
-	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCommitCreated || point == spine.BarrierCheckExited
+	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCheckExited
 	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted || point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
 	cleanupPoint := point == spine.BarrierReviewerRouteRevoked || point == spine.BarrierReviewerSandboxDeleted || point == spine.BarrierMainRouteRevoked || point == spine.BarrierMainSandboxDeleted
 	if !messagePoint && !workflowPoint && !publicationPoint && !cleanupPoint {

@@ -40,8 +40,8 @@ flowchart TD
     Admit --> Job["Create durable Job"]
     Job --> Sandbox["Create Sandbox and clone"]
     Sandbox --> Setup["Run repository setup contract"]
-    Setup --> Implement["Implementation AgentRun"]
-    Implement --> Revision["Commit Revision"]
+    Setup --> Implement["Implementation AgentRun changes and commits"]
+    Implement --> Revision["Observe clean final descendant Revision"]
     Revision --> Checks["Deterministic Checks"]
     Checks --> Facts["Compute ChangeFacts"]
     Facts --> Policy{"ReviewPolicy"}
@@ -70,7 +70,8 @@ expand capability. No agent replaces the durable Job as coordinator.
 | Validate input and authority | Understand the goal and codebase |
 | Allocate stable identities, FIFO follow order, and explicit steer priority | Design and implement the change |
 | Create, inspect, and destroy Sandboxes | Resolve ambiguity with documented assumptions |
-| Clone, set up, commit, diff, push, and publish | Decide whether an unfamiliar change needs specialist review |
+| Clone, set up, observe the final Revision, diff, push, and publish | Decide whether an unfamiliar change needs specialist review |
+| — | Create one or many implementation or repair commits when changing code |
 | Run declared tests, linters, smoke checks, and probes | Perform QA, security, architecture, or performance review |
 | Compute ChangeFacts and apply known review rules | Adjudicate findings and choose a repair |
 | Hash, pin, invalidate, and render Evidence | Explain material decisions and remaining uncertainty |

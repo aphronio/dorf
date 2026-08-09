@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -90,67 +89,49 @@ func TestCommandReceiptExecutesExactCommandOnce(t *testing.T) {
 	}
 }
 
-func TestCommitReconcilesLostResponseFromExactGitFacts(t *testing.T) {
-	repo, parent := testRepository(t)
-	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("bounded change\n"), 0o600); err != nil {
-		t.Fatal(err)
+func TestObserveRevisionFromRealGitCheckout(t *testing.T) {
+	tests := []struct {
+		name  string
+		dirty bool
+	}{
+		{name: "multiple agent-created commits are accepted"},
+		{name: "dirty checkout is rejected", dirty: true},
 	}
-	manager := testManager(repo)
-	actionID := "action-" + parent[:12]
-	first, _, err := manager.Commit(context.Background(), "sandbox", actionID, "job-proof", "dorf/proof", parent, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, err := manager.Commit(context.Background(), "sandbox", actionID, "job-proof", "dorf/proof", parent, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second || first.Parent != parent || first.Revision == parent {
-		t.Fatalf("first=%#v second=%#v", first, second)
-	}
-	if got := gitOutput(t, repo, "status", "--porcelain=v1", "--untracked-files=all"); got != "" {
-		t.Fatalf("committed checkout is dirty: %q", got)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "ambiguous.txt"), []byte("unrecorded"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := manager.Commit(context.Background(), "sandbox", actionID, "job-proof", "dorf/proof", parent, 1); err == nil || !strings.Contains(err.Error(), "attention") {
-		t.Fatalf("dirty reconciliation error=%v", err)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, base := testRepository(t)
+			for i := 1; i <= 2; i++ {
+				if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte(fmt.Sprintf("agent change %d\n", i)), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, repo, "add", "tracked.txt")
+				runGit(t, repo, "commit", "-m", fmt.Sprintf("agent commit %d", i))
+			}
+			if tt.dirty {
+				if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("not committed\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-func TestCommitTreeCrashBeforeReceiptConvergesOnDeterministicOID(t *testing.T) {
-	repo, parent := testRepository(t)
-	if err := os.WriteFile(filepath.Join(repo, "change.txt"), []byte("bounded change\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repo, "add", "-A")
-	tree := gitOutput(t, repo, "write-tree")
-	parentTime := gitOutput(t, repo, "show", "-s", "--format=%ct", parent)
-	message := "Dorf Job job-proof revision 1\n"
-	commitTime, err := strconv.ParseInt(parentTime, 10, 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command("git", "-C", repo, "commit-tree", tree, "-p", parent)
-	cmd.Stdin = strings.NewReader(message)
-	deterministicDate := fmt.Sprintf("@%d +0000", commitTime+1)
-	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Dorf", "GIT_AUTHOR_EMAIL=dorf@localhost", "GIT_AUTHOR_DATE="+deterministicDate, "GIT_COMMITTER_NAME=Dorf", "GIT_COMMITTER_EMAIL=dorf@localhost", "GIT_COMMITTER_DATE="+deterministicDate)
-	lostOIDBytes, err := cmd.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	lostOID := strings.TrimSpace(string(lostOIDBytes))
-	if gitOutput(t, repo, "rev-parse", "HEAD") != parent {
-		t.Fatal("inner-boundary simulation unexpectedly advanced the branch")
-	}
-	manager := testManager(repo)
-	recovered, _, err := manager.Commit(context.Background(), "sandbox", "action-"+parent[:12], "job-proof", "dorf/proof", parent, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovered.Revision != lostOID {
-		t.Fatalf("retry commit=%s lost-response commit=%s", recovered.Revision, lostOID)
+			observation, artifact, err := testManager(repo).ObserveRevision(context.Background(), "sandbox", "dorf/proof", base)
+			if tt.dirty {
+				if err == nil || !strings.Contains(err.Error(), "checkout is dirty") {
+					t.Fatalf("dirty observation error=%v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			head := gitOutput(t, repo, "rev-parse", "HEAD")
+			tree := gitOutput(t, repo, "show", "-s", "--format=%T", "HEAD")
+			if observation.ComparisonBase != base || observation.Revision != head || observation.Tree != tree || observation.Branch != "dorf/proof" || observation.StartedAt.IsZero() || observation.FinishedAt.Before(observation.StartedAt) {
+				t.Fatalf("observation=%#v", observation)
+			}
+			if !bytes.Contains(artifact, []byte(head)) || !bytes.Contains(artifact, []byte(base)) {
+				t.Fatalf("artifact=%s", artifact)
+			}
+		})
 	}
 }
 

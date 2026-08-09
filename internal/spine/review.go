@@ -119,7 +119,3 @@ type ReviewExternals interface {
 	ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error)
 	ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error)
 }
-
-type ReviewAdjudicationExternals interface {
-	RepositoryHasChanges(context.Context, Job) (bool, error)
-}

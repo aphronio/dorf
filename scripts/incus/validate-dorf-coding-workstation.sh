@@ -68,12 +68,13 @@ INSPECTION="$($BINARY inspect --json "$JOB_ID")"
 jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$INSPECTION" >/dev/null
 jq -e '.claims.implementation_agent_runs | map(select(.sequence == 1 and .native_outcome == "completed" and (.native_turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
 jq -e --arg source "$SOURCE_COMMIT" '
+  (.claims.implementation_agent_runs | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
   .job.starting_revision == $source and
   .job.revision == $source and
   .job.revision_generation == 0 and
   .job.workflow_phase == "blocked" and
-  (.job.workflow_attention | contains("Git commit reconciliation needs attention: implementation produced no change")) and
-  ([.observed_facts.actions[] | select(.kind == "repository-commit" and .state == "uncertain")] | length == 1) and
+  .job.workflow_attention == ("AgentRun " + $agent_run_id + " completed without a new committed Revision") and
+  ([.observed_facts.actions[] | select(.kind == "repository-commit")] | length == 0) and
   (.observed_facts.checks | length == 0) and
   (.review_agent_runs | length == 0) and
   .proposal == null
@@ -90,7 +91,7 @@ jq -n \
   --arg source "$SOURCE_COMMIT" \
   --arg provider "$PROVIDER" \
   --arg job "$JOB_ID" \
-  '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change Codex turn",observed:{repository_setup:"succeeded",implementation_turn:"completed",workflow_outcome:"expected no-change block",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
+  '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_generation:0,repository_commit_action:"absent; the AgentRun owns commits",workflow_outcome:"blocked: completed without a new committed Revision",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
   >"$EVIDENCE_DIR/image-proof.json"
 printf 'Candidate image setup/turn/no-change/cleanup proof passed: %s\n' "$JOB_ID"
 JOB_ID=""

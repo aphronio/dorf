@@ -492,10 +492,10 @@ func TestAcceptedTerminalTurnAllowsSameSessionFollowFIFO(t *testing.T) {
 	}
 }
 
-func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeCommit(t *testing.T) {
+func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservation(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, sessionID := prepareTransportIntegrationJob(t, store, "failed-commit-gate")
+	job, sessionID := prepareTransportIntegrationJob(t, store, "failed-observation-gate")
 	first, err := store.NextDelivery(ctx, job.ID, sessionID)
 	if err != nil || first == nil {
 		t.Fatalf("first=%#v err=%v", first, err)
@@ -510,16 +510,16 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeCommit(t *testing.
 	if err := store.BindNativeTurn(ctx, first.AgentRun.ID, firstTurnID, "failed"); err != nil {
 		t.Fatal(err)
 	}
-	if action, started, err := store.BeginCommit(ctx, job.ID, job.Revision); err != nil || started || action.ID != "" {
-		t.Fatalf("failed accepted turn crossed commit gate: action=%#v started=%v err=%v", action, started, err)
+	if run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision); err != nil || ready || run.ID != "" {
+		t.Fatalf("failed accepted turn crossed Revision observation gate: run=%#v ready=%v err=%v", run, ready, err)
 	}
 	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "successful-follow", Input: "finish the coding workflow"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-success-"+job.ID)
-	if action, started, err := store.BeginCommit(ctx, job.ID, job.Revision); err != nil || !started || action.ID == "" {
-		t.Fatalf("successful later follow did not open commit gate: action=%#v started=%v err=%v", action, started, err)
+	completed := completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-success-"+job.ID)
+	if run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision); err != nil || !ready || run.ID != completed.ID {
+		t.Fatalf("successful later follow did not become the Revision candidate: run=%#v ready=%v err=%v", run, ready, err)
 	}
 }
 
@@ -579,14 +579,14 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + job.ID}); err != nil {
 		t.Fatal(err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-implementation-"+job.ID)
-	commit, started, err := store.BeginCommit(ctx, job.ID, start)
-	if err != nil || !started {
-		t.Fatalf("first commit started=%v err=%v", started, err)
+	implementationRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-implementation-"+job.ID)
+	firstCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, start)
+	if err != nil || !ready || firstCandidate.ID != implementationRun.ID {
+		t.Fatalf("first Revision candidate=%#v ready=%v err=%v", firstCandidate, ready, err)
 	}
-	firstRevisionEvidence := integrationEvidence(commit.ID, "git-revision", commit.ID, "", first, "b")
-	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil {
-		t.Fatal(err)
+	firstRevisionEvidence := integrationEvidence(firstCandidate.ID, "git-revision", "", "", first, "b")
+	if recorded, err := store.RecordRevision(ctx, job.ID, firstCandidate.ID, spine.RevisionObservation{ComparisonBase: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil || !recorded {
+		t.Fatalf("first Revision recorded=%v err=%v", recorded, err)
 	}
 	failed, err := store.BeginCheck(ctx, job.ID, first, "check", "go test ./...")
 	if err != nil {
@@ -605,18 +605,18 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 	if err != nil || created || repeated != repair {
 		t.Fatalf("repeated repair=%#v created=%v err=%v", repeated, created, err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-repair-"+job.ID)
+	repairRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-repair-"+job.ID)
 	job, err = store.Job(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondCommit, started, err := store.BeginCommit(ctx, job.ID, job.Revision)
-	if err != nil || !started {
-		t.Fatalf("second commit started=%v err=%v", started, err)
+	secondCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
+	if err != nil || !ready || secondCandidate.ID != repairRun.ID {
+		t.Fatalf("second Revision candidate=%#v ready=%v err=%v", secondCandidate, ready, err)
 	}
-	secondRevisionEvidence := integrationEvidence(secondCommit.ID, "git-revision", secondCommit.ID, "", second, "d")
-	if err := store.RecordRevision(ctx, secondCommit.ID, spine.CommitObservation{Parent: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil {
-		t.Fatal(err)
+	secondRevisionEvidence := integrationEvidence(secondCandidate.ID, "git-revision", "", "", second, "d")
+	if recorded, err := store.RecordRevision(ctx, job.ID, secondCandidate.ID, spine.RevisionObservation{ComparisonBase: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil || !recorded {
+		t.Fatalf("second Revision recorded=%v err=%v", recorded, err)
 	}
 	passing, err := store.BeginCheck(ctx, job.ID, second, "check", "go test ./...")
 	if err != nil {
@@ -863,15 +863,16 @@ func TestAcceptedMaterialRepairCreatesNewRevisionAndAutomaticallyReentersPolicy(
 	if repeated, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID); err != nil || created || repeated.ID != message.ID {
 		t.Fatalf("repeated repair=%#v created=%t err=%v", repeated, created, err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-accepted-review-repair-"+job.ID)
+	repairRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-accepted-review-repair-"+job.ID)
 
 	newRevision := strings.Repeat("d", 40)
-	commit, started, err := store.BeginCommit(ctx, job.ID, revision)
-	if err != nil || !started {
-		t.Fatalf("repair commit=%#v started=%t err=%v", commit, started, err)
+	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, revision)
+	if err != nil || !ready || candidate.ID != repairRun.ID {
+		t.Fatalf("repair Revision candidate=%#v ready=%t err=%v", candidate, ready, err)
 	}
-	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, integrationEvidence(commit.ID, "git-revision", commit.ID, "", newRevision, "8")); err != nil {
-		t.Fatal(err)
+	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", newRevision, "8")
+	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, spine.RevisionObservation{ComparisonBase: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, evidence); err != nil || !recorded {
+		t.Fatalf("repair Revision recorded=%t err=%v", recorded, err)
 	}
 	check, err := store.BeginCheck(ctx, job.ID, newRevision, "check", "go test ./...")
 	if err != nil {
@@ -1384,13 +1385,14 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 	if err := store.CompleteAction(ctx, session.ID, spine.Receipt{ExternalID: "session-" + job.ID}); err != nil {
 		t.Fatal(err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-"+job.ID)
-	commit, started, err := store.BeginCommit(ctx, job.ID, start)
-	if err != nil || !started {
-		t.Fatalf("commit=%#v started=%v err=%v", commit, started, err)
+	implementationRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-"+job.ID)
+	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, start)
+	if err != nil || !ready || candidate.ID != implementationRun.ID {
+		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
 	}
-	if err := store.RecordRevision(ctx, commit.ID, spine.CommitObservation{Parent: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}, integrationEvidence(commit.ID, "git-revision", commit.ID, "", revision, "2")); err != nil {
-		t.Fatal(err)
+	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", revision, "2")
+	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}, evidence); err != nil || !recorded {
+		t.Fatalf("Revision recorded=%v err=%v", recorded, err)
 	}
 	check, err := store.BeginCheck(ctx, job.ID, revision, "check", "go test ./...")
 	if err != nil {
@@ -1504,12 +1506,13 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 	}
 }
 
-func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testing.T) {
+func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	start := strings.Repeat("6", 40)
-	key := fmt.Sprintf("commit-admission-boundary-%d", time.Now().UnixNano())
-	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/commit-boundary", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	revision := strings.Repeat("7", 40)
+	key := fmt.Sprintf("revision-observation-boundary-%d", time.Now().UnixNano())
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-observation-boundary", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -1534,20 +1537,41 @@ func TestCommitAdmissionBoundaryIncludesOrRejectsLateSteeringAtomically(t *testi
 		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
 	}
 
-	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-before-commit", Input: "include this bounded steering"})
+	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-before-observation", Input: "include this bounded steering"})
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
-	if action, started, err := store.BeginCommit(ctx, job.ID, start); err != nil || started || action.ID != "" {
-		t.Fatalf("commit crossed admitted FIFO action=%#v started=%v err=%v", action, started, err)
+	if run, ready, err := store.RevisionCandidate(ctx, job.ID, start); err != nil || ready || run.ID != "" {
+		t.Fatalf("Revision candidate crossed admitted FIFO: run=%#v ready=%v err=%v", run, ready, err)
 	}
-	completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-late-"+job.ID)
-	action, started, err := store.BeginCommit(ctx, job.ID, start)
-	if err != nil || !started || action.ID == "" {
-		t.Fatalf("commit reservation action=%#v started=%v err=%v", action, started, err)
+	includedRun := completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-late-"+job.ID)
+	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, start)
+	if err != nil || !ready || candidate.ID != includedRun.ID {
+		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
 	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-commit", Input: "must not run"}); err == nil || !strings.Contains(err.Error(), "no longer accepts implementation steering") {
-		t.Fatalf("post-boundary admission error=%v", err)
+	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: job.Branch}
+	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", revision, "a")
+	afterCandidate, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
+	if err != nil || !created {
+		t.Fatalf("late post-candidate admission=%#v created=%v err=%v", afterCandidate, created, err)
+	}
+	if blocked, err := store.BlockNoRevision(ctx, job.ID, candidate.ID, start, "stale no-change result"); err != nil || blocked {
+		t.Fatalf("no-change observation skipped late accepted input: blocked=%v err=%v", blocked, err)
+	}
+	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, observation, evidence); err != nil || recorded {
+		t.Fatalf("Revision observation skipped late accepted input: recorded=%v err=%v", recorded, err)
+	}
+	finalRun := completeNextIntegrationRun(t, store, job.ID, sessionID, "turn-after-candidate-"+job.ID)
+	finalCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, start)
+	if err != nil || !ready || finalCandidate.ID != finalRun.ID {
+		t.Fatalf("final Revision candidate=%#v ready=%v err=%v", finalCandidate, ready, err)
+	}
+	finalEvidence := integrationEvidence(finalCandidate.ID, "git-revision", "", "", revision, "b")
+	if recorded, err := store.RecordRevision(ctx, job.ID, finalCandidate.ID, observation, finalEvidence); err != nil || !recorded {
+		t.Fatalf("final Revision observation recorded=%v err=%v", recorded, err)
+	}
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-observation", Input: "must not run"}); err == nil || !strings.Contains(err.Error(), "no longer accepts implementation steering") {
+		t.Fatalf("post-observation admission error=%v", err)
 	}
 	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: late.CallerID, Input: late.Input})
 	if err != nil || created || retry != late {
@@ -1560,7 +1584,7 @@ func integrationEvidence(owner, kind, actionID, checkID, revision, digestByte st
 	return spine.Evidence{ID: spine.EvidenceID(owner, kind), Digest: strings.Repeat(digestByte, 64), ByteSize: 10, MediaType: "application/vnd.dorf.observation+json", Producer: "integration-test", Provenance: "observed", Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: now, FinishedAt: now}
 }
 
-func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, sessionID, turnID string) {
+func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, sessionID, turnID string) spine.AgentRun {
 	t.Helper()
 	delivery, err := store.NextDelivery(context.Background(), jobID, sessionID)
 	if err != nil || delivery == nil {
@@ -1575,6 +1599,7 @@ func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, sessi
 	if err := store.BindNativeTurn(context.Background(), delivery.AgentRun.ID, turnID, "completed"); err != nil {
 		t.Fatal(err)
 	}
+	return delivery.AgentRun
 }
 
 func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) {

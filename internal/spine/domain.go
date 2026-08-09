@@ -20,7 +20,6 @@ const (
 	ActionSandboxCreate         ActionKind = "sandbox-create"
 	ActionRepositoryClone       ActionKind = "repository-clone"
 	ActionRepositorySetup       ActionKind = "repository-setup"
-	ActionRepositoryCommit      ActionKind = "repository-commit"
 	ActionRepositoryPush        ActionKind = "repository-push"
 	ActionGitHubPullRequest     ActionKind = "github-pull-request"
 	ActionReviewWorkspaceCreate ActionKind = "review-workspace-create"
@@ -183,13 +182,13 @@ type CommandObservation struct {
 	Redactions []string
 }
 
-type CommitObservation struct {
-	Parent     string    `json:"parent"`
-	Revision   string    `json:"revision"`
-	Tree       string    `json:"tree"`
-	Branch     string    `json:"branch"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
+type RevisionObservation struct {
+	ComparisonBase string    `json:"comparison_base"`
+	Revision       string    `json:"revision"`
+	Tree           string    `json:"tree"`
+	Branch         string    `json:"branch"`
+	StartedAt      time.Time `json:"started_at"`
+	FinishedAt     time.Time `json:"finished_at"`
 }
 
 type Check struct {

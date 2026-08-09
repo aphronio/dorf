@@ -344,6 +344,15 @@ func (s Sandbox) ReconcileClone(ctx context.Context, name, repository, revision,
 	if strings.TrimSpace(head.Stdout) != revision {
 		return fmt.Errorf("Sandbox HEAD %q does not match admitted Revision %q", strings.TrimSpace(head.Stdout), revision)
 	}
+	for _, identity := range [][2]string{{"user.name", "Dorf Agent"}, {"user.email", "dorf-agent@localhost"}} {
+		configured, err := s.Exec(ctx, name, nil, "git", "-C", s.Config.Workspace, "config", "--local", identity[0], identity[1])
+		if err != nil {
+			return err
+		}
+		if configured.ExitCode != 0 {
+			return failure("configure repository-local agent commit identity", configured)
+		}
+	}
 	return nil
 }
 

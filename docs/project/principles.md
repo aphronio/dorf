@@ -24,9 +24,12 @@ real product requirement.
 ## Deterministic before agentic
 
 Anything that can be derived or executed programmatically should be. Admission, identity,
-sequencing, setup, policy facts, Git operations, checks, evidence hashing, publication, retry, and
-cleanup are code-owned. Agents are reserved for implementation, ambiguity, triage, review, and
-other judgment.
+sequencing, setup, policy facts, Checks, evidence hashing, publication, retry, and cleanup are
+code-owned. Implementation and repair AgentRuns own the change itself, including one or many Git
+commits. When they change code, Dorf validates the clean final checkout and records its descendant
+commit as the next Revision. A review repair may instead leave clean `HEAD` unchanged when it rejects
+a false-positive finding. Agents are otherwise reserved for ambiguity, triage, review, and other
+judgment.
 
 Review authority starts with deterministic mandatory policy. An implementation AgentRun may also
 make a structured, bounded request for an allowlisted review Role or focus, and an unknown

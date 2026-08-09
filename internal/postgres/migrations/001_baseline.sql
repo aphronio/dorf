@@ -29,7 +29,7 @@ create table dorf.jobs (
     task_id text unique,
     cleanup_task_id text unique,
     workflow_phase text not null default 'setup' check (workflow_phase in (
-        'setup','implementing','committing','checking','repairing',
+        'setup','implementing','checking','repairing',
         'review-planning','review-triage','reviewing','review-repairing',
         'ready','publishing','publication-blocked','published','blocked'
     )),
@@ -77,7 +77,7 @@ create table dorf.actions (
     job_id text not null references dorf.jobs(id),
     message_id text references dorf.job_messages(id),
     kind text not null check (kind in (
-        'sandbox-create','repository-clone','repository-setup','repository-commit',
+        'sandbox-create','repository-clone','repository-setup',
         'repository-push','github-pull-request','review-workspace-create',
         'provider-route-create','codex-session-start','codex-turn-start',
         'provider-route-revoke','sandbox-delete'
@@ -170,14 +170,18 @@ create unique index agent_runs_one_review_native_session on dorf.agent_runs(sess
 create table dorf.revisions (
     job_id text not null references dorf.jobs(id),
     oid text not null check (oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    parent_oid text check (parent_oid is null or parent_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
+    comparison_base_oid text check (comparison_base_oid is null or comparison_base_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     tree_oid text check (tree_oid is null or tree_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     branch text not null,
     generation integer not null check (generation>=0),
-    action_id text references dorf.actions(id),
+    evidence_id text unique,
     observed_at timestamptz not null default clock_timestamp(),
     primary key(job_id,oid),
-    unique(job_id,generation)
+    unique(job_id,generation),
+    check (
+        (generation=0 and comparison_base_oid is null and tree_oid is null and evidence_id is null) or
+        (generation>0 and comparison_base_oid is not null and tree_oid is not null and evidence_id is not null)
+    )
 );
 
 create table dorf.repository_commands (
@@ -219,6 +223,9 @@ create table dorf.evidence (
     check (check_id is null or action_id is null),
     check (finished_at>=started_at)
 );
+
+alter table dorf.revisions
+    add constraint revisions_evidence_fk foreign key(evidence_id) references dorf.evidence(id);
 alter table dorf.checks add constraint checks_evidence_id_fkey foreign key(evidence_id) references dorf.evidence(id);
 alter table dorf.agent_runs add constraint agent_runs_claim_evidence_id_fkey foreign key(claim_evidence_id) references dorf.evidence(id);
 alter table dorf.agent_runs add constraint agent_runs_observed_evidence_id_fkey foreign key(observed_evidence_id) references dorf.evidence(id);

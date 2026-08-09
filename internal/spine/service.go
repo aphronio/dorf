@@ -51,9 +51,10 @@ type steeringExternals interface {
 }
 
 type CodingStore interface {
-	BeginCommit(context.Context, string, string) (Action, bool, error)
+	RevisionCandidate(context.Context, string, string) (AgentRun, bool, error)
+	BlockNoRevision(context.Context, string, string, string, string) (bool, error)
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
-	RecordRevision(context.Context, string, CommitObservation, Evidence) error
+	RecordRevision(context.Context, string, string, RevisionObservation, Evidence) (bool, error)
 	BeginCheck(context.Context, string, string, string, string) (Check, error)
 	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
 	AdmitRepair(context.Context, Check) (Message, bool, error)
@@ -66,7 +67,7 @@ type CodingStore interface {
 
 type RepositoryExternals interface {
 	RepositorySetup(context.Context, Job, Action) (CommandObservation, []DeclaredCheck, error)
-	RepositoryCommit(context.Context, Job, Action) (CommitObservation, []byte, error)
+	RepositoryRevision(context.Context, Job) (RevisionObservation, []byte, error)
 	RepositoryCheck(context.Context, Job, Check) (CommandObservation, error)
 }
 
@@ -84,7 +85,6 @@ const (
 	BarrierAfterSubmitBeforeBind  = "after-submit-before-bind"
 	BarrierNativeActive           = "native-active"
 	BarrierSetupComplete          = "setup-complete-before-record"
-	BarrierCommitCreated          = "commit-created-before-record"
 	BarrierCheckExited            = "check-exited-before-record"
 	BarrierPushAccepted           = "push-accepted-before-record"
 	BarrierPullRequestAccepted    = "pull-request-accepted-before-record"
@@ -289,52 +289,52 @@ func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bo
 		return RunIdle, false, nil
 	case "blocked":
 		return RunBlocked, false, nil
-	case "implementing", "repairing", "review-repairing", "committing":
-		if job.WorkflowPhase == "review-repairing" {
-			observer, ok := s.Externals.(ReviewAdjudicationExternals)
-			if !ok {
-				return RunIdle, false, fmt.Errorf("review adjudication requires an observed Git workspace boundary")
+	case "implementing", "repairing", "review-repairing":
+		run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
+		if err != nil {
+			return RunIdle, false, err
+		}
+		if !ready {
+			return RunIdle, false, nil
+		}
+		observation, artifact, err := s.Repository.RepositoryRevision(ctx, job)
+		if err != nil {
+			if attentionNeeded(err) {
+				_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+				return RunBlocked, false, nil
 			}
-			changed, err := observer.RepositoryHasChanges(ctx, job)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			if !changed {
+			return RunIdle, false, err
+		}
+		if observation.Revision == observation.ComparisonBase {
+			if job.WorkflowPhase == "review-repairing" {
 				reviewStore := s.Store.(ReviewStore)
 				if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
 					return RunIdle, false, err
 				}
 				return RunIdle, true, nil
 			}
+			reason := fmt.Sprintf("AgentRun %s completed without a new committed Revision", run.ID)
+			blocked, err := store.BlockNoRevision(ctx, job.ID, run.ID, observation.ComparisonBase, reason)
+			if err != nil {
+				return RunIdle, false, err
+			}
+			if !blocked {
+				return RunIdle, true, nil
+			}
+			return RunBlocked, false, nil
 		}
-		parent := job.Revision
-		action, started, err := store.BeginCommit(ctx, job.ID, parent)
+		evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
 		if err != nil {
 			return RunIdle, false, err
 		}
-		if !started {
-			return RunIdle, false, nil
+		recorded, err := store.RecordRevision(ctx, job.ID, run.ID, observation, evidenceRecord)
+		if err != nil {
+			return RunIdle, false, err
 		}
-		if action.State != ActionSucceeded {
-			observation, artifact, err := s.Repository.RepositoryCommit(ctx, job, action)
-			if err != nil {
-				_ = s.Store.UncertainAction(ctx, action.ID)
-				if attentionNeeded(err) {
-					_ = store.BlockWorkflow(ctx, job.ID, err.Error())
-					return RunBlocked, false, nil
-				}
-				return RunIdle, false, err
-			}
-			evidenceRecord, err := s.retainEvidence(action.ID, "git-revision", action.ID, "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			if err := s.reachWorkflow(ctx, BarrierCommitCreated, job.ID, action.ID); err != nil {
-				return RunIdle, false, err
-			}
-			if err := store.RecordRevision(ctx, action.ID, observation, evidenceRecord); err != nil {
-				return RunIdle, false, err
-			}
+		if !recorded {
+			// A new Message was accepted after the read-only Git observation.
+			// Its AgentRun must finish before Dorf may adopt this Revision.
+			return RunIdle, true, nil
 		}
 		return RunIdle, true, nil
 	case "checking":

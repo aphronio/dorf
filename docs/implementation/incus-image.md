@@ -36,7 +36,8 @@ not execute a mutable network installer.
    repository, and requires the repository's declared preparation Action to succeed;
 5. completes one real Codex app-server turn through a scoped Provider Route, with an explicit
    no-modification goal, and requires the exact starting Revision to remain current with the
-   specific `implementation produced no change` blocked outcome;
+   AgentRun-specific `completed without a new committed Revision` blocked outcome and Revision
+   generation zero;
 6. records the image fingerprint, native Session/turn identity, timings, and terminal state in a
    redacted local evidence directory;
 7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
@@ -45,11 +46,12 @@ not execute a mutable network installer.
    VMs and candidate alias.
 
 This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. Before
-cleanup, the validator requires exactly one uncertain repository-commit Action caused by the
-expected unchanged tree, zero Checks, zero review AgentRuns, and no proposal. Retained evidence
-labels Checks, review, and publication as not run or claimed. A different blocked Job cannot satisfy
-the proof. The separate final cutover dogfood owns exact-Revision Checks and Evidence, selected
-review, repair, publication, outcome, and cleanup.
+cleanup, the validator requires no repository-commit Action: implementation commits belong to the
+AgentRun, and that Action kind no longer exists. The expected unchanged tree leaves the starting
+Revision current at generation zero and blocks after the completed AgentRun, before any Checks,
+review AgentRuns, or proposal. Retained evidence labels Checks, review, and publication as not run
+or claimed. A different blocked Job cannot satisfy the proof. The separate final cutover dogfood
+owns exact-Revision Checks and Evidence, selected review, repair, publication, outcome, and cleanup.
 
 Run that proof manually with an already connected Provider Gateway name:
 
