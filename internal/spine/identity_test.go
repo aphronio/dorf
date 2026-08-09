@@ -22,6 +22,9 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if messageA == messageB || TurnActionID(messageA) == TurnActionID(messageB) || AgentRunID(messageA) == AgentRunID(messageB) {
 		t.Fatal("distinct logical inputs share delivery identities")
 	}
+	if MessageID(jobA, "caller-a") == MessageID(JobID("client-request-41"), "caller-a") {
+		t.Fatal("same caller ID shares a Message identity across Jobs")
+	}
 	if TurnActionID(messageA) != TurnActionID(messageA) || AgentRunID(messageA) != AgentRunID(messageA) {
 		t.Fatal("per-input Action or AgentRun identity is not stable")
 	}
