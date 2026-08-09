@@ -183,8 +183,7 @@ Goal: make submission, native recovery, waiting, and terminal recording one dura
 - [x] Delete the separate implementation and review submission/recovery state machines.
 - [x] Replace duplicated native-status and uncertainty tests with one runner recovery contract plus one
       reviewer ownership/capability test.
-- [ ] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun. Local
-      setup currently stops at the missing `personal-chatgpt` provider connection.
+- [x] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun.
 
 Terminal: implementation and selected review both execute through the same AgentRun runner without
 weakening reviewer isolation or exact-Revision ownership.
@@ -210,11 +209,18 @@ Goal: make ReviewPolicy, review, Message delivery, and Revision observation one 
       branches once `RunJob` is authoritative.
 - [x] Delete review-result structs, finding persistence, output parsers, adjudication states, and
       review-specific repair counters once this path is authoritative.
-- [ ] Dogfood no-review and selected-review paths; let later dogfood expose further feedback edge cases.
-      Local setup currently stops at the missing `personal-chatgpt` provider connection.
+- [x] Dogfood no-review and selected-review paths; let later dogfood expose further feedback edge cases.
 
 Terminal: no-review, known-role review, and general review all follow the visible `RunJob` story; review
 text reaches the original implementation Session through Message and no parser decides what it means.
+
+Live proof (2026-08-10): Job `job-dd819a66732c3e7c556c` ran an implementation AgentRun, observed
+agent-created Revision `395362a33eff41cec67f746259b29df00d36e87c`, passed `check` and `smoke`,
+ran a selected general reviewer in an isolated read-only Sandbox, delivered its opaque text as an
+agent Message to the original implementation Session, created exact-Revision PR #103, then completed
+abandoned-Outcome cleanup with both routes revoked and both Sandboxes deleted. The run exposed and
+closed one shared-runner adapter bug: the adopted reviewer controller must remain visible during an
+active native wait.
 
 ## Slice 4: Simplify Proposal and Outcome
 

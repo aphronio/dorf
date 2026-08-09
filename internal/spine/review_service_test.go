@@ -83,6 +83,20 @@ func TestRunReviewUsesSharedNativeRecoveryWithoutResubmission(t *testing.T) {
 	}
 }
 
+func TestRunReviewCarriesTheAdoptedControllerIntoTheActiveWait(t *testing.T) {
+	store, externals, job, run := reviewFixture(t)
+	externals.startActive = true
+	externals.output = "No issue found."
+	service := Service{Store: store, Externals: externals, Evidence: evidence.Store{Root: t.TempDir()}}
+
+	if err := service.RunReview(context.Background(), job, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if externals.submissions != 1 || externals.waits != 1 || store.feedback.Input != externals.output {
+		t.Fatalf("submissions=%d waits=%d feedback=%#v", externals.submissions, externals.waits, store.feedback)
+	}
+}
+
 func TestReviewerNativeOwnershipIsExact(t *testing.T) {
 	_, _, _, run := reviewFixture(t)
 	run.SessionID = "session-review"
@@ -257,6 +271,8 @@ type reviewTestExternals struct {
 	output         string
 	submissions    int
 	recoveries     int
+	waits          int
+	startActive    bool
 	cleanupEffects []ActionKind
 }
 
@@ -288,7 +304,11 @@ func (e *reviewTestExternals) binding() ReviewNativeBinding {
 }
 func (e *reviewTestExternals) ReviewInitialTurn(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error) {
 	e.submissions++
-	return e.binding(), nil
+	binding := e.binding()
+	if e.startActive {
+		binding.Turn.Status = "running"
+	}
+	return binding, nil
 }
 func (e *reviewTestExternals) ReviewRecover(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error) {
 	e.recoveries++
@@ -299,6 +319,7 @@ func (e *reviewTestExternals) ReviewTurns(context.Context, Job, ReviewRunView) (
 	return ReviewNativeHistory{AppServerID: binding.AppServerID, SessionID: binding.SessionID, Turns: []NativeTurn{binding.Turn}}, nil
 }
 func (e *reviewTestExternals) ReviewWait(context.Context, Job, ReviewRunView, string) (ReviewNativeBinding, error) {
+	e.waits++
 	return e.binding(), nil
 }
 

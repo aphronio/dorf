@@ -164,6 +164,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		}
 	}
 	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	projection := run.ReviewRunProjection
 	contract := nativeAgentRunContract{
 		service:             s,
 		delivery:            Delivery{AgentRun: run.AgentRun},
@@ -171,19 +172,19 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		label:               "review",
 		bindUnsupportedTurn: false,
 		submitNew: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewInitialTurn(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: original.ReviewRunProjection})
+			binding, err := externals.ReviewInitialTurn(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
 		},
 		recover: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewRecover(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: original.ReviewRunProjection})
+			binding, err := externals.ReviewRecover(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
 		},
 		history: func(ctx context.Context, run AgentRun) (nativeAgentHistory, error) {
-			history, err := externals.ReviewTurns(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: original.ReviewRunProjection})
+			history, err := externals.ReviewTurns(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 			return nativeAgentHistory{OwnerID: history.AppServerID, SessionID: history.SessionID, Turns: history.Turns}, err
 		},
 		wait: func(ctx context.Context, run AgentRun, turnID string) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewWait(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: original.ReviewRunProjection}, turnID)
+			binding, err := externals.ReviewWait(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, turnID)
 			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
 		},
 		validateOwner: func(run AgentRun, appServerID, sessionID string) error {
@@ -193,13 +194,15 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 				}
 				return nil
 			}
-			return validateReviewNativeOwner(ReviewRunView{AgentRun: run, ReviewRunProjection: original.ReviewRunProjection}, appServerID, sessionID)
+			return validateReviewNativeOwner(ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, appServerID, sessionID)
 		},
 		bindSession: func(ctx context.Context, binding nativeAgentBinding) error {
 			return s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.OwnerID})
 		},
-		adoptBinding: func(_ *AgentRun, _ nativeAgentBinding) {},
-		onReadError:  s.recordReviewReadError,
+		adoptBinding: func(_ *AgentRun, binding nativeAgentBinding) {
+			projection.ReviewerAppServer = binding.OwnerID
+		},
+		onReadError: s.recordReviewReadError,
 		onRecoverError: func(ctx context.Context, run AgentRun, err error) error {
 			var missing interface{ RetryableReviewVisibility() bool }
 			if errors.As(err, &missing) && missing.RetryableReviewVisibility() {

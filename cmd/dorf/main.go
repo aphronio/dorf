@@ -853,7 +853,7 @@ func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, publication,
 	if job.AdmissionOpen && (run.State == "failed" || run.State == "cancelled" || run.State == "missing") {
 		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the admitted Job task is terminal before the workflow reached its authority boundary"}
 	}
-	return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "persisted Job phase and Absurd tasks continue checks, review, repair, and exact-Revision publication"}
+	return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "persisted Job phase and Absurd tasks continue checks, review feedback, and exact-Revision publication"}
 }
 
 func queuedState(state spine.AgentRunState) string {
