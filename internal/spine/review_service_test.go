@@ -121,31 +121,6 @@ func TestRejectedMaterialFindingSettlesButPendingOrAcceptedRetainsAuthority(t *t
 	}
 }
 
-func TestReviewPhasesAdvanceBeforeImplementationFIFO(t *testing.T) {
-	for _, phase := range []string{"review-planning", "review-triage", "reviewing"} {
-		t.Run(phase, func(t *testing.T) {
-			base := newMemoryStore()
-			job := testJob()
-			job.WorkflowPhase, job.SessionID = phase, "implementation-session"
-			base.jobs[job.ID] = job
-			base.addMessage(job.ID, "queued-implementation-message", "must not dispatch during review")
-			for _, kind := range []ActionKind{ActionSandboxCreate, ActionRepositoryClone, ActionRepositorySetup, ActionRouteCreate} {
-				base.actions[ActionID(job.ID, kind)] = Action{ID: ActionID(job.ID, kind), JobID: job.ID, Kind: kind, State: ActionSucceeded, ExternalID: "ready-" + string(kind)}
-			}
-			store := newReviewDecisionStore(base)
-			store.planErr = errReviewPhaseAdvanced
-			externals := &reviewDispatchExternals{fakeExternals: newFakeExternals()}
-			_, err := (Service{Store: store, Externals: externals, Repository: &fakeRepository{}}).RunUntilIdle(context.Background(), job.ID)
-			if !errors.Is(err, errReviewPhaseAdvanced) {
-				t.Fatalf("dispatch error=%v", err)
-			}
-			if store.nextDeliveryCalls != 0 {
-				t.Fatalf("NextDelivery queried %d times during %s", store.nextDeliveryCalls, phase)
-			}
-		})
-	}
-}
-
 func TestReviewPlanningAutomaticallyAppliesPersistedPolicyInput(t *testing.T) {
 	for _, test := range []struct {
 		name     string

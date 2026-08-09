@@ -10,124 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/aphronio/dorf/internal/evidence"
 )
-
-func TestIntentionalCheckFailureGetsOneSameSessionRepairAndNewReadyRevision(t *testing.T) {
-	base := newMemoryStore()
-	store := &codingMemoryStore{memoryStore: base, checks: map[string]Check{}, evidence: map[string]Evidence{}}
-	job := testJob()
-	job.StartingRevision = job.Revision
-	job.WorkflowPhase = "setup"
-	store.jobs[job.ID] = job
-	store.addMessage(job.ID, "initial", "make one bounded change and commit it")
-	externals := newFakeExternals()
-	repository := &fakeRepository{firstRevision: strings.Repeat("a", 40), repairedRevision: strings.Repeat("b", 40)}
-	service := Service{Store: store, Externals: externals, Repository: repository, Evidence: evidence.Store{Root: t.TempDir()}}
-	disposition, err := service.RunUntilIdle(context.Background(), job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ready := store.jobs[job.ID]
-	if disposition != RunIdle || ready.WorkflowPhase != "ready" || ready.Revision != repository.repairedRevision || ready.RepairCount != 1 {
-		t.Fatalf("disposition=%s job=%#v", disposition, ready)
-	}
-	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1, 2}) {
-		t.Fatalf("implementation and repair submissions=%v", got)
-	}
-	if len(store.messages[job.ID]) != 2 || store.messages[job.ID][1].CallerID != "dorf:repair:1" {
-		t.Fatalf("repair FIFO=%#v", store.messages[job.ID])
-	}
-	firstRun := store.runs[AgentRunID(store.messages[job.ID][0].ID)]
-	repairRun := store.runs[AgentRunID(store.messages[job.ID][1].ID)]
-	if firstRun.SessionID == "" || repairRun.SessionID != firstRun.SessionID || repairRun.Role != "repair" {
-		t.Fatalf("implementation=%#v repair=%#v", firstRun, repairRun)
-	}
-	if repository.setupCalls != 1 || repository.observationCalls != 2 || repository.checkCalls != 2 {
-		t.Fatalf("repository calls setup=%d observation=%d check=%d", repository.setupCalls, repository.observationCalls, repository.checkCalls)
-	}
-	failed := store.checks[CheckID(job.ID, repository.firstRevision, "check")]
-	passed := store.checks[CheckID(job.ID, repository.repairedRevision, "check")]
-	if failed.State != "failed" || passed.State != "passed" || failed.EvidenceDigest == "" || passed.EvidenceDigest == "" || len(store.evidence) != 5 {
-		t.Fatalf("failed=%#v passed=%#v Evidence=%#v", failed, passed, store.evidence)
-	}
-	if setup := store.actions[ActionID(job.ID, ActionRepositorySetup)]; setup.State != ActionSucceeded {
-		t.Fatalf("setup Action=%#v", setup)
-	}
-}
-
-func TestAdmissionDuringActiveTurnDrainsDistinctAgentRunsInFIFO(t *testing.T) {
-	store := newMemoryStore()
-	job := testJob()
-	store.jobs[job.ID] = job
-	store.addMessage(job.ID, "first", "first input")
-	externals := newFakeExternals()
-	externals.blockFirst = make(chan struct{})
-	externals.firstActive = make(chan struct{})
-	service := Service{Store: store, Externals: externals}
-	done := make(chan error, 1)
-	go func() { done <- service.Run(context.Background(), job.ID) }()
-	<-externals.firstActive
-	second := store.addMessage(job.ID, "second", "identical text remains independent")
-	close(externals.blockFirst)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if got, want := externals.submittedSequences(), []int64{1, 2}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("native submission order=%v want=%v", got, want)
-	}
-	first := store.runs[AgentRunID(MessageID(job.ID, "first"))]
-	secondRun := store.runs[AgentRunID(second.ID)]
-	if first.ID == secondRun.ID || first.State != AgentRunCompleted || secondRun.State != AgentRunCompleted {
-		t.Fatalf("per-input AgentRuns were not distinct and terminal: %#v %#v", first, secondRun)
-	}
-}
-
-func TestFaultBoundariesRecoverOneNativeTurn(t *testing.T) {
-	for _, point := range []string{BarrierBeforeSubmit, BarrierAfterSubmitBeforeBind, BarrierNativeActive} {
-		t.Run(point, func(t *testing.T) {
-			store := newMemoryStore()
-			job := testJob()
-			store.jobs[job.ID] = job
-			message := store.addMessage(job.ID, "one", "one input")
-			externals := newFakeExternals()
-			barrier := &failBarrier{point: point}
-			service := Service{Store: store, Externals: externals, Barrier: barrier}
-			if err := service.Run(context.Background(), job.ID); !errors.Is(err, errBarrier) {
-				t.Fatalf("first run error=%v, want barrier", err)
-			}
-			checkpointSession := store.actions[ActionID(job.ID, ActionSessionStart)]
-			checkpointRun := store.runs[AgentRunID(message.ID)]
-			switch point {
-			case BarrierBeforeSubmit:
-				if checkpointSession.State == ActionSucceeded || checkpointRun.NativeTurnID != "" || len(externals.submittedSequences()) != 0 {
-					t.Fatalf("before-submit state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
-				}
-			case BarrierAfterSubmitBeforeBind:
-				if checkpointSession.State == ActionSucceeded || checkpointRun.NativeTurnID != "" || !reflect.DeepEqual(externals.submittedSequences(), []int64{1}) {
-					t.Fatalf("after-submit state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
-				}
-			case BarrierNativeActive:
-				if checkpointSession.State != ActionSucceeded || checkpointRun.NativeTurnID == "" || !reflect.DeepEqual(externals.submittedSequences(), []int64{1}) {
-					t.Fatalf("native-active state session=%#v run=%#v submissions=%v", checkpointSession, checkpointRun, externals.submittedSequences())
-				}
-			}
-			service.Barrier = nil
-			if err := service.Run(context.Background(), job.ID); err != nil {
-				t.Fatal(err)
-			}
-			if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
-				t.Fatalf("native submissions=%v want one", got)
-			}
-			run := store.runs[AgentRunID(message.ID)]
-			session := store.actions[ActionID(job.ID, ActionSessionStart)]
-			if session.State != ActionSucceeded || session.ExternalID != "session-1" || run.SessionID != session.ExternalID || run.State != AgentRunCompleted || run.NativeTurnID == "" || !run.BaselineRecorded || run.BaselineTurnID != "" {
-				t.Fatalf("recovered AgentRun=%#v", run)
-			}
-		})
-	}
-}
 
 func TestSteerAcceptanceRecoversAfterAcknowledgementBeforeBind(t *testing.T) {
 	base := newMemoryStore()
@@ -200,13 +83,13 @@ func TestSharedSteerPersistsEveryTerminalTargetOutcome(t *testing.T) {
 
 			propagated.NativeOutcome = ""
 			store.runs[steerRun.ID] = propagated
-			if progressed, err := service.deliver(context.Background(), job, Delivery{Message: steer, AgentRun: propagated}); err != nil || !progressed {
+			if progressed, err := service.Deliver(context.Background(), job, Delivery{Message: steer, AgentRun: propagated}); err != nil || !progressed {
 				t.Fatalf("terminal-history reconciliation progressed=%v err=%v", progressed, err)
 			}
 			if err := store.BindNativeTurn(context.Background(), targetRun.ID, targetTurnID, status); err != nil {
 				t.Fatal(err)
 			}
-			if progressed, err := service.deliver(context.Background(), job, Delivery{Message: steer, AgentRun: store.runs[steerRun.ID]}); err != nil || !progressed {
+			if progressed, err := service.Deliver(context.Background(), job, Delivery{Message: steer, AgentRun: store.runs[steerRun.ID]}); err != nil || !progressed {
 				t.Fatalf("idempotent steer replay progressed=%v err=%v", progressed, err)
 			}
 			final := store.runs[steerRun.ID]
@@ -261,7 +144,7 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 					t.Fatalf("pre-bind transport steers=%v starts=%v run=%#v", externals.steered, externals.submittedSequences(), store.runs[run.ID])
 				}
 				service.Barrier = nil
-				progressed, err = service.deliver(context.Background(), job, Delivery{Message: message, AgentRun: store.runs[run.ID]})
+				progressed, err = service.Deliver(context.Background(), job, Delivery{Message: message, AgentRun: store.runs[run.ID]})
 			}
 			if err != nil || !progressed {
 				t.Fatalf("fallback recovery progressed=%v err=%v", progressed, err)
@@ -277,7 +160,7 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 			if len(externals.steered) != test.wantSteers || !reflect.DeepEqual(externals.submittedSequences(), []int64{2}) {
 				t.Fatalf("steers=%v starts=%v", externals.steered, externals.submittedSequences())
 			}
-			if progressed, err := service.deliver(context.Background(), job, Delivery{Message: message, AgentRun: bound}); err != nil || !progressed {
+			if progressed, err := service.Deliver(context.Background(), job, Delivery{Message: message, AgentRun: bound}); err != nil || !progressed {
 				t.Fatalf("bound replay progressed=%v err=%v", progressed, err)
 			}
 			if len(externals.steered) != test.wantSteers || !reflect.DeepEqual(externals.submittedSequences(), []int64{2}) {
@@ -290,7 +173,7 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 			if err != nil || delivery == nil || delivery.Message.ID != later.ID {
 				t.Fatalf("later delivery=%#v err=%v", delivery, err)
 			}
-			if progressed, err := service.deliver(context.Background(), job, *delivery); err != nil || !progressed {
+			if progressed, err := service.Deliver(context.Background(), job, *delivery); err != nil || !progressed {
 				t.Fatalf("later follow progressed=%v err=%v", progressed, err)
 			}
 			if !reflect.DeepEqual(externals.submittedSequences(), []int64{2, 3}) || store.runs[AgentRunID(later.ID)].State != AgentRunCompleted {
@@ -316,165 +199,6 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 			t.Fatalf("progressed=%v err=%v run=%#v steers=%v starts=%v", progressed, err, store.runs[run.ID], externals.steered, externals.submittedSequences())
 		}
 	})
-}
-
-func TestRepositoryRecordBoundariesRecoverCompletedLogicalWork(t *testing.T) {
-	for _, point := range []string{BarrierSetupComplete, BarrierCheckExited} {
-		t.Run(point, func(t *testing.T) {
-			base := newMemoryStore()
-			store := &codingMemoryStore{memoryStore: base, checks: map[string]Check{}, evidence: map[string]Evidence{}}
-			job := testJob()
-			job.StartingRevision, job.WorkflowPhase = job.Revision, "setup"
-			store.jobs[job.ID] = job
-			store.addMessage(job.ID, "initial", "make one bounded change")
-			repository := &receiptRepository{revision: strings.Repeat("c", 40)}
-			service := Service{Store: store, Externals: newFakeExternals(), Repository: repository, Evidence: evidence.Store{Root: t.TempDir()}, Barrier: &failWorkflowBarrier{point: point}}
-			if err := service.Run(context.Background(), job.ID); !errors.Is(err, errBarrier) {
-				t.Fatalf("first run error=%v", err)
-			}
-			if err := service.Run(context.Background(), job.ID); err != nil {
-				t.Fatal(err)
-			}
-			ready := store.jobs[job.ID]
-			if ready.WorkflowPhase != "ready" || repository.setupExecutions != 1 || repository.observationExecutions != 1 || repository.checkExecutions != 1 {
-				t.Fatalf("ready=%#v logical executions setup=%d observation=%d check=%d", ready, repository.setupExecutions, repository.observationExecutions, repository.checkExecutions)
-			}
-		})
-	}
-}
-
-func TestInitialRecoveryAdoptsTurnAfterSessionCheckpoint(t *testing.T) {
-	store := newMemoryStore()
-	store.bindFailures = 1
-	job := testJob()
-	store.jobs[job.ID] = job
-	message := store.addMessage(job.ID, "one", "one input")
-	externals := newFakeExternals()
-	service := Service{Store: store, Externals: externals}
-	if err := service.Run(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "checkpoint native turn") {
-		t.Fatalf("first run error=%v", err)
-	}
-	session := store.actions[ActionID(job.ID, ActionSessionStart)]
-	run := store.runs[AgentRunID(message.ID)]
-	if session.State != ActionSucceeded || session.ExternalID != "session-1" || run.SessionID != "session-1" || run.NativeTurnID != "" {
-		t.Fatalf("partial checkpoint session=%#v run=%#v", session, run)
-	}
-	if err := service.Run(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
-		t.Fatalf("native submissions=%v want one", got)
-	}
-	run = store.runs[AgentRunID(message.ID)]
-	if run.State != AgentRunCompleted || run.NativeTurnID == "" {
-		t.Fatalf("recovered AgentRun=%#v", run)
-	}
-}
-
-func TestAcceptedFailedAndInterruptedTurnsPermitLaterFIFO(t *testing.T) {
-	for _, status := range []string{"failed", "interrupted"} {
-		t.Run(status, func(t *testing.T) {
-			store := newMemoryStore()
-			job := testJob()
-			store.jobs[job.ID] = job
-			first := store.addMessage(job.ID, "first", "first")
-			store.addMessage(job.ID, "second", "second")
-			externals := newFakeExternals()
-			externals.outcomes[1] = status
-			disposition, err := (Service{Store: store, Externals: externals}).RunUntilIdle(context.Background(), job.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if disposition != RunIdle || !reflect.DeepEqual(externals.submittedSequences(), []int64{1, 2}) {
-				t.Fatalf("disposition=%s submissions=%v", disposition, externals.submittedSequences())
-			}
-			firstRun := store.runs[AgentRunID(first.ID)]
-			if string(firstRun.State) != status || firstRun.NativeTurnID == "" || firstRun.NativeOutcome != status {
-				t.Fatalf("first run=%#v want preserved accepted %s outcome", firstRun, status)
-			}
-		})
-	}
-}
-
-func TestAmbiguousNativeSuffixPersistsAttentionWithoutResubmission(t *testing.T) {
-	store := newMemoryStore()
-	job := testJob()
-	store.jobs[job.ID] = job
-	store.addMessage(job.ID, "first", "first")
-	delivery, err := store.NextDelivery(context.Background(), job.ID, "session-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.BeginAction(context.Background(), job.ID, ActionSessionStart)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.CompleteAction(context.Background(), session.ID, Receipt{ExternalID: "session-1"}); err != nil {
-		t.Fatal(err)
-	}
-	externals := newFakeExternals()
-	externals.turns = []NativeTurn{{ID: "unbound-a", Status: "completed"}, {ID: "unbound-b", Status: "running"}}
-	disposition, err := (Service{Store: store, Externals: externals}).RunUntilIdle(context.Background(), job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := store.runs[delivery.AgentRun.ID]
-	if disposition != RunBlocked || run.State != AgentRunUncertain || !strings.Contains(run.Attention, "2 native turns") || len(externals.submittedSequences()) != 0 {
-		t.Fatalf("disposition=%s run=%#v submissions=%v", disposition, run, externals.submittedSequences())
-	}
-}
-
-func TestUnsupportedNativeStatusPersistsAttentionAndBlocksFIFO(t *testing.T) {
-	store := newMemoryStore()
-	job := testJob()
-	store.jobs[job.ID] = job
-	first := store.addMessage(job.ID, "first", "first")
-	store.addMessage(job.ID, "second", "second")
-	externals := newFakeExternals()
-	externals.outcomes[1] = "pausedByFutureServer"
-	disposition, err := (Service{Store: store, Externals: externals}).RunUntilIdle(context.Background(), job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := store.runs[AgentRunID(first.ID)]
-	if disposition != RunBlocked || run.State != AgentRunUncertain || !strings.Contains(run.Attention, "unsupported status") {
-		t.Fatalf("disposition=%s run=%#v", disposition, run)
-	}
-	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
-		t.Fatalf("unsupported status allowed later FIFO submission: %v", got)
-	}
-}
-
-func TestOverlappingClaimsSerializeNativeMutation(t *testing.T) {
-	store := newMemoryStore()
-	job := testJob()
-	store.jobs[job.ID] = job
-	store.addMessage(job.ID, "first", "first")
-	externals := newFakeExternals()
-	externals.blockFirst = make(chan struct{})
-	externals.firstActive = make(chan struct{})
-	service := Service{Store: store, Externals: externals}
-	errs := make(chan error, 2)
-	go func() { errs <- service.Run(context.Background(), job.ID) }()
-	<-externals.firstActive
-	go func() { errs <- service.Run(context.Background(), job.ID) }()
-	select {
-	case <-externals.secondClaim:
-		t.Fatal("second claim crossed the Job fence")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(externals.blockFirst)
-	for range 2 {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got := externals.submittedSequences(); !reflect.DeepEqual(got, []int64{1}) {
-		t.Fatalf("submissions=%v", got)
-	}
 }
 
 func TestCleanupUsesSameFenceAndIsIdempotent(t *testing.T) {

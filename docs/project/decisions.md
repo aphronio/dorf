@@ -1091,3 +1091,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A supported harness cannot reliably commit inside the Sandbox, or a concrete
   acceptance surface requires a separately reviewed normalization step that preserves authorship
   and exact source-Revision provenance.
+
+## D051 — One explicit coding coordinator uses stable Absurd Steps
+
+- **Status:** Accepted workflow boundary — 2026-08-10
+- **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
+  single spine operations in product order and gives each repeatable Action, AgentRun, Revision, and
+  Check operation a stable versioned Absurd Step name plus a small typed result. Absurd owns durable
+  execution mechanics; PostgreSQL remains authoritative for Job facts and receipts.
+- **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
+  Each external mutation reserves and reconciles its stable Action, performs a final claim check,
+  records the receipt, and then completes its Step. `workflow_phase` is retained temporarily as a
+  domain guard and review/publication handoff projection until Slice 6; the mixed service-layer
+  coordinator that interpreted it has been deleted.
+- **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
+  durable runtime rather than a second Dorf-owned program counter.
+- **Reconsider when:** Review and publication are also expressed as direct product-order operations,
+  or a real dogfood workflow shows that a stable Step identity or boundary cannot represent recovery
+  truthfully.

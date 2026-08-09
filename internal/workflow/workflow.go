@@ -29,51 +29,24 @@ type Wake struct {
 	Sequence int64  `json:"sequence"`
 }
 
-type CycleResultV1 struct {
-	Disposition spine.RunDisposition `json:"disposition"`
-}
-
 func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func cycleStepName(sequence int64) string {
-	return fmt.Sprintf("dorf/job-cycle/v1/%020d", sequence)
-}
-
 func Register(client *absurd.Client, service spine.Service, store postgres.Store) {
+	service.ClaimCheck = absurdruntime.RequireClaim
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
 			return Result{}, err
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
-		cycleSequence := int64(1)
 		for {
-			// The immutable Message sequence is the persisted cursor. Never rely
-			// on Absurd's call-occurrence suffixes: domain progress can advance
-			// between a cycle checkpoint and replay after process loss.
-			cycleName := cycleStepName(cycleSequence)
-			cycle, err := absurd.Step(ctx, cycleName, func(stepCtx context.Context) (CycleResultV1, error) {
-				return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (CycleResultV1, error) {
-					disposition, err := service.RunUntilIdle(workCtx, params.JobID)
-					if err != nil {
-						return CycleResultV1{}, err
-					}
-					current, err := store.Job(workCtx, params.JobID)
-					if err != nil {
-						return CycleResultV1{}, err
-					}
-					if err := continuePublication(workCtx, store, client, service.Barrier, current); err != nil {
-						return CycleResultV1{}, err
-					}
-					return CycleResultV1{Disposition: disposition}, nil
-				})
-			})
+			disposition, err := RunJob(ctx, client, service, store, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
-			if cycle.Disposition == spine.RunClosed {
+			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
@@ -87,7 +60,6 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
 				return Result{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
-			cycleSequence = wake.Sequence
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 	client.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params Params) (Result, error) {

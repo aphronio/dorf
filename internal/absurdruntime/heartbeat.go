@@ -15,6 +15,16 @@ const (
 	HeartbeatLease    = 2 * time.Minute
 )
 
+// RequireClaim closes the gap between an opaque external operation and the
+// Dorf receipt that adopts its result. Call it immediately before recording a
+// successful Action, AgentRun, Revision, or Check fact.
+func RequireClaim(ctx context.Context) error {
+	if err := absurd.Heartbeat(ctx, HeartbeatLease); err != nil {
+		return fmt.Errorf("validate claim before recording external result: %w", err)
+	}
+	return nil
+}
+
 // WithHeartbeat keeps the current Absurd claim alive while an opaque external
 // operation runs. Cancellation or a lost claim is observed through Heartbeat;
 // the derived context then asks the external operation to stop. Stable Dorf

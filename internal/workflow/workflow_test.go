@@ -14,11 +14,24 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	}
 }
 
-func TestCycleCheckpointIsKeyedByImmutableMessageSequence(t *testing.T) {
-	if cycleStepName(2) != cycleStepName(2) {
-		t.Fatal("same Message sequence did not retain its cycle checkpoint")
+func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"Action", actionStepName("action-1"), "dorf/action/v1/action-1"},
+		{"setup", setupStepName("setup-1"), "dorf/setup/v1/setup-1"},
+		{"AgentRun", agentRunStepName("run-1"), "dorf/agent-run/v1/run-1"},
+		{"Revision", revisionStepName("run-1"), "dorf/revision/v1/run-1"},
+		{"Check", checkStepName("check-1"), "dorf/check/v1/check-1"},
+		{"verification", verifyStepName("job-1", "revision-1"), "dorf/checks-verified/v1/job-1/revision-1"},
 	}
-	if cycleStepName(2) == cycleStepName(3) {
-		t.Fatal("distinct Message sequences share a cycle checkpoint")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Fatalf("Step name %q, want %q", test.got, test.want)
+			}
+		})
 	}
 }

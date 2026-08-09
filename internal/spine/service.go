@@ -110,315 +110,179 @@ type Service struct {
 	Barrier    FaultBarrier
 	Repository RepositoryExternals
 	Evidence   evidence.Store
+	ClaimCheck func(context.Context) error
 }
 
-func (s Service) RunUntilIdle(ctx context.Context, jobID string) (RunDisposition, error) {
-	disposition := RunIdle
-	err := s.Store.WithJobFence(ctx, jobID, func() error {
-		var err error
-		disposition, err = s.runFenced(ctx, jobID)
-		return err
-	})
-	return disposition, err
+func (s Service) requireClaim(ctx context.Context) error {
+	if s.ClaimCheck == nil {
+		return nil
+	}
+	return s.ClaimCheck(ctx)
 }
 
-func (s Service) Run(ctx context.Context, jobID string) error {
-	_, err := s.RunUntilIdle(ctx, jobID)
-	return err
-}
-
-func (s Service) runFenced(ctx context.Context, jobID string) (RunDisposition, error) {
-	job, err := s.Store.Job(ctx, jobID)
-	if err != nil {
-		return RunIdle, err
-	}
-	if !job.AdmissionOpen {
-		return RunClosed, nil
-	}
-	switch job.WorkflowPhase {
-	case "ready", "publishing", "published":
-		// The admitted Job task owns ready-to-publication reconciliation
-		// outside the coding spine, then waits for external outcome authority.
-		return RunIdle, nil
-	}
-	for _, kind := range []ActionKind{ActionSandboxCreate, ActionRepositoryClone, ActionRouteCreate} {
-		if kind == ActionRouteCreate && s.Repository != nil {
-			job, err = s.Store.Job(ctx, jobID)
-			if err != nil {
-				return RunIdle, err
-			}
-			disposition, err := s.setup(ctx, job)
-			if err != nil || disposition == RunBlocked {
-				return disposition, err
-			}
-		}
-		job, err = s.Store.Job(ctx, jobID)
-		if err != nil {
-			return RunIdle, err
-		}
-		if _, err := s.reconcile(ctx, job, kind); err != nil {
-			return RunIdle, fmt.Errorf("reconcile %s: %w", kind, err)
-		}
-	}
-	job, err = s.Store.Job(ctx, jobID)
-	if err != nil {
-		return RunIdle, err
-	}
-	sessionID := job.SessionID
-	if !reviewPhasePreemptsFIFO(job.WorkflowPhase) {
-		session, err := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
-		if err != nil {
-			return RunIdle, err
-		}
-		sessionID = session.ExternalID
-		if session.State != ActionSucceeded {
-			delivery, err := s.Store.NextDelivery(ctx, jobID, "")
-			if err != nil {
-				return RunIdle, err
-			}
-			if delivery == nil || delivery.Message.Sequence != 1 || delivery.Message.Intent != MessageFollow {
-				return RunIdle, fmt.Errorf("unbound native Session has no initial delivery")
-			}
-			switch delivery.AgentRun.State {
-			case AgentRunFailed, AgentRunInterrupted:
-				if delivery.AgentRun.NativeTurnID == "" {
-					break
-				}
-				return RunBlocked, nil
-			}
-			sessionID, err = s.deliverInitial(ctx, job, session, *delivery)
-			if err != nil {
-				return RunIdle, fmt.Errorf("reconcile initial native Session and turn: %w", err)
-			}
-		}
-	}
-	for {
-		job, err = s.Store.Job(ctx, jobID)
-		if err != nil {
-			return RunIdle, err
-		}
-		if !job.AdmissionOpen {
-			return RunClosed, nil
-		}
-		if reviewPhasePreemptsFIFO(job.WorkflowPhase) {
-			disposition, progressed, err := s.advanceCoding(ctx, job)
-			if err != nil || disposition == RunBlocked || !progressed {
-				return disposition, err
-			}
-			continue
-		}
-		delivery, err := s.Store.NextDelivery(ctx, jobID, sessionID)
-		if err != nil {
-			return RunIdle, err
-		}
-		if delivery == nil {
-			if s.Repository == nil {
-				return RunIdle, nil
-			}
-			disposition, progressed, err := s.advanceCoding(ctx, job)
-			if err != nil || disposition == RunBlocked || !progressed {
-				return disposition, err
-			}
-			continue
-		}
-		progressed, err := s.deliver(ctx, job, *delivery)
-		if err != nil {
-			return RunIdle, err
-		}
-		if !progressed {
-			return RunBlocked, nil
-		}
-	}
-}
-
-func reviewPhasePreemptsFIFO(phase string) bool {
-	switch phase {
-	case "review-planning", "review-triage", "reviewing":
-		return true
-	default:
-		return false
-	}
-}
-
-func (s Service) setup(ctx context.Context, job Job) (RunDisposition, error) {
+func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error {
 	store := s.Store.(CodingStore)
-	action, err := s.Store.BeginSetup(ctx, job.ID)
-	if err != nil {
-		return RunIdle, err
-	}
-	if action.State == ActionSucceeded {
-		return RunIdle, nil
-	}
-	if action.State == ActionFailed {
-		return RunBlocked, nil
-	}
 	observation, declared, err := s.Repository.RepositorySetup(ctx, job, action)
 	if err != nil {
 		_ = s.Store.UncertainAction(ctx, action.ID)
 		if attentionNeeded(err) {
 			_ = store.BlockWorkflow(ctx, job.ID, err.Error())
-			return RunBlocked, nil
+			return nil
 		}
-		return RunIdle, err
+		return err
 	}
 	observation = canonicalCommandObservation(observation)
 	artifact, err := commandArtifact(action.ID, job.StartingRevision, observation)
 	if err != nil {
-		return RunIdle, err
+		return err
 	}
 	evidenceRecord, err := s.retainEvidence(action.ID, "repository-setup", action.ID, "", job.StartingRevision, observation.StartedAt, observation.FinishedAt, artifact)
 	if err != nil {
-		return RunIdle, err
+		return err
 	}
 	if err := s.reachWorkflow(ctx, BarrierSetupComplete, job.ID, action.ID); err != nil {
-		return RunIdle, err
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		_ = s.Store.UncertainAction(ctx, action.ID)
+		return err
 	}
 	if err := store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
-		return RunIdle, err
+		return err
 	}
 	if observation.ExitCode != 0 {
-		return RunBlocked, nil
+		return nil
 	}
-	return RunIdle, nil
+	return nil
 }
 
-func (s Service) advanceCoding(ctx context.Context, job Job) (RunDisposition, bool, error) {
+func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) error {
 	store := s.Store.(CodingStore)
-	switch job.WorkflowPhase {
-	case "ready", "publishing", "publication-blocked", "published":
-		return RunIdle, false, nil
-	case "blocked":
-		return RunBlocked, false, nil
-	case "implementing", "repairing", "review-repairing":
-		run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
-		if err != nil {
-			return RunIdle, false, err
+	observation, artifact, err := s.Repository.RepositoryRevision(ctx, job)
+	if err != nil {
+		if attentionNeeded(err) {
+			_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+			return nil
 		}
-		if !ready {
-			return RunIdle, false, nil
-		}
-		observation, artifact, err := s.Repository.RepositoryRevision(ctx, job)
-		if err != nil {
-			if attentionNeeded(err) {
-				_ = store.BlockWorkflow(ctx, job.ID, err.Error())
-				return RunBlocked, false, nil
-			}
-			return RunIdle, false, err
-		}
-		if observation.Revision == observation.ComparisonBase {
-			if job.WorkflowPhase == "review-repairing" {
-				reviewStore := s.Store.(ReviewStore)
-				if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
-					return RunIdle, false, err
-				}
-				return RunIdle, true, nil
-			}
-			reason := fmt.Sprintf("AgentRun %s completed without a new committed Revision", run.ID)
-			blocked, err := store.BlockNoRevision(ctx, job.ID, run.ID, observation.ComparisonBase, reason)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			if !blocked {
-				return RunIdle, true, nil
-			}
-			return RunBlocked, false, nil
-		}
-		evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-		if err != nil {
-			return RunIdle, false, err
-		}
-		recorded, err := store.RecordRevision(ctx, job.ID, run.ID, observation, evidenceRecord)
-		if err != nil {
-			return RunIdle, false, err
-		}
-		if !recorded {
-			// A new Message was accepted after the read-only Git observation.
-			// Its AgentRun must finish before Dorf may adopt this Revision.
-			return RunIdle, true, nil
-		}
-		return RunIdle, true, nil
-	case "checking":
-		declared, err := store.DeclaredChecks(ctx, job.ID)
-		if err != nil {
-			if attentionNeeded(err) {
-				_ = store.BlockWorkflow(ctx, job.ID, err.Error())
-				return RunBlocked, false, nil
-			}
-			return RunIdle, false, err
-		}
-		for _, declaration := range declared {
-			check, err := store.BeginCheck(ctx, job.ID, job.Revision, declaration.Name, declaration.Command)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			if check.State == "passed" {
-				continue
-			}
-			if check.State == "failed" {
-				return s.handleFailedCheck(ctx, job, check)
-			}
-			observation, err := s.Repository.RepositoryCheck(ctx, job, check)
-			if err != nil {
-				if attentionNeeded(err) {
-					_ = store.BlockWorkflow(ctx, job.ID, err.Error())
-					return RunBlocked, false, nil
-				}
-				return RunIdle, false, err
-			}
-			observation = canonicalCommandObservation(observation)
-			artifact, err := commandArtifact(check.ID, job.Revision, observation)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			evidenceRecord, err := s.retainEvidence(check.ID, "check-output", "", check.ID, job.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-			if err != nil {
-				return RunIdle, false, err
-			}
-			if err := s.reachWorkflow(ctx, BarrierCheckExited, job.ID, check.ID); err != nil {
-				return RunIdle, false, err
-			}
-			if err := store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
-				return RunIdle, false, err
-			}
-			check.State, check.ExitCode, check.EvidenceID, check.EvidenceDigest = "passed", observation.ExitCode, evidenceRecord.ID, evidenceRecord.Digest
-			if observation.ExitCode != 0 {
-				check.State = "failed"
-				return s.handleFailedCheck(ctx, job, check)
-			}
-		}
-		checks, err := store.Checks(ctx, job.ID)
-		if err != nil {
-			return RunIdle, false, err
-		}
-		records, err := store.Evidence(ctx, job.ID)
-		if err != nil {
-			return RunIdle, false, err
-		}
-		verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.Evidence)
-		if err != nil {
-			reason := fmt.Sprintf("Revision %s Evidence verification failed: %v", job.Revision, err)
-			if blockErr := store.BlockWorkflow(ctx, job.ID, reason); blockErr != nil {
-				return RunIdle, false, blockErr
-			}
-			return RunBlocked, false, nil
-		}
-		verifiedIDs := make([]string, 0, len(verified))
-		for _, result := range verified {
-			verifiedIDs = append(verifiedIDs, result.EvidenceID)
-		}
-		if reviewStore, ok := s.Store.(ReviewStore); ok {
-			if err := reviewStore.MarkChecksVerified(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
-				return RunIdle, false, err
-			}
-		} else if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
-			return RunIdle, false, err
-		}
-		return RunIdle, true, nil
-	case "review-planning", "review-triage", "reviewing":
-		return s.advanceReview(ctx, job)
-	default:
-		return RunIdle, false, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
+		return err
 	}
+	if observation.Revision == observation.ComparisonBase {
+		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		if job.WorkflowPhase == "review-repairing" {
+			reviewStore := s.Store.(ReviewStore)
+			if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
+				return err
+			}
+			return nil
+		}
+		reason := fmt.Sprintf("AgentRun %s completed without a new committed Revision", run.ID)
+		blocked, err := store.BlockNoRevision(ctx, job.ID, run.ID, observation.ComparisonBase, reason)
+		if err != nil {
+			return err
+		}
+		if !blocked {
+			return nil
+		}
+		return nil
+	}
+	evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+	if err != nil {
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	recorded, err := store.RecordRevision(ctx, job.ID, run.ID, observation, evidenceRecord)
+	if err != nil {
+		return err
+	}
+	if !recorded {
+		return nil
+	}
+	return nil
+}
+
+func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
+	store := s.Store.(CodingStore)
+	if check.State == "passed" {
+		return nil
+	}
+	if check.State == "failed" {
+		return s.HandleFailedCheck(ctx, job, check)
+	}
+	observation, err := s.Repository.RepositoryCheck(ctx, job, check)
+	if err != nil {
+		if attentionNeeded(err) {
+			_ = store.BlockWorkflow(ctx, job.ID, err.Error())
+			return nil
+		}
+		return err
+	}
+	observation = canonicalCommandObservation(observation)
+	artifact, err := commandArtifact(check.ID, job.Revision, observation)
+	if err != nil {
+		return err
+	}
+	evidenceRecord, err := s.retainEvidence(check.ID, "check-output", "", check.ID, job.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+	if err != nil {
+		return err
+	}
+	if err := s.reachWorkflow(ctx, BarrierCheckExited, job.ID, check.ID); err != nil {
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	if err := store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
+		return err
+	}
+	check.State, check.ExitCode, check.EvidenceID, check.EvidenceDigest = "passed", observation.ExitCode, evidenceRecord.ID, evidenceRecord.Digest
+	if observation.ExitCode != 0 {
+		check.State = "failed"
+		return s.HandleFailedCheck(ctx, job, check)
+	}
+	return nil
+}
+
+func (s Service) VerifyChecks(ctx context.Context, job Job, declared []DeclaredCheck) error {
+	store := s.Store.(CodingStore)
+	checks, err := store.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	records, err := store.Evidence(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.Evidence)
+	if err != nil {
+		reason := fmt.Sprintf("Revision %s Evidence verification failed: %v", job.Revision, err)
+		if blockErr := store.BlockWorkflow(ctx, job.ID, reason); blockErr != nil {
+			return blockErr
+		}
+		return nil
+	}
+	verifiedIDs := make([]string, 0, len(verified))
+	for _, result := range verified {
+		verifiedIDs = append(verifiedIDs, result.EvidenceID)
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	if reviewStore, ok := s.Store.(ReviewStore); ok {
+		if err := reviewStore.MarkChecksVerified(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+			return err
+		}
+	} else if err := store.MarkReady(ctx, job.ID, job.Revision, verifiedIDs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s Service) AdvanceReview(ctx context.Context, job Job) (RunDisposition, bool, error) {
+	return s.advanceReview(ctx, job)
 }
 
 func attentionNeeded(err error) bool {
@@ -426,19 +290,19 @@ func attentionNeeded(err error) bool {
 	return errors.As(err, &attention) && attention.AttentionNeeded()
 }
 
-func (s Service) handleFailedCheck(ctx context.Context, job Job, check Check) (RunDisposition, bool, error) {
+func (s Service) HandleFailedCheck(ctx context.Context, job Job, check Check) error {
 	store := s.Store.(CodingStore)
 	if job.RepairCount == 0 && job.ReviewRepairCount == 0 {
 		if _, _, err := store.AdmitRepair(ctx, check); err != nil {
-			return RunIdle, false, err
+			return err
 		}
-		return RunIdle, true, nil
+		return nil
 	}
 	reason := fmt.Sprintf("Check %s still failed at Revision %s with exit %d", check.Name, check.Revision, check.ExitCode)
 	if err := store.BlockWorkflow(ctx, job.ID, reason); err != nil {
-		return RunIdle, false, err
+		return err
 	}
-	return RunBlocked, false, nil
+	return nil
 }
 
 func canonicalCommandObservation(observation CommandObservation) CommandObservation {
@@ -483,7 +347,7 @@ func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity strin
 	return barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func (s Service) deliverInitial(ctx context.Context, job Job, session Action, delivery Delivery) (string, error) {
+func (s Service) DeliverInitial(ctx context.Context, job Job, session Action, delivery Delivery) (string, error) {
 	run := delivery.AgentRun
 	if run.SessionID != "" {
 		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun is bound while its native Session action is unsettled")
@@ -529,6 +393,10 @@ func (s Service) deliverInitial(ctx context.Context, job Job, session Action, de
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 		return "", err
 	}
+	if err := s.requireClaim(ctx); err != nil {
+		_ = s.Store.UncertainAction(ctx, session.ID)
+		return "", err
+	}
 	if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID}); err != nil {
 		return "", err
 	}
@@ -538,7 +406,7 @@ func (s Service) deliverInitial(ctx context.Context, job Job, session Action, de
 	return sessionID, nil
 }
 
-func (s Service) deliver(ctx context.Context, job Job, delivery Delivery) (bool, error) {
+func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) (bool, error) {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.NativeTurnID == "" || delivery.AgentRun.NativeTurnID == delivery.Message.TargetTurnID) {
 		return s.deliverSteer(ctx, job, delivery)
 	}
@@ -554,6 +422,9 @@ func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Deliver
 		outcome, err := s.Externals.AgentWait(ctx, job, run.SessionID, run.NativeTurnID)
 		if err != nil {
 			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
+			return false, err
+		}
+		if err := s.requireClaim(ctx); err != nil {
 			return false, err
 		}
 		return true, s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status)
@@ -577,12 +448,18 @@ func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Deliver
 	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
 	if reconciliation.Classification == "uncertain" {
 		if reconciliation.Turn.ID != "" {
+			if err := s.requireClaim(ctx); err != nil {
+				return false, err
+			}
 			return false, s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
 		}
 		return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 	}
 	if reconciliation.Classification == "no-submit" {
 		return s.submit(ctx, job, delivery)
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return false, err
 	}
 	if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
 		return false, err
@@ -594,6 +471,9 @@ func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Deliver
 		outcome, err := s.Externals.AgentWait(ctx, job, run.SessionID, reconciliation.Turn.ID)
 		if err != nil {
 			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
+			return false, err
+		}
+		if err := s.requireClaim(ctx); err != nil {
 			return false, err
 		}
 		return true, s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status)
@@ -628,6 +508,9 @@ func (s Service) submit(ctx context.Context, job Job, delivery Delivery) (bool, 
 		}
 		if reconciliation.Classification == "uncertain" {
 			if reconciliation.Turn.ID != "" {
+				if claimErr := s.requireClaim(ctx); claimErr != nil {
+					return false, claimErr
+				}
 				return false, s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
 			}
 			return false, s.Store.UncertainAgentRun(ctx, delivery.AgentRun.ID, reconciliation.Reason)
@@ -635,6 +518,9 @@ func (s Service) submit(ctx context.Context, job Job, delivery Delivery) (bool, 
 		turn = reconciliation.Turn
 	}
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
+		return false, err
+	}
+	if err := s.requireClaim(ctx); err != nil {
 		return false, err
 	}
 	if err := s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, turn.ID, turn.Status); err != nil {
@@ -652,6 +538,9 @@ func (s Service) submit(ctx context.Context, job Job, delivery Delivery) (bool, 
 	outcome, err := s.Externals.AgentWait(ctx, job, delivery.AgentRun.SessionID, turn.ID)
 	if err != nil {
 		_ = s.Store.AgentRunAttention(ctx, delivery.AgentRun.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
+		return false, err
+	}
+	if err := s.requireClaim(ctx); err != nil {
 		return false, err
 	}
 	return true, s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, outcome.ID, outcome.Status)
@@ -674,6 +563,9 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	}
 	reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 	if reconciliation.Classification == "completed" {
+		if err := s.requireClaim(ctx); err != nil {
+			return false, err
+		}
 		return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
@@ -707,6 +599,9 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 		}
 		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
 		if reconciled.Classification == "completed" {
+			if claimErr := s.requireClaim(ctx); claimErr != nil {
+				return false, claimErr
+			}
 			return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
@@ -724,6 +619,9 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 		return false, s.Store.UncertainAgentRun(ctx, run.ID, "native steer acknowledgement named a different active turn")
 	}
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
+		return false, err
+	}
+	if err := s.requireClaim(ctx); err != nil {
 		return false, err
 	}
 	return true, store.BindNativeSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
@@ -984,8 +882,16 @@ func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Recei
 	if action.State == ActionSucceeded {
 		return Receipt{ExternalID: action.ExternalID, Outcome: action.Outcome}, nil
 	}
+	return s.ExecuteAction(ctx, job, action)
+}
+
+// ExecuteAction reconciles one already-reserved external mutation. The Action
+// identity comes from PostgreSQL; the caller gives the operation its durable
+// Absurd Step identity.
+func (s Service) ExecuteAction(ctx context.Context, job Job, action Action) (Receipt, error) {
 	var receipt Receipt
-	switch kind {
+	var err error
+	switch action.Kind {
 	case ActionSandboxCreate:
 		receipt, err = s.Externals.SandboxCreate(ctx, job, action)
 	case ActionRepositoryClone:
@@ -997,22 +903,26 @@ func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Recei
 	case ActionSandboxDelete:
 		receipt, err = s.Externals.SandboxDelete(ctx, job, action)
 	default:
-		err = fmt.Errorf("unsupported Action kind %q", kind)
+		err = fmt.Errorf("unsupported Action kind %q", action.Kind)
 	}
 	if err != nil {
 		_ = s.Store.UncertainAction(ctx, action.ID)
 		return Receipt{}, err
 	}
 	point := ""
-	if kind == ActionRouteRevoke {
+	if action.Kind == ActionRouteRevoke {
 		point = BarrierMainRouteRevoked
-	} else if kind == ActionSandboxDelete {
+	} else if action.Kind == ActionSandboxDelete {
 		point = BarrierMainSandboxDeleted
 	}
 	if point != "" {
 		if err := s.reachWorkflow(ctx, point, job.ID, action.ID); err != nil {
 			return Receipt{}, err
 		}
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		_ = s.Store.UncertainAction(ctx, action.ID)
+		return Receipt{}, err
 	}
 	if err := s.Store.CompleteAction(ctx, action.ID, receipt); err != nil {
 		return Receipt{}, err

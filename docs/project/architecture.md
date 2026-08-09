@@ -57,9 +57,15 @@ durable task sequences explicit, named phases; it does not contain a generic use
 - Admission records the complete goal before agent work begins and schedules the Job with a stable
   idempotency identity. If recording and scheduling cannot be made one transaction, recovery
   reconciles the two facts rather than assuming both happened.
-- Deterministic sequencing executes through Absurd's public named-step APIs. Dorf keeps only the
-  domain facts and Action receipts needed to understand the product or reconcile an external
-  effect; it does not mirror generic step, retry, lease, cancellation, or task-inspection state.
+- Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. It reads the
+  product facts in order: Sandbox, clone, setup, route, AgentRun delivery, Revision observation,
+  Checks, then the existing review/publication continuations. Each repeatable operation uses a
+  public Absurd Step with a stable name derived from its Action, AgentRun, Revision, or Check ID and
+  a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
+  Dorf keeps only product facts and Action receipts. The spine exposes single operations to this
+  coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
+  `workflow_phase` remains a transitional domain guard and review/publication handoff projection until
+  those downstream paths become explicit; no second service-layer coordinator interprets it.
 - Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
   expected output contract.
 - Change-producing implementation and repair AgentRuns create one or many commits. On successful

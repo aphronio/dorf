@@ -104,27 +104,36 @@ final descendant as one immutable Revision, and Checks run against that exact Re
 Goal: express `provision Sandbox -> setup -> Implementation AgentRun -> observe Revision -> Checks`
 as one concrete coding coordinator backed by named Absurd Steps.
 
-- [ ] Introduce one readable `RunJob` coordinator in the coding workflow layer for this path.
-- [ ] Keep Absurd task, checkpoint, heartbeat, wait, retry, and cancellation mechanics localized at
+- [x] Introduce one readable `RunJob` coordinator in the coding workflow layer for this path.
+- [x] Keep Absurd task, checkpoint, heartbeat, wait, retry, and cancellation mechanics localized at
       the workflow/runtime boundary.
-- [ ] Give repeated Steps explicit stable names based on Message, AgentRun, Revision, Check, or Action
+- [x] Give repeated Steps explicit stable names based on Message, AgentRun, Revision, Check, or Action
       identity; never rely on call occurrence counters.
-- [ ] Use small typed Step results that point back to authoritative Dorf facts.
-- [ ] Centralize the external Action pattern: reserve stable identity, reconcile external truth,
+- [x] Use small typed Step results that point back to authoritative Dorf facts.
+- [x] Centralize the external Action pattern: reserve stable identity, reconcile external truth,
       perform only if missing, perform a final claim check, record the receipt, then complete the Step.
-- [ ] Use the same Action executor for Sandbox, route, and other code-owned external mutations in this
+- [x] Use the same Action executor for Sandbox, route, and other code-owned external mutations in this
       path.
-- [ ] Execute repository setup and declared repository checks as concrete CommandRuns at the coding
+- [x] Execute repository setup and declared repository checks as concrete CommandRuns at the coding
       edge, represented durably as Actions or Checks according to whether lasting mutation is intended.
-- [ ] Keep locks and database transactions short; do not hold them across Incus, Codex, Git, or command
+- [x] Keep locks and database transactions short; do not hold them across Incus, Codex, Git, or command
       execution.
-- [ ] Delete the matching coding phases and orchestration branches from the mixed service layer as the
-      coordinator becomes authoritative.
-- [ ] Delete private phase-transition and duplicate recovery tests replaced by product-path and shared
+- [x] Delete the matching orchestration branches from the mixed service layer as the coordinator
+      becomes authoritative. `workflow_phase` remains a transitional domain guard and handoff projection
+      until Slice 6; there is no second service-layer coordinator interpreting it.
+- [x] Delete private phase-transition and duplicate recovery tests replaced by product-path and shared
       Action-reconciliation tests.
 
 Terminal: the first half of `RunJob` reads in product order, survives interruption through stable
 Steps, and contains no second Dorf-owned program counter for the replaced path.
+
+The workflow currently keeps `workflow_phase` because domain transactions, review, and publication still
+use it as a guard and handoff projection. Slice 6 deletes it after those downstream paths are explicit.
+
+Live proof (2026-08-10): Job `job-b3fc6dbd0069a0574f5a` ran an implementation AgentRun, observed
+Revision `f5efad68821fa0edabe7898fd13d19bb5d06d9e0`, passed `check` and `smoke`, selected no review,
+created exact-Revision PR #102, then completed abandoned-Outcome cleanup with its route revoked and
+Sandbox deleted.
 
 ## Slice 3: Centralize review and repair
 
