@@ -135,30 +135,75 @@ Revision `f5efad68821fa0edabe7898fd13d19bb5d06d9e0`, passed `check` and `smoke`,
 created exact-Revision PR #102, then completed abandoned-Outcome cleanup with its route revoked and
 Sandbox deleted.
 
-## Slice 3: Centralize review and repair
+## Slice 3: Make every agent invocation one AgentRun
+
+An implementation agent, repair agent, review triage agent, and specialist reviewer are not different
+execution systems. They are AgentRuns with different Roles, prompts, Revision inputs, workspaces, and
+capability envelopes.
+
+```text
+AgentRun
+  +-- Role
+  +-- prompt or Message
+  +-- input Revision
+  +-- capability envelope
+  +-- workspace
+  +-- expected output contract
+```
+
+### Slice 3A: Use one AgentRun runner
+
+Goal: make submission, native recovery, waiting, and terminal recording one durable mechanism.
+
+- [ ] Define one small AgentRun execution contract containing only the durable run identity and the
+      concrete harness operations needed to inspect, submit, and wait.
+- [ ] Use one runner for initial implementation, follow-up implementation, repair, review triage, and
+      specialist review.
+- [ ] Keep Role-specific prompt construction outside the runner.
+- [ ] Keep reviewer Sandbox creation, immutable checkout, scoped route creation, and capability
+      validation outside the runner as preparation facts.
+- [ ] Keep review output parsing and finding persistence outside the runner as result interpretation.
+- [ ] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
+- [ ] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
+- [ ] Delete the separate implementation and review submission/recovery state machines.
+- [ ] Replace duplicated native-status and uncertainty tests with one runner recovery contract plus one
+      reviewer ownership/capability test.
+- [ ] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun.
+
+Terminal: implementation and selected review both execute through the same AgentRun runner without
+weakening reviewer isolation or exact-Revision ownership.
+
+### Slice 3B: Put review and repair directly in `RunJob`
 
 Goal: make ReviewPolicy, triage, specialist review, and repair one readable product path.
 
-- [ ] Use one AgentRun runner for implementation, repair, triage, and specialist review.
-- [ ] Use one deterministic readiness calculation.
-- [ ] Keep ReviewPolicy pure and Revision-pinned.
-- [ ] Retain isolated reviewer workspaces and security attestations.
-- [ ] Return material findings to the original implementation Session.
-- [ ] Observe the agent's repair commit as a new Revision and loop through Checks and policy.
-- [ ] Delete duplicated implementation/review native-turn recovery.
-- [ ] Delete redundant review phases, resource projections, and duplicate uncertainty tests.
+- [ ] Replace the coarse review continuation with explicit Revision-scoped Steps in `RunJob`.
+- [ ] Keep `ReviewPolicy(ChangeFacts) -> ReviewPlan` pure and deterministic.
+- [ ] Run bounded triage through the shared AgentRun runner only when policy reports unknown risk.
+- [ ] Run each selected specialist through the shared AgentRun runner in its prepared read-only
+      workspace.
+- [ ] Record findings as Revision-pinned product facts after validating each output contract.
+- [ ] Return material findings to the original implementation Session as a repair AgentRun.
+- [ ] Observe the repair AgentRun's commit as a new Revision, then loop through Checks and policy.
+- [ ] Use one deterministic readiness calculation for no-review, reviewed, and repaired Revisions.
+- [ ] Delete `advanceReview`, the coarse review Step, redundant review phases, and duplicated readiness
+      branches once `RunJob` is authoritative.
+- [ ] Dogfood no-review and selected-review paths; let later dogfood expose further repair edge cases.
 
-Terminal: no-review, known-role review, triage-selected review, and one repair loop all reach the next
-correct product state.
+Terminal: no-review, known-role review, triage-selected review, and one material-finding repair all follow
+the visible `RunJob` story and reach the next correct product state.
 
 ## Slice 4: Simplify Proposal and Outcome
 
 Goal: make an exact-Revision Proposal the direct successor of readiness.
 
 - [ ] Execute publication through named, Revision-scoped Actions and Steps.
+- [ ] Express publication visibly as `push exact Revision -> create or adopt exact PR`.
 - [ ] Reconcile Git and GitHub before repeating an uncertain effect.
 - [ ] Use Absurd retry instead of a Dorf publication retry scheduler.
 - [ ] Keep Proposal and Outcome as Dorf product facts.
+- [ ] Replace publication-specific task attachment fields with the smallest task handle needed for
+      correlation or cancellation.
 - [ ] Delete publication polling, attachment verification, mirrored task state, and custom retry state.
 - [ ] Consolidate duplicate publication adoption tests.
 
@@ -171,11 +216,12 @@ Goal: leave Cleanup as the only independently scheduled, observable lifecycle ta
 
 - [ ] Close admission and request cancellation before cleanup starts destructive reconciliation.
 - [ ] Reconcile unsettled AgentRuns and Actions before deleting resources.
-- [ ] Revoke reviewer and main provider routes.
-- [ ] Delete reviewer and main Sandboxes.
+- [ ] Represent reviewer and main provider routes as one list of owned resources with revoke Actions.
+- [ ] Represent reviewer and main Sandboxes as one list of owned resources with delete Actions.
+- [ ] Use the same external Action executor as the ordinary and publication paths.
 - [ ] Record cleanup attention or completion as a Dorf product fact.
 - [ ] Use stable cleanup Action identities and Absurd retry.
-- [ ] Delete duplicated cleanup preflight, broad Job fencing, and task-state mirrors.
+- [ ] Delete duplicated per-resource cleanup orchestration, broad Job fencing, and task-state mirrors.
 - [ ] Consolidate cleanup tests around partial success and retry.
 
 Terminal: cleanup can fail visibly, retry safely, and eventually prove that all owned resources are
@@ -186,9 +232,18 @@ gone.
 Goal: leave one obvious workflow story with no second durable scheduler in Dorf.
 
 - [ ] Remove `workflow_phase` as sequencing authority.
-- [ ] Remove `RunUntilIdle`, cycle dispositions, cycle results, and synthetic cycle checkpoints.
-- [ ] Derive bounded repair history from product facts where practical.
-- [ ] Remove task attachment and cancellation plumbing made unnecessary by the final task shape.
+- [ ] Derive the next operation from retained product facts: resources, AgentRuns, Revisions, Checks,
+      ReviewPlans, Proposals, Outcomes, and cleanup receipts.
+- [ ] Remove boolean-like repair counters and derive bounded history from repair AgentRuns and findings.
+- [ ] Replace copied run/publication/cleanup task columns with one minimal task-handle shape, or remove
+      them where Absurd identity is sufficient.
+- [ ] Remove duplicated Action outcome prose when immutable Evidence already owns the detail.
+- [ ] Remove review resource Action-ID and state columns that are deterministic or already represented
+      by Actions and receipts.
+- [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B; remove the
+      remaining review-oriented disposition once Slice 3B no longer needs it.
+- [ ] Remove remaining task attachment and cancellation plumbing made unnecessary by the final task
+      shape.
 - [ ] Add one central Job inspection read model.
 - [ ] Keep a small set of end-to-end product-story tests.
 - [ ] Keep pure policy, readiness, identity, and publication decision tests.
