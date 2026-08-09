@@ -222,6 +222,48 @@ abandoned-Outcome cleanup with both routes revoked and both Sandboxes deleted. T
 closed one shared-runner adapter bug: the adopted reviewer controller must remain visible during an
 active native wait.
 
+### Slice 3C: Add compiler-checked SQL queries before further storage changes
+
+Goal: get compiler-like early feedback for PostgreSQL query and schema changes while preserving the
+existing Store, transaction, domain, and behavioral-test boundaries.
+
+`sqlc` is a query compiler for this slice, not an ORM, migration owner, repository layer, or source of
+domain types. The generated package remains a private implementation detail of `postgres.Store`.
+Store methods continue to own transactions, state-transition checks, compare-and-set expectations,
+error translation, and conversion to `spine` types. PostgreSQL integration tests continue to prove
+locking, constraints, concurrency, transaction behavior, and recovery semantics that generation
+cannot establish.
+
+- [ ] Agree on the exact generated-package and query-file boundary before adding the tool.
+- [ ] Pin `sqlc` as repository-owned development tooling and add deterministic generate and stale-code
+      check commands. Do not add a runtime service, cloud dependency, or migration framework.
+- [ ] Generate against the clean Dorf baseline schema using the existing `database/sql` surface.
+- [ ] Keep generated records and parameter structs inside `internal/postgres`; do not expose them from
+      Store methods or replace `spine` domain types with database-generated types.
+- [ ] Prove the approach first on the representative `Job`, `Messages`, `Actions`, `Checks`, and
+      `Evidence` read paths. Delete each replaced inline query, manual `Scan` list, and row loop in the
+      same change; do not retain parallel generated and handwritten implementations of one query.
+- [ ] Prove one representative transactional path using generated queries bound to the Store-owned
+      `*sql.Tx`. Keep transaction begin, commit, rollback, and product invariants in the handwritten
+      Store method.
+- [ ] Record the trial's handwritten production LOC removed, generated LOC added, configuration and
+      conversion LOC added, generation time, and any unsupported SQL or type-mapping friction.
+- [ ] Continue only if the trial removes materially more handwritten query plumbing than its
+      configuration and conversion surface add, and schema/query drift fails during generation.
+- [ ] If the trial succeeds, convert the remaining stable Dorf-owned queries in bounded groups and
+      delete their superseded scanners. Keep schema bootstrap, migrations, Absurd diagnostics, and
+      genuinely unsupported exceptional SQL explicit.
+- [ ] If the trial fails the adoption gate, remove the generated code, configuration, and tool pin so
+      the experiment leaves no permanent second query mechanism.
+- [ ] Run the portable and PostgreSQL integration/fault suites and keep the complete coding workflow
+      runnable throughout the conversion.
+
+Terminal: an incompatible Dorf schema or query change fails deterministically before tests; Store
+methods still express the same transactions and product invariants; no generated database type leaks
+into the domain; the PostgreSQL-backed coding workflow behaves identically; and the measured
+handwritten persistence surface is materially smaller. If those conditions are not met, `sqlc` is
+removed without residue.
+
 ## Slice 4: Simplify Proposal and Outcome
 
 Goal: make an exact-Revision Proposal the direct successor of readiness.
