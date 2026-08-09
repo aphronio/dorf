@@ -552,7 +552,6 @@ func TestMainCleanupSuccessBeforeRecordBarriersRetainPartialInventoryAndSkipSett
 
 func TestCleanupRecoversCompletedTurnAfterRunTaskFailed(t *testing.T) {
 	store, job, delivery := cleanupDelivery(t, AgentRunActive)
-	job.RunTerminalState = "failed"
 	store.jobs[job.ID] = job
 	delivery.AgentRun.NativeTurnID = "turn-existing"
 	store.runs[delivery.AgentRun.ID] = delivery.AgentRun

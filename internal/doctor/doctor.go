@@ -14,6 +14,7 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type Check struct {
@@ -53,8 +54,17 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 		err = fmt.Errorf("found version %s, require 0.5.0", version)
 	}
 	add("absurd", err, "run dorf migrate --absurd-schema /path/to/absurd-0.5.0.sql")
-	var queue bool
-	err = db.QueryRowContext(ctx, `select exists(select 1 from absurd.queues where queue_name='dorf_jobs')`).Scan(&queue)
+	client, clientErr := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName})
+	var queues []string
+	if clientErr == nil {
+		queues, err = client.ListQueues(ctx)
+	} else {
+		err = clientErr
+	}
+	queue := false
+	for _, name := range queues {
+		queue = queue || name == config.QueueName
+	}
 	if err == nil && !queue {
 		err = fmt.Errorf("queue dorf_jobs is missing")
 	}

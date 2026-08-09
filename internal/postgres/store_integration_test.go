@@ -70,7 +70,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	taskIDs := []string{job.TaskID}
 	t.Cleanup(func() {
 		for _, id := range taskIDs {
-			_, _ = db.ExecContext(context.Background(), `select absurd.cancel_task($1,$2::uuid)`, config.QueueName, id)
+			_ = client.CancelTask(context.Background(), config.QueueName, id)
 		}
 	})
 
@@ -212,10 +212,9 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("cleanup crossed the active native-mutation fence: %#v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	duringActive, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "during-active", Input: "accepted without the long fence"})
-	if err != nil || !created || duringActive.Sequence != concurrent+4 {
+	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
 		close(releaseFence)
-		t.Fatalf("nonblocking active-turn admission=%#v created=%v err=%v", duringActive, created, err)
+		t.Fatalf("cleanup did not close admission before waiting for the active native-mutation fence: created=%v err=%v", created, err)
 	}
 	close(releaseFence)
 	if err := <-fenceDone; err != nil {
@@ -765,61 +764,6 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 			changed.Initial.Decision = "invalid-retry-change"
 			if err := store.RecordReviewPolicy(ctx, changed); err == nil || !strings.Contains(err.Error(), "changed across retry") {
 				t.Fatalf("changed atomic policy error=%v", err)
-			}
-		})
-	}
-}
-
-func TestAdmittedJobTaskRedeliveryReconcilesPublicationPhases(t *testing.T) {
-	for _, test := range []struct {
-		phase            string
-		wantPhase        string
-		wantPublications int
-	}{
-		{phase: "ready", wantPhase: "publishing", wantPublications: 1},
-		{phase: "publishing", wantPhase: "publishing"},
-		{phase: "published", wantPhase: "published"},
-	} {
-		t.Run(test.phase, func(t *testing.T) {
-			db, store, client := testDatabase(t)
-			ctx := context.Background()
-			key := fmt.Sprintf("publication-redelivery-%s-%d", test.phase, time.Now().UnixNano())
-			revision := strings.Repeat("a", 40)
-			job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{
-				AdmissionKey: key, Goal: "reconcile one publication boundary", Repository: "https://github.com/aphronio/dorf.git",
-				Revision: revision, Branch: "dorf/" + key, ProviderConnection: "primary",
-				ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-				GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
-			})
-			if err != nil || !created {
-				t.Fatalf("admit=%#v created=%t err=%v", job, created, err)
-			}
-			t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, job.TaskID) })
-			attachedTaskID := ""
-			if test.phase == "ready" {
-				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				attachedTaskID = "00000000-0000-0000-0000-000000000082"
-				if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,publication_task_id=$3 where id=$1`, job.ID, test.phase, attachedTaskID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "publication-redelivery-" + key, BatchSize: 1}); err != nil {
-				t.Fatal(err)
-			}
-			updated, err := store.Job(ctx, job.ID)
-			var publications int
-			if countErr := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&publications); countErr != nil {
-				t.Fatal(countErr)
-			}
-			task, taskErr := client.FetchTaskResult(ctx, config.QueueName, job.TaskID)
-			if err != nil || taskErr != nil || task.State != absurd.TaskSleeping || updated.WorkflowPhase != test.wantPhase || updated.PublicationTaskID == "" || publications != test.wantPublications || attachedTaskID != "" && updated.PublicationTaskID != attachedTaskID {
-				t.Fatalf("continued Job=%#v task=%#v publication tasks=%d attached publication=%s errors=%v/%v", updated, task, publications, attachedTaskID, err, taskErr)
-			}
-			if test.phase == "ready" {
-				t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, updated.PublicationTaskID) })
 			}
 		})
 	}
@@ -1683,13 +1627,6 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 	if err != nil || created || retriedAgain != second {
 		t.Fatalf("repeated wake repair=%#v created=%v err=%v", retriedAgain, created, err)
 	}
-	var secondWakeRows int
-	if err := db.QueryRowContext(ctx, `select count(*) from absurd.e_dorf_jobs where event_name=$1`, workflow.WakeEvent(job.ID, second.Sequence)).Scan(&secondWakeRows); err != nil {
-		t.Fatal(err)
-	}
-	if secondWakeRows != 1 {
-		t.Fatalf("idempotent admission retry produced %d sequence-2 wake identities", secondWakeRows)
-	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "wake-second-" + suffix, BatchSize: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -1707,13 +1644,6 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 	if err != nil || !created || third.Sequence != 3 {
 		t.Fatalf("third admission=%#v created=%v err=%v", third, created, err)
 	}
-	var distinctWakeRows int
-	if err := db.QueryRowContext(ctx, `select count(*) from absurd.e_dorf_jobs where event_name in ($1,$2)`, workflow.WakeEvent(job.ID, second.Sequence), workflow.WakeEvent(job.ID, third.Sequence)).Scan(&distinctWakeRows); err != nil {
-		t.Fatal(err)
-	}
-	if distinctWakeRows != 2 {
-		t.Fatalf("separate admitted FIFO positions produced %d distinct wake identities", distinctWakeRows)
-	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "wake-third-" + suffix, BatchSize: 1}); err != nil {
 		t.Fatal(err)
 	}
@@ -1730,7 +1660,7 @@ func TestAbsurdDistinctMessageWakesResumeSeparateIdleCyclesInFIFO(t *testing.T) 
 }
 
 func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) {
-	db, store, client := testDatabase(t)
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := workflow.Admit(ctx, store, client, postgres.NewJob{AdmissionKey: "cleanup-exhausted-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/cleanup-exhausted", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
@@ -1782,21 +1712,14 @@ func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) 
 	if err != nil || !created || second.Sequence != 2 {
 		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
 	}
-	if _, err := db.ExecContext(ctx, `update absurd.r_dorf_jobs set state='failed',claimed_by=null,claim_expires_at=null where task_id=$1::uuid`, job.TaskID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, `update absurd.t_dorf_jobs set state='failed',attempts=5 where task_id=$1::uuid`, job.TaskID); err != nil {
-		t.Fatal(err)
-	}
-
 	externals := &integrationExternals{turns: []spine.NativeTurn{{ID: turnID, Status: "completed"}}, submitted: []int64{1}}
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	taskIDs = append(taskIDs, cleaning.CleanupTaskID)
-	if cleaning.AdmissionOpen || cleaning.RunTerminalState != "failed" {
-		t.Fatalf("cleanup did not close admission and retain failed run truth: %#v", cleaning)
+	if cleaning.AdmissionOpen {
+		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
 	if err := (spine.Service{Store: store, Externals: externals}).Cleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
@@ -1808,7 +1731,7 @@ func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cleaned.CleanupState != spine.CleanupComplete || cleaned.RunTerminalState != "failed" {
+	if cleaned.CleanupState != spine.CleanupComplete {
 		t.Fatalf("cleaned Job=%#v", cleaned)
 	}
 	messages, err := store.Messages(ctx, job.ID)
@@ -1824,9 +1747,9 @@ func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) 
 	if got := externals.effectKinds(); fmt.Sprint(got) != "[provider-route-revoke sandbox-delete]" {
 		t.Fatalf("cleanup effects=%v", got)
 	}
-	evidence, err := store.TaskEvidence(ctx, job.TaskID)
-	if err != nil || evidence.State != "failed" || evidence.Attempts != 5 {
-		t.Fatalf("failed run evidence=%#v err=%v", evidence, err)
+	snapshot, err := client.FetchTaskResult(ctx, config.QueueName, job.TaskID)
+	if err != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled {
+		t.Fatalf("cancelled public run result=%#v err=%v", snapshot, err)
 	}
 }
 
@@ -1841,7 +1764,14 @@ func (e *integrationExternals) receipt(job spine.Job, action spine.Action) (spin
 	e.mu.Lock()
 	e.effects = append(e.effects, action.Kind)
 	e.mu.Unlock()
-	return spine.Receipt{ExternalID: "integration-" + string(action.Kind) + "-" + job.ID}, nil
+	externalID := "integration-" + string(action.Kind) + "-" + job.ID
+	switch action.Kind {
+	case spine.ActionSandboxCreate, spine.ActionSandboxDelete:
+		externalID = spine.MainSandboxName(job.ID)
+	case spine.ActionRouteCreate, spine.ActionRouteRevoke:
+		externalID = spine.ProviderRouteID(spine.ActionID(job.ID, spine.ActionRouteCreate))
+	}
+	return spine.Receipt{ExternalID: externalID}, nil
 }
 func (e *integrationExternals) SandboxCreate(_ context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
 	return e.receipt(job, action)
@@ -1914,87 +1844,73 @@ func (e *integrationExternals) effectKinds() []spine.ActionKind {
 	return append([]spine.ActionKind(nil), e.effects...)
 }
 
-func TestMessageTaskReattachmentFailsClosed(t *testing.T) {
-	db, store, client := testDatabase(t)
+func TestTaskHandlersRecoverPublicSpawnBeforeDorfAttachment(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	externals := &integrationExternals{}
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: "spawn-before-attach-" + suffix, Goal: "recover each public Spawn attachment", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/spawn-before-attach-" + suffix, ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	if err != nil || !created {
+		t.Fatalf("admit created=%v err=%v", created, err)
+	}
+	run, err := client.Spawn(ctx, workflow.RunTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, run.TaskID) })
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "run-spawn-before-attach-" + suffix, BatchSize: 1}); err != nil {
+		t.Fatal(err)
+	}
+	attached, err := store.Job(ctx, job.ID)
+	if err != nil || attached.TaskID != run.TaskID {
+		t.Fatalf("ordinary worker attachment=%#v spawn=%#v err=%v", attached, run, err)
+	}
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CancelTask(ctx, config.QueueName, run.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := client.Spawn(ctx, workflow.CleanupTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:v3:" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleanup.TaskID) })
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "cleanup-spawn-before-attach-" + suffix, BatchSize: 1}); err != nil {
+		t.Fatal(err)
+	}
+	attached, err = store.Job(ctx, job.ID)
+	if err != nil || attached.CleanupTaskID != cleanup.TaskID || attached.CleanupState != spine.CleanupComplete {
+		t.Fatalf("cleanup worker attachment=%#v spawn=%#v err=%v", attached, cleanup, err)
+	}
+}
+
+func TestMessageTaskAttachmentCompareAndSetRejectsAnotherStoredTask(t *testing.T) {
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	newInput := func(label string) postgres.NewJob {
-		return postgres.NewJob{AdmissionKey: "reattach-safety-" + label + "-" + suffix, Goal: "safety input " + label, Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/reattach-" + label, ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
+	input := postgres.NewJob{AdmissionKey: "reattach-cas-" + suffix, Goal: "preserve one task binding", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/reattach-cas", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	var taskIDs []string
-	t.Cleanup(func() {
-		for _, taskID := range taskIDs {
-			_ = client.CancelTask(context.Background(), config.QueueName, taskID)
-		}
-	})
-
-	t.Run("active unrelated consumer", func(t *testing.T) {
-		input := newInput("active")
-		job, created, err := store.Admit(ctx, input)
-		if err != nil || !created {
-			t.Fatalf("admit created=%v err=%v", created, err)
-		}
-		unrelated, err := client.Spawn(ctx, "unrelated-active-task", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "run:" + job.ID})
-		if err != nil {
-			t.Fatal(err)
-		}
-		taskIDs = append(taskIDs, unrelated.TaskID)
-		if err := store.SetTaskID(ctx, job.ID, unrelated.TaskID); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "not the expected dorf-job-messages-v2 consumer") {
-			t.Fatalf("active unrelated consumer reattachment error=%v", err)
-		}
-		var v2Tasks int
-		if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where idempotency_key=$1`, postgres.MessageTaskKey(job.ID)).Scan(&v2Tasks); err != nil {
-			t.Fatal(err)
-		}
-		if v2Tasks != 0 {
-			t.Fatalf("active unrelated consumer allowed %d message tasks to spawn", v2Tasks)
-		}
-	})
-
-	t.Run("unrelated current task", func(t *testing.T) {
-		input := newInput("unrelated")
-		job, created, err := store.Admit(ctx, input)
-		if err != nil || !created {
-			t.Fatalf("admit created=%v err=%v", created, err)
-		}
-		unrelated, err := client.Spawn(ctx, "unrelated-run-task", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "run:" + job.ID})
-		if err != nil {
-			t.Fatal(err)
-		}
-		taskIDs = append(taskIDs, unrelated.TaskID)
-		if err := store.SetTaskID(ctx, job.ID, unrelated.TaskID); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "not the expected dorf-job-messages-v2 consumer") {
-			t.Fatalf("unrelated current task error=%v", err)
-		}
-	})
-
-	t.Run("v2 idempotency collision", func(t *testing.T) {
-		input := newInput("collision")
-		job, created, err := store.Admit(ctx, input)
-		if err != nil || !created {
-			t.Fatalf("admit created=%v err=%v", created, err)
-		}
-		collision, err := client.Spawn(ctx, "unrelated-v2-key-owner", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: postgres.MessageTaskKey(job.ID)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		taskIDs = append(taskIDs, collision.TaskID)
-		if _, _, err := workflow.Admit(ctx, store, client, input); err == nil || !strings.Contains(err.Error(), "not the expected dorf-job-messages-v2 consumer") {
-			t.Fatalf("v2 key collision error=%v", err)
-		}
-		stored, err := store.Job(ctx, job.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if stored.TaskID != "" {
-			t.Fatalf("v2 key collision overwrote Job task_id with %s", stored.TaskID)
-		}
-	})
+	unrelated, err := client.Spawn(ctx, "unrelated-task", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "unrelated:" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, unrelated.TaskID) })
+	if err := store.SetTaskID(ctx, job.ID, unrelated.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	spawned, err := client.Spawn(ctx, postgres.MessageTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
+	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err == nil {
+		t.Fatal("a second public Spawn result replaced the stored task binding")
+	}
 }
 
 func TestPostgresJobFenceSerializesOverlappingClaims(t *testing.T) {

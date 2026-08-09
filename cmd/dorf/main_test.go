@@ -11,6 +11,7 @@ import (
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 func TestPublicationGrammarParsesJobBeforeFlags(t *testing.T) {
@@ -87,38 +88,38 @@ func TestInspectionReadinessDoesNotTrustPersistedReadyPhaseWithoutEvidence(t *te
 
 func TestInspectionDistinguishesAutomaticContinuationFromExternalAuthority(t *testing.T) {
 	job := spine.Job{WorkflowPhase: "reviewing", CleanupState: spine.CleanupPending}
-	run := postgres.TaskEvidence{State: "sleeping"}
-	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{}); got.Mode != "self-advancing" || got.Actor != "admitted Dorf worker" {
+	run := taskResultView{State: absurd.TaskSleeping}
+	if got := continuationFor(job, nil, run, taskResultView{}, taskResultView{}); got.Mode != "self-advancing" || got.Actor != "admitted Dorf worker" {
 		t.Fatalf("review continuation=%#v", got)
 	}
 	job.WorkflowPhase, job.PublicationTaskID = "published", "publication-task"
-	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{}); got.Mode != "external-authority" || !strings.Contains(got.Detail, "accepted, rejected, or explicitly abandoned") {
+	if got := continuationFor(job, nil, run, taskResultView{}, taskResultView{}); got.Mode != "external-authority" || !strings.Contains(got.Detail, "accepted, rejected, or explicitly abandoned") {
 		t.Fatalf("published continuation=%#v", got)
 	}
 	outcome := &spine.JobOutcome{Kind: spine.OutcomeRejected}
 	job.CleanupState, job.CleanupTaskID = spine.CleanupScheduled, "cleanup-task"
-	if got := continuationFor(job, outcome, run, nil, postgres.TaskEvidence{State: "pending"}); got.Mode != "automatic-cleanup" || got.Actor != "Dorf cleanup task" {
+	if got := continuationFor(job, outcome, run, taskResultView{}, taskResultView{State: absurd.TaskPending}); got.Mode != "automatic-cleanup" || got.Actor != "Dorf cleanup task" {
 		t.Fatalf("outcome continuation=%#v", got)
 	}
 	job.CleanupState = spine.CleanupComplete
-	if got := continuationFor(job, outcome, run, nil, postgres.TaskEvidence{State: "completed"}); got.Mode != "terminal" {
+	if got := continuationFor(job, outcome, run, taskResultView{}, taskResultView{State: absurd.TaskCompleted}); got.Mode != "terminal" {
 		t.Fatalf("clean continuation=%#v", got)
 	}
 	job.WorkflowPhase = "publication-blocked"
 	want := continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
-	if got := continuationFor(job, nil, run, nil, postgres.TaskEvidence{State: "completed"}); got != want {
+	if got := continuationFor(job, nil, run, taskResultView{}, taskResultView{State: absurd.TaskCompleted}); got != want {
 		t.Fatalf("clean no-outcome continuation=%#v want=%#v", got, want)
 	}
 }
 
 func TestInspectionExposesFailedDurableContinuationAsAttention(t *testing.T) {
 	job := spine.Job{WorkflowPhase: "reviewing", CleanupState: spine.CleanupPending, AdmissionOpen: true}
-	if got := continuationFor(job, nil, postgres.TaskEvidence{State: "failed"}, nil, postgres.TaskEvidence{}); got.Mode != "attention" || !strings.Contains(got.Detail, "Job task is terminal") {
+	if got := continuationFor(job, nil, taskResultView{State: absurd.TaskFailed}, taskResultView{}, taskResultView{}); got.Mode != "attention" || !strings.Contains(got.Detail, "Job task is terminal") {
 		t.Fatalf("failed Job continuation=%#v", got)
 	}
 	job.WorkflowPhase = "publishing"
-	publication := postgres.PublicationTaskEvidence{Current: true, State: "failed"}
-	if got := continuationFor(job, nil, postgres.TaskEvidence{State: "sleeping"}, []postgres.PublicationTaskEvidence{publication}, postgres.TaskEvidence{}); got.Mode != "attention" || !strings.Contains(got.Detail, "publication task exhausted") {
+	publication := taskResultView{State: absurd.TaskFailed}
+	if got := continuationFor(job, nil, taskResultView{State: absurd.TaskSleeping}, publication, taskResultView{}); got.Mode != "attention" || !strings.Contains(got.Detail, "publication task exhausted") {
 		t.Fatalf("failed publication continuation=%#v", got)
 	}
 }

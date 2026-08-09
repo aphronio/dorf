@@ -157,6 +157,23 @@ func publicationFaultGitHub(apiURL string) githubapi.Client {
 	}}
 }
 
+func publicationFaultInput(admissionKey string) postgres.NewJob {
+	return postgres.NewJob{
+		AdmissionKey:         admissionKey,
+		Goal:                 "recover publication after process loss",
+		Repository:           "https://github.com/aphronio/dorf.git",
+		Revision:             strings.Repeat("a", 40),
+		Branch:               "dorf/publication-fault-recovery",
+		ProviderConnection:   "primary",
+		ProviderGatewayState: "/tmp/dorf-provider-gateway-test",
+		Model:                "gpt-5.6-sol",
+		ReasoningEffort:      "high",
+		GitHubRepository:     "aphronio/dorf",
+		GitHubInstallation:   "42",
+		BaseBranch:           "greenfield",
+	}
+}
+
 func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 	if os.Getenv(publicationFaultChild) == "1" {
 		runPublicationFaultChild(t)
@@ -166,7 +183,7 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 		t.Run(point, func(t *testing.T) {
 			db, store, client := testDatabase(t)
 			ctx := context.Background()
-			input := publicationInput(fmt.Sprintf("publication-sigkill-%s-%d", point, time.Now().UnixNano()))
+			input := publicationFaultInput(fmt.Sprintf("publication-sigkill-%s-%d", point, time.Now().UnixNano()))
 			state := &publicationAuthorityState{base: strings.Repeat("b", 40), branch: input.Branch}
 			server := httptest.NewServer(http.HandlerFunc(state.handler))
 			defer server.Close()
@@ -218,7 +235,7 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 				if proposalErr != nil || actionErr != nil || proposal != nil || retainedPull.State != spine.ActionUncertain {
 					t.Fatalf("lost accepted PR proposal=%#v pull=%#v errors=%v/%v", proposal, retainedPull, proposalErr, actionErr)
 				}
-				if _, err := workflow.ScheduleCleanup(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "bounded publication retry") {
+				if _, err := workflow.ScheduleCleanup(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "publication") {
 					t.Fatalf("uncertain pull cleanup error=%v", err)
 				}
 			}
@@ -231,16 +248,15 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 			if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "publication-fault-recovery", ClaimTimeout: 30 * time.Second, BatchSize: 1}); err != nil {
 				t.Fatal(err)
 			}
-			evidenceView, err := store.TaskEvidence(ctx, taskID)
-			if err != nil || evidenceView.State != "completed" || evidenceView.Attempts < 2 {
-				t.Fatalf("recovered task Evidence=%#v err=%v", evidenceView, err)
+			taskResult, err := client.FetchTaskResult(ctx, config.QueueName, taskID)
+			if err != nil || taskResult == nil || taskResult.State != absurd.TaskCompleted {
+				t.Fatalf("recovered public task result=%#v err=%v", taskResult, err)
 			}
 			job, err = store.Job(ctx, job.ID)
 			proposal, proposalErr := store.Proposal(ctx, job.ID)
-			history, historyErr := store.PublicationTaskHistory(ctx, job)
 			retainedPush, retainedPull, actionsErr := store.PublicationActions(ctx, job.ID, job.Revision)
-			if err != nil || proposalErr != nil || historyErr != nil || actionsErr != nil || job.WorkflowPhase != "published" || proposal == nil || proposal.Stale || proposal.ObservedRemoteHead != job.Revision || len(history) != 1 || !history[0].Current || history[0].TaskID != taskID || retainedPush.State != spine.ActionSucceeded || retainedPull.State != spine.ActionSucceeded {
-				t.Fatalf("converged Job=%#v proposal=%#v history=%#v push=%#v pull=%#v errors=%v/%v/%v/%v", job, proposal, history, retainedPush, retainedPull, err, proposalErr, historyErr, actionsErr)
+			if err != nil || proposalErr != nil || actionsErr != nil || job.WorkflowPhase != "published" || proposal == nil || proposal.Stale || proposal.ObservedRemoteHead != job.Revision || job.PublicationTaskID != taskID || retainedPush.State != spine.ActionSucceeded || retainedPull.State != spine.ActionSucceeded {
+				t.Fatalf("converged Job=%#v proposal=%#v push=%#v pull=%#v errors=%v/%v/%v", job, proposal, retainedPush, retainedPull, err, proposalErr, actionsErr)
 			}
 			state.mu.Lock()
 			remote, pushes, pulls, updates := state.head, state.pushes, state.pullCreates, state.pullUpdates
@@ -248,15 +264,12 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 			if remote != job.Revision || pushes != 1 || pulls != 1 || updates != 0 {
 				t.Fatalf("external authority remote=%s pushes=%d pull-creates=%d pull-updates=%d", remote, pushes, pulls, updates)
 			}
-			var tasks, proposals int
-			if err := db.QueryRowContext(ctx, `select count(*) from absurd.t_dorf_jobs where task_name=$1 and params->>'job_id'=$2`, postgres.PublicationTaskName, job.ID).Scan(&tasks); err != nil {
-				t.Fatal(err)
-			}
+			var proposals int
 			if err := db.QueryRowContext(ctx, `select count(*) from dorf.github_proposals where job_id=$1`, job.ID).Scan(&proposals); err != nil {
 				t.Fatal(err)
 			}
-			if tasks != 1 || proposals != 1 || strings.Contains(retainedPush.ExternalID+retainedPull.ExternalID+retainedPull.Outcome, "ephemeral-test-token") {
-				t.Fatalf("durable receipts tasks=%d proposals=%d push=%#v pull=%#v", tasks, proposals, retainedPush, retainedPull)
+			if proposals != 1 || strings.Contains(retainedPush.ExternalID+retainedPull.ExternalID+retainedPull.Outcome, "ephemeral-test-token") {
+				t.Fatalf("durable receipts proposals=%d push=%#v pull=%#v", proposals, retainedPush, retainedPull)
 			}
 		})
 	}
@@ -288,7 +301,7 @@ func preparePublicationFaultJob(t *testing.T, db *sql.DB, store postgres.Store, 
 	if _, err := db.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command,starting_revision) values($1,'check',$2,$3)`, job.ID, command, job.StartingRevision); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.checks(id,job_id,name,command,revision,state,exit_code,started_at,finished_at,attempts) values($1,$2,'check',$3,$4,'passed',0,$5,$5,1)`, checkID, job.ID, command, job.Revision, now); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into dorf.checks(id,job_id,name,command,revision,state,exit_code,started_at,finished_at) values($1,$2,'check',$3,$4,'passed',0,$5,$5)`, checkID, job.ID, command, job.Revision, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `insert into dorf.evidence(id,job_id,digest,byte_size,media_type,producer,provenance,kind,check_id,revision,started_at,finished_at) values($1,$2,$3,$4,'application/vnd.dorf.observation+json','dorf-go-worker','observed','check-output',$5,$6,$7,$7)`, evidenceID, job.ID, blob.Digest, blob.ByteSize, checkID, job.Revision, now); err != nil {

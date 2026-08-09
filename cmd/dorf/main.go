@@ -94,7 +94,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
-		return inspect(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
+		return inspect(ctx, store, client, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
@@ -485,7 +485,7 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	return err
 }
 
-func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
@@ -542,20 +542,20 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	if err != nil {
 		return err
 	}
-	runEvidence, err := store.TaskEvidence(ctx, job.TaskID)
+	runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
 	if err != nil {
 		return err
 	}
-	cleanupEvidence, err := store.TaskEvidence(ctx, job.CleanupTaskID)
+	cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
 	if err != nil {
 		return err
 	}
-	publicationEvidence, err := store.PublicationTaskHistory(ctx, job)
+	publicationEvidence, err := fetchTaskResult(ctx, client, job.PublicationTaskID)
 	if err != nil {
 		return err
 	}
 	continuation := continuationFor(job, outcome, runEvidence, publicationEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publications": publicationEvidence, "absurd_cleanup": cleanupEvidence, "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publication": publicationEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
@@ -576,20 +576,14 @@ func inspect(ctx context.Context, store postgres.Store, evidenceStore evidence.S
 	} else {
 		fmt.Fprintf(stdout, "  outcome: %s PR=#%d state=%s merged=%t proposed=%s observed-head=%s merge=%s observed-at=%s\n", outcome.Kind, outcome.Number, outcome.ObservedState, outcome.ObservedMerged, outcome.ProposedRevision, outcome.ObservedHead, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
-	fmt.Fprintf(stdout, "  Absurd run: %s state=%s attempts=%d checkpoints=%d live-claims=%d\n", empty(runEvidence.TaskID), empty(runEvidence.State), runEvidence.Attempts, runEvidence.Checkpoints, runEvidence.LiveClaims)
-	if job.RunTerminalState != "" {
-		if job.RunTerminalState == "cancelled" && !job.AdmissionOpen {
-			fmt.Fprintln(stdout, "  delivery task: cancelled after admission closed for cleanup")
-		} else {
-			fmt.Fprintf(stdout, "  durable run terminal: %s (delivery infrastructure stopped; cleanup remains independent)\n", job.RunTerminalState)
-		}
-	}
+	fmt.Fprintf(stdout, "  Absurd run: %s state=%s\n", empty(runEvidence.TaskID), empty(string(runEvidence.State)))
 	if cleanupEvidence.TaskID != "" {
-		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s attempts=%d checkpoints=%d live-claims=%d\n", cleanupEvidence.TaskID, cleanupEvidence.State, cleanupEvidence.Attempts, cleanupEvidence.Checkpoints, cleanupEvidence.LiveClaims)
+		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s\n", cleanupEvidence.TaskID, cleanupEvidence.State)
 	}
-	for _, task := range publicationEvidence {
-		fmt.Fprintf(stdout, "  Absurd publication: %s key=%s generation=%d state=%s attempts=%d checkpoints=%d live-claims=%d current=%t\n", task.TaskID, task.IdempotencyKey, task.Attempt, task.State, task.Attempts, task.Checkpoints, task.LiveClaims, task.Current)
+	if publicationEvidence.TaskID != "" {
+		fmt.Fprintf(stdout, "  Absurd publication: %s state=%s\n", publicationEvidence.TaskID, publicationEvidence.State)
 	}
+	fmt.Fprintln(stdout, "  Absurd history: use absurdctl dump-task --task-id=<task-id>")
 	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
 	for _, message := range messages {
 		description := describeMessage(message, messages)
@@ -683,7 +677,6 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore ev
 func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, service spine.Service, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	now := set.Bool("now", false, "reconcile the exact route and Sandbox synchronously after durable scheduling")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -694,16 +687,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	if err != nil {
 		return err
 	}
-	if *now && job.CleanupState != spine.CleanupComplete {
-		if err := service.Cleanup(ctx, job.ID); err != nil {
-			return fmt.Errorf("synchronous exact cleanup: %w", err)
-		}
-		job, err = store.Job(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled, "synchronous": *now})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
 }
 
 func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
@@ -730,11 +714,11 @@ func publicationCommand(ctx context.Context, store postgres.Store, client *absur
 	if job.WorkflowPhase != "publishing" && job.WorkflowPhase != "publication-blocked" {
 		return fmt.Errorf("publication retry requires an already-scheduled or visibly blocked publication, not workflow phase %s", job.WorkflowPhase)
 	}
-	params, taskID, created, err := publication.Schedule(ctx, store, client, barrier, jobID, *revision)
+	params, retried, err := publication.Retry(ctx, store, client, jobID, *revision)
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "attempt": params.Attempt, "task_id": taskID, "created": created, "scheduled": true})
+	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "task_id": retried.TaskID, "run_id": retried.RunID, "attempt": retried.Attempt, "created": retried.Created, "scheduled": true})
 }
 
 func outcomeCommand(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
@@ -820,7 +804,28 @@ type continuationStatus struct {
 	Detail string `json:"detail"`
 }
 
-func continuationFor(job spine.Job, outcome *spine.JobOutcome, run postgres.TaskEvidence, publications []postgres.PublicationTaskEvidence, cleanup postgres.TaskEvidence) continuationStatus {
+type taskResultView struct {
+	TaskID  string                 `json:"task_id,omitempty"`
+	State   absurd.TaskResultState `json:"state,omitempty"`
+	Result  json.RawMessage        `json:"result,omitempty"`
+	Failure json.RawMessage        `json:"failure,omitempty"`
+}
+
+func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) (taskResultView, error) {
+	if taskID == "" {
+		return taskResultView{}, nil
+	}
+	snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), taskID)
+	if err != nil {
+		return taskResultView{}, err
+	}
+	if snapshot == nil {
+		return taskResultView{TaskID: taskID, State: "missing"}, nil
+	}
+	return taskResultView{TaskID: taskID, State: snapshot.State, Result: snapshot.Result, Failure: snapshot.Failure}, nil
+}
+
+func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, publication, cleanup taskResultView) continuationStatus {
 	if job.CleanupState == spine.CleanupComplete {
 		if outcome == nil {
 			return continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
@@ -848,10 +853,8 @@ func continuationFor(job spine.Job, outcome *spine.JobOutcome, run postgres.Task
 	case "blocked", "publication-blocked":
 		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "durable attention must be resolved; no orchestration agent is silently advancing this Job"}
 	}
-	for _, task := range publications {
-		if task.Current && (task.State == "failed" || task.State == "cancelled") {
-			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the exact publication task exhausted or was cancelled; repair the cause and use the bounded publication retry"}
-		}
+	if publication.State == absurd.TaskFailed || publication.State == absurd.TaskCancelled {
+		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the exact publication task exhausted or was cancelled; repair the cause and use Absurd's in-place publication retry"}
 	}
 	if job.AdmissionOpen && (run.State == "failed" || run.State == "cancelled" || run.State == "missing") {
 		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the admitted Job task is terminal before the workflow reached its authority boundary"}

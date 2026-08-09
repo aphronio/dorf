@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -13,12 +12,12 @@ import (
 )
 
 const (
-	PublicationTaskName        = "dorf-github-publication-v1"
+	PublicationTaskName        = "dorf-github-publication-v2"
 	PublicationTaskMaxAttempts = 5
 )
 
-func PublicationTaskKey(jobID, revision string, attempt int) string {
-	return fmt.Sprintf("publication:%s:%s:%d", jobID, revision, attempt)
+func PublicationTaskKey(jobID, revision string) string {
+	return fmt.Sprintf("publication:v2:%s:%s", jobID, revision)
 }
 
 func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (spine.Job, spine.Action, spine.Action, bool, error) {
@@ -28,12 +27,11 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	}
 	defer tx.Rollback()
 	var current, phase, repository, installation, base, head, clone, taskID string
-	var attempt int
 	var admissionOpen bool
 	var cleanupState spine.CleanupState
 	alreadyPublished := false
 	spawn := false
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,''),branch,repository,publication_attempt,coalesce(publication_task_id,''),admission_open,cleanup_state from dorf.jobs where id=$1 for update`, jobID).Scan(&current, &phase, &repository, &installation, &base, &head, &clone, &attempt, &taskID, &admissionOpen, &cleanupState); err != nil {
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,''),branch,repository,coalesce(publication_task_id,''),admission_open,cleanup_state from dorf.jobs where id=$1 for update`, jobID).Scan(&current, &phase, &repository, &installation, &base, &head, &clone, &taskID, &admissionOpen, &cleanupState); err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
 	if !admissionOpen || cleanupState != spine.CleanupPending {
@@ -49,25 +47,10 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	case "ready":
 		spawn = true
 	case "publishing":
-		if taskID == "" {
-			// BeginPublication commits before Absurd Spawn/Attach. An empty
-			// attachment is the recoverable same-attempt scheduling window;
-			// the deterministic Absurd key decides create versus adopt.
-			spawn = true
-			break
-		}
-		task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
-		if err != nil {
-			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("inspect attached publication task %s: %w", taskID, err)
-		}
-		exhausted, err := validatePublicationTask(jobID, revision, attempt, task)
-		if err != nil {
-			return spine.Job{}, spine.Action{}, spine.Action{}, false, err
-		}
-		if exhausted {
-			attempt++
-			spawn = true
-		}
+		// An empty attachment is the recoverable window after the Dorf
+		// publication intent committed and before the public Absurd Spawn
+		// result was attached. The stable key decides create versus adopt.
+		spawn = taskID == ""
 	case "published":
 		var proposed string
 		err := tx.QueryRowContext(ctx, `select proposed_revision from dorf.github_proposals where job_id=$1`, jobID).Scan(&proposed)
@@ -75,19 +58,20 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 			alreadyPublished = true
 			// The deterministic task may have won the Job fence and completed
 			// after Spawn but before its ID was attached. Re-adopt that same
-			// attempt key without reopening publication.
+			// stable task without reopening publication.
 			spawn = taskID == ""
 		} else {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("published Job is not stale at a later exact ready Revision")
 		}
 	case "publication-blocked":
-		attempt++
-		spawn = true
+		// An attached failed task is retried only through Absurd RetryTask.
+		// The empty case is still the same Spawn/Attach recovery window.
+		spawn = taskID == ""
 	default:
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", phase)
 	}
 	if spawn && !alreadyPublished {
-		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='publishing',workflow_attention=null,publication_attempt=$2,publication_task_id=null where id=$1`, jobID, attempt); err != nil {
+		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=case when workflow_phase='ready' then 'publishing' else workflow_phase end,workflow_attention=case when workflow_phase='ready' then null else workflow_attention end where id=$1`, jobID); err != nil {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 		}
 	}
@@ -104,87 +88,6 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	}
 	job, err := s.Job(ctx, jobID)
 	return job, push, pull, spawn, err
-}
-
-const publicationTaskQuery = `select t.task_id::text,t.task_name,t.state,
-	coalesce(t.params->>'job_id',''),coalesce(t.params->>'revision',''),coalesce(t.params->>'attempt',''),
-	coalesce(t.idempotency_key,''),coalesce(t.max_attempts,0),t.attempts,
-	coalesce(r.state,''),coalesce(r.attempt,0)
-	from absurd.t_dorf_jobs t
-	left join absurd.r_dorf_jobs r on r.run_id=t.last_attempt_run and r.task_id=t.task_id
-	where t.task_id=$1::uuid`
-
-type publicationTaskRecord struct {
-	ID, Name, State, JobID, Revision, Attempt, IdempotencyKey string
-	MaxAttempts, Attempts, LastRunAttempt                     int
-	LastRunState                                              string
-}
-
-func scanPublicationTask(row rowScanner) (publicationTaskRecord, error) {
-	var task publicationTaskRecord
-	err := row.Scan(&task.ID, &task.Name, &task.State, &task.JobID, &task.Revision, &task.Attempt, &task.IdempotencyKey, &task.MaxAttempts, &task.Attempts, &task.LastRunState, &task.LastRunAttempt)
-	return task, err
-}
-
-func validatePublicationTask(jobID, revision string, attempt int, task publicationTaskRecord) (bool, error) {
-	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
-		return false, err
-	}
-	switch task.State {
-	case "pending", "running", "sleeping":
-		if task.Attempts < 1 || task.Attempts > PublicationTaskMaxAttempts || task.LastRunState != task.State || task.LastRunAttempt != task.Attempts {
-			return false, fmt.Errorf("attached publication task %s has ambiguous active authority: task=%s/%d last-run=%s/%d", task.ID, task.State, task.Attempts, task.LastRunState, task.LastRunAttempt)
-		}
-		return false, nil
-	case "failed":
-		if task.Attempts != PublicationTaskMaxAttempts || task.LastRunState != "failed" || task.LastRunAttempt != PublicationTaskMaxAttempts {
-			return false, fmt.Errorf("attached publication task %s has ambiguous failed authority: attempts=%d/%d last-run=%s/%d", task.ID, task.Attempts, task.MaxAttempts, task.LastRunState, task.LastRunAttempt)
-		}
-		return true, nil
-	default:
-		return false, fmt.Errorf("attached publication task %s is terminal %s while the Job remains publishing; refusing to create another task", task.ID, task.State)
-	}
-}
-
-func validatePublicationTaskIdentity(jobID, revision string, attempt int, task publicationTaskRecord) error {
-	wantKey := PublicationTaskKey(jobID, revision, attempt)
-	if task.Name != PublicationTaskName || task.JobID != jobID || task.Revision != revision || task.Attempt != strconv.Itoa(attempt) || task.IdempotencyKey != wantKey || task.MaxAttempts != PublicationTaskMaxAttempts {
-		return fmt.Errorf("attached Absurd task %s does not prove exact publication authority for Job %s Revision %s attempt %d", task.ID, jobID, revision, attempt)
-	}
-	return nil
-}
-
-func (s Store) CancelPublication(ctx context.Context, jobID string) (string, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	var taskID, revision string
-	var attempt int
-	if err := tx.QueryRowContext(ctx, `select coalesce(publication_task_id,''),revision,publication_attempt from dorf.jobs where id=$1 for update`, jobID).Scan(&taskID, &revision, &attempt); err != nil {
-		return "", err
-	}
-	if taskID == "" {
-		return "", tx.Commit()
-	}
-	task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
-	if err != nil {
-		return "", err
-	}
-	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
-		return "", err
-	}
-	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
-		if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {
-			return "", fmt.Errorf("cancel attached publication task: %w", err)
-		}
-		task.State = "cancelled"
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return task.State, nil
 }
 
 func beginPublicationAction(ctx context.Context, tx *sql.Tx, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {
@@ -211,8 +114,12 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 	return push, pull, err
 }
 
-func (s Store) AttachPublicationTask(ctx context.Context, jobID, revision string, attempt int, taskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set publication_task_id=coalesce(publication_task_id,$4) where id=$1 and revision=$2 and publication_attempt=$3 and workflow_phase in ('publishing','published') and (publication_task_id is null or publication_task_id=$4)`, jobID, revision, attempt, taskID))
+func (s Store) AttachPublicationTask(ctx context.Context, jobID, revision, taskID string) error {
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set publication_task_id=coalesce(publication_task_id,$3) where id=$1 and revision=$2 and workflow_phase in ('publishing','publication-blocked','published') and (publication_task_id is null or publication_task_id=$3)`, jobID, revision, taskID))
+}
+
+func (s Store) ResumePublication(ctx context.Context, jobID, revision string) error {
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='publishing',workflow_attention=null where id=$1 and revision=$2 and publication_task_id is not null and workflow_phase in ('publishing','publication-blocked')`, jobID, revision))
 }
 
 func (s Store) RecordPush(ctx context.Context, actionID, revision string) error {

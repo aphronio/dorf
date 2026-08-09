@@ -74,7 +74,6 @@ type Job struct {
 	GitHubInstallation   string       `json:"github_installation_id,omitempty"`
 	BaseBranch           string       `json:"base_branch,omitempty"`
 	PublicationTaskID    string       `json:"publication_task_id,omitempty"`
-	PublicationAttempt   int          `json:"publication_attempt"`
 	ProviderConnection   string       `json:"provider_connection"`
 	ProviderGatewayState string       `json:"provider_gateway_state,omitempty"`
 	Model                string       `json:"model"`
@@ -89,7 +88,6 @@ type Job struct {
 	RouteID              string       `json:"route_id,omitempty"`
 	RouteState           string       `json:"route_state,omitempty"`
 	SessionID            string       `json:"session_id,omitempty"`
-	RunTerminalState     string       `json:"run_terminal_state,omitempty"`
 	WorkflowPhase        string       `json:"workflow_phase"`
 	RepairCount          int          `json:"repair_count"`
 	WorkflowAttention    string       `json:"workflow_attention,omitempty"`

@@ -43,17 +43,17 @@ type AttentionError struct{ Reason string }
 
 func (e *AttentionError) Error() string { return e.Reason }
 
-func (s Service) Publish(ctx context.Context, jobID, revision string, attempt int) error {
-	return s.Store.WithJobFence(ctx, jobID, func() error { return s.publishFenced(ctx, jobID, revision, attempt) })
+func (s Service) Publish(ctx context.Context, jobID, revision string) error {
+	return s.Store.WithJobFence(ctx, jobID, func() error { return s.publishFenced(ctx, jobID, revision) })
 }
 
-func (s Service) publishFenced(ctx context.Context, jobID, revision string, attempt int) error {
+func (s Service) publishFenced(ctx context.Context, jobID, revision string) error {
 	job, err := s.Store.Job(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	if job.Revision != revision || job.PublicationAttempt != attempt {
-		return fmt.Errorf("publication task scope Revision=%s attempt=%d conflicts with Job Revision=%s attempt=%d", revision, attempt, job.Revision, job.PublicationAttempt)
+	if job.Revision != revision {
+		return fmt.Errorf("publication task scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
 	}
 	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("publication task cannot mutate Git or GitHub after cleanup begins")
@@ -235,7 +235,10 @@ func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHub
 }
 
 func (s Service) block(ctx context.Context, job spine.Job, reason string) error {
-	return s.Store.BlockPublication(ctx, job.ID, job.Revision, reason)
+	if err := s.Store.BlockPublication(ctx, job.ID, job.Revision, reason); err != nil {
+		return err
+	}
+	return &AttentionError{Reason: reason}
 }
 
 func (s Service) reach(ctx context.Context, point, jobID, identity string) error {

@@ -11,12 +11,12 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 //go:embed migrations/*.sql
@@ -29,11 +29,11 @@ const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
 	AbsurdSchemaURL     = "https://raw.githubusercontent.com/earendil-works/absurd/" + AbsurdReleaseCommit + "/sql/absurd.sql"
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
-	MessageTaskName     = "dorf-job-messages-v2"
+	MessageTaskName     = "dorf-coding-job-v3"
 	initialCallerID     = "dorf:initial"
 )
 
-func MessageTaskKey(jobID string) string { return "run:v2:" + jobID }
+func MessageTaskKey(jobID string) string { return "coding-job:v3:" + jobID }
 
 type Store struct{ DB *sql.DB }
 
@@ -88,25 +88,6 @@ type ActionView struct {
 	EvidenceDigest string            `json:"evidence_digest,omitempty"`
 }
 
-type TaskEvidence struct {
-	TaskID      string `json:"task_id"`
-	State       string `json:"state"`
-	Attempts    int    `json:"attempts"`
-	Checkpoints int    `json:"checkpoints"`
-	LiveClaims  int    `json:"live_claims"`
-}
-
-type PublicationTaskEvidence struct {
-	TaskID         string `json:"task_id"`
-	IdempotencyKey string `json:"idempotency_key"`
-	State          string `json:"state"`
-	Attempts       int    `json:"attempts"`
-	Checkpoints    int    `json:"checkpoints"`
-	LiveClaims     int    `json:"live_claims"`
-	Attempt        int    `json:"publication_attempt"`
-	Current        bool   `json:"current"`
-}
-
 func (s Store) BootstrapAbsurd(ctx context.Context, schema []byte) error {
 	sum := fmt.Sprintf("%x", sha256.Sum256(schema))
 	if sum != AbsurdSchemaSHA256 {
@@ -144,35 +125,48 @@ func (s Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, name := range []string{"001_dorf.sql", "002_run_terminal.sql", "003_exactly_once_messages.sql", "004_revision_evidence.sql", "005_commit_admission.sql", "006_setup_retry.sql", "007_review_policy.sql", "008_message_delivery.sql", "009_github_publication.sql", "010_job_outcomes_cleanup.sql", "011_self_advancing_workflow.sql"} {
+	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-schema-baseline',0))`); err != nil {
+		return err
+	}
+	var installed bool
+	if err := tx.QueryRowContext(ctx, `select to_regnamespace('dorf') is not null`).Scan(&installed); err != nil {
+		return err
+	}
+	if installed {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
 			return err
 		}
-		if migrationsTable {
-			var applied bool
-			if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.schema_migrations where name=$1)`, name).Scan(&applied); err != nil {
-				return err
-			}
-			if applied {
-				continue
-			}
+		if !migrationsTable {
+			return fmt.Errorf("existing Dorf schema has no baseline identity; recreate this prototype database")
 		}
-		contents, err := migrationFiles.ReadFile("migrations/" + name)
+		var total, baseline int
+		if err := tx.QueryRowContext(ctx, `select count(*),count(*) filter(where name='001_baseline.sql') from dorf.schema_migrations`).Scan(&total, &baseline); err != nil {
+			return err
+		}
+		if total != 1 || baseline != 1 {
+			return fmt.Errorf("prototype Dorf migration history is incompatible with the greenfield baseline; recreate this database")
+		}
+	} else {
+		contents, err := migrationFiles.ReadFile("migrations/001_baseline.sql")
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply Dorf migration %s: %w", name, err)
-		}
-		if _, err := tx.ExecContext(ctx, `insert into dorf.schema_migrations(name) values ($1) on conflict do nothing`, name); err != nil {
-			return err
+			return fmt.Errorf("apply Dorf baseline schema: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `select absurd.create_queue('dorf_jobs')`); err != nil {
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	client, err := absurd.New(absurd.Options{DB: s.DB, QueueName: "dorf_jobs"})
+	if err != nil {
+		return err
+	}
+	if err := client.CreateQueue(ctx, "dorf_jobs"); err != nil {
 		return fmt.Errorf("create Absurd queue dorf_jobs: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
@@ -397,11 +391,11 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	var job spine.Job
 	err := s.DB.QueryRowContext(ctx, `
 		select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0),j.starting_revision,j.branch,
-		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),j.publication_attempt,
+		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),
 		       j.provider_connection,coalesce(j.provider_gateway_state,''),j.model,j.reasoning_effort,j.state,j.admission_open,
 		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
 		       coalesce(sb.incus_name,''),coalesce(sb.state,''),coalesce(r.route_id,''),coalesce(r.state,''),coalesce(se.native_session_id,''),
-		       coalesce(j.run_terminal_state,''),j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,''),coalesce(j.cleanup_attention,''),j.review_repair_count
+		       j.workflow_phase,j.repair_count,coalesce(j.workflow_attention,''),coalesce(j.cleanup_attention,''),j.review_repair_count
 		from dorf.jobs j
 		left join dorf.sandboxes sb on sb.job_id=j.id
 		left join dorf.routes r on r.job_id=j.id
@@ -409,10 +403,10 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
 		where j.id=$1`, id).Scan(
 		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.RevisionGeneration, &job.StartingRevision, &job.Branch,
-		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID, &job.PublicationAttempt,
+		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID,
 		&job.ProviderConnection, &job.ProviderGatewayState, &job.Model, &job.ReasoningEffort, &job.State, &job.AdmissionOpen,
 		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.SandboxState, &job.RouteID, &job.RouteState,
-		&job.SessionID, &job.RunTerminalState, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.CleanupAttention, &job.ReviewRepairCount)
+		&job.SessionID, &job.WorkflowPhase, &job.RepairCount, &job.WorkflowAttention, &job.CleanupAttention, &job.ReviewRepairCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.Job{}, ErrNotFound
 	}
@@ -448,89 +442,14 @@ func (s Store) SetTaskID(ctx context.Context, jobID, taskID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and (task_id is null or task_id=$2)`, jobID, taskID))
 }
 
-// CheckMessageTaskAttachment prevents spawning a competing consumer while an
-// active or unrelated task is still authoritative for the Job.
-func (s Store) CheckMessageTaskAttachment(ctx context.Context, jobID string) error {
-	var taskID string
-	var admissionOpen bool
-	if err := s.DB.QueryRowContext(ctx, `select coalesce(task_id,''),admission_open from dorf.jobs where id=$1`, jobID).Scan(&taskID, &admissionOpen); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return err
-	}
-	if !admissionOpen {
-		return fmt.Errorf("Job %s admission is closed; refusing to attach a message consumer", jobID)
-	}
-	if taskID == "" {
-		return nil
-	}
-	task, err := s.runTask(ctx, taskID)
-	if err != nil {
-		return fmt.Errorf("inspect current Absurd run task %s: %w", taskID, err)
-	}
-	return validateCurrentMessageTask(jobID, task)
-}
-
-// AttachMessageTask binds the one exact consumer admitted for this Job.
+// AttachMessageTask binds the public Spawn result for the one exact consumer
+// admitted for this Job. The deterministic Absurd idempotency key supplies
+// task identity; Dorf only compare-and-sets its cross-authority binding.
 func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var currentTaskID string
-	var admissionOpen bool
-	if err := tx.QueryRowContext(ctx, `select coalesce(task_id,''),admission_open from dorf.jobs where id=$1 for update`, jobID).Scan(&currentTaskID, &admissionOpen); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return err
-	}
-	if !admissionOpen {
-		return fmt.Errorf("Job %s admission closed before its message task could be attached", jobID)
-	}
-	proposed, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, proposedTaskID))
-	if err != nil {
-		return fmt.Errorf("inspect proposed Absurd message task %s: %w", proposedTaskID, err)
-	}
-	if err := validateCurrentMessageTask(jobID, proposed); err != nil {
-		return err
-	}
-	if currentTaskID != "" && currentTaskID != proposedTaskID {
-		return fmt.Errorf("Job %s is already attached to another Absurd consumer %s", jobID, currentTaskID)
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.jobs set task_id=$2 where id=$1`, jobID, proposedTaskID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-type runTaskRecord struct {
-	ID, Name, State, JobID, IdempotencyKey string
-}
-
-func (s Store) runTask(ctx context.Context, taskID string) (runTaskRecord, error) {
-	return scanRunTask(s.DB.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID))
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and admission_open and (task_id is null or task_id=$2)`, jobID, proposedTaskID))
 }
 
 type rowScanner interface{ Scan(...any) error }
-
-func scanRunTask(row rowScanner) (runTaskRecord, error) {
-	var task runTaskRecord
-	err := row.Scan(&task.ID, &task.Name, &task.State, &task.JobID, &task.IdempotencyKey)
-	return task, err
-}
-
-func validateCurrentMessageTask(jobID string, task runTaskRecord) error {
-	if task.Name != MessageTaskName || task.JobID != jobID || task.IdempotencyKey != MessageTaskKey(jobID) {
-		return fmt.Errorf("Absurd task %s is not the expected %s consumer for Job %s", task.ID, MessageTaskName, jobID)
-	}
-	if task.State != "pending" && task.State != "running" && task.State != "sleeping" {
-		return fmt.Errorf("Absurd message task %s is %s, not an active consumer for open Job %s", task.ID, task.State, jobID)
-	}
-	return nil
-}
 
 func (s Store) StartRun(ctx context.Context, jobID string) error {
 	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set state='running' where id=$1 and admission_open and cleanup_state='pending'`, jobID))
@@ -541,18 +460,7 @@ func (s Store) CloseAdmission(ctx context.Context, jobID string) error {
 }
 
 func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := requireCleanupTask(ctx, tx, taskID, jobID); err != nil {
-		return err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_task_id=coalesce(cleanup_task_id,$2),cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end where id=$1 and (cleanup_task_id is null or cleanup_task_id=$2)`, jobID, taskID)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_task_id=coalesce(cleanup_task_id,$2),cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end where id=$1 and (cleanup_task_id is null or cleanup_task_id=$2)`, jobID, taskID))
 }
 
 func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
@@ -927,7 +835,7 @@ func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command st
 		return spine.Check{}, err
 	}
 	var check spine.Check
-	if err := tx.QueryRowContext(ctx, `update dorf.checks set attempts=attempts+case when state in ('passed','failed') then 0 else 1 end where id=$1 returning id,job_id,name,command,revision,state,coalesce(exit_code,0),coalesce(evidence_id,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch')`, id).Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.StartedAt, &check.FinishedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, `select id,job_id,name,command,revision,state,coalesce(exit_code,0),coalesce(evidence_id,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch') from dorf.checks where id=$1`, id).Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.StartedAt, &check.FinishedAt); err != nil {
 		return spine.Check{}, err
 	}
 	if check.Command != command {
@@ -1522,26 +1430,15 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	}
 	defer tx.Rollback()
 	var admissionOpen bool
-	var cleanupState, taskID, publicationTaskID, cleanupTaskID, workflowAttention string
-	if err := tx.QueryRowContext(ctx, `select admission_open,cleanup_state,coalesce(task_id,''),coalesce(publication_task_id,''),coalesce(cleanup_task_id,''),coalesce(workflow_attention,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&admissionOpen, &cleanupState, &taskID, &publicationTaskID, &cleanupTaskID, &workflowAttention); err != nil {
+	var cleanupState, cleanupTaskID, workflowAttention string
+	if err := tx.QueryRowContext(ctx, `select admission_open,cleanup_state,coalesce(cleanup_task_id,''),coalesce(workflow_attention,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&admissionOpen, &cleanupState, &cleanupTaskID, &workflowAttention); err != nil {
 		return err
 	}
 	if admissionOpen || cleanupState != string(spine.CleanupScheduled) || workflowAttention != "" {
 		return fmt.Errorf("cleanup cannot complete while admission, workflow attention, or cleanup scheduling remains unsettled")
 	}
-	if err := requireTerminalJobTask(ctx, tx, taskID, MessageTaskName, jobID, MessageTaskKey(jobID)); err != nil {
-		return fmt.Errorf("ordinary Job task remains unsettled: %w", err)
-	}
-	if publicationTaskID != "" {
-		if err := requireTerminalPublicationTask(ctx, tx, publicationTaskID, jobID); err != nil {
-			return fmt.Errorf("attached publication task remains unsettled: %w", err)
-		}
-	}
 	if cleanupTaskID == "" {
 		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
-	}
-	if err := requireCleanupTask(ctx, tx, cleanupTaskID, jobID); err != nil {
-		return err
 	}
 	var nativeMutations int
 	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.agent_runs where job_id=$1 and role in ('implement','repair') and state in ('submitting','active','uncertain')`, jobID).Scan(&nativeMutations); err != nil {
@@ -1568,104 +1465,6 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 		return err
 	}
 	return tx.Commit()
-}
-
-func requireTerminalJobTask(ctx context.Context, tx *sql.Tx, taskID, taskName, jobID, key string) error {
-	if taskID == "" {
-		return fmt.Errorf("task attachment is missing")
-	}
-	var name, state, owner, idempotency string
-	if err := tx.QueryRowContext(ctx, `select task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&name, &state, &owner, &idempotency); err != nil {
-		return err
-	}
-	if name != taskName || owner != jobID || idempotency != key {
-		return fmt.Errorf("task %s does not belong to exact Job %s", taskID, jobID)
-	}
-	if state != "completed" && state != "failed" && state != "cancelled" {
-		return fmt.Errorf("task %s is %s", taskID, state)
-	}
-	return requireNoLiveTaskRuns(ctx, tx, taskID)
-}
-
-func requireTerminalPublicationTask(ctx context.Context, tx *sql.Tx, taskID, jobID string) error {
-	var revision string
-	var attempt int
-	if err := tx.QueryRowContext(ctx, `select revision,publication_attempt from dorf.jobs where id=$1`, jobID).Scan(&revision, &attempt); err != nil {
-		return err
-	}
-	task, err := scanPublicationTask(tx.QueryRowContext(ctx, publicationTaskQuery, taskID))
-	if err != nil {
-		return err
-	}
-	if err := validatePublicationTaskIdentity(jobID, revision, attempt, task); err != nil {
-		return err
-	}
-	if task.State != "completed" && task.State != "failed" && task.State != "cancelled" {
-		return fmt.Errorf("task %s is %s", taskID, task.State)
-	}
-	return requireNoLiveTaskRuns(ctx, tx, taskID)
-}
-
-func requireNoLiveTaskRuns(ctx context.Context, tx *sql.Tx, taskID string) error {
-	var live int
-	if err := tx.QueryRowContext(ctx, `select count(*) from absurd.r_dorf_jobs where task_id=$1::uuid and state not in ('completed','failed','cancelled')`, taskID).Scan(&live); err != nil {
-		return err
-	}
-	if live != 0 {
-		return fmt.Errorf("task %s retains %d live run claims", taskID, live)
-	}
-	return nil
-}
-
-func requireCleanupTask(ctx context.Context, tx *sql.Tx, taskID, jobID string) error {
-	var name, owner, key string
-	if err := tx.QueryRowContext(ctx, `select task_name,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&name, &owner, &key); err != nil {
-		return err
-	}
-	if name != "dorf-job-cleanup-v2" || owner != jobID || key != "cleanup:"+jobID {
-		return fmt.Errorf("cleanup task %s does not prove exact Job %s authority", taskID, jobID)
-	}
-	return nil
-}
-
-func (s Store) CancelRun(ctx context.Context, jobID string) (string, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return "", err
-	}
-	defer tx.Rollback()
-	var taskID string
-	if err := tx.QueryRowContext(ctx, `select coalesce(task_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&taskID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", ErrNotFound
-		}
-		return "", err
-	}
-	if taskID == "" {
-		return "", fmt.Errorf("Job %s has no Absurd run task to cancel", jobID)
-	}
-	task, err := scanRunTask(tx.QueryRowContext(ctx, `select task_id::text,task_name,state,coalesce(params->>'job_id',''),coalesce(idempotency_key,'') from absurd.t_dorf_jobs where task_id=$1::uuid for update`, taskID))
-	if err != nil {
-		return "", fmt.Errorf("inspect exact ordinary Job task: %w", err)
-	}
-	validCurrent := task.Name == MessageTaskName && task.JobID == jobID && task.IdempotencyKey == MessageTaskKey(jobID)
-	if !validCurrent {
-		return "", fmt.Errorf("attached ordinary task %s does not belong to exact Job %s", taskID, jobID)
-	}
-	if _, err := tx.ExecContext(ctx, `select absurd.cancel_task('dorf_jobs',$1::uuid)`, taskID); err != nil {
-		return "", fmt.Errorf("cancel Absurd run task: %w", err)
-	}
-	var state string
-	if err := tx.QueryRowContext(ctx, `select state from absurd.t_dorf_jobs where task_id=$1::uuid`, taskID).Scan(&state); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.jobs set run_terminal_state=case when $2 in ('failed','cancelled') then coalesce(run_terminal_state,$2) else run_terminal_state end,run_terminal_at=case when $2 in ('failed','cancelled') then coalesce(run_terminal_at,clock_timestamp()) else run_terminal_at end where id=$1`, jobID, state); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(); err != nil {
-		return "", err
-	}
-	return state, nil
 }
 
 func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) {
@@ -1745,63 +1544,6 @@ func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error
 			(select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)
 		)`, jobID).Scan(&sequence)
 	return sequence, err
-}
-
-func (s Store) TaskEvidence(ctx context.Context, taskID string) (TaskEvidence, error) {
-	if taskID == "" {
-		return TaskEvidence{}, nil
-	}
-	var evidence TaskEvidence
-	err := s.DB.QueryRowContext(ctx, `select t.task_id::text,t.state,t.attempts,
-		(select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
-		(select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
-		from absurd.t_dorf_jobs t where t.task_id=$1::uuid`, taskID).Scan(&evidence.TaskID, &evidence.State, &evidence.Attempts, &evidence.Checkpoints, &evidence.LiveClaims)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TaskEvidence{TaskID: taskID, State: "missing"}, nil
-	}
-	return evidence, err
-}
-
-// PublicationTaskHistory projects retained Absurd authority for every exact
-// publication generation of the Job's current Revision.
-func (s Store) PublicationTaskHistory(ctx context.Context, job spine.Job) ([]PublicationTaskEvidence, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		select t.task_id::text,t.idempotency_key,t.state,t.attempts,
-		       coalesce(t.params->>'attempt',''),
-		       (select count(*) from absurd.c_dorf_jobs c where c.task_id=t.task_id),
-		       (select count(*) from absurd.r_dorf_jobs r where r.task_id=t.task_id and r.state not in ('completed','failed','cancelled'))
-		from absurd.t_dorf_jobs t
-		where t.task_name=$1 and t.params->>'job_id'=$2 and t.params->>'revision'=$3
-		  and t.max_attempts=$4
-		order by t.idempotency_key,t.task_id`, PublicationTaskName, job.ID, job.Revision, PublicationTaskMaxAttempts)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []PublicationTaskEvidence
-	for rows.Next() {
-		var item PublicationTaskEvidence
-		var attempt string
-		if err := rows.Scan(&item.TaskID, &item.IdempotencyKey, &item.State, &item.Attempts, &attempt, &item.Checkpoints, &item.LiveClaims); err != nil {
-			return nil, err
-		}
-		item.Attempt, err = strconv.Atoi(attempt)
-		if err != nil || item.Attempt < 0 || item.IdempotencyKey != PublicationTaskKey(job.ID, job.Revision, item.Attempt) {
-			return nil, fmt.Errorf("Absurd task %s has ambiguous publication generation authority", item.TaskID)
-		}
-		item.Current = item.TaskID == job.PublicationTaskID && item.Attempt == job.PublicationAttempt
-		result = append(result, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Attempt != result[j].Attempt {
-			return result[i].Attempt < result[j].Attempt
-		}
-		return result[i].TaskID < result[j].TaskID
-	})
-	return result, nil
 }
 
 func expectOne(result sql.Result, err error) error {

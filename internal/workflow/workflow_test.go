@@ -13,3 +13,12 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 		t.Fatal("distinct FIFO positions share an immutable Absurd event")
 	}
 }
+
+func TestCycleCheckpointIsKeyedByImmutableMessageSequence(t *testing.T) {
+	if cycleStepName(2) != cycleStepName(2) {
+		t.Fatal("same Message sequence did not retain its cycle checkpoint")
+	}
+	if cycleStepName(2) == cycleStepName(3) {
+		t.Fatal("distinct Message sequences share a cycle checkpoint")
+	}
+}
