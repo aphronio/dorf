@@ -17,19 +17,20 @@ Goal
   -> deterministic ReviewPolicy
        -> no review
        -> selected specialist AgentRuns
-       -> bounded triage, then selected specialist AgentRuns
-  -> material finding?
-       -> yes: original Session repairs and commits a new Revision; loop
-       -> no: continue
+       -> one general review AgentRun for unknown risk
+  -> reviewer text becomes a Message to the original implementation Session
+  -> implementation AgentRun decides whether to act
+       -> committed change: observe a new Revision; loop
+       -> clean unchanged checkout: continue
   -> exact-Revision PR Proposal
   -> accepted, rejected, or abandoned Outcome
   -> separate observable, retryable Cleanup
 ```
 
-Dorf never creates an implementation commit on the agent's behalf. An implementation or repair AgentRun
-may create one commit or several. Dorf validates the branch, clean workspace, commit and tree, and proves
-that the final Git HEAD descends from the previously accepted Revision. It then records that final HEAD as
-the next immutable Revision.
+Dorf never creates an implementation commit on the agent's behalf. An AgentRun in the implementation
+Session may create one commit or several. Dorf validates the branch, clean workspace, commit and tree,
+and proves that the final Git HEAD descends from the previously accepted Revision. It then records that
+final HEAD as the next immutable Revision.
 
 ## Working rules
 
@@ -81,8 +82,8 @@ Keep the implementation concrete until another real workflow proves a reusable s
 
 Goal: replace Dorf-created commits with a clear observation boundary.
 
-- [x] Update the North Star and decision log: implementation and repair AgentRuns decide when and what
-      to commit; Dorf observes and validates their result.
+- [x] Update the North Star and decision log: AgentRuns in the implementation Session decide when and
+      what to commit; Dorf observes and validates their result.
 - [x] Allow an AgentRun to create one commit or several.
 - [x] After the AgentRun completes, inspect the coding branch and require a clean workspace.
 - [x] Prove that final Git HEAD differs from and descends from the previously accepted Revision.
@@ -96,8 +97,8 @@ Goal: replace Dorf-created commits with a clear observation boundary.
       has exactly one new commit.
 - [x] Keep the complete coding workflow runnable and run Checks against the observed exact Revision.
 
-Terminal: a real implementation or repair AgentRun creates one or more commits, Dorf records its clean
-final descendant as one immutable Revision, and Checks run against that exact Revision.
+Terminal: a real AgentRun in the implementation Session creates one or more commits, Dorf records its
+clean final descendant as one immutable Revision, and Checks run against that exact Revision.
 
 ### Slice 2B: Move coding order into one readable workflow
 
@@ -135,20 +136,24 @@ Revision `f5efad68821fa0edabe7898fd13d19bb5d06d9e0`, passed `check` and `smoke`,
 created exact-Revision PR #102, then completed abandoned-Outcome cleanup with its route revoked and
 Sandbox deleted.
 
-## Slice 3: Make every agent invocation one AgentRun
+## Slice 3: Use one AgentRun mechanism and one Message follow-up path
 
-An implementation agent, repair agent, review triage agent, and specialist reviewer are not different
-execution systems. They are AgentRuns with different Roles, prompts, Revision inputs, workspaces, and
-capability envelopes.
+Implementation and review are not different execution systems. They are AgentRuns with different
+Roles, prompts, Revision inputs, workspaces, and capability envelopes. User text, Check output, and
+reviewer text are not different follow-up primitives. They are Messages to the original implementation
+Session.
 
 ```text
 AgentRun
   +-- Role
-  +-- prompt or Message
+  +-- prompt
   +-- input Revision
   +-- capability envelope
   +-- workspace
-  +-- expected output contract
+
+Message
+  +-- user text, Check output, or reviewer text
+  +-- target implementation Session
 ```
 
 ### Slice 3A: Use one AgentRun runner
@@ -157,12 +162,12 @@ Goal: make submission, native recovery, waiting, and terminal recording one dura
 
 - [ ] Define one small AgentRun execution contract containing only the durable run identity and the
       concrete harness operations needed to inspect, submit, and wait.
-- [ ] Use one runner for initial implementation, follow-up implementation, repair, review triage, and
-      specialist review.
+- [ ] Use one runner for initial and follow-up implementation, general review, and specialist review.
 - [ ] Keep Role-specific prompt construction outside the runner.
 - [ ] Keep reviewer Sandbox creation, immutable checkout, scoped route creation, and capability
       validation outside the runner as preparation facts.
-- [ ] Keep review output parsing and finding persistence outside the runner as result interpretation.
+- [ ] Keep reviewer output as opaque text; persist the cross-AgentRun handoff as a Message, with no
+      review-result parser or finding schema.
 - [ ] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
 - [ ] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
 - [ ] Delete the separate implementation and review submission/recovery state machines.
@@ -173,25 +178,31 @@ Goal: make submission, native recovery, waiting, and terminal recording one dura
 Terminal: implementation and selected review both execute through the same AgentRun runner without
 weakening reviewer isolation or exact-Revision ownership.
 
-### Slice 3B: Put review and repair directly in `RunJob`
+### Slice 3B: Put the review feedback loop directly in `RunJob`
 
-Goal: make ReviewPolicy, triage, specialist review, and repair one readable product path.
+Goal: make ReviewPolicy, review, Message delivery, and Revision observation one readable product path.
 
 - [ ] Replace the coarse review continuation with explicit Revision-scoped Steps in `RunJob`.
 - [ ] Keep `ReviewPolicy(ChangeFacts) -> ReviewPlan` pure and deterministic.
-- [ ] Run bounded triage through the shared AgentRun runner only when policy reports unknown risk.
+- [ ] Run one general read-only reviewer when policy reports unknown risk; do not use reviewer prose
+      as a router protocol.
 - [ ] Run each selected specialist through the shared AgentRun runner in its prepared read-only
       workspace.
-- [ ] Record findings as Revision-pinned product facts after validating each output contract.
-- [ ] Return material findings to the original implementation Session as a repair AgentRun.
-- [ ] Observe the repair AgentRun's commit as a new Revision, then loop through Checks and policy.
-- [ ] Use one deterministic readiness calculation for no-review, reviewed, and repaired Revisions.
+- [ ] Turn each reviewer's returned text into one stable Message to the original implementation Session.
+- [ ] Deliver user, Check, and reviewer Messages through the same implementation AgentRun path.
+- [ ] Let the implementation agent decide whether to act, ignore, or explain; Dorf does not classify
+      the text as clear, material, a suggestion, or a finding.
+- [ ] Observe the implementation AgentRun's Git result: a new commit loops through Checks and policy;
+      a clean unchanged checkout completes review for that Revision.
+- [ ] Use one deterministic readiness calculation for no-review and completed-review Revisions.
 - [ ] Delete `advanceReview`, the coarse review Step, redundant review phases, and duplicated readiness
       branches once `RunJob` is authoritative.
-- [ ] Dogfood no-review and selected-review paths; let later dogfood expose further repair edge cases.
+- [ ] Delete review-result structs, finding persistence, output parsers, adjudication states, and
+      review-specific repair counters once this path is authoritative.
+- [ ] Dogfood no-review and selected-review paths; let later dogfood expose further feedback edge cases.
 
-Terminal: no-review, known-role review, triage-selected review, and one material-finding repair all follow
-the visible `RunJob` story and reach the next correct product state.
+Terminal: no-review, known-role review, and general review all follow the visible `RunJob` story; review
+text reaches the original implementation Session through Message and no parser decides what it means.
 
 ## Slice 4: Simplify Proposal and Outcome
 
@@ -234,7 +245,8 @@ Goal: leave one obvious workflow story with no second durable scheduler in Dorf.
 - [ ] Remove `workflow_phase` as sequencing authority.
 - [ ] Derive the next operation from retained product facts: resources, AgentRuns, Revisions, Checks,
       ReviewPlans, Proposals, Outcomes, and cleanup receipts.
-- [ ] Remove boolean-like repair counters and derive bounded history from repair AgentRuns and findings.
+- [ ] Remove review and repair counters; derive follow-up history from Messages, AgentRuns, and review
+      provenance.
 - [ ] Replace copied run/publication/cleanup task columns with one minimal task-handle shape, or remove
       them where Absurd identity is sufficient.
 - [ ] Remove duplicated Action outcome prose when immutable Evidence already owns the detail.

@@ -25,16 +25,15 @@ real product requirement.
 
 Anything that can be derived or executed programmatically should be. Admission, identity,
 sequencing, setup, policy facts, Checks, evidence hashing, publication, retry, and cleanup are
-code-owned. Implementation and repair AgentRuns own the change itself, including one or many Git
-commits. When they change code, Dorf validates the clean final checkout and records its descendant
-commit as the next Revision. A review repair may instead leave clean `HEAD` unchanged when it rejects
-a false-positive finding. Agents are otherwise reserved for ambiguity, triage, review, and other
-judgment.
+code-owned. AgentRuns in the original implementation Session own code changes, including one or
+many Git commits. User input, failed Check output, and reviewer text all return through the same
+Message path. The implementation agent decides whether to act. Dorf then observes either a clean
+descendant commit as the next Revision or a clean unchanged checkout.
 
-Review authority starts with deterministic mandatory policy. An implementation AgentRun may also
-make a structured, bounded request for an allowlisted review Role or focus, and an unknown
-classification may invoke bounded triage. Unstructured agent prose is not policy input; no agent
-request can waive a Check, mandatory Role, capability boundary, or spend limit.
+Review authority starts with deterministic mandatory policy. Known risks select bounded read-only
+review Roles; an unknown classification selects one general reviewer instead of a triage router.
+Reviewer prose is advisory Message input to the implementation Session, not a policy protocol to
+parse. No agent can waive a Check, mandatory Role, capability boundary, or spend limit.
 
 ## Disposable developer workstations
 

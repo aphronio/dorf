@@ -67,13 +67,12 @@ durable task sequences explicit, named phases; it does not contain a generic use
   `workflow_phase` remains a transitional domain guard and review/publication handoff projection until
   those downstream paths become explicit; no second service-layer coordinator interprets it.
 - Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
-  expected output contract.
-- Change-producing implementation and repair AgentRuns create one or many commits. On successful
-  completion, Dorf validates a clean checkout and a final `HEAD` that is a proper descendant of the
-  input Revision, then records that exact commit as the next Revision. A review repair that rejects
-  a false-positive finding may complete with clean, unchanged `HEAD` and creates no Revision.
-- A Job-local Session may be reused for implementation and repair. Absurd retry of infrastructure
-  is not a new AgentRun.
+  ordinary text input and output.
+- AgentRuns in the original implementation Session create one or many commits when they change
+  code. On completion, Dorf validates a clean checkout. A descendant `HEAD` becomes the next exact
+  Revision; unchanged `HEAD` records that the Message was handled without a code change.
+- A Job-local Session is reused for the initial goal and later user, Check, and reviewer Messages.
+  Absurd retry of infrastructure is not a new AgentRun.
 - Accepted client messages receive an immutable Job-local sequence and identity. Follow-up turns
   preserve FIFO order. A `steer` is an explicit priority lane targeting the active native turn, so
   it may overtake already queued follow-ups. Default text and structured inspection, command help,
@@ -88,8 +87,8 @@ durable task sequences explicit, named phases; it does not contain a generic use
 Every code-owned operation that changes external state receives a stable Action identity derived
 from the Job and its intended meaning. Dorf records enough information to classify the Action as
 pending, succeeded, failed, or uncertain. On an uncertain result, recovery inspects the external
-authority before repeating the operation. Agent tool calls and implementation or repair commits are
-AgentRun work, not Actions; Dorf observes their resulting Git state at the AgentRun boundary.
+authority before repeating the operation. Agent tool calls and commits are AgentRun work, not
+Actions; Dorf observes their resulting Git state at the AgentRun boundary.
 
 This applies at least to Sandbox creation and destruction, repository clone and push, agent-turn
 submission, scoped credential or provider-route creation, and pull-request publication. Absurd
@@ -98,19 +97,19 @@ the unavoidable boundary where an external system succeeds and its response is l
 
 ## Review composition
 
-Review is selected, not ritualized. A pure Go `ReviewPolicy(ChangeFacts) -> ReviewPlan` starts with
-explicit rules. An implementation AgentRun may add an allowlisted Role and optional bounded focus
-through a structured request. The request is advisory input, not a new capability: it cannot
-suppress mandatory policy, waive Checks, create a Role, or grant tools, credentials, retries, or
-spend. Unknown classifications may invoke one bounded `ReviewTriage` AgentRun; there is no general
-Coordinator Agent because the durable Job already coordinates mechanics.
+Review is selected, not ritualized. A pure Go `ReviewPolicy(ChangeFacts) -> ReviewPlan` selects
+known specialist Roles through explicit rules. An unknown classification selects one bounded
+general reviewer rather than a triage router. There is no general Coordinator Agent because the
+durable Job already coordinates mechanics.
 
 Each selected Role is an AgentRun against an immutable Revision in its own disposable Sandbox and
 scoped provider route. This deliberately uniform isolation model also applies to read-only review.
 Independent Roles may run in parallel, and each Role's live resources are reclaimed after its
-evidence is retained. Findings return to the original implementation Session for one adjudication
-and repair cycle. Policy may request targeted re-verification of affected claims; it must not
-default to repeated full-context review.
+output is retained. Reviewer output remains ordinary text. Dorf copies it into a Message to the
+original implementation Session instead of parsing a `ReviewResult` or persisting a `Finding`.
+The implementation agent decides whether to act, ignore, or explain. If it commits, Dorf observes
+a new Revision and repeats Checks and policy; if it leaves a clean unchanged checkout, review is
+complete for that Revision.
 
 ## Failure and code evolution
 
@@ -192,8 +191,8 @@ The replacement is ready to become `main` when a clean machine can complete one 
 4. survive controller and task-executor loss without duplicating a Sandbox, message, turn, or external
    Action;
 5. run deterministic repository Checks and retain Revision-pinned Evidence;
-6. select any review through deterministic policy and return findings to the same implementation
-   Session;
+6. select any review through deterministic policy and return its text as a Message to the same
+   implementation Session;
 7. publish an exact-Revision pull-request proposal;
 8. reach an explicit accepted, rejected, or abandoned outcome; and
 9. reconcile cleanup to an observable terminal.

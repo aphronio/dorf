@@ -23,8 +23,8 @@ Evidence proves claims about a Revision.
 | **Sandbox** | The isolated mutable machine and checkout boundary for one Job |
 | **Revision** | The exact immutable commit being implemented, checked, reviewed, or proposed |
 | **AgentRun** | One bounded invocation of an agent against a Job and Revision |
-| **Session** | Optional Job-scoped conversational continuity across implementation and repair AgentRuns |
-| **Role** | The bounded responsibility of an AgentRun, such as implement, triage, QA, or security |
+| **Session** | Optional Job-scoped conversational continuity across implementation AgentRuns |
+| **Role** | The bounded responsibility of an AgentRun, such as implement, general review, QA, or security |
 | **Action** | Code-owned work that changes external state |
 | **Check** | Code-owned observation or assertion |
 | **Evidence** | Immutable, provenance-labelled proof tied to a Revision or lifecycle fact |
@@ -46,22 +46,23 @@ flowchart TD
     Checks --> Facts["Compute ChangeFacts"]
     Facts --> Policy{"ReviewPolicy"}
     Policy -->|"known roles"| Reviews["Selected review AgentRuns"]
-    Policy -->|"unknown"| Triage["Bounded ReviewTriage AgentRun"]
-    Triage --> Reviews
+    Policy -->|"unknown"| GeneralReview["General review AgentRun"]
     Policy -->|"no review"| Proposal
-    Reviews --> Findings{"Material findings?"}
-    Findings -->|"yes"| Repair["Original Session adjudicates and repairs"]
-    Repair --> Revision
-    Findings -->|"no"| Proposal["Publish exact-Revision proposal"]
+    Reviews --> Feedback["Reviewer text becomes a Message"]
+    GeneralReview --> Feedback
+    Feedback --> Respond["Original implementation Session decides what to do"]
+    Respond -->|"committed change"| Revision
+    Respond -->|"clean unchanged checkout"| Proposal["Publish exact-Revision proposal"]
     Proposal --> Outcome{"Accept, reject, or abandon"}
     Outcome --> Cleanup["Reconcile cleanup"]
     Cleanup --> Receipt["Evidence-backed terminal receipt"]
 ```
 
-Review is optional and explainable. The implementation agent may make a structured request for an
-allowlisted Role or bounded focus; deterministic policy may require Roles independently; ambiguous
-classification may ask one triage agent. A request can add scrutiny but cannot waive policy or
-expand capability. No agent replaces the durable Job as coordinator.
+Review is optional and explainable. Deterministic policy selects known specialist Roles and uses one
+general reviewer for an unknown change. Each reviewer returns ordinary text. Dorf sends that text as
+a Message to the original implementation Session; it does not parse a universal review result. The
+implementation agent decides whether to act, explain, or leave the Revision unchanged. No agent
+replaces the durable Job as coordinator.
 
 ## The deterministic and agentic boundary
 
@@ -71,9 +72,9 @@ expand capability. No agent replaces the durable Job as coordinator.
 | Allocate stable identities, FIFO follow order, and explicit steer priority | Design and implement the change |
 | Create, inspect, and destroy Sandboxes | Resolve ambiguity with documented assumptions |
 | Clone, set up, observe the final Revision, diff, push, and publish | Decide whether an unfamiliar change needs specialist review |
-| — | Create one or many implementation or repair commits when changing code |
+| — | Create one or many commits when the implementation Session changes code |
 | Run declared tests, linters, smoke checks, and probes | Perform QA, security, architecture, or performance review |
-| Compute ChangeFacts and apply known review rules | Adjudicate findings and choose a repair |
+| Compute ChangeFacts and apply known review rules | Decide what to do with user, Check, or reviewer Messages |
 | Hash, pin, invalidate, and render Evidence | Explain material decisions and remaining uncertainty |
 | Retry, reconcile, and report external effects | — |
 
@@ -125,6 +126,7 @@ render the same application boundary; they do not become authorities.
 
 A stranger on a clean machine can delegate one real change and later inspect an evidence-backed
 pull-request proposal. During the run, the controller and task executor can be killed and restarted,
-a message can be accepted while the agent is active, selected review can feed one repair, and cleanup
-can be retried. No duplicate Job, Sandbox, agent turn, branch, or pull request appears, and the user
+a message can be accepted while the agent is active, selected review can feed the same implementation
+Session through a Message, and cleanup can be retried. No duplicate Job, Sandbox, agent turn, branch,
+or pull request appears, and the user
 never has to understand Absurd, PostgreSQL rows, Incus names, or harness protocol details.

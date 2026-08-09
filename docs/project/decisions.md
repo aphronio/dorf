@@ -940,7 +940,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D047 — Replace the Python runtime with a greenfield Go and Absurd system
 
 - **Status:** Accepted foundation — 2026-08-06; review-request and Absurd-usage clauses superseded
-  by D048 — 2026-08-09; implementation and repair commit ownership clarified by D050 — 2026-08-10
+  by D048 — 2026-08-09; commit ownership clarified by D050 — 2026-08-10; review handoff and unknown
+  review selection superseded by D052 — 2026-08-10
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
@@ -1018,7 +1019,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   queued follow-ups. Default text and structured inspection, command help, and the admission
   acknowledgement must expose its intent, target, original sequence, and priority effect; an
   architecture document alone is not adequate observability.
-- **Review composition:** Deterministic policy supplies the mandatory Role floor. An implementation
+- **Review composition (superseded by D052):** Deterministic policy supplies the mandatory Role floor. An implementation
   AgentRun may additionally make a structured, bounded request for an allowlisted Role and optional
   focus. The request cannot remove mandatory review, change capabilities, grant authority, create a
   Role, or authorize recursive or unbounded work. Each selected Role receives its own disposable
@@ -1070,16 +1071,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
   successfully prepared repository environment behind the same `commands.prepare` contract.
 
-## D050 — Implementation and repair AgentRuns own commits
+## D050 — AgentRuns in the implementation Session own commits
 
-- **Status:** Accepted workflow correction — 2026-08-10
-- **Decision:** An implementation or repair AgentRun owns the code change and, when it changes code,
-  creates one or many commits in the Job checkout. Its successful change contract requires a clean
+- **Status:** Accepted workflow correction — 2026-08-10; terminology clarified by D052
+- **Decision:** An AgentRun in the implementation Session owns the code change and, when it changes
+  code, creates one or many commits in the Job checkout. Its successful change contract requires a clean
   checkout and a final `HEAD` that is a proper descendant of the AgentRun's input Revision. Dorf
   validates those facts and records the observed `HEAD` as the next exact Revision; it does not
-  manufacture, squash, or amend the agent's commits. A review repair may instead reject a
-  false-positive finding by returning a clean checkout with unchanged `HEAD`; that creates no new
-  Revision.
+  manufacture, squash, or amend the agent's commits. A follow-up Message may instead be handled with
+  a clean unchanged `HEAD`; that creates no new Revision.
 - **Action boundary:** An Action is a code-owned operation that changes external state. Submitting
   the bounded agent turn is therefore an Action, but tool calls and commits made inside that
   AgentRun are not separate Actions. Their transcript remains harness-owned, their commits remain
@@ -1109,3 +1109,29 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Review and publication are also expressed as direct product-order operations,
   or a real dogfood workflow shows that a stable Step identity or boundary cannot represent recovery
   truthfully.
+
+## D052 — Feedback is a Message to the implementation Session
+
+- **Status:** Accepted workflow simplification — 2026-08-10
+- **Decision:** User text, Check output, and reviewer text use the same durable `Message` primitive and
+  are consumed by the original implementation Session through the normal AgentRun path. A review
+  AgentRun returns ordinary text. Dorf does not parse a universal `ReviewResult`, classify findings,
+  or create separate respond-to-review, respond-to-check, or repair AgentRun types.
+- **Review selection:** Deterministic policy selects known specialist Roles. Unknown risk selects one
+  bounded general read-only reviewer rather than a triage AgentRun whose prose must be parsed to route
+  more work. Role, prompt, Revision, workspace, and capability envelope specialize an AgentRun; they
+  do not create a new execution primitive.
+- **Outcome:** The implementation agent decides whether to act, ignore, or explain. Dorf observes the
+  resulting Git state. A committed descendant becomes a new Revision and loops through Checks and
+  policy. A clean unchanged checkout means the Message was handled without a code change. A failed
+  mandatory Check still blocks readiness until it passes, but it reaches the agent through the same
+  Message mechanism.
+- **Authority:** Reviewer prose is an advisory claim. The Message is the durable handoff between agent
+  Sessions. Git remains authoritative for commits, and deterministic Checks remain authoritative for
+  their results.
+- **Why:** This matches ordinary human collaboration: one worker receives feedback from different
+  people and tools, decides what it means, and either changes the work or explains why not. One runner,
+  one inbox, and opaque text remove parsers and review-specific state without weakening deterministic
+  gates.
+- **Reconsider when:** A concrete acceptance surface requires a machine-readable reviewer decision, or
+  dogfood proves that ordinary text cannot safely carry a specific cross-agent contract.
