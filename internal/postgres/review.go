@@ -84,7 +84,7 @@ func verifyEvidenceSet(ctx context.Context, tx *sql.Tx, jobID, revision string, 
 }
 
 func (s Store) ReviewPlan(ctx context.Context, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	return reviewPlanRow(s.DB.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2`, jobID, revision))
+	return reviewPlanRow(s.DB.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(plan,'{}'::jsonb),coalesce(policy_digest,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2`, jobID, revision))
 }
 
 func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPlanRecord, error) {
@@ -116,14 +116,14 @@ func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPla
 }
 
 func reviewPlanTx(ctx context.Context, tx *sql.Tx, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	return reviewPlanRow(tx.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(initial_policy,'{}'::jsonb),coalesce(final_plan,'{}'::jsonb),coalesce(policy_digest,''),coalesce(triage_run_id,''),coalesce(triage_rationale,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2 for update`, jobID, revision))
+	return reviewPlanRow(tx.QueryRowContext(ctx, `select job_id,revision,state,coalesce(facts,'{}'::jsonb),coalesce(plan,'{}'::jsonb),coalesce(policy_digest,''),created_at,finalized_at from dorf.review_plans where job_id=$1 and revision=$2 for update`, jobID, revision))
 }
 
 func reviewPlanRow(row *sql.Row) (spine.ReviewPlanRecord, error) {
 	var record spine.ReviewPlanRecord
-	var facts, initial, final []byte
+	var facts, plan []byte
 	var finalized sql.NullTime
-	err := row.Scan(&record.JobID, &record.Revision, &record.State, &facts, &initial, &final, &record.PolicyDigest, &record.TriageRunID, &record.TriageRationale, &record.CreatedAt, &finalized)
+	err := row.Scan(&record.JobID, &record.Revision, &record.State, &facts, &plan, &record.PolicyDigest, &record.CreatedAt, &finalized)
 	if err != nil {
 		return record, err
 	}
@@ -135,13 +135,8 @@ func reviewPlanRow(row *sql.Row) (spine.ReviewPlanRecord, error) {
 			return record, err
 		}
 	}
-	if string(initial) != "{}" {
-		if err := json.Unmarshal(initial, &record.Initial); err != nil {
-			return record, err
-		}
-	}
-	if string(final) != "{}" {
-		if err := json.Unmarshal(final, &record.Final); err != nil {
+	if string(plan) != "{}" {
+		if err := json.Unmarshal(plan, &record.Plan); err != nil {
 			return record, err
 		}
 	}
@@ -161,7 +156,7 @@ func policyDigest(facts policy.ChangeFacts, plan policy.ReviewPlan) (string, err
 }
 
 func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlanRecord) error {
-	digest, err := policyDigest(proposed.Facts, proposed.Initial)
+	digest, err := policyDigest(proposed.Facts, proposed.Plan)
 	if err != nil {
 		return err
 	}
@@ -187,32 +182,17 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 		return fmt.Errorf("review policy conflicts with its durable per-Revision state")
 	}
 	factsJSON, _ := json.Marshal(proposed.Facts)
-	initialJSON, _ := json.Marshal(proposed.Initial)
-	final := proposed.Initial
-	state, phase := "final", "reviewing"
-	if proposed.Initial.Decision == "triage" {
-		state, phase = "triage-pending", "review-triage"
-		final = policy.ReviewPlan{}
-	} else if proposed.Initial.Decision == "no-review" {
+	planJSON, _ := json.Marshal(proposed.Plan)
+	phase := "reviewing"
+	if proposed.Plan.Decision == "no-review" {
 		phase = "ready"
 	}
-	finalJSON, _ := json.Marshal(final)
-	if _, err := tx.ExecContext(ctx, `update dorf.review_plans set state=$3,facts=$4::jsonb,initial_policy=$5::jsonb,final_plan=$6::jsonb,policy_digest=$7,finalized_at=case when $3='final' then clock_timestamp() else null end where job_id=$1 and revision=$2 and policy_digest is null`, proposed.JobID, proposed.Revision, state, factsJSON, initialJSON, finalJSON, digest); err != nil {
+	if _, err := tx.ExecContext(ctx, `update dorf.review_plans set state='final',facts=$3::jsonb,plan=$4::jsonb,policy_digest=$5,finalized_at=clock_timestamp() where job_id=$1 and revision=$2 and policy_digest is null`, proposed.JobID, proposed.Revision, factsJSON, planJSON, digest); err != nil {
 		return err
 	}
-	if proposed.Initial.Decision == "triage" {
-		runID, err := createReviewRunTx(ctx, tx, proposed.JobID, proposed.Revision, spine.ReviewTriageRole, proposed.Facts)
-		if err != nil {
+	for _, role := range proposed.Plan.Roles {
+		if _, err := createReviewRunTx(ctx, tx, proposed.JobID, proposed.Revision, string(role), proposed.Facts); err != nil {
 			return err
-		}
-		if _, err := tx.ExecContext(ctx, `update dorf.review_plans set triage_run_id=$3 where job_id=$1 and revision=$2`, proposed.JobID, proposed.Revision, runID); err != nil {
-			return err
-		}
-	} else {
-		for _, role := range proposed.Initial.Roles {
-			if _, err := createReviewRunTx(ctx, tx, proposed.JobID, proposed.Revision, string(role), proposed.Facts); err != nil {
-				return err
-			}
 		}
 	}
 	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=$3,workflow_attention=null where id=$1 and revision=$2 and workflow_phase='review-planning'`, proposed.JobID, proposed.Revision, phase)); err != nil {
@@ -240,10 +220,7 @@ func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role st
 	if err := rows.Close(); err != nil {
 		return "", err
 	}
-	input, output := policy.RolePrompt(policy.Role(role), facts, declaredChecks), policy.FindingOutputContract
-	if role == spine.ReviewTriageRole {
-		input, output = policy.TriagePrompt(facts), policy.TriageOutputContract
-	}
+	input := policy.RolePrompt(policy.Role(role), facts, declaredChecks)
 	turnAction := spine.ScopedActionID(jobID, spine.ActionTurnStart, runID)
 	sessionAction := spine.ScopedActionID(jobID, spine.ActionSessionStart, runID)
 	sandboxCreateAction := spine.ScopedActionID(jobID, spine.ActionSandboxCreate, runID)
@@ -259,7 +236,7 @@ func createReviewRunTx(ctx context.Context, tx *sql.Tx, jobID, revision, role st
 			return "", err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,role,state,revision,capability,workspace,input_contract,output_contract) values($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9) on conflict do nothing`, runID, jobID, turnAction, role, revision, spine.ReviewReadOnlyCapability, workspace, input, output); err != nil {
+	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,role,state,revision,capability,workspace,input_contract) values($1,$2,$3,$4,'pending',$5,$6,$7,$8) on conflict do nothing`, runID, jobID, turnAction, role, revision, spine.ReviewReadOnlyCapability, workspace, input); err != nil {
 		return "", err
 	}
 	ownerNonce, err := reviewNonce()
@@ -285,23 +262,25 @@ func reviewNonce() (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
-func (s Store) ReviewRun(ctx context.Context, runID string) (spine.AgentRun, error) {
+func (s Store) ReviewRun(ctx context.Context, runID string) (spine.ReviewRunView, error) {
 	return scanReviewRun(s.DB.QueryRowContext(ctx, reviewRunSelect+` where ar.id=$1`, runID))
 }
 
-const reviewRunSelect = `select ar.id,ar.job_id,coalesce(ar.message_id,''),ar.action_id,coalesce(ar.session_id,''),ar.state,ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role,coalesce(ar.revision,''),coalesce(ar.capability,''),coalesce(ar.workspace,''),coalesce(ar.input_contract,''),coalesce(ar.output_contract,''),coalesce(ar.claim_evidence_id,''),coalesce(ar.observed_evidence_id,''),ar.started_at,ar.finished_at,ar.input_tokens,ar.cached_input_tokens,ar.output_tokens,ar.cost_microusd,ar.usage_available,ar.yield_count,coalesce(rr.sandbox_name,''),coalesce(rr.route_id,''),coalesce(rr.app_server_id,''),coalesce(rr.ownership_nonce,''),coalesce(rr.submission_nonce,''),coalesce(rr.input_digest,''),coalesce(rr.revision_tree,''),coalesce(rr.sandbox_state,''),coalesce(rr.route_state,''),coalesce(rr.checkout_state,''),coalesce(rr.post_review_state,'') from dorf.agent_runs ar left join dorf.review_resources rr on rr.run_id=ar.id`
+const reviewRunSelect = `select ar.id,ar.job_id,coalesce(ar.message_id,''),ar.action_id,coalesce(ar.session_id,''),ar.state,ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role,coalesce(ar.revision,''),coalesce(ar.capability,''),coalesce(ar.workspace,''),coalesce(ar.input_contract,''),coalesce(ar.claim_evidence_id,''),coalesce(ar.observed_evidence_id,''),ar.started_at,ar.finished_at,ar.input_tokens,ar.cached_input_tokens,ar.output_tokens,ar.cost_microusd,ar.usage_available,ar.yield_count,coalesce(rr.sandbox_name,''),coalesce(rr.route_id,''),coalesce(rr.app_server_id,''),coalesce(rr.ownership_nonce,''),coalesce(rr.submission_nonce,''),coalesce(rr.input_digest,''),coalesce(rr.revision_tree,''),coalesce(rr.sandbox_state,''),coalesce(rr.route_state,''),coalesce(rr.checkout_state,''),coalesce(rr.post_review_state,'') from dorf.agent_runs ar left join dorf.review_resources rr on rr.run_id=ar.id`
 
-func scanReviewRun(row rowScanner) (spine.AgentRun, error) {
-	var run spine.AgentRun
+func scanReviewRun(row rowScanner) (spine.ReviewRunView, error) {
+	var view spine.ReviewRunView
+	run := &view.AgentRun
+	projection := &view.ReviewRunProjection
 	var started, finished sql.NullTime
-	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State, &run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role, &run.Revision, &run.Capability, &run.Workspace, &run.InputContract, &run.OutputContract, &run.ClaimEvidenceID, &run.ObservedEvidenceID, &started, &finished, &run.InputTokens, &run.CachedInputTokens, &run.OutputTokens, &run.CostMicrousd, &run.UsageAvailable, &run.YieldCount, &run.ReviewerSandboxID, &run.ReviewerRouteID, &run.ReviewerAppServer, &run.ReviewerOwnerNonce, &run.SubmissionNonce, &run.InputDigest, &run.RevisionTree, &run.ReviewerSandboxState, &run.ReviewerRouteState, &run.CheckoutState, &run.PostReviewState)
+	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State, &run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role, &run.Revision, &run.Capability, &run.Workspace, &run.InputContract, &projection.ClaimEvidenceID, &projection.ObservedEvidenceID, &started, &finished, &run.InputTokens, &run.CachedInputTokens, &run.OutputTokens, &run.CostMicrousd, &run.UsageAvailable, &run.YieldCount, &projection.ReviewerSandboxID, &projection.ReviewerRouteID, &projection.ReviewerAppServer, &projection.ReviewerOwnerNonce, &projection.SubmissionNonce, &projection.InputDigest, &projection.RevisionTree, &projection.ReviewerSandboxState, &projection.ReviewerRouteState, &projection.CheckoutState, &projection.PostReviewState)
 	if started.Valid {
 		run.StartedAt = started.Time
 	}
 	if finished.Valid {
 		run.FinishedAt = finished.Time
 	}
-	return run, err
+	return view, err
 }
 
 func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.ReviewRunView, error) {
@@ -320,17 +299,10 @@ func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.
 		if err != nil {
 			return nil, err
 		}
-		view := spine.ReviewRunView{AgentRun: run, Stale: run.Revision != currentRevision}
-		var material bool
-		var summary, rationale, evidenceID, adjudication string
-		var affectedRoles, affectedChecks []byte
-		err = s.DB.QueryRowContext(ctx, `select material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication from dorf.review_findings where run_id=$1`, run.ID).Scan(&material, &summary, &rationale, &affectedRoles, &affectedChecks, &evidenceID, &adjudication)
-		if err == nil {
-			finding := &spine.ReviewFinding{RunID: run.ID, Revision: run.Revision, Role: policy.Role(run.Role), Material: material, Summary: summary, Rationale: rationale, EvidenceID: evidenceID, Adjudication: adjudication, Stale: view.Stale}
-			_ = json.Unmarshal(affectedRoles, &finding.AffectedRoles)
-			_ = json.Unmarshal(affectedChecks, &finding.AffectedChecks)
-			view.Finding = finding
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		view := run
+		view.Stale = view.Revision != currentRevision
+		err = s.DB.QueryRowContext(ctx, `select coalesce((select id from dorf.job_messages where job_id=$1 and from_kind='agent' and from_id=$2),'')`, run.JobID, run.ID).Scan(&view.FeedbackMessageID)
+		if err != nil {
 			return nil, err
 		}
 		views = append(views, view)
@@ -380,7 +352,7 @@ func (s Store) CleanupReviewRuns(ctx context.Context, jobID string) ([]spine.Rev
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, spine.ReviewRunView{AgentRun: run})
+		result = append(result, run)
 	}
 	return result, rows.Err()
 }
@@ -507,230 +479,126 @@ func parseReviewStateOutcome(outcome string) (string, string, error) {
 	return parts[0], parts[1], nil
 }
 
-func (s Store) RecordTriageResult(ctx context.Context, runID string, outcome spine.NativeTurn, claim, observed spine.Evidence, final policy.ReviewPlan, rationale string) error {
+// RecordReviewFeedback retains one reviewer's exact prose and feeds it back to
+// the original implementation Session as an ordinary Message. The Job row is
+// locked before allocating the Message sequence so concurrent reviewer
+// completions remain deterministic and idempotent.
+func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome spine.NativeTurn, claim, observed spine.Evidence) (spine.Message, bool, error) {
+	if outcome.Status != "completed" || strings.TrimSpace(outcome.Output) == "" {
+		return spine.Message{}, false, fmt.Errorf("review feedback requires exact nonblank completed reviewer output")
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return spine.Message{}, false, err
 	}
 	defer tx.Rollback()
-	var jobID, revision, role, runState string
-	if err := tx.QueryRowContext(ctx, `select job_id,revision,role,state from dorf.agent_runs where id=$1 for update`, runID).Scan(&jobID, &revision, &role, &runState); err != nil {
-		return err
+	var jobID, revision, role, runState, nativeTurnID, capability, currentRevision, phase string
+	if err := tx.QueryRowContext(ctx, `
+		select ar.job_id,ar.revision,ar.role,ar.state,coalesce(ar.native_turn_id,''),coalesce(ar.capability,''),j.revision,j.workflow_phase
+		from dorf.agent_runs ar join dorf.jobs j on j.id=ar.job_id
+		where ar.id=$1 for update of j,ar`, runID).Scan(&jobID, &revision, &role, &runState, &nativeTurnID, &capability, &currentRevision, &phase); err != nil {
+		return spine.Message{}, false, err
 	}
-	if role != spine.ReviewTriageRole || runState != "completed" || outcome.Status != "completed" || claim.Revision != revision || observed.Revision != revision {
-		return fmt.Errorf("triage result conflicts with its AgentRun or Revision")
+	if !policy.Allowed(policy.Role(role)) || capability != spine.ReviewReadOnlyCapability || runState != string(spine.AgentRunCompleted) ||
+		nativeTurnID == "" || outcome.ID != nativeTurnID || revision != currentRevision || claim.Revision != revision || observed.Revision != revision ||
+		phase != "reviewing" && phase != "review-feedback" && phase != "ready" {
+		return spine.Message{}, false, fmt.Errorf("review feedback conflicts with its completed exact-Revision reviewer AgentRun")
 	}
 	var boundaryReady bool
-	if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and post_review_state='verified' and app_server_id is not null and revision_tree is not null)`, runID).Scan(&boundaryReady); err != nil || !boundaryReady {
-		return fmt.Errorf("triage result lacks an attested isolated reviewer boundary")
+	if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and post_review_state='verified' and app_server_id is not null and revision_tree is not null)`, runID).Scan(&boundaryReady); err != nil {
+		return spine.Message{}, false, err
 	}
-	plan, err := reviewPlanTx(ctx, tx, jobID, revision)
-	if err != nil {
-		return err
-	}
-	if plan.State != "triage-pending" || plan.TriageRunID != runID {
-		return fmt.Errorf("triage is not pending for AgentRun %s", runID)
+	if !boundaryReady {
+		return spine.Message{}, false, fmt.Errorf("review feedback lacks an attested isolated reviewer boundary")
 	}
 	if err := insertEvidence(ctx, tx, jobID, claim); err != nil {
-		return err
+		return spine.Message{}, false, err
 	}
 	if err := insertEvidence(ctx, tx, jobID, observed); err != nil {
-		return err
+		return spine.Message{}, false, err
 	}
-	finalJSON, _ := json.Marshal(final)
+	var storedClaimID, storedObservedID string
+	if err := tx.QueryRowContext(ctx, `select coalesce(claim_evidence_id,''),coalesce(observed_evidence_id,'') from dorf.agent_runs where id=$1`, runID).Scan(&storedClaimID, &storedObservedID); err != nil {
+		return spine.Message{}, false, err
+	}
+	if storedClaimID != "" && storedClaimID != claim.ID || storedObservedID != "" && storedObservedID != observed.ID {
+		return spine.Message{}, false, fmt.Errorf("review feedback retry conflicts with retained Evidence")
+	}
 	if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set claim_evidence_id=$2,observed_evidence_id=$3,input_tokens=$4,cached_input_tokens=$5,output_tokens=$6,cost_microusd=$7,usage_available=$8,finished_at=coalesce(finished_at,clock_timestamp()) where id=$1`, runID, claim.ID, observed.ID, outcome.InputTokens, outcome.CachedInputTokens, outcome.OutputTokens, outcome.CostMicrousd, outcome.UsageAvailable); err != nil {
-		return err
-	}
-	for _, selected := range final.Roles {
-		if _, err := createReviewRunTx(ctx, tx, jobID, revision, string(selected), plan.Facts); err != nil {
-			return err
-		}
-	}
-	phase := "reviewing"
-	if final.Decision == "no-review" {
-		phase = "ready"
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.review_plans set state='final',final_plan=$3::jsonb,triage_rationale=$4,finalized_at=clock_timestamp() where job_id=$1 and revision=$2`, jobID, revision, finalJSON, rationale); err != nil {
-		return err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=$3 where id=$1 and revision=$2 and workflow_phase='review-triage'`, jobID, revision, phase)); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s Store) RecordReviewResult(ctx context.Context, runID string, outcome spine.NativeTurn, claim, observed spine.Evidence, finding spine.ReviewFinding) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var jobID, revision, role, state string
-	if err := tx.QueryRowContext(ctx, `select job_id,revision,role,state from dorf.agent_runs where id=$1 for update`, runID).Scan(&jobID, &revision, &role, &state); err != nil {
-		return err
-	}
-	if role == spine.ReviewTriageRole || outcome.Status != "completed" || state != "completed" || finding.RunID != runID || finding.Revision != revision || string(finding.Role) != role || claim.Revision != revision || observed.Revision != revision {
-		return fmt.Errorf("review result conflicts with its terminal AgentRun or Revision")
-	}
-	var boundaryReady bool
-	if err := tx.QueryRowContext(ctx, `select exists(select 1 from dorf.review_resources where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and post_review_state='verified' and app_server_id is not null and revision_tree is not null)`, runID).Scan(&boundaryReady); err != nil || !boundaryReady {
-		return fmt.Errorf("review result lacks an attested isolated reviewer boundary")
-	}
-	if err := insertEvidence(ctx, tx, jobID, claim); err != nil {
-		return err
-	}
-	if err := insertEvidence(ctx, tx, jobID, observed); err != nil {
-		return err
-	}
-	affectedRoles, _ := json.Marshal(finding.AffectedRoles)
-	affectedChecks, _ := json.Marshal(finding.AffectedChecks)
-	adjudication := "not-needed"
-	if finding.Material {
-		adjudication = "pending"
-	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.review_findings(run_id,job_id,revision,role,material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication) values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11) on conflict(run_id) do nothing`, runID, jobID, revision, role, finding.Material, finding.Summary, finding.Rationale, affectedRoles, affectedChecks, claim.ID, adjudication); err != nil {
-		return err
-	}
-	yield := 0
-	if finding.Material {
-		yield = 1
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set claim_evidence_id=$2,observed_evidence_id=$3,input_tokens=$4,cached_input_tokens=$5,output_tokens=$6,cost_microusd=$7,yield_count=$8,usage_available=$9,finished_at=coalesce(finished_at,clock_timestamp()) where id=$1`, runID, claim.ID, observed.ID, outcome.InputTokens, outcome.CachedInputTokens, outcome.OutputTokens, outcome.CostMicrousd, yield, outcome.UsageAvailable); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s Store) AdmitReviewRepair(ctx context.Context, jobID, findingRunID string) (spine.Message, bool, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
 		return spine.Message{}, false, err
 	}
-	defer tx.Rollback()
-	var revision, phase, source string
-	var count int
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,review_repair_count,coalesce(review_repair_source_run_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase, &count, &source); err != nil {
-		return spine.Message{}, false, err
-	}
-	callerID := "dorf:review-repair:1"
-	var existing spine.Message
-	err = tx.QueryRowContext(ctx, `select id,job_id,caller_id,sequence,input,delivery_intent from dorf.job_messages where job_id=$1 and caller_id=$2`, jobID, callerID).Scan(&existing.ID, &existing.JobID, &existing.CallerID, &existing.Sequence, &existing.Input, &existing.Intent)
+
+	message := spine.Message{ID: spine.MessageID(jobID, spine.MessageFromAgent, runID), JobID: jobID, FromKind: spine.MessageFromAgent, FromID: runID, Input: outcome.Output, Intent: spine.MessageFollow}
+	created := false
+	err = tx.QueryRowContext(ctx, `select id,job_id,from_kind,from_id,sequence,input,delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where job_id=$1 and from_kind='agent' and from_id=$2`, jobID, runID).Scan(&message.ID, &message.JobID, &message.FromKind, &message.FromID, &message.Sequence, &message.Input, &message.Intent, &message.TargetTurnID)
 	if err == nil {
-		if source != findingRunID {
-			return spine.Message{}, false, fmt.Errorf("review repair is already bound to another finding")
+		if message.Input != outcome.Output || message.Intent != spine.MessageFollow {
+			return spine.Message{}, false, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", runID)
 		}
-		if err := tx.Commit(); err != nil {
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return spine.Message{}, false, err
+	} else {
+		message.Sequence, err = allocateMessageSequenceTx(ctx, tx, jobID)
+		if err != nil {
 			return spine.Message{}, false, err
 		}
-		return existing, false, nil
+		if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input) values($1,$2,$3,$4,$5,$6)`, message.ID, message.JobID, message.FromKind, message.FromID, message.Sequence, message.Input); err != nil {
+			return spine.Message{}, false, err
+		}
+		actionID, implementationRunID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
+		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, jobID, message.ID, spine.ActionTurnStart); err != nil {
+			return spine.Message{}, false, err
+		}
+		if err := expectOne(tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) select $1,$2,$3,$4,native_session_id,'implement','pending' from dorf.sessions where job_id=$2`, implementationRunID, jobID, message.ID, actionID)); err != nil {
+			return spine.Message{}, false, err
+		}
+		created = true
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	var missing int
+	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_resources rr where rr.job_id=$1 and rr.revision=$2 and not exists(select 1 from dorf.job_messages m where m.job_id=rr.job_id and m.from_kind='agent' and m.from_id=rr.run_id)`, jobID, revision).Scan(&missing); err != nil {
 		return spine.Message{}, false, err
 	}
-	var role, summary, rationale, evidenceID, adjudication string
-	var material bool
-	if err := tx.QueryRowContext(ctx, `select role,material,summary,rationale,evidence_id,adjudication from dorf.review_findings where run_id=$1 and job_id=$2 and revision=$3 for update`, findingRunID, jobID, revision).Scan(&role, &material, &summary, &rationale, &evidenceID, &adjudication); err != nil {
-		return spine.Message{}, false, err
-	}
-	var materialCount int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_findings where job_id=$1 and revision=$2 and material`, jobID, revision).Scan(&materialCount); err != nil {
-		return spine.Message{}, false, err
-	}
-	if phase != "reviewing" || count != 0 || !material || adjudication != "pending" || materialCount != 1 {
-		return spine.Message{}, false, fmt.Errorf("exactly one unsettled material finding is required for the bounded review repair")
-	}
-	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, jobID); err != nil {
-		return spine.Message{}, false, fmt.Errorf("review repair admission blocked: %w", err)
-	}
-	sequence, err := allocateMessageSequenceTx(ctx, tx, jobID)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	input := fmt.Sprintf("Adjudicate the single material %s review claim for exact Revision %s. Claim Evidence %s. Summary: %s. Rationale: %s. If valid, make only the focused repair in the original implementation workspace and commit it. If it is a false positive, leave HEAD unchanged and the checkout clean, then explain why. Return control to Dorf for exact Git observation and targeted verification.", role, revision, evidenceID, summary, rationale)
-	message := spine.Message{ID: spine.MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,caller_id,sequence,input) values($1,$2,$3,$4,$5)`, message.ID, jobID, callerID, sequence, input); err != nil {
-		return spine.Message{}, false, err
-	}
-	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, jobID, message.ID, spine.ActionTurnStart); err != nil {
-		return spine.Message{}, false, err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) select $1,$2,$3,$4,native_session_id,'repair','pending' from dorf.sessions where job_id=$2`, runID, jobID, message.ID, actionID)); err != nil {
-		return spine.Message{}, false, err
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.review_findings set adjudication='pending' where run_id=$1`, findingRunID); err != nil {
-		return spine.Message{}, false, err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set review_repair_count=1,review_repair_source_run_id=$2,workflow_phase='review-repairing',workflow_attention=null where id=$1`, jobID, findingRunID)); err != nil {
-		return spine.Message{}, false, err
+	if missing == 0 && phase == "reviewing" {
+		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='review-feedback',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='reviewing'`, jobID, revision)); err != nil {
+			return spine.Message{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.Message{}, false, err
 	}
-	return message, true, nil
+	return message, created, nil
 }
 
-func (s Store) MarkReviewReady(ctx context.Context, jobID, revision string) error {
+// CompleteReviewFeedback accepts an unchanged clean checkout only while the
+// named implementation AgentRun is still the latest accepted Message. A later
+// Message wins the Job-row race and returns false so it can be delivered.
+func (s Store) CompleteReviewFeedback(ctx context.Context, jobID, runID, revision string) (bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	plan, err := reviewPlanTx(ctx, tx, jobID, revision)
+	var currentRevision, phase string
+	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &phase); err != nil {
+		return false, err
+	}
+	if currentRevision != revision || phase != "review-feedback" {
+		return false, fmt.Errorf("unchanged review feedback conflicts with current Revision %s or workflow phase %s", currentRevision, phase)
+	}
+	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if plan.State != "final" || plan.Final.Decision == "triage" {
-		return fmt.Errorf("review plan is not final")
+	if !ready || candidate.ID != runID {
+		return false, nil
 	}
-	for _, role := range plan.Final.Roles {
-		var state string
-		var material bool
-		var adjudication string
-		err := tx.QueryRowContext(ctx, `select ar.state,rf.material,rf.adjudication from dorf.agent_runs ar join dorf.review_findings rf on rf.run_id=ar.id join dorf.review_resources rr on rr.run_id=ar.id where ar.job_id=$1 and ar.revision=$2 and ar.role=$3 and rr.checkout_state='verified' and rr.post_review_state='verified'`, jobID, revision, role).Scan(&state, &material, &adjudication)
-		if err != nil || state != "completed" || material && adjudication != "rejected" {
-			return fmt.Errorf("selected review Role %s is not settled", role)
-		}
+	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='review-feedback'`, jobID, revision)); err != nil {
+		return false, err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='reviewing'`, jobID, revision)); err != nil {
-		return err
+	if err := tx.Commit(); err != nil {
+		return false, err
 	}
-	return tx.Commit()
-}
-
-func (s Store) ReviewRepairTargets(ctx context.Context, jobID string) ([]policy.Role, error) {
-	var raw []byte
-	err := s.DB.QueryRowContext(ctx, `select rf.affected_roles from dorf.jobs j join dorf.review_findings rf on rf.run_id=j.review_repair_source_run_id where j.id=$1 and j.review_repair_count=1`, jobID).Scan(&raw)
-	if err != nil {
-		return nil, err
-	}
-	var roles []policy.Role
-	if err := json.Unmarshal(raw, &roles); err != nil {
-		return nil, err
-	}
-	return roles, nil
-}
-
-func (s Store) RejectReviewFinding(ctx context.Context, jobID, revision string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var currentRevision, phase, source string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,coalesce(review_repair_source_run_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &phase, &source); err != nil {
-		return err
-	}
-	if currentRevision != revision || phase != "review-repairing" || source == "" {
-		return fmt.Errorf("review finding rejection is not admissible for the current Revision and phase")
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.review_findings set adjudication='rejected' where run_id=$1 and revision=$2 and adjudication='pending'`, source, revision)); err != nil {
-		return err
-	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='reviewing',workflow_attention=null where id=$1 and revision=$2`, jobID, revision)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return true, nil
 }
 
 var _ spine.ReviewStore = Store{}

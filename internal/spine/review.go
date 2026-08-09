@@ -8,42 +8,44 @@ import (
 )
 
 const (
-	ReviewTriageRole         = "review-triage"
 	ReviewReadOnlyCapability = "immutable-read-only"
 )
 
 type ReviewPlanRecord struct {
-	JobID           string             `json:"job_id"`
-	Revision        string             `json:"revision"`
-	State           string             `json:"state"`
-	Facts           policy.ChangeFacts `json:"facts"`
-	Initial         policy.ReviewPlan  `json:"initial_policy"`
-	Final           policy.ReviewPlan  `json:"final_plan"`
-	PolicyDigest    string             `json:"policy_digest,omitempty"`
-	TriageRunID     string             `json:"triage_agent_run_id,omitempty"`
-	TriageRationale string             `json:"triage_rationale,omitempty"`
-	CreatedAt       time.Time          `json:"created_at,omitempty"`
-	FinalizedAt     time.Time          `json:"finalized_at,omitempty"`
-}
-
-type ReviewFinding struct {
-	RunID          string        `json:"agent_run_id"`
-	Revision       string        `json:"revision"`
-	Role           policy.Role   `json:"role"`
-	Material       bool          `json:"material"`
-	Summary        string        `json:"summary"`
-	Rationale      string        `json:"rationale"`
-	AffectedRoles  []policy.Role `json:"affected_roles"`
-	AffectedChecks []string      `json:"affected_checks"`
-	EvidenceID     string        `json:"claim_evidence_id,omitempty"`
-	Adjudication   string        `json:"adjudication,omitempty"`
-	Stale          bool          `json:"stale"`
+	JobID        string             `json:"job_id"`
+	Revision     string             `json:"revision"`
+	State        string             `json:"state"`
+	Facts        policy.ChangeFacts `json:"facts"`
+	Plan         policy.ReviewPlan  `json:"plan"`
+	PolicyDigest string             `json:"policy_digest,omitempty"`
+	CreatedAt    time.Time          `json:"created_at,omitempty"`
+	FinalizedAt  time.Time          `json:"finalized_at,omitempty"`
 }
 
 type ReviewRunView struct {
 	AgentRun
-	Finding *ReviewFinding `json:"finding,omitempty"`
-	Stale   bool           `json:"stale"`
+	ReviewRunProjection
+	FeedbackMessageID string `json:"feedback_message_id,omitempty"`
+	Stale             bool   `json:"stale"`
+}
+
+// ReviewRunProjection contains review workflow facts derived from an AgentRun
+// and its isolated review resources. They are intentionally not part of the
+// generic AgentRun contract.
+type ReviewRunProjection struct {
+	ClaimEvidenceID      string `json:"claim_evidence_id,omitempty"`
+	ObservedEvidenceID   string `json:"observed_evidence_id,omitempty"`
+	ReviewerSandboxID    string `json:"reviewer_sandbox_id,omitempty"`
+	ReviewerRouteID      string `json:"reviewer_route_id,omitempty"`
+	ReviewerAppServer    string `json:"reviewer_app_server_id,omitempty"`
+	ReviewerOwnerNonce   string `json:"-"`
+	SubmissionNonce      string `json:"-"`
+	InputDigest          string `json:"input_digest,omitempty"`
+	RevisionTree         string `json:"revision_tree,omitempty"`
+	ReviewerSandboxState string `json:"reviewer_sandbox_state,omitempty"`
+	ReviewerRouteState   string `json:"reviewer_route_state,omitempty"`
+	CheckoutState        string `json:"checkout_state,omitempty"`
+	PostReviewState      string `json:"post_review_state,omitempty"`
 }
 
 type ReviewNativeBinding struct {
@@ -93,29 +95,25 @@ type ReviewStore interface {
 	BeginReviewWorkspace(context.Context, string) (Action, error)
 	BeginReviewSession(context.Context, string) (Action, error)
 	UncertainReviewSubmission(context.Context, string, string, string) error
-	ReviewRun(context.Context, string) (AgentRun, error)
-	RecordReviewResult(context.Context, string, NativeTurn, Evidence, Evidence, ReviewFinding) error
-	RecordTriageResult(context.Context, string, NativeTurn, Evidence, Evidence, policy.ReviewPlan, string) error
-	AdmitReviewRepair(context.Context, string, string) (Message, bool, error)
-	MarkReviewReady(context.Context, string, string) error
+	ReviewRun(context.Context, string) (ReviewRunView, error)
+	RecordReviewFeedback(context.Context, string, NativeTurn, Evidence, Evidence) (Message, bool, error)
+	CompleteReviewFeedback(context.Context, string, string, string) (bool, error)
 	BeginReviewRouteCleanup(context.Context, string) (Action, error)
 	BeginReviewSandboxCleanup(context.Context, string) (Action, error)
 	InterruptReviewRun(context.Context, string, string) error
 	RecordReviewPostState(context.Context, string, Receipt) error
-	ReviewRepairTargets(context.Context, string) ([]policy.Role, error)
-	RejectReviewFinding(context.Context, string, string) error
 }
 
 type ReviewExternals interface {
 	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
-	ReviewSandboxCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewRouteCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewWorkspaceCreate(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewWorkspaceVerify(context.Context, Job, AgentRun) (Receipt, error)
-	ReviewRouteRevoke(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewSandboxDelete(context.Context, Job, AgentRun, Action) (Receipt, error)
-	ReviewInitialTurn(context.Context, Job, AgentRun) (ReviewNativeBinding, error)
-	ReviewRecover(context.Context, Job, AgentRun) (ReviewNativeBinding, error)
-	ReviewTurns(context.Context, Job, AgentRun) (ReviewNativeHistory, error)
-	ReviewWait(context.Context, Job, AgentRun, string) (ReviewNativeBinding, error)
+	ReviewSandboxCreate(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	ReviewRouteCreate(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	ReviewWorkspaceCreate(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	ReviewWorkspaceVerify(context.Context, Job, ReviewRunView) (Receipt, error)
+	ReviewRouteRevoke(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	ReviewSandboxDelete(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	ReviewInitialTurn(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error)
+	ReviewRecover(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error)
+	ReviewTurns(context.Context, Job, ReviewRunView) (ReviewNativeHistory, error)
+	ReviewWait(context.Context, Job, ReviewRunView, string) (ReviewNativeBinding, error)
 }

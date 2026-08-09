@@ -74,23 +74,27 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		}
 	})
 
-	first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-retry", Input: "same text"})
-	if err != nil || !created || first.Sequence != 2 {
+	first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
+	if err != nil || !created || first.Sequence != 2 || first.FromKind != "human" || first.FromID != "client-retry" || first.ID != spine.MessageID(job.ID, "human", "client-retry") {
 		t.Fatalf("first message=%#v created=%v err=%v", first, created, err)
 	}
-	repeated, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-retry", Input: "same text"})
+	repeated, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || created || repeated != first {
 		t.Fatalf("idempotent message=%#v created=%v err=%v", repeated, created, err)
 	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-retry", Input: "changed"}); err == nil {
-		t.Fatal("changed input under the same caller ID did not conflict")
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
+		t.Fatal("changed input under the same source identity did not conflict")
 	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-retry", Input: "same text "}); err == nil {
-		t.Fatal("byte-distinct complete input under the same caller ID did not conflict")
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
+		t.Fatal("byte-distinct complete input under the same source identity did not conflict")
 	}
-	distinct, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-distinct", Input: "same text"})
+	distinct, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-distinct", Input: "same text"})
 	if err != nil || !created || distinct.ID == first.ID || distinct.Sequence != 3 {
 		t.Fatalf("distinct identical message=%#v created=%v err=%v", distinct, created, err)
+	}
+	crossKind, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "workflow", FromID: distinct.FromID, Input: "same source identity from the workflow"})
+	if err != nil || !created || crossKind.Sequence != 4 || crossKind.ID == distinct.ID || crossKind.ID != spine.MessageID(job.ID, "workflow", distinct.FromID) || crossKind.FromKind != "workflow" || crossKind.FromID != distinct.FromID {
+		t.Fatalf("cross-kind source identity=%#v created=%v err=%v", crossKind, created, err)
 	}
 
 	const concurrent = 12
@@ -101,7 +105,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			message, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
+			message, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
 			if err == nil {
 				sequences <- message.Sequence
 			}
@@ -122,7 +126,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	sort.Ints(got)
 	for i, sequence := range got {
-		if sequence != i+4 {
+		if sequence != i+5 {
 			t.Fatalf("concurrent FIFO positions=%v", got)
 		}
 	}
@@ -155,8 +159,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err := db.QueryRowContext(ctx, `select count(*) from dorf.agent_runs where job_id=$1 and message_id is not null`, job.ID).Scan(&runCount); err != nil {
 		t.Fatal(err)
 	}
-	if runCount != concurrent+3 {
-		t.Fatalf("per-Job AgentRuns=%d want=%d (one stable identity per admitted input)", runCount, concurrent+3)
+	if runCount != concurrent+4 {
+		t.Fatalf("per-Job AgentRuns=%d want=%d (one stable identity per admitted input)", runCount, concurrent+4)
 	}
 	if err := store.PrepareAgentRun(ctx, next.AgentRun.ID, "native-turn-"+job.ID); err != nil {
 		t.Fatal(err)
@@ -212,7 +216,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("cleanup crossed the active native-mutation fence: %#v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
+	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
 		close(releaseFence)
 		t.Fatalf("cleanup did not close admission before waiting for the active native-mutation fence: created=%v err=%v", created, err)
 	}
@@ -229,10 +233,10 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if cleaning.AdmissionOpen {
 		t.Fatal("cleanup did not durably close admission")
 	}
-	if retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
+	if retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v %v", retry, created, err)
 	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "after-cleanup", Input: "late"}); err == nil {
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
 		t.Fatal("cleanup allowed a new message")
 	}
 }
@@ -256,7 +260,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	steerInput := postgres.NewMessage{JobID: job.ID, CallerID: "operator-steer", Input: "correct the active work", Intent: spine.MessageSteer}
+	steerInput := postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: spine.MessageSteer}
 	steer, created, err := store.AdmitMessage(ctx, steerInput)
 	if err != nil || !created || steer.Intent != spine.MessageSteer || steer.TargetTurnID != activeTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
@@ -292,7 +296,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("active follow after steer=%#v err=%v", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: other.ID, CallerID: "invalid-steer", Input: "cannot target", Intent: spine.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular native turn") {
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: other.ID, FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: spine.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular native turn") {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -317,11 +321,11 @@ func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
 			if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "first-shared-steer", Input: "first accepted shared input", Intent: spine.MessageSteer})
+			first, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "first-shared-steer", Input: "first accepted shared input", Intent: spine.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("first steer=%#v created=%v err=%v", first, created, err)
 			}
-			second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "second-shared-steer", Input: "second accepted shared input", Intent: spine.MessageSteer})
+			second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "second-shared-steer", Input: "second accepted shared input", Intent: spine.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("second steer=%#v created=%v err=%v", second, created, err)
 			}
@@ -391,7 +395,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindNativeTurn(ctx, target.AgentRun.ID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "terminal-race-steer", Input: "preserve exact durable input", Intent: spine.MessageSteer})
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "terminal-race-steer", Input: "preserve exact durable input", Intent: spine.MessageSteer})
 	if err != nil || !created || steer.TargetTurnID != targetTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -412,7 +416,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindNativeTurn(ctx, fallback.AgentRun.ID, actualTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "later-follow", Input: "later FIFO delivery"})
+	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
 	if err != nil || !created {
 		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
 	}
@@ -460,7 +464,7 @@ func TestAcceptedTerminalTurnAllowsSameSessionFollowFIFO(t *testing.T) {
 			if err := store.BindNativeTurn(ctx, first.AgentRun.ID, turnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "queued-follow", Input: "continue after the accepted outcome"})
+			follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "queued-follow", Input: "continue after the accepted outcome"})
 			if err != nil || !created || follow.Intent != spine.MessageFollow {
 				t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 			}
@@ -513,7 +517,7 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 	if run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision); err != nil || ready || run.ID != "" {
 		t.Fatalf("failed accepted turn crossed Revision observation gate: run=%#v ready=%v err=%v", run, ready, err)
 	}
-	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "successful-follow", Input: "finish the coding workflow"})
+	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "successful-follow", Input: "finish the coding workflow"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
@@ -551,7 +555,7 @@ func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label st
 	return job, sessionID
 }
 
-func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
+func TestRevisionChecksWorkflowMessageAndCleanupRetention(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano())
@@ -597,21 +601,25 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed.State, failed.ExitCode, failed.EvidenceDigest = "failed", 1, failedEvidence.Digest
-	repair, created, err := store.AdmitRepair(ctx, failed)
-	if err != nil || !created || repair.Sequence != 2 {
-		t.Fatalf("repair=%#v created=%v err=%v", repair, created, err)
+	checkMessage, created, err := store.AdmitCheckMessage(ctx, failed)
+	if err != nil || !created || checkMessage.Sequence != 2 || checkMessage.FromKind != "workflow" || checkMessage.FromID != failed.ID || checkMessage.ID != spine.MessageID(job.ID, "workflow", failed.ID) {
+		t.Fatalf("failed Check Message=%#v created=%v err=%v", checkMessage, created, err)
 	}
-	repeated, created, err := store.AdmitRepair(ctx, failed)
-	if err != nil || created || repeated != repair {
-		t.Fatalf("repeated repair=%#v created=%v err=%v", repeated, created, err)
+	repeated, created, err := store.AdmitCheckMessage(ctx, failed)
+	if err != nil || created || repeated != checkMessage {
+		t.Fatalf("repeated failed Check Message=%#v created=%v err=%v", repeated, created, err)
 	}
-	repairRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-repair-"+job.ID)
+	delivery, err := store.NextDelivery(ctx, job.ID, "session-"+job.ID)
+	if err != nil || delivery == nil || delivery.Message != checkMessage || delivery.AgentRun.MessageID != checkMessage.ID || delivery.AgentRun.Role != "implement" || delivery.AgentRun.ID != spine.AgentRunID(checkMessage.ID) {
+		t.Fatalf("failed Check implementation delivery=%#v err=%v", delivery, err)
+	}
+	handlingRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-check-feedback-"+job.ID)
 	job, err = store.Job(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
-	if err != nil || !ready || secondCandidate.ID != repairRun.ID {
+	if err != nil || !ready || secondCandidate.ID != handlingRun.ID {
 		t.Fatalf("second Revision candidate=%#v ready=%v err=%v", secondCandidate, ready, err)
 	}
 	secondRevisionEvidence := integrationEvidence(secondCandidate.ID, "git-revision", "", "", second, "d")
@@ -633,7 +641,7 @@ func TestRevisionChecksEvidenceRepairAndCleanupRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.WorkflowPhase != "ready" || job.Revision != second || job.StartingRevision != start || job.RepairCount != 1 {
+	if err != nil || job.WorkflowPhase != "ready" || job.Revision != second || job.StartingRevision != start {
 		t.Fatalf("ready job=%#v err=%v", job, err)
 	}
 	checks, err := store.Checks(ctx, job.ID)
@@ -725,7 +733,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record.Facts, record.Initial, record.Final = facts, plan, plan
+			record.Facts, record.Plan = facts, plan
 			if err := store.RecordReviewPolicy(ctx, record); err != nil {
 				t.Fatal(err)
 			}
@@ -737,12 +745,12 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				t.Fatalf("updated Job=%#v err=%v", updated, err)
 			}
 			persisted, err := store.ReviewPlan(ctx, job.ID, revision)
-			if err != nil || persisted.State != "final" || persisted.PolicyDigest == "" || persisted.Final.Decision != plan.Decision {
+			if err != nil || persisted.State != "final" || persisted.PolicyDigest == "" || persisted.Plan.Decision != plan.Decision {
 				t.Fatalf("persisted plan=%#v err=%v", persisted, err)
 			}
 			runs, err := store.ReviewRuns(ctx, job.ID, revision)
 			if len(test.roles) == 0 {
-				if err != nil || len(runs) != 0 || persisted.Final.Decision != "no-review" {
+				if err != nil || len(runs) != 0 || persisted.Plan.Decision != "no-review" {
 					t.Fatalf("no-review runs=%#v plan=%#v err=%v", runs, persisted, err)
 				}
 			} else {
@@ -761,7 +769,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				}
 			}
 			changed := record
-			changed.Initial.Decision = "invalid-retry-change"
+			changed.Plan.Decision = "invalid-retry-change"
 			if err := store.RecordReviewPolicy(ctx, changed); err == nil || !strings.Contains(err.Error(), "changed across retry") {
 				t.Fatalf("changed atomic policy error=%v", err)
 			}
@@ -769,62 +777,62 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
-func TestRejectedMaterialReviewClaimRemainsDurableAndReachesReady(t *testing.T) {
+func TestReviewerFeedbackBecomesIdempotentProvenancedImplementationMessage(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "rejected-material-ready")
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
+	job, revision, message, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-message")
+
+	if message.FromKind != "agent" || message.FromID == "" || message.ID != spine.MessageID(job.ID, "agent", message.FromID) || implementationRun.MessageID != message.ID || implementationRun.Role != "implement" || implementationRun.ID != spine.AgentRunID(message.ID) {
+		t.Fatalf("review feedback Message=%#v implementation AgentRun=%#v", message, implementationRun)
 	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := policy.ReviewPolicy(facts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Facts, record.Initial, record.Final = facts, plan, plan
-	if err := store.RecordReviewPolicy(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	runs, err := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("review runs=%#v err=%v", runs, err)
-	}
-	run := runs[0].AgentRun
-	prepareReviewBoundaryIntegration(t, store, run)
-	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
-	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
-	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleAuthAuthority, Material: true, Summary: "claim", Rationale: "requires adjudication", AffectedRoles: []policy.Role{policy.RoleAuthAuthority}, AffectedChecks: []string{"check"}}
-	if err := store.RecordReviewResult(ctx, run.ID, spine.NativeTurn{ID: "turn-" + run.ID, Status: "completed"}, claim, observed, finding); err != nil {
-		t.Fatal(err)
-	}
-	if _, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID); err != nil || !created {
-		t.Fatalf("repair created=%t err=%v", created, err)
-	}
-	completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-review-repair-"+job.ID)
-	if err := store.RejectReviewFinding(ctx, job.ID, revision); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkReviewReady(ctx, job.ID, revision); err != nil {
-		t.Fatal(err)
+	if completed, err := store.CompleteReviewFeedback(ctx, job.ID, implementationRun.ID, revision); err != nil || !completed {
+		t.Fatalf("unchanged review feedback completion=%t err=%v", completed, err)
 	}
 	ready, err := store.Job(ctx, job.ID)
-	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || runsErr != nil || ready.WorkflowPhase != "ready" || len(runs) != 1 || runs[0].Finding == nil || !runs[0].Finding.Material || runs[0].Finding.Adjudication != "rejected" || runs[0].Finding.EvidenceID != claim.ID {
-		t.Fatalf("ready=%#v runs=%#v err=%v runsErr=%v", ready, runs, err, runsErr)
+	if err != nil || ready.WorkflowPhase != "ready" || ready.Revision != revision {
+		t.Fatalf("unchanged review feedback Job=%#v err=%v", ready, err)
 	}
 }
 
-func TestAcceptedMaterialRepairCreatesNewRevisionAndAutomaticallyReentersPolicy(t *testing.T) {
-	_, store, _ := testDatabase(t)
+func TestCompleteReviewFeedbackDefersToLaterMessageAndChangedRevision(t *testing.T) {
+	t.Run("later Message wins readiness race", func(t *testing.T) {
+		_, store, _ := testDatabase(t)
+		ctx := context.Background()
+		job, revision, _, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-late-message")
+		late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-clarification", Input: "also account for this accepted clarification"})
+		if err != nil || !created || late.Sequence <= 2 {
+			t.Fatalf("late Message=%#v created=%t err=%v", late, created, err)
+		}
+		if completed, err := store.CompleteReviewFeedback(ctx, job.ID, implementationRun.ID, revision); err != nil || completed {
+			t.Fatalf("late Message readiness race completion=%t err=%v", completed, err)
+		}
+		delivery, err := store.NextDelivery(ctx, job.ID, "session-"+job.ID)
+		if err != nil || delivery == nil || delivery.Message.ID != late.ID || delivery.AgentRun.Role != "implement" {
+			t.Fatalf("late Message delivery=%#v err=%v", delivery, err)
+		}
+	})
+
+	t.Run("implementation change reenters checks", func(t *testing.T) {
+		_, store, _ := testDatabase(t)
+		ctx := context.Background()
+		job, revision, _, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-changed-revision")
+		newRevision := strings.Repeat("d", 40)
+		evidence := integrationEvidence(implementationRun.ID, "git-revision", "", "", newRevision, "9")
+		recorded, err := store.RecordRevision(ctx, job.ID, implementationRun.ID, spine.RevisionObservation{ComparisonBase: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, evidence)
+		if err != nil || !recorded {
+			t.Fatalf("review feedback Revision recorded=%t err=%v", recorded, err)
+		}
+		checking, err := store.Job(ctx, job.ID)
+		if err != nil || checking.Revision != newRevision || checking.WorkflowPhase != "checking" {
+			t.Fatalf("changed review feedback Job=%#v err=%v", checking, err)
+		}
+	})
+}
+
+func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, spine.Message, spine.AgentRun) {
+	t.Helper()
 	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "accepted-material-reentry")
+	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, suffix)
 	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +848,7 @@ func TestAcceptedMaterialRepairCreatesNewRevisionAndAutomaticallyReentersPolicy(
 	if err != nil {
 		t.Fatal(err)
 	}
-	record.Facts, record.Initial, record.Final = facts, plan, plan
+	record.Facts, record.Plan = facts, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -848,50 +856,32 @@ func TestAcceptedMaterialRepairCreatesNewRevisionAndAutomaticallyReentersPolicy(
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("review runs=%#v err=%v", runs, err)
 	}
-	run := runs[0].AgentRun
-	prepareReviewBoundaryIntegration(t, store, run)
-	claim := integrationEvidence(run.ID, "review-finding", run.ActionID, "", revision, "6")
-	observed := integrationEvidence(run.ID, "review-native-observation", run.ActionID, "", revision, "7")
-	finding := spine.ReviewFinding{RunID: run.ID, Revision: revision, Role: policy.RoleAuthAuthority, Material: true, Summary: "repair authority check", Rationale: "authorization path is incomplete", AffectedRoles: []policy.Role{policy.RoleAuthAuthority}, AffectedChecks: []string{"check"}}
-	if err := store.RecordReviewResult(ctx, run.ID, spine.NativeTurn{ID: "turn-" + run.ID, Status: "completed"}, claim, observed, finding); err != nil {
-		t.Fatal(err)
+	reviewerRun := runs[0]
+	prepareReviewBoundaryIntegration(t, store, reviewerRun)
+	feedback := "The authority path needs one bounded implementation adjustment."
+	claim := integrationEvidence(reviewerRun.ID, "review-feedback", reviewerRun.ActionID, "", revision, "6")
+	claim.Provenance = "claim"
+	claim.MediaType = "text/plain; charset=utf-8"
+	observed := integrationEvidence(reviewerRun.ID, "review-native-observation", reviewerRun.ActionID, "", revision, "7")
+	outcome := spine.NativeTurn{ID: "turn-" + reviewerRun.ID, Status: "completed", Output: feedback}
+	message, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, outcome, claim, observed)
+	if err != nil || !created || message.Input != feedback || message.FromKind != "agent" || message.FromID != reviewerRun.ID {
+		t.Fatalf("review feedback Message=%#v created=%t err=%v", message, created, err)
 	}
-	message, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID)
-	if err != nil || !created {
-		t.Fatalf("repair message=%#v created=%t err=%v", message, created, err)
+	repeated, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, outcome, claim, observed)
+	if err != nil || created || repeated != message {
+		t.Fatalf("idempotent review feedback Message=%#v created=%t err=%v", repeated, created, err)
 	}
-	if repeated, created, err := store.AdmitReviewRepair(ctx, job.ID, run.ID); err != nil || created || repeated.ID != message.ID {
-		t.Fatalf("repeated repair=%#v created=%t err=%v", repeated, created, err)
+	views, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(views) != 1 || views[0].FeedbackMessageID != message.ID {
+		t.Fatalf("review feedback projection=%#v err=%v", views, err)
 	}
-	repairRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-accepted-review-repair-"+job.ID)
-
-	newRevision := strings.Repeat("d", 40)
-	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, revision)
-	if err != nil || !ready || candidate.ID != repairRun.ID {
-		t.Fatalf("repair Revision candidate=%#v ready=%t err=%v", candidate, ready, err)
+	delivery, err := store.NextDelivery(ctx, job.ID, "session-"+job.ID)
+	if err != nil || delivery == nil || delivery.Message != message || delivery.AgentRun.MessageID != message.ID || delivery.AgentRun.Role != "implement" {
+		t.Fatalf("review feedback implementation delivery=%#v err=%v", delivery, err)
 	}
-	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", newRevision, "8")
-	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, spine.RevisionObservation{ComparisonBase: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, evidence); err != nil || !recorded {
-		t.Fatalf("repair Revision recorded=%t err=%v", recorded, err)
-	}
-	check, err := store.BeginCheck(ctx, job.ID, newRevision, "check", "go test ./...")
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkEvidence := integrationEvidence(check.ID, "check-output", "", check.ID, newRevision, "9")
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	if err := store.RecordCheck(ctx, check, checkEvidence, spine.CommandObservation{Command: check.Command, StartedAt: now, FinishedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkChecksVerified(ctx, job.ID, newRevision, []string{checkEvidence.ID}); err != nil {
-		t.Fatal(err)
-	}
-	updated, err := store.Job(ctx, job.ID)
-	newPlan, planErr := store.ReviewPlan(ctx, job.ID, newRevision)
-	oldRuns, runsErr := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || planErr != nil || runsErr != nil || updated.Revision != newRevision || updated.WorkflowPhase != "review-planning" || newPlan.State != "pending" || len(oldRuns) != 1 || oldRuns[0].Finding == nil || oldRuns[0].Finding.Adjudication != "accepted" || !oldRuns[0].Finding.Stale {
-		t.Fatalf("updated=%#v new plan=%#v old runs=%#v errors=%v/%v/%v", updated, newPlan, oldRuns, err, planErr, runsErr)
-	}
+	implementationRun := completeNextIntegrationRun(t, store, job.ID, "session-"+job.ID, "turn-feedback-"+job.ID)
+	return job, revision, message, implementationRun
 }
 
 func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
@@ -907,7 +897,7 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	}
 	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
 	plan, _ := policy.ReviewPolicy(facts)
-	record.Facts, record.Initial, record.Final = facts, plan, plan
+	record.Facts, record.Plan = facts, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -915,7 +905,7 @@ func TestReviewResourceReceiptsAndCleanupAreExactAndRetrySafe(t *testing.T) {
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
-	run := runs[0].AgentRun
+	run := runs[0]
 	sandbox, err := store.BeginReviewSandbox(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1058,7 +1048,7 @@ func TestCleanupReviewEnumerationUsesPersistedResourcesAndRetainsHistoricalEvide
 	if err != nil {
 		t.Fatal(err)
 	}
-	record.Facts, record.Initial, record.Final = facts, plan, plan
+	record.Facts, record.Plan = facts, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -1074,28 +1064,25 @@ func TestCleanupReviewEnumerationUsesPersistedResourcesAndRetainsHistoricalEvide
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	if _, err := db.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,state,role,revision,capability,workspace,input_contract,output_contract,native_turn_id,native_outcome,started_at,finished_at) values($1,$2,$3,'completed',$4,$5,$6,'/historical/review','historical input','historical output',$7,'completed',$8,$8)`, historicalRunID, job.ID, historicalActionID, policy.RoleBrowserUI, historicalRevision, spine.ReviewReadOnlyCapability, "turn-"+historicalRunID, now); err != nil {
+	if _, err := db.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,action_id,state,role,revision,capability,workspace,input_contract,native_turn_id,native_outcome,started_at,finished_at) values($1,$2,$3,'completed',$4,$5,$6,'/historical/review','historical input',$7,'completed',$8,$8)`, historicalRunID, job.ID, historicalActionID, policy.RoleBrowserUI, historicalRevision, spine.ReviewReadOnlyCapability, "turn-"+historicalRunID, now); err != nil {
 		t.Fatal(err)
 	}
-	historicalEvidence := integrationEvidence(historicalRunID, "review-finding", historicalActionID, "", historicalRevision, "f")
+	historicalEvidence := integrationEvidence(historicalRunID, "review-feedback", historicalActionID, "", historicalRevision, "f")
 	historicalEvidence.Provenance = "claim"
+	historicalEvidence.MediaType = "text/plain; charset=utf-8"
 	if _, err := db.ExecContext(ctx, `insert into dorf.evidence(id,job_id,digest,byte_size,media_type,producer,provenance,kind,action_id,revision,started_at,finished_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, historicalEvidence.ID, job.ID, historicalEvidence.Digest, historicalEvidence.ByteSize, historicalEvidence.MediaType, historicalEvidence.Producer, historicalEvidence.Provenance, historicalEvidence.Kind, historicalEvidence.ActionID, historicalEvidence.Revision, historicalEvidence.StartedAt, historicalEvidence.FinishedAt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `update dorf.agent_runs set claim_evidence_id=$2 where id=$1`, historicalRunID, historicalEvidence.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.review_findings(run_id,job_id,revision,role,material,summary,rationale,affected_roles,affected_checks,evidence_id,adjudication) values($1,$2,$3,$4,true,'historical claim','retained rejected finding','["browser-ui"]'::jsonb,'[]'::jsonb,$5,'rejected')`, historicalRunID, job.ID, historicalRevision, policy.RoleBrowserUI, historicalEvidence.ID); err != nil {
-		t.Fatal(err)
-	}
-
 	allRuns, err := store.AllReviewRuns(ctx, job.ID)
 	historicalIndex := slices.IndexFunc(allRuns, func(run spine.ReviewRunView) bool { return run.ID == historicalRunID })
 	if err != nil || len(allRuns) != 2 || historicalIndex < 0 {
 		t.Fatalf("aggregate review runs=%#v err=%v", allRuns, err)
 	}
 	historicalView := allRuns[historicalIndex]
-	if !historicalView.Stale || historicalView.Finding == nil || historicalView.Finding.EvidenceID != historicalEvidence.ID || historicalView.Finding.Adjudication != "rejected" || !historicalView.Finding.Stale {
+	if !historicalView.Stale || historicalView.ClaimEvidenceID != historicalEvidence.ID || historicalView.FeedbackMessageID != "" {
 		t.Fatalf("historical aggregate hydration=%#v", historicalView)
 	}
 
@@ -1131,7 +1118,7 @@ func TestReviewSubmissionUncertaintyIsAtomicAndExactBindingCanRecover(t *testing
 	}
 	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
 	plan, _ := policy.ReviewPolicy(facts)
-	record.Facts, record.Initial, record.Final = facts, plan, plan
+	record.Facts, record.Plan = facts, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -1139,7 +1126,7 @@ func TestReviewSubmissionUncertaintyIsAtomicAndExactBindingCanRecover(t *testing
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs=%#v err=%v", runs, err)
 	}
-	run := runs[0].AgentRun
+	run := runs[0]
 	prepareReviewResourcesIntegration(t, store, run)
 	if err := store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
 		t.Fatal(err)
@@ -1197,7 +1184,7 @@ func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T)
 	}
 	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
 	plan, _ := policy.ReviewPolicy(facts)
-	record.Facts, record.Initial, record.Final = facts, plan, plan
+	record.Facts, record.Plan = facts, plan
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -1220,7 +1207,7 @@ func TestIsolatedUncertainReviewRunCanBeInterruptedForExactCleanup(t *testing.T)
 	}
 }
 
-func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run spine.AgentRun) {
+func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
 	prepareReviewResourcesIntegration(t, store, run)
@@ -1252,7 +1239,7 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 	}
 }
 
-func prepareReviewResourcesIntegration(t *testing.T, store postgres.Store, run spine.AgentRun) {
+func prepareReviewResourcesIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
 	sandbox, err := store.BeginReviewSandbox(ctx, run.ID)
@@ -1282,83 +1269,6 @@ func prepareReviewResourcesIntegration(t *testing.T, store postgres.Store, run s
 		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: "route-" + run.ID, Outcome: run.ReviewerSandboxID}); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestUnknownDeclaredPerformancePersistsTriageWithMandatoryFloor(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "unknown-performance-triage")
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/cache/cache.go"}, true, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := policy.ReviewPolicy(facts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Facts, record.Initial, record.Final = facts, plan, plan
-	if err := store.RecordReviewPolicy(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	persisted, err := store.ReviewPlan(ctx, job.ID, revision)
-	updated, jobErr := store.Job(ctx, job.ID)
-	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || jobErr != nil || runsErr != nil || persisted.State != "triage-pending" || persisted.Initial.Decision != "triage" || !slices.Equal(persisted.Initial.Roles, []policy.Role{policy.RolePerformance}) || updated.WorkflowPhase != "review-triage" || len(runs) != 1 || runs[0].Role != spine.ReviewTriageRole {
-		t.Fatalf("plan=%#v Job=%#v runs=%#v err=%v jobErr=%v runsErr=%v", persisted, updated, runs, err, jobErr, runsErr)
-	}
-}
-
-func TestRepairedRevisionAutomaticallyPersistsTargetedFloor(t *testing.T) {
-	db, store, _ := testDatabase(t)
-	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "repaired-targeted-floor")
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set review_repair_count=1 where id=$1`, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
-	}
-	waiting, err := store.Job(ctx, job.ID)
-	if err != nil || waiting.WorkflowPhase != "review-planning" {
-		t.Fatalf("repaired Revision did not enter automatic planning: Job=%#v err=%v", waiting, err)
-	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatalf("automatic repaired policy input=%#v err=%v", record, err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	floor, err := policy.ReviewPolicy(facts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	targeted, err := policy.TargetedReverification(floor, []policy.Role{policy.RoleCriticalBoundary})
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Facts, record.Initial, record.Final = facts, targeted, targeted
-	if err := store.RecordReviewPolicy(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	persisted, err := store.ReviewPlan(ctx, job.ID, revision)
-	runs, runsErr := store.ReviewRuns(ctx, job.ID, revision)
-	wantRoles := []policy.Role{policy.RoleAuthAuthority, policy.RoleCriticalBoundary}
-	wantReasons := []policy.Reason{
-		{Role: policy.RoleAuthAuthority, Source: "mandatory", Detail: "authentication or authority paths changed"},
-		{Role: policy.RoleCriticalBoundary, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"},
-	}
-	if err != nil || runsErr != nil || !slices.Equal(persisted.Initial.Roles, wantRoles) || !slices.Equal(persisted.Initial.Reasons, wantReasons) || len(runs) != len(wantRoles) {
-		t.Fatalf("targeted plan=%#v runs=%#v err=%v runsErr=%v", persisted, runs, err, runsErr)
 	}
 }
 
@@ -1425,7 +1335,7 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 	failedEvidence := integrationEvidence(failed.ID, "repository-setup", failed.ID, "", start, "8")
 	observation := spine.CommandObservation{Command: "go mod download", ExitCode: 127, StartedAt: now, FinishedAt: now}
 	declared := []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}
-	collidingPublic, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "setup-retry:toolchain-repair-1", Input: "ordinary caller input"})
+	collidingPublic, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "setup-retry:toolchain-repair-1", Input: "ordinary caller input"})
 	if err != nil || !created || collidingPublic.Sequence != 2 {
 		t.Fatalf("public collision setup=%#v created=%v err=%v", collidingPublic, created, err)
 	}
@@ -1537,7 +1447,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
 	}
 
-	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-before-observation", Input: "include this bounded steering"})
+	late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-before-observation", Input: "include this bounded steering"})
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
@@ -1551,12 +1461,9 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	}
 	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: job.Branch}
 	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", revision, "a")
-	afterCandidate, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
+	afterCandidate, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
 	if err != nil || !created {
 		t.Fatalf("late post-candidate admission=%#v created=%v err=%v", afterCandidate, created, err)
-	}
-	if blocked, err := store.BlockNoRevision(ctx, job.ID, candidate.ID, start, "stale no-change result"); err != nil || blocked {
-		t.Fatalf("no-change observation skipped late accepted input: blocked=%v err=%v", blocked, err)
 	}
 	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, observation, evidence); err != nil || recorded {
 		t.Fatalf("Revision observation skipped late accepted input: recorded=%v err=%v", recorded, err)
@@ -1570,10 +1477,10 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if recorded, err := store.RecordRevision(ctx, job.ID, finalCandidate.ID, observation, finalEvidence); err != nil || !recorded {
 		t.Fatalf("final Revision observation recorded=%v err=%v", recorded, err)
 	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "late-after-observation", Input: "must not run"}); err == nil || !strings.Contains(err.Error(), "no longer accepts implementation steering") {
+	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-after-observation", Input: "must not run"}); err == nil {
 		t.Fatalf("post-observation admission error=%v", err)
 	}
-	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: late.CallerID, Input: late.Input})
+	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
 	if err != nil || created || retry != late {
 		t.Fatalf("idempotent admitted retry=%#v created=%v err=%v", retry, created, err)
 	}
@@ -1651,7 +1558,7 @@ func TestCleanupRecoversCompletedNativeTurnAfterRunTaskExhaustion(t *testing.T) 
 	if err := store.BindNativeTurn(ctx, delivery.AgentRun.ID, turnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, CallerID: "later-pending", Input: "must not be submitted by cleanup"})
+	second, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-pending", Input: "must not be submitted by cleanup"})
 	if err != nil || !created || second.Sequence != 2 {
 		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
 	}

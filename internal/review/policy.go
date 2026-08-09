@@ -14,9 +14,10 @@ const (
 	RoleAuthAuthority    Role = "auth-authority"
 	RolePerformance      Role = "performance"
 	RoleCriticalBoundary Role = "critical-boundary"
+	RoleGeneral          Role = "general"
 )
 
-var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RolePerformance}
+var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RoleGeneral, RolePerformance}
 
 type ChangeFacts struct {
 	Revision            string   `json:"revision"`
@@ -87,7 +88,7 @@ func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, 
 }
 
 // ReviewPolicy is pure and deterministic. Explicit facts select the mandatory
-// review floor; only AddTriage may add Roles for an unknown classification.
+// review floor; unknown classification selects one general read-only reviewer.
 func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 	if !facts.ChecksGreen || facts.Revision == "" || facts.BaseRevision == "" || len(facts.Paths) == 0 {
 		return ReviewPlan{}, fmt.Errorf("incomplete ChangeFacts cannot select review")
@@ -109,6 +110,9 @@ func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 	if facts.DeclaredPerformance {
 		add(RolePerformance, "mandatory", "repository declared performance-sensitive change")
 	}
+	if facts.Unknown {
+		add(RoleGeneral, "unknown", "change risk could not be classified mechanically")
+	}
 	roles := make([]Role, 0, len(selected))
 	for role := range selected {
 		roles = append(roles, role)
@@ -124,97 +128,10 @@ func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 		roles = nil
 	}
 	decision := "selected"
-	if facts.Unknown {
-		decision = "triage"
-	} else if len(roles) == 0 {
+	if len(roles) == 0 {
 		decision = "no-review"
 	}
 	return ReviewPlan{Decision: decision, Roles: roles, Reasons: reasons}, nil
-}
-
-func AddTriage(plan ReviewPlan, roles []Role, rationale string) (ReviewPlan, error) {
-	if plan.Decision != "triage" {
-		return ReviewPlan{}, fmt.Errorf("triage result is not admissible for policy decision %q", plan.Decision)
-	}
-	if strings.TrimSpace(rationale) == "" || len(rationale) > 4096 {
-		return ReviewPlan{}, fmt.Errorf("triage requires bounded rationale")
-	}
-	selected := make(map[Role]bool, len(plan.Roles)+len(roles))
-	for _, role := range plan.Roles {
-		selected[role] = true
-	}
-	for _, role := range roles {
-		if !Allowed(role) {
-			return ReviewPlan{}, fmt.Errorf("triage attempted to add invalid or unsafe review Role %q", role)
-		}
-		if !selected[role] {
-			selected[role] = true
-			plan.Reasons = append(plan.Reasons, Reason{Role: role, Source: "review-triage", Detail: strings.TrimSpace(rationale)})
-		}
-	}
-	plan.Roles = plan.Roles[:0]
-	for role := range selected {
-		plan.Roles = append(plan.Roles, role)
-	}
-	sort.Slice(plan.Roles, func(i, j int) bool { return plan.Roles[i] < plan.Roles[j] })
-	sort.Slice(plan.Reasons, func(i, j int) bool {
-		if plan.Reasons[i].Role == plan.Reasons[j].Role {
-			return plan.Reasons[i].Source < plan.Reasons[j].Source
-		}
-		return plan.Reasons[i].Role < plan.Reasons[j].Role
-	})
-	if len(plan.Roles) == 0 {
-		plan.Decision = "no-review"
-	} else {
-		plan.Decision = "selected"
-	}
-	return plan, nil
-}
-
-// TargetedReverification keeps the deterministic mandatory floor while
-// replacing unknown-case broad triage with the exact Roles invalidated by one
-// accepted material finding.
-func TargetedReverification(plan ReviewPlan, affected []Role) (ReviewPlan, error) {
-	if len(affected) == 0 {
-		return ReviewPlan{}, fmt.Errorf("targeted re-verification requires at least one affected Role")
-	}
-	selected := map[Role]bool{}
-	reasons := make([]Reason, 0, len(plan.Reasons)+len(affected))
-	for _, reason := range plan.Reasons {
-		if reason.Source != "mandatory" {
-			continue
-		}
-		if !Allowed(reason.Role) {
-			return ReviewPlan{}, fmt.Errorf("targeted re-verification contains invalid mandatory Role %q", reason.Role)
-		}
-		if !selected[reason.Role] {
-			selected[reason.Role] = true
-			reasons = append(reasons, reason)
-		}
-	}
-	affectedSeen := map[Role]bool{}
-	for _, role := range affected {
-		if !Allowed(role) || affectedSeen[role] {
-			return ReviewPlan{}, fmt.Errorf("targeted re-verification contains invalid or duplicate Role %q", role)
-		}
-		affectedSeen[role] = true
-		selected[role] = true
-		reasons = append(reasons, Reason{Role: role, Source: "accepted-finding", Detail: "accepted material finding invalidated this Role's claim"})
-	}
-	plan.Roles = make([]Role, 0, len(selected))
-	for role := range selected {
-		plan.Roles = append(plan.Roles, role)
-	}
-	sort.Slice(plan.Roles, func(i, j int) bool { return plan.Roles[i] < plan.Roles[j] })
-	sort.Slice(reasons, func(i, j int) bool {
-		if reasons[i].Role == reasons[j].Role {
-			return reasons[i].Source < reasons[j].Source
-		}
-		return reasons[i].Role < reasons[j].Role
-	})
-	plan.Reasons = reasons
-	plan.Decision = "selected"
-	return plan, nil
 }
 
 func Allowed(role Role) bool {

@@ -14,16 +14,14 @@ type FactStepResultV1 struct {
 	FactID string `json:"fact_id"`
 }
 
-type ReviewStepResultV1 struct {
-	Revision string `json:"revision"`
-	Continue bool   `json:"continue"`
-}
-
 func actionStepName(id string) string   { return "dorf/action/v1/" + id }
 func setupStepName(id string) string    { return "dorf/setup/v1/" + id }
 func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
 func checkStepName(id string) string    { return "dorf/check/v1/" + id }
+func reviewPolicyStepName(job, revision string) string {
+	return fmt.Sprintf("dorf/review-policy/v1/%s/%s", job, revision)
+}
 func verifyStepName(job, revision string) string {
 	return fmt.Sprintf("dorf/checks-verified/v1/%s/%s", job, revision)
 }
@@ -102,13 +100,16 @@ func RunJob(ctx context.Context, client *absurd.Client, service spine.Service, s
 				return spine.RunIdle, err
 			}
 			return spine.RunIdle, nil
-		case "review-planning", "review-triage", "reviewing":
-			keepAdvancing, err := runReviewStep(ctx, service, store, job)
-			if err != nil {
+		case "review-planning":
+			if err := runFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
+				return service.PlanReview(workCtx, job)
+			}); err != nil {
 				return spine.RunIdle, err
 			}
-			if !keepAdvancing {
-				return spine.RunIdle, nil
+			continue
+		case "reviewing":
+			if err := runReviewSteps(ctx, service, store, job); err != nil {
+				return spine.RunIdle, err
 			}
 			continue
 		}
@@ -143,7 +144,7 @@ func RunJob(ctx context.Context, client *absurd.Client, service spine.Service, s
 		}
 
 		switch job.WorkflowPhase {
-		case "implementing", "repairing", "review-repairing":
+		case "implementing", "review-feedback":
 			run, ready, err := store.RevisionCandidate(ctx, jobID, job.Revision)
 			if err != nil {
 				return spine.RunIdle, err
@@ -242,37 +243,30 @@ func runFactStep(ctx context.Context, name, factID string, work func(context.Con
 	return nil
 }
 
-func runReviewStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job) (bool, error) {
-	result, err := absurd.Step(ctx, "dorf/review/v1/"+job.Revision, func(stepCtx context.Context) (ReviewStepResultV1, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (ReviewStepResultV1, error) {
-			for {
-				current, err := store.Job(workCtx, job.ID)
-				if err != nil {
-					return ReviewStepResultV1{}, err
-				}
-				switch current.WorkflowPhase {
-				case "review-planning", "review-triage", "reviewing":
-					disposition, progressed, err := service.AdvanceReview(workCtx, current)
-					if err != nil {
-						return ReviewStepResultV1{}, err
-					}
-					if disposition == spine.RunBlocked {
-						return ReviewStepResultV1{Revision: job.Revision, Continue: true}, nil
-					}
-					if !progressed {
-						return ReviewStepResultV1{Revision: job.Revision, Continue: false}, nil
-					}
-				default:
-					return ReviewStepResultV1{Revision: job.Revision, Continue: true}, nil
-				}
-			}
-		})
-	})
+func runReviewSteps(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job) error {
+	plan, err := store.ReviewPlan(ctx, job.ID, job.Revision)
 	if err != nil {
-		return false, err
+		return err
 	}
-	if result.Revision != job.Revision {
-		return false, fmt.Errorf("review Step returned Revision %q, want %q", result.Revision, job.Revision)
+	runs, err := store.ReviewRuns(ctx, job.ID, job.Revision)
+	if err != nil {
+		return err
 	}
-	return result.Continue, nil
+	byRole := make(map[string]spine.ReviewRunView, len(runs))
+	for _, run := range runs {
+		byRole[run.Role] = run
+	}
+	for _, role := range plan.Plan.Roles {
+		run, ok := byRole[string(role)]
+		if !ok {
+			return fmt.Errorf("selected review Role %s has no AgentRun", role)
+		}
+		if run.FeedbackMessageID != "" {
+			continue
+		}
+		return runFactStep(ctx, agentRunStepName(run.ID), run.ID, func(workCtx context.Context) error {
+			return service.RunReview(workCtx, job, run.ID)
+		})
+	}
+	return fmt.Errorf("reviewing Revision %s has no pending reviewer", job.Revision)
 }

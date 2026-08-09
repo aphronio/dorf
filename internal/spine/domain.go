@@ -78,16 +78,23 @@ type Job struct {
 	RouteState           string       `json:"route_state,omitempty"`
 	SessionID            string       `json:"session_id,omitempty"`
 	WorkflowPhase        string       `json:"workflow_phase"`
-	RepairCount          int          `json:"repair_count"`
 	WorkflowAttention    string       `json:"workflow_attention,omitempty"`
 	CleanupAttention     string       `json:"cleanup_attention,omitempty"`
-	ReviewRepairCount    int          `json:"review_repair_count"`
 }
+
+type MessageFromKind string
+
+const (
+	MessageFromHuman    MessageFromKind = "human"
+	MessageFromAgent    MessageFromKind = "agent"
+	MessageFromWorkflow MessageFromKind = "workflow"
+)
 
 type Message struct {
 	ID           string                `json:"id"`
 	JobID        string                `json:"job_id"`
-	CallerID     string                `json:"caller_id"`
+	FromKind     MessageFromKind       `json:"from_kind"`
+	FromID       string                `json:"from_id"`
 	Sequence     int64                 `json:"sequence"`
 	Input        string                `json:"input"`
 	Intent       MessageDeliveryIntent `json:"intent"`
@@ -102,44 +109,30 @@ const (
 )
 
 type AgentRun struct {
-	ID                   string        `json:"id"`
-	JobID                string        `json:"job_id"`
-	MessageID            string        `json:"message_id"`
-	ActionID             string        `json:"action_id"`
-	SessionID            string        `json:"session_id"`
-	State                AgentRunState `json:"state"`
-	BaselineRecorded     bool          `json:"baseline_recorded"`
-	BaselineTurnID       string        `json:"baseline_turn_id,omitempty"`
-	NativeTurnID         string        `json:"native_turn_id,omitempty"`
-	NativeOutcome        string        `json:"native_outcome,omitempty"`
-	Attention            string        `json:"attention,omitempty"`
-	Role                 string        `json:"role"`
-	Revision             string        `json:"revision,omitempty"`
-	Capability           string        `json:"capability,omitempty"`
-	Workspace            string        `json:"workspace,omitempty"`
-	InputContract        string        `json:"input_contract,omitempty"`
-	OutputContract       string        `json:"output_contract,omitempty"`
-	ClaimEvidenceID      string        `json:"claim_evidence_id,omitempty"`
-	ObservedEvidenceID   string        `json:"observed_evidence_id,omitempty"`
-	StartedAt            time.Time     `json:"started_at,omitempty"`
-	FinishedAt           time.Time     `json:"finished_at,omitempty"`
-	InputTokens          int64         `json:"input_tokens,omitempty"`
-	CachedInputTokens    int64         `json:"cached_input_tokens,omitempty"`
-	OutputTokens         int64         `json:"output_tokens,omitempty"`
-	CostMicrousd         int64         `json:"cost_microusd,omitempty"`
-	UsageAvailable       bool          `json:"usage_available"`
-	YieldCount           int           `json:"yield_count,omitempty"`
-	ReviewerSandboxID    string        `json:"reviewer_sandbox_id,omitempty"`
-	ReviewerRouteID      string        `json:"reviewer_route_id,omitempty"`
-	ReviewerAppServer    string        `json:"reviewer_app_server_id,omitempty"`
-	ReviewerOwnerNonce   string        `json:"-"`
-	SubmissionNonce      string        `json:"-"`
-	InputDigest          string        `json:"input_digest,omitempty"`
-	RevisionTree         string        `json:"revision_tree,omitempty"`
-	ReviewerSandboxState string        `json:"reviewer_sandbox_state,omitempty"`
-	ReviewerRouteState   string        `json:"reviewer_route_state,omitempty"`
-	CheckoutState        string        `json:"checkout_state,omitempty"`
-	PostReviewState      string        `json:"post_review_state,omitempty"`
+	ID                string        `json:"id"`
+	JobID             string        `json:"job_id"`
+	MessageID         string        `json:"message_id"`
+	ActionID          string        `json:"action_id"`
+	SessionID         string        `json:"session_id"`
+	State             AgentRunState `json:"state"`
+	BaselineRecorded  bool          `json:"baseline_recorded"`
+	BaselineTurnID    string        `json:"baseline_turn_id,omitempty"`
+	NativeTurnID      string        `json:"native_turn_id,omitempty"`
+	NativeOutcome     string        `json:"native_outcome,omitempty"`
+	Attention         string        `json:"attention,omitempty"`
+	Role              string        `json:"role"`
+	Revision          string        `json:"revision,omitempty"`
+	Capability        string        `json:"capability,omitempty"`
+	Workspace         string        `json:"workspace,omitempty"`
+	InputContract     string        `json:"input_contract,omitempty"`
+	StartedAt         time.Time     `json:"started_at,omitempty"`
+	FinishedAt        time.Time     `json:"finished_at,omitempty"`
+	InputTokens       int64         `json:"input_tokens,omitempty"`
+	CachedInputTokens int64         `json:"cached_input_tokens,omitempty"`
+	OutputTokens      int64         `json:"output_tokens,omitempty"`
+	CostMicrousd      int64         `json:"cost_microusd,omitempty"`
+	UsageAvailable    bool          `json:"usage_available"`
+	YieldCount        int           `json:"yield_count,omitempty"`
 }
 
 type Delivery struct {
@@ -291,8 +284,8 @@ func JobID(admissionKey string) string {
 	return "job-" + digest(admissionKey, 20)
 }
 
-func MessageID(jobID, callerID string) string {
-	return "message-" + digest(jobID+"\x00"+callerID, 24)
+func MessageID(jobID string, fromKind MessageFromKind, fromID string) string {
+	return "message-" + digest(jobID+"\x00"+string(fromKind)+"\x00"+fromID, 24)
 }
 
 func AgentRunID(messageID string) string {

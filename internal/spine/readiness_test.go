@@ -97,14 +97,14 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	if withoutPlan.Ready || !strings.Contains(withoutPlan.Reason, "no explicit persisted") {
 		t.Fatalf("missing plan readiness=%#v", withoutPlan)
 	}
-	noReview := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Final: policy.ReviewPlan{Decision: "no-review"}}
+	noReview := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Plan: policy.ReviewPlan{Decision: "no-review"}}
 	explicit := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &noReview, nil)
 	if !explicit.Ready || !strings.Contains(explicit.Reason, "explicitly selected no agent review") {
 		t.Fatalf("explicit no-review readiness=%#v", explicit)
 	}
-	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Final: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
+	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
 	incomplete := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &selected, nil)
-	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not settled") {
+	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not returned a Message") {
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -112,13 +112,17 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	runID := ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary))
 	ownerNonce := strings.Repeat("a", 64)
 	reviewerSandbox := ReviewSandboxName(runID)
-	run := ReviewRunView{AgentRun: AgentRun{ID: runID, JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: input, StartedAt: now, FinishedAt: now.Add(time.Second), ReviewerSandboxID: reviewerSandbox, ReviewerRouteID: "route-review", ReviewerAppServer: ReviewControllerID(runID, reviewerSandbox, ownerNonce), ReviewerOwnerNonce: ownerNonce, SubmissionNonce: strings.Repeat("b", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(input))), RevisionTree: strings.Repeat("c", 40), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", PostReviewState: "verified"}, Finding: &ReviewFinding{Material: false, Summary: "clear", Rationale: "no issue", AffectedRoles: []policy.Role{}, AffectedChecks: []string{}}}
-	outcome := NativeTurn{ID: run.NativeTurnID, Status: "completed", Output: `{"material":false,"summary":"clear","rationale":"no issue","affected_roles":[],"affected_checks":[]}`}
-	claim, observed, err := (Service{Evidence: store}).reviewEvidence(run.AgentRun, outcome, "review-finding")
+	run := ReviewRunView{
+		AgentRun:            AgentRun{ID: runID, JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: input, StartedAt: now, FinishedAt: now.Add(time.Second)},
+		ReviewRunProjection: ReviewRunProjection{ReviewerSandboxID: reviewerSandbox, ReviewerRouteID: "route-review", ReviewerAppServer: ReviewControllerID(runID, reviewerSandbox, ownerNonce), ReviewerOwnerNonce: ownerNonce, SubmissionNonce: strings.Repeat("b", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(input))), RevisionTree: strings.Repeat("c", 40), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", PostReviewState: "verified"},
+		FeedbackMessageID:   MessageID(jobID, MessageFromAgent, runID),
+	}
+	outcome := NativeTurn{ID: run.NativeTurnID, Status: "completed", Output: "No material issue found. The boundary remains intact."}
+	claim, observed, err := (Service{Evidence: store}).reviewEvidence(run, outcome, "review-feedback")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.ClaimEvidenceID, run.ObservedEvidenceID, run.Finding.EvidenceID = claim.ID, observed.ID, claim.ID
+	run.ClaimEvidenceID, run.ObservedEvidenceID = claim.ID, observed.ID
 	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, claim, observed}, store, &selected, []ReviewRunView{run})
 	if !settled.Ready || !strings.Contains(settled.Reason, "claim Evidence") {
 		t.Fatalf("settled selected readiness=%#v", settled)

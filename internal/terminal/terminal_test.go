@@ -29,7 +29,7 @@ func TestJobRecordedGatewayLocatorOverridesRestartedControllerDefault(t *testing
 
 func TestReviewerRouteCleanupRecoversExactIDFromStableCreateAction(t *testing.T) {
 	job := spine.Job{ID: "job-exact"}
-	run := spine.AgentRun{ID: "review-run-exact", JobID: job.ID}
+	run := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-run-exact", JobID: job.ID}}
 	want := gateway.RouteID(spine.ScopedActionID(job.ID, spine.ActionRouteCreate, run.ID))
 	got, err := reviewerRouteID(job, run)
 	if err != nil || got != want {
@@ -53,6 +53,21 @@ func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
 		if err := requireBridgeRoute(value, "10.42.0.1"); err == nil {
 			t.Fatalf("accepted unsafe Sandbox route %s", value)
 		}
+	}
+}
+
+func TestCodingTurnInputKeepsReviewFeedbackOpaque(t *testing.T) {
+	job := spine.Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
+	message := spine.Message{FromKind: spine.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
+
+	reviewer := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary-review"}})
+	if reviewer != message.Input {
+		t.Fatalf("reviewer input was rewritten: %q", reviewer)
+	}
+
+	implementation := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "implement"}})
+	if !strings.HasPrefix(implementation, message.Input+"\n\n") || !strings.Contains(implementation, job.Branch) || !strings.Contains(implementation, job.Revision) {
+		t.Fatalf("implementation input is missing the coding contract: %q", implementation)
 	}
 }
 
@@ -135,7 +150,10 @@ func TestReviewMaterializationRealGitIgnoresImplementationForgedReviewWorktree(t
 	}
 
 	job := spine.Job{ID: "job-real-boundary", Revision: revision}
-	run := spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, Revision: revision, Workspace: "/workspace/job", ReviewerSandboxID: "dorf-review-real", ReviewerOwnerNonce: strings.Repeat("d", 64)}
+	run := spine.ReviewRunView{
+		AgentRun:            spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, Revision: revision, Workspace: "/workspace/job"},
+		ReviewRunProjection: spine.ReviewRunProjection{ReviewerSandboxID: "dorf-review-real", ReviewerOwnerNonce: strings.Repeat("d", 64)},
+	}
 	metadata := map[string]string{
 		"user.dorf.owner": "review", "user.dorf.job": job.ID, "user.dorf.agent_run": run.ID,
 		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.ReviewerOwnerNonce,
@@ -190,7 +208,10 @@ func (r *reviewBoundaryRunner) Run(_ context.Context, command string, _ []byte, 
 func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testing.T) {
 	revision, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	job := spine.Job{ID: "job-1", Revision: revision}
-	run := spine.AgentRun{ID: "agent-run-1", JobID: job.ID, Revision: revision, Workspace: "/workspace/job", ReviewerSandboxID: "dorf-review-owned", ReviewerOwnerNonce: strings.Repeat("c", 64)}
+	run := spine.ReviewRunView{
+		AgentRun:            spine.AgentRun{ID: "agent-run-1", JobID: job.ID, Revision: revision, Workspace: "/workspace/job"},
+		ReviewRunProjection: spine.ReviewRunProjection{ReviewerSandboxID: "dorf-review-owned", ReviewerOwnerNonce: strings.Repeat("c", 64)},
+	}
 	runner := &reviewBoundaryRunner{revision: revision, tree: tree, metadata: map[string]string{
 		"user.dorf.owner": "review", "user.dorf.job": job.ID, "user.dorf.agent_run": run.ID,
 		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.ReviewerOwnerNonce,

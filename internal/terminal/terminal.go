@@ -72,7 +72,7 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (po
 	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
 }
 
-func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
 	if run.ReviewerSandboxID == "" {
 		return spine.Receipt{}, fmt.Errorf("review materialization requires a dedicated reviewer Sandbox")
 	}
@@ -126,7 +126,7 @@ printf '%s %s clean\n' "$head" "$tree"`
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
-func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
 	if run.ReviewerSandboxID != spine.ReviewSandboxName(run.ID) || run.ReviewerSandboxID == e.Sandbox.Name(job.ID) {
 		return spine.Receipt{}, fmt.Errorf("reviewer Sandbox identity is not isolated from the implementation Sandbox")
 	}
@@ -134,7 +134,7 @@ func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run s
 	return spine.Receipt{ExternalID: id, Outcome: run.Revision}, err
 }
 
-func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spine.AgentRun, action spine.Action) (spine.Receipt, error) {
+func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, action spine.Action) (spine.Receipt, error) {
 	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
 		return spine.Receipt{}, err
 	}
@@ -163,7 +163,7 @@ func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spi
 	return spine.Receipt{ExternalID: route.ID, Outcome: run.ReviewerSandboxID}, nil
 }
 
-func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.Receipt, error) {
+func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.Receipt, error) {
 	if run.ReviewerSandboxID == "" {
 		return spine.Receipt{}, fmt.Errorf("legacy implementation-Sandbox review cannot produce isolated post-turn attestation")
 	}
@@ -184,7 +184,7 @@ printf '%s %s clean\n' "$head" "$tree"`
 	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
-func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
 	present, err := e.Sandbox.ReviewPresent(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
 	if err != nil {
 		return spine.Receipt{}, err
@@ -209,7 +209,7 @@ func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spi
 	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
 }
 
-func reviewerRouteID(job spine.Job, run spine.AgentRun) (string, error) {
+func reviewerRouteID(job spine.Job, run spine.ReviewRunView) (string, error) {
 	if run.JobID != job.ID || strings.TrimSpace(run.ID) == "" {
 		return "", fmt.Errorf("reviewer route cleanup identity does not belong to exact Job %s", job.ID)
 	}
@@ -220,35 +220,32 @@ func reviewerRouteID(job spine.Job, run spine.AgentRun) (string, error) {
 	return gateway.RouteID(createActionID), nil
 }
 
-func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run spine.AgentRun, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
 	err := e.Sandbox.DeleteReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
 	return spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}, err
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeBinding, error) {
+func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeBinding, error) {
 	return e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeHistory, error) {
+func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeHistory, error) {
 	return e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
-func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.AgentRun) (spine.ReviewNativeBinding, error) {
+func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeBinding, error) {
 	return e.Agent.RecoverStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.AgentRun, turnID string) (spine.ReviewNativeBinding, error) {
+func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.ReviewRunView, turnID string) (spine.ReviewNativeBinding, error) {
 	return e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, turnID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 }
 
-func reviewMetadata(job spine.Job, run spine.AgentRun) incus.ReviewMetadata {
+func reviewMetadata(job spine.Job, run spine.ReviewRunView) incus.ReviewMetadata {
 	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.Revision, OwnershipNonce: run.ReviewerOwnerNonce}
 }
 
 func reviewEffort(role, implementationEffort string) string {
-	if role == "review-triage" {
-		return "low"
-	}
 	if role == "auth-authority" || role == "critical-boundary" {
 		return implementationEffort
 	}
@@ -298,7 +295,7 @@ func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spin
 }
 
 func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
-	if delivery.AgentRun.Role != "implement" && delivery.AgentRun.Role != "repair" {
+	if delivery.AgentRun.Role != "implement" {
 		return delivery.Message.Input
 	}
 	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", delivery.Message.Input, job.Branch, job.Revision)

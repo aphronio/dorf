@@ -29,15 +29,12 @@ create table dorf.jobs (
     task_id text unique,
     cleanup_task_id text unique,
     workflow_phase text not null default 'setup' check (workflow_phase in (
-        'setup','implementing','checking','repairing',
-        'review-planning','review-triage','reviewing','review-repairing',
+        'setup','implementing','checking',
+        'review-planning','reviewing','review-feedback',
         'ready','publishing','publication-blocked','published','blocked'
     )),
-    repair_count integer not null default 0 check (repair_count between 0 and 1),
     workflow_attention text,
     setup_action_id text,
-    review_repair_count integer not null default 0 check (review_repair_count between 0 and 1),
-    review_repair_source_run_id text,
     cleanup_attention text,
     admitted_at timestamptz not null default clock_timestamp(),
     cleaned_at timestamptz,
@@ -58,13 +55,14 @@ create table dorf.jobs (
 create table dorf.job_messages (
     id text primary key,
     job_id text not null references dorf.jobs(id),
-    caller_id text not null check (length(trim(caller_id)) > 0),
+    from_kind text not null check (from_kind in ('human','agent','workflow')),
+    from_id text not null check (length(trim(from_id)) > 0),
     sequence bigint not null check (sequence > 0),
     input text not null check (length(trim(input)) > 0),
     delivery_intent text not null default 'follow' check (delivery_intent in ('follow','steer')),
     steer_target_turn_id text,
     admitted_at timestamptz not null default clock_timestamp(),
-    unique(job_id,caller_id),
+    unique(job_id,from_kind,from_id),
     unique(job_id,sequence),
     constraint job_messages_delivery_target_check check (
         (delivery_intent='follow' and steer_target_turn_id is null) or
@@ -134,12 +132,11 @@ create table dorf.agent_runs (
     native_turn_id text,
     native_outcome text check (native_outcome is null or native_outcome in ('completed','interrupted','failed')),
     attention text,
-    role text not null check (role in ('implement','repair','review-triage','browser-ui','auth-authority','performance','critical-boundary')),
+    role text not null check (role in ('implement','general','browser-ui','auth-authority','performance','critical-boundary')),
     revision text,
     capability text,
     workspace text,
     input_contract text,
-    output_contract text,
     claim_evidence_id text,
     observed_evidence_id text,
     started_at timestamptz,
@@ -153,10 +150,10 @@ create table dorf.agent_runs (
     observed_at timestamptz not null default clock_timestamp(),
     updated_at timestamptz not null default clock_timestamp(),
     constraint agent_runs_review_binding_check check (
-        (role in ('implement','repair') and revision is null and capability is null and workspace is null) or
-        (role in ('review-triage','browser-ui','auth-authority','performance','critical-boundary') and
+        (role='implement' and revision is null and capability is null and workspace is null and input_contract is null) or
+        (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
          revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$' and capability='immutable-read-only' and
-         length(workspace)>0 and length(input_contract)>0 and length(output_contract)>0)
+         length(workspace)>0 and length(input_contract)>0)
     ),
     constraint agent_runs_review_measurements_check check (
         input_tokens>=0 and cached_input_tokens>=0 and output_tokens>=0 and cost_microusd>=0 and yield_count>=0 and
@@ -233,13 +230,10 @@ alter table dorf.agent_runs add constraint agent_runs_observed_evidence_id_fkey 
 create table dorf.review_plans (
     job_id text not null references dorf.jobs(id),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    state text not null check (state in ('pending','triage-pending','final')),
+    state text not null check (state in ('pending','final')),
     facts jsonb,
-    initial_policy jsonb,
-    final_plan jsonb,
+    plan jsonb,
     policy_digest text check (policy_digest is null or policy_digest ~ '^[0-9a-f]{64}$'),
-    triage_run_id text,
-    triage_rationale text,
     created_at timestamptz not null default clock_timestamp(),
     finalized_at timestamptz,
     primary key(job_id,revision)
@@ -271,24 +265,7 @@ create table dorf.review_resources (
     sandbox_deleted_at timestamptz
 );
 
-create table dorf.review_findings (
-    run_id text primary key references dorf.agent_runs(id),
-    job_id text not null references dorf.jobs(id),
-    revision text not null,
-    role text not null,
-    material boolean not null,
-    summary text not null,
-    rationale text not null,
-    affected_roles jsonb not null default '[]'::jsonb,
-    affected_checks jsonb not null default '[]'::jsonb,
-    evidence_id text not null unique references dorf.evidence(id),
-    adjudication text not null default 'not-needed' check (adjudication in ('not-needed','pending','accepted','rejected')),
-    recorded_at timestamptz not null default clock_timestamp()
-);
-
 alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
-alter table dorf.jobs add constraint jobs_review_repair_source_run_id_fkey foreign key(review_repair_source_run_id) references dorf.agent_runs(id);
-alter table dorf.review_plans add constraint review_plans_triage_run_id_fkey foreign key(triage_run_id) references dorf.agent_runs(id);
 
 create table dorf.github_proposals (
     job_id text primary key references dorf.jobs(id),

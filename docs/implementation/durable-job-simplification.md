@@ -153,37 +153,38 @@ AgentRun
 
 Message
   +-- text
-  +-- source kind: human, Check, or AgentRun
-  +-- source ID
+  +-- from: human, agent, or workflow
+  +-- from ID: request, AgentRun, or Check ID
   +-- Job-local sequence
 ```
 
-`Feedback` describes how a Message is being used; it is not another durable primitive. The source
-identifies the human request, Check, or AgentRun that produced it. The AgentRun that consumes the
-Message supplies the other half of the history: `source -> Message -> handling AgentRun`. Rename the
-existing caller-oriented field to this source vocabulary rather than storing both. Add reply or
-thread fields only when a real outward-response feature needs them.
+`Feedback` describes how a Message is being used; it is not another durable primitive. `FromKind`
+names the sender: a human, an agent, or the workflow. `FromID` retains the exact request, AgentRun, or
+Check that caused the Message. The AgentRun that consumes the Message supplies the other half of the
+history: `sender -> Message -> handling AgentRun`. Add reply or thread fields only when a real
+outward-response feature needs them.
 
 ### Slice 3A: Use one AgentRun runner
 
 Goal: make submission, native recovery, waiting, and terminal recording one durable mechanism.
 
-- [ ] Define one small AgentRun execution contract containing only the durable run identity and the
+- [x] Define one small AgentRun execution contract containing only the durable run identity and the
       concrete harness operations needed to inspect, submit, and wait.
-- [ ] Use one runner for initial and follow-up implementation, general review, and specialist review.
-- [ ] Keep Role-specific prompt construction outside the runner.
-- [ ] Keep reviewer Sandbox creation, immutable checkout, scoped route creation, and capability
+- [x] Use one runner for initial and follow-up implementation, general review, and specialist review.
+- [x] Keep Role-specific prompt construction outside the runner.
+- [x] Keep reviewer Sandbox creation, immutable checkout, scoped route creation, and capability
       validation outside the runner as preparation facts.
-- [ ] Keep reviewer output as opaque text; persist the cross-AgentRun handoff as a Message, with no
+- [x] Keep reviewer output as opaque text; persist the cross-AgentRun handoff as a Message, with no
       review-result parser or finding schema.
-- [ ] Give every Message explicit source kind and source ID; use the same pair as its stable
+- [x] Give every Message explicit `FromKind` and `FromID`; use the same pair as its stable
       admission identity and remove the caller-only naming.
-- [ ] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
-- [ ] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
-- [ ] Delete the separate implementation and review submission/recovery state machines.
-- [ ] Replace duplicated native-status and uncertainty tests with one runner recovery contract plus one
+- [x] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
+- [x] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
+- [x] Delete the separate implementation and review submission/recovery state machines.
+- [x] Replace duplicated native-status and uncertainty tests with one runner recovery contract plus one
       reviewer ownership/capability test.
-- [ ] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun.
+- [ ] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun. Local
+      setup currently stops at the missing `personal-chatgpt` provider connection.
 
 Terminal: implementation and selected review both execute through the same AgentRun runner without
 weakening reviewer isolation or exact-Revision ownership.
@@ -192,24 +193,25 @@ weakening reviewer isolation or exact-Revision ownership.
 
 Goal: make ReviewPolicy, review, Message delivery, and Revision observation one readable product path.
 
-- [ ] Replace the coarse review continuation with explicit Revision-scoped Steps in `RunJob`.
-- [ ] Keep `ReviewPolicy(ChangeFacts) -> ReviewPlan` pure and deterministic.
-- [ ] Run one general read-only reviewer when policy reports unknown risk; do not use reviewer prose
+- [x] Replace the coarse review continuation with explicit Revision-scoped Steps in `RunJob`.
+- [x] Keep `ReviewPolicy(ChangeFacts) -> ReviewPlan` pure and deterministic.
+- [x] Run one general read-only reviewer when policy reports unknown risk; do not use reviewer prose
       as a router protocol.
-- [ ] Run each selected specialist through the shared AgentRun runner in its prepared read-only
+- [x] Run each selected specialist through the shared AgentRun runner in its prepared read-only
       workspace.
-- [ ] Turn each reviewer's returned text into one stable Message to the original implementation Session.
-- [ ] Deliver user, Check, and reviewer Messages through the same implementation AgentRun path.
-- [ ] Let the implementation agent decide whether to act, ignore, or explain; Dorf does not classify
+- [x] Turn each reviewer's returned text into one stable Message to the original implementation Session.
+- [x] Deliver human, workflow, and agent Messages through the same implementation AgentRun path.
+- [x] Let the implementation agent decide whether to act, ignore, or explain; Dorf does not classify
       the text as clear, material, a suggestion, or a finding.
-- [ ] Observe the implementation AgentRun's Git result: a new commit loops through Checks and policy;
+- [x] Observe the implementation AgentRun's Git result: a new commit loops through Checks and policy;
       a clean unchanged checkout completes review for that Revision.
-- [ ] Use one deterministic readiness calculation for no-review and completed-review Revisions.
-- [ ] Delete `advanceReview`, the coarse review Step, redundant review phases, and duplicated readiness
+- [x] Use one deterministic readiness calculation for no-review and completed-review Revisions.
+- [x] Delete `advanceReview`, the coarse review Step, redundant review phases, and duplicated readiness
       branches once `RunJob` is authoritative.
-- [ ] Delete review-result structs, finding persistence, output parsers, adjudication states, and
+- [x] Delete review-result structs, finding persistence, output parsers, adjudication states, and
       review-specific repair counters once this path is authoritative.
 - [ ] Dogfood no-review and selected-review paths; let later dogfood expose further feedback edge cases.
+      Local setup currently stops at the missing `personal-chatgpt` provider connection.
 
 Terminal: no-review, known-role review, and general review all follow the visible `RunJob` story; review
 text reaches the original implementation Session through Message and no parser decides what it means.

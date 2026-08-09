@@ -17,10 +17,13 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if ActionID(jobA, ActionTurnStart) == ActionID(jobA, ActionRouteCreate) {
 		t.Fatal("different effects share an Action identity")
 	}
-	messageA := MessageID(jobA, "caller-a")
-	messageB := MessageID(jobA, "caller-b")
+	messageA := MessageID(jobA, MessageFromHuman, "caller-a")
+	messageB := MessageID(jobA, MessageFromHuman, "caller-b")
 	if messageA == messageB || TurnActionID(messageA) == TurnActionID(messageB) || AgentRunID(messageA) == AgentRunID(messageB) {
 		t.Fatal("distinct logical inputs share delivery identities")
+	}
+	if messageA == MessageID(jobA, MessageFromWorkflow, "caller-a") {
+		t.Fatal("different senders share a Message identity")
 	}
 	if TurnActionID(messageA) != TurnActionID(messageA) || AgentRunID(messageA) != AgentRunID(messageA) {
 		t.Fatal("per-input Action or AgentRun identity is not stable")

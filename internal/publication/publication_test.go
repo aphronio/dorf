@@ -113,6 +113,35 @@ func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T
 	}
 }
 
+func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	job := spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback", Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
+	runs := []spine.ReviewRunView{{
+		AgentRun: spine.AgentRun{
+			Role:     "critical-boundary-review",
+			Revision: revision,
+		},
+		ReviewRunProjection: spine.ReviewRunProjection{ClaimEvidenceID: "e-claim", ObservedEvidenceID: "e-observed"},
+		FeedbackMessageID:   "message-review-feedback",
+	}}
+	evidence := []spine.Evidence{
+		{ID: "e-claim", Digest: strings.Repeat("1", 64)},
+		{ID: "e-observed", Digest: strings.Repeat("2", 64)},
+	}
+
+	body := Body(job, spine.ReadinessAssessment{Status: "ready", Reason: "review feedback handled"}, nil, evidence, runs)
+	for _, want := range []string{"critical-boundary-review", "feedback Message `message-review-feedback`", "handled by the implementation Session", "e-claim", "e-observed"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body is missing %q:\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"material finding", "no material finding", "adjudication"} {
+		if strings.Contains(strings.ToLower(body), forbidden) {
+			t.Fatalf("body classified opaque feedback as %q:\n%s", forbidden, body)
+		}
+	}
+}
+
 func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *testing.T) {
 	const truncated = "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
 	tests := []struct {

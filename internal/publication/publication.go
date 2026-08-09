@@ -314,15 +314,11 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 	lines = append(lines, "", "## Selected review", "")
 	selected := false
 	for _, run := range runs {
-		if run.Revision != job.Revision || run.Role == spine.ReviewTriageRole || run.Finding == nil {
+		if run.Revision != job.Revision {
 			continue
 		}
 		selected = true
-		outcome := "no material finding"
-		if run.Finding.Material {
-			outcome = "material finding " + run.Finding.Adjudication
-		}
-		lines = append(lines, fmt.Sprintf("- %s: %s — %s (claim Evidence `%s`, sha256 `%s`; observed Evidence `%s`, sha256 `%s`)", run.Role, outcome, run.Finding.Summary, run.ClaimEvidenceID, digests[run.ClaimEvidenceID], run.ObservedEvidenceID, digests[run.ObservedEvidenceID]))
+		lines = append(lines, fmt.Sprintf("- %s: feedback Message `%s` handled by the implementation Session (claim Evidence `%s`, sha256 `%s`; observed Evidence `%s`, sha256 `%s`)", run.Role, run.FeedbackMessageID, run.ClaimEvidenceID, digests[run.ClaimEvidenceID], run.ObservedEvidenceID, digests[run.ObservedEvidenceID]))
 	}
 	if !selected {
 		lines = append(lines, "- ReviewPolicy selected no agent review.")

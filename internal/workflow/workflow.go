@@ -122,7 +122,7 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	// Events carry no delivery truth. Re-emitting on an idempotent client retry
 	// repairs a crash after PostgreSQL admission but before this wake hint.
 	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), Wake{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
-		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same caller ID and input: %w", message.ID, message.Sequence, err)
+		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same from ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
 }

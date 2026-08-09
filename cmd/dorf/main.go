@@ -404,7 +404,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	set := flag.NewFlagSet("message", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jobID := set.String("job", "", "existing Job ID")
-	callerID := set.String("id", "", "stable caller message identity")
+	requestID := set.String("id", "", "stable human request identity")
 	inputFile := set.String("input-file", "", "path containing the complete message input")
 	intent := set.String("intent", string(spine.MessageFollow), "harness delivery intent: follow or steer")
 	if err := set.Parse(args); err != nil {
@@ -414,7 +414,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, CallerID: *callerID, Input: input, Intent: spine.MessageDeliveryIntent(*intent)})
+	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, FromKind: spine.MessageFromHuman, FromID: *requestID, Input: input, Intent: spine.MessageDeliveryIntent(*intent)})
 	if err != nil {
 		return err
 	}
@@ -555,7 +555,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		return err
 	}
 	continuation := continuationFor(job, outcome, runEvidence, publicationEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"implementation_agent_runs": messages, "review_findings": reviewRuns, "authority": "Codex native Sessions; agent statements and findings are claims and do not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publication": publicationEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publication": publicationEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
@@ -584,7 +584,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		fmt.Fprintf(stdout, "  Absurd publication: %s state=%s\n", publicationEvidence.TaskID, publicationEvidence.State)
 	}
 	fmt.Fprintln(stdout, "  Absurd history: use absurdctl dump-task --task-id=<task-id>")
-	fmt.Fprintln(stdout, "  claims: implementation and repair prose remain in the Codex-owned native context; claims do not prove readiness")
+	fmt.Fprintln(stdout, "  claims: agent text is carried by Message; claims do not prove readiness")
 	for _, message := range messages {
 		description := describeMessage(message, messages)
 		if !job.AdmissionOpen && message.State == spine.AgentRunPending {
@@ -607,12 +607,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		if plan.Revision == job.Revision {
 			scope = "current"
 		}
-		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v digest=%s\n", scope, plan.Revision, plan.State, plan.Final.Decision, plan.Final.Roles, empty(plan.PolicyDigest))
-		for _, reason := range plan.Final.Reasons {
+		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v digest=%s\n", scope, plan.Revision, plan.State, plan.Plan.Decision, plan.Plan.Roles, empty(plan.PolicyDigest))
+		for _, reason := range plan.Plan.Reasons {
 			fmt.Fprintf(stdout, "    reason %s [%s]: %s\n", reason.Role, reason.Source, reason.Detail)
-		}
-		if plan.TriageRationale != "" {
-			fmt.Fprintf(stdout, "    triage claim %s: %s\n", plan.TriageRunID, plan.TriageRationale)
 		}
 	}
 	for _, run := range reviewRuns {
@@ -620,10 +617,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
 			latency = run.FinishedAt.Sub(run.StartedAt)
 		}
-		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s controller=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), empty(run.ReviewerAppServer), run.Stale)
-		if run.Finding != nil {
-			fmt.Fprintf(stdout, "    claim material=%t adjudication=%s evidence=%s summary=%s\n", run.Finding.Material, run.Finding.Adjudication, run.Finding.EvidenceID, run.Finding.Summary)
-		}
+		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s controller=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), empty(run.ReviewerAppServer), run.Stale)
 	}
 	for _, record := range evidenceRecords {
 		verification := "verified"

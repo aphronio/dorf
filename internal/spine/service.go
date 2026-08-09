@@ -57,7 +57,7 @@ type CodingStore interface {
 	RecordRevision(context.Context, string, string, RevisionObservation, Evidence) (bool, error)
 	BeginCheck(context.Context, string, string, string, string) (Check, error)
 	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
-	AdmitRepair(context.Context, Check) (Message, bool, error)
+	AdmitCheckMessage(context.Context, Check) (Message, bool, error)
 	MarkReady(context.Context, string, string, []string) error
 	BlockWorkflow(context.Context, string, string) error
 	DeclaredChecks(context.Context, string) ([]DeclaredCheck, error)
@@ -170,9 +170,9 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-		if job.WorkflowPhase == "review-repairing" {
+		if job.WorkflowPhase == "review-feedback" {
 			reviewStore := s.Store.(ReviewStore)
-			if err := reviewStore.RejectReviewFinding(ctx, job.ID, job.Revision); err != nil {
+			if _, err := reviewStore.CompleteReviewFeedback(ctx, job.ID, run.ID, job.Revision); err != nil {
 				return err
 			}
 			return nil
@@ -281,10 +281,6 @@ func (s Service) VerifyChecks(ctx context.Context, job Job, declared []DeclaredC
 	return nil
 }
 
-func (s Service) AdvanceReview(ctx context.Context, job Job) (RunDisposition, bool, error) {
-	return s.advanceReview(ctx, job)
-}
-
 func attentionNeeded(err error) bool {
 	var attention interface{ AttentionNeeded() bool }
 	return errors.As(err, &attention) && attention.AttentionNeeded()
@@ -292,14 +288,7 @@ func attentionNeeded(err error) bool {
 
 func (s Service) HandleFailedCheck(ctx context.Context, job Job, check Check) error {
 	store := s.Store.(CodingStore)
-	if job.RepairCount == 0 && job.ReviewRepairCount == 0 {
-		if _, _, err := store.AdmitRepair(ctx, check); err != nil {
-			return err
-		}
-		return nil
-	}
-	reason := fmt.Sprintf("Check %s still failed at Revision %s with exit %d", check.Name, check.Revision, check.ExitCode)
-	if err := store.BlockWorkflow(ctx, job.ID, reason); err != nil {
+	if _, _, err := store.AdmitCheckMessage(ctx, check); err != nil {
 		return err
 	}
 	return nil
@@ -352,55 +341,55 @@ func (s Service) DeliverInitial(ctx context.Context, job Job, session Action, de
 	if run.SessionID != "" {
 		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun is bound while its native Session action is unsettled")
 	}
-	if !run.BaselineRecorded {
-		if err := s.Store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
-			return "", err
-		}
-		run.BaselineRecorded, run.State = true, AgentRunSubmitting
-		delivery.AgentRun = run
-	} else if run.BaselineTurnID != "" {
-		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun has a nonempty native baseline")
-	}
-	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
-		return "", err
-	}
-	if err := s.Store.BeginTurnSubmission(ctx, run.ID); err != nil {
-		return "", err
-	}
-	sessionID, turn, err := s.Externals.AgentInitialTurn(ctx, job, delivery)
-	if err != nil {
-		var attention interface{ AttentionNeeded() bool }
-		if errors.As(err, &attention) && attention.AttentionNeeded() {
-			_ = s.Store.UncertainAction(ctx, session.ID)
-			return "", s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		}
-		var definite interface{ DefiniteNoSubmit() bool }
-		if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-			_ = s.Store.UncertainAction(ctx, session.ID)
-			if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-				return "", failErr
+	var sessionID string
+	contract := nativeAgentRunContract{
+		service:             s,
+		delivery:            delivery,
+		run:                 run,
+		label:               "initial",
+		bindUnsupportedTurn: true,
+		submitNew: func(ctx context.Context, _ AgentRun) (nativeAgentBinding, error) {
+			id, turn, err := s.Externals.AgentInitialTurn(ctx, job, delivery)
+			sessionID = id
+			return nativeAgentBinding{SessionID: id, Turn: turn}, err
+		},
+		recover: func(ctx context.Context, _ AgentRun) (nativeAgentBinding, error) {
+			id, turns, err := s.Externals.AgentInitialTurns(ctx, job)
+			if err != nil || id == "" || len(turns) == 0 {
+				return nativeAgentBinding{}, err
 			}
-			return "", err
-		}
-		_ = s.Store.UncertainAction(ctx, session.ID)
-		_ = s.Store.AgentRunAttention(ctx, run.ID, "initial native submission is awaiting isolated Session reconciliation: "+err.Error())
-		return "", err
+			sessionID = id
+			return nativeAgentBinding{SessionID: id, Turn: turns[len(turns)-1]}, nil
+		},
+		bindSession: func(ctx context.Context, binding nativeAgentBinding) error {
+			sessionID = binding.SessionID
+			return s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID})
+		},
+		beforeBind: func(ctx context.Context) error {
+			if err := s.requireClaim(ctx); err != nil {
+				_ = s.Store.UncertainAction(ctx, session.ID)
+				return err
+			}
+			return nil
+		},
+		onSubmitError: func(ctx context.Context, run AgentRun, _ nativeAgentBinding, err error) (NativeTurn, error) {
+			_ = s.Store.UncertainAction(ctx, session.ID)
+			var attention interface{ AttentionNeeded() bool }
+			if errors.As(err, &attention) && attention.AttentionNeeded() {
+				return NativeTurn{}, s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+			}
+			var definite interface{ DefiniteNoSubmit() bool }
+			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
+				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
+					return NativeTurn{}, failErr
+				}
+				return NativeTurn{}, err
+			}
+			_ = s.Store.AgentRunAttention(ctx, run.ID, "initial native submission is awaiting isolated Session reconciliation: "+err.Error())
+			return NativeTurn{}, err
+		},
 	}
-	if sessionID == "" || turn.ID == "" {
-		_ = s.Store.UncertainAction(ctx, session.ID)
-		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial native submission returned an incomplete Session or turn binding")
-	}
-	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
-		return "", err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		_ = s.Store.UncertainAction(ctx, session.ID)
-		return "", err
-	}
-	if err := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID}); err != nil {
-		return "", err
-	}
-	if err := s.Store.BindNativeTurn(ctx, run.ID, turn.ID, turn.Status); err != nil {
+	if _, err := contract.execute(ctx); err != nil {
 		return "", err
 	}
 	return sessionID, nil
@@ -415,135 +404,51 @@ func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) (bool,
 
 func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Delivery) (bool, error) {
 	run := delivery.AgentRun
-	if run.NativeTurnID != "" && run.State == AgentRunActive {
-		if err := s.reach(ctx, BarrierNativeActive, delivery); err != nil {
-			return false, err
-		}
-		outcome, err := s.Externals.AgentWait(ctx, job, run.SessionID, run.NativeTurnID)
-		if err != nil {
-			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
-			return false, err
-		}
-		if err := s.requireClaim(ctx); err != nil {
-			return false, err
-		}
-		return true, s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status)
-	}
-	turns, err := s.Externals.AgentTurns(ctx, job, run.SessionID)
-	if err != nil {
-		_ = s.Store.AgentRunAttention(ctx, run.ID, "native Session history is currently unavailable: "+err.Error())
-		return false, err
-	}
-	if !run.BaselineRecorded {
-		baseline := ""
-		if len(turns) > 0 {
-			baseline = turns[len(turns)-1].ID
-		}
-		if err := s.Store.PrepareAgentRun(ctx, run.ID, baseline); err != nil {
-			return false, err
-		}
-		run.BaselineRecorded, run.BaselineTurnID, run.State = true, baseline, AgentRunSubmitting
-		delivery.AgentRun = run
-	}
-	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
-	if reconciliation.Classification == "uncertain" {
-		if reconciliation.Turn.ID != "" {
-			if err := s.requireClaim(ctx); err != nil {
-				return false, err
+	contract := nativeAgentRunContract{
+		service:              s,
+		delivery:             delivery,
+		run:                  run,
+		label:                "native",
+		reconcileSubmitError: true,
+		bindUnsupportedTurn:  true,
+		submitBound: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
+			delivery.AgentRun = run
+			turn, err := s.Externals.AgentSubmit(ctx, job, delivery)
+			return nativeAgentBinding{SessionID: run.SessionID, Turn: turn}, err
+		},
+		history: func(ctx context.Context, run AgentRun) (nativeAgentHistory, error) {
+			turns, err := s.Externals.AgentTurns(ctx, job, run.SessionID)
+			return nativeAgentHistory{SessionID: run.SessionID, Turns: turns}, err
+		},
+		wait: func(ctx context.Context, run AgentRun, turnID string) (nativeAgentBinding, error) {
+			turn, err := s.Externals.AgentWait(ctx, job, run.SessionID, turnID)
+			return nativeAgentBinding{SessionID: run.SessionID, Turn: turn}, err
+		},
+		validateOwner: func(run AgentRun, _ string, sessionID string) error {
+			if sessionID == "" || sessionID != run.SessionID {
+				return fmt.Errorf("native recovery conflicts with the bound Session")
 			}
-			return false, s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
-		}
-		return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
-	}
-	if reconciliation.Classification == "no-submit" {
-		return s.submit(ctx, job, delivery)
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return false, err
-	}
-	if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
-		return false, err
-	}
-	if reconciliation.Classification == "active" {
-		if err := s.reach(ctx, BarrierNativeActive, delivery); err != nil {
-			return false, err
-		}
-		outcome, err := s.Externals.AgentWait(ctx, job, run.SessionID, reconciliation.Turn.ID)
-		if err != nil {
-			_ = s.Store.AgentRunAttention(ctx, run.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
-			return false, err
-		}
-		if err := s.requireClaim(ctx); err != nil {
-			return false, err
-		}
-		return true, s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status)
-	}
-	return true, nil
-}
-
-func (s Service) submit(ctx context.Context, job Job, delivery Delivery) (bool, error) {
-	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
-		return false, err
-	}
-	if err := s.Store.BeginTurnSubmission(ctx, delivery.AgentRun.ID); err != nil {
-		return false, err
-	}
-	turn, err := s.Externals.AgentSubmit(ctx, job, delivery)
-	if err != nil {
-		var definite interface{ DefiniteNoSubmit() bool }
-		if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-			if failErr := s.Store.FailAgentRun(ctx, delivery.AgentRun.ID, err.Error()); failErr != nil {
-				return false, failErr
-			}
-			return false, err
-		}
-		turns, inspectErr := s.Externals.AgentTurns(ctx, job, delivery.AgentRun.SessionID)
-		if inspectErr != nil {
-			reason := "native submission is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
-			return false, s.Store.UncertainAgentRun(ctx, delivery.AgentRun.ID, reason)
-		}
-		reconciliation := ReconcileTurns(true, delivery.AgentRun.BaselineTurnID, "", turns)
-		if reconciliation.Classification == "no-submit" {
-			return false, err
-		}
-		if reconciliation.Classification == "uncertain" {
-			if reconciliation.Turn.ID != "" {
-				if claimErr := s.requireClaim(ctx); claimErr != nil {
-					return false, claimErr
+			return nil
+		},
+		beforeBind: s.requireClaim,
+		onReadError: func(ctx context.Context, runID string, err error) {
+			_ = s.Store.AgentRunAttention(ctx, runID, "native Session or submitted turn is currently unavailable: "+err.Error())
+		},
+		onSubmitError: func(ctx context.Context, run AgentRun, _ nativeAgentBinding, err error) (NativeTurn, error) {
+			var definite interface{ DefiniteNoSubmit() bool }
+			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
+				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
+					return NativeTurn{}, failErr
 				}
-				return false, s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, reconciliation.Turn.ID, reconciliation.Turn.Status)
 			}
-			return false, s.Store.UncertainAgentRun(ctx, delivery.AgentRun.ID, reconciliation.Reason)
-		}
-		turn = reconciliation.Turn
+			return NativeTurn{}, err
+		},
 	}
-	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
-		return false, err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return false, err
-	}
-	if err := s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, turn.ID, turn.Status); err != nil {
-		return false, err
-	}
-	if terminalNative(turn.Status) {
-		return true, nil
-	}
-	if !activeNative(turn.Status) {
-		return false, nil
-	}
-	if err := s.reach(ctx, BarrierNativeActive, delivery); err != nil {
-		return false, err
-	}
-	outcome, err := s.Externals.AgentWait(ctx, job, delivery.AgentRun.SessionID, turn.ID)
+	outcome, err := contract.execute(ctx)
 	if err != nil {
-		_ = s.Store.AgentRunAttention(ctx, delivery.AgentRun.ID, "submitted native turn outcome is currently unavailable: "+err.Error())
 		return false, err
 	}
-	if err := s.requireClaim(ctx); err != nil {
-		return false, err
-	}
-	return true, s.Store.BindNativeTurn(ctx, delivery.AgentRun.ID, outcome.ID, outcome.Status)
+	return terminalNative(outcome.Status), nil
 }
 
 func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (bool, error) {
@@ -691,7 +596,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 					if err != nil || routeAction.State == ActionSucceeded {
 						return err
 					}
-					receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run.AgentRun, routeAction)
+					receipt, err := reviewExternals.ReviewRouteRevoke(ctx, job, run, routeAction)
 					if err != nil {
 						_ = s.Store.UncertainAction(ctx, routeAction.ID)
 						return fmt.Errorf("reconcile exact reviewer route for %s: %w", run.ID, err)
@@ -709,7 +614,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 					if err != nil || sandboxAction.State == ActionSucceeded {
 						return err
 					}
-					receipt, err := reviewExternals.ReviewSandboxDelete(ctx, job, run.AgentRun, sandboxAction)
+					receipt, err := reviewExternals.ReviewSandboxDelete(ctx, job, run, sandboxAction)
 					if err != nil {
 						_ = s.Store.UncertainAction(ctx, sandboxAction.ID)
 						return fmt.Errorf("reconcile exact reviewer Sandbox %s: %w", run.ReviewerSandboxID, err)

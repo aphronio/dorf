@@ -19,7 +19,7 @@ func TestSteerAcceptanceRecoversAfterAcknowledgementBeforeBind(t *testing.T) {
 	job.SessionID = "session-1"
 	store.jobs[job.ID] = job
 	targetTurnID := "turn-active-1"
-	message := Message{ID: MessageID(job.ID, "steer-1"), JobID: job.ID, CallerID: "steer-1", Sequence: 2, Input: "correct active work", Intent: MessageSteer, TargetTurnID: targetTurnID}
+	message := Message{ID: MessageID(job.ID, MessageFromHuman, "steer-1"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "steer-1", Sequence: 2, Input: "correct active work", Intent: MessageSteer, TargetTurnID: targetTurnID}
 	run := AgentRun{ID: AgentRunID(message.ID), JobID: job.ID, MessageID: message.ID, ActionID: TurnActionID(message.ID), SessionID: job.SessionID, State: AgentRunPending}
 	store.messages[job.ID] = []Message{message}
 	store.runs[run.ID] = run
@@ -54,9 +54,9 @@ func TestSharedSteerPersistsEveryTerminalTargetOutcome(t *testing.T) {
 			job.SessionID = "session-1"
 			store.jobs[job.ID] = job
 			targetTurnID := "turn-shared"
-			target := Message{ID: MessageID(job.ID, "target"), JobID: job.ID, CallerID: "target", Sequence: 1, Input: "target input", Intent: MessageFollow}
+			target := Message{ID: MessageID(job.ID, MessageFromHuman, "target"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "target", Sequence: 1, Input: "target input", Intent: MessageFollow}
 			targetRun := AgentRun{ID: AgentRunID(target.ID), JobID: job.ID, MessageID: target.ID, ActionID: TurnActionID(target.ID), SessionID: job.SessionID, State: AgentRunActive, NativeTurnID: targetTurnID}
-			steer := Message{ID: MessageID(job.ID, "steer-outcome"), JobID: job.ID, CallerID: "steer-outcome", Sequence: 2, Input: "accepted shared input", Intent: MessageSteer, TargetTurnID: targetTurnID}
+			steer := Message{ID: MessageID(job.ID, MessageFromHuman, "steer-outcome"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "steer-outcome", Sequence: 2, Input: "accepted shared input", Intent: MessageSteer, TargetTurnID: targetTurnID}
 			steerRun := AgentRun{ID: AgentRunID(steer.ID), JobID: job.ID, MessageID: steer.ID, ActionID: TurnActionID(steer.ID), SessionID: job.SessionID, State: AgentRunPending}
 			store.messages[job.ID] = []Message{target, steer}
 			store.runs[targetRun.ID], store.runs[steerRun.ID] = targetRun, steerRun
@@ -119,9 +119,9 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 			job.SessionID = "session-1"
 			store.jobs[job.ID] = job
 			targetTurnID := "turn-original-target"
-			target := Message{ID: MessageID(job.ID, "target"), JobID: job.ID, CallerID: "target", Sequence: 1, Input: "original work", Intent: MessageFollow}
+			target := Message{ID: MessageID(job.ID, MessageFromHuman, "target"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "target", Sequence: 1, Input: "original work", Intent: MessageFollow}
 			targetRun := AgentRun{ID: AgentRunID(target.ID), JobID: job.ID, MessageID: target.ID, ActionID: TurnActionID(target.ID), SessionID: job.SessionID, State: AgentRunCompleted, NativeTurnID: targetTurnID, NativeOutcome: "completed"}
-			message := Message{ID: MessageID(job.ID, "steer-race"), JobID: job.ID, CallerID: "steer-race", Sequence: 2, Input: "preserve these exact bytes", Intent: MessageSteer, TargetTurnID: targetTurnID}
+			message := Message{ID: MessageID(job.ID, MessageFromHuman, "steer-race"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "steer-race", Sequence: 2, Input: "preserve these exact bytes", Intent: MessageSteer, TargetTurnID: targetTurnID}
 			run := AgentRun{ID: AgentRunID(message.ID), JobID: job.ID, MessageID: message.ID, ActionID: TurnActionID(message.ID), SessionID: job.SessionID, State: AgentRunPending}
 			store.messages[job.ID] = []Message{target, message}
 			store.runs[targetRun.ID], store.runs[run.ID] = targetRun, run
@@ -188,7 +188,7 @@ func TestSteerTerminalRaceStartsSameDurableInputAtMostOnce(t *testing.T) {
 		job.SessionID = "session-1"
 		store.jobs[job.ID] = job
 		targetTurnID := "turn-original-target"
-		message := Message{ID: MessageID(job.ID, "ambiguous-steer"), JobID: job.ID, CallerID: "ambiguous-steer", Sequence: 2, Input: "exact input", Intent: MessageSteer, TargetTurnID: targetTurnID}
+		message := Message{ID: MessageID(job.ID, MessageFromHuman, "ambiguous-steer"), JobID: job.ID, FromKind: MessageFromHuman, FromID: "ambiguous-steer", Sequence: 2, Input: "exact input", Intent: MessageSteer, TargetTurnID: targetTurnID}
 		run := AgentRun{ID: AgentRunID(message.ID), JobID: job.ID, MessageID: message.ID, ActionID: TurnActionID(message.ID), SessionID: job.SessionID, State: AgentRunPending}
 		store.messages[job.ID], store.runs[run.ID] = []Message{message}, run
 		store.actions[run.ActionID] = Action{ID: run.ActionID, JobID: job.ID, MessageID: message.ID, Kind: ActionTurnStart, State: ActionPending}
@@ -433,6 +433,36 @@ func TestBaselineReconciliationClassifications(t *testing.T) {
 	}
 }
 
+func TestFailedCheckBecomesCheckSourcedImplementationMessage(t *testing.T) {
+	base := newMemoryStore()
+	store := &codingMemoryStore{memoryStore: base, checks: map[string]Check{}, evidence: map[string]Evidence{}}
+	job := testJob()
+	job.WorkflowPhase = "checking"
+	job.SessionID = "session-1"
+	store.jobs[job.ID] = job
+	check := Check{ID: CheckID(job.ID, job.Revision, "check"), JobID: job.ID, Revision: job.Revision, Name: "check", Command: "go test ./...", State: "failed", ExitCode: 1}
+	service := Service{Store: store}
+
+	if err := service.HandleFailedCheck(context.Background(), job, check); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.HandleFailedCheck(context.Background(), job, check); err != nil {
+		t.Fatal(err)
+	}
+	messages := store.messages[job.ID]
+	if len(messages) != 1 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	message := messages[0]
+	if message.FromKind != MessageFromWorkflow || message.FromID != check.ID || message.ID != MessageID(job.ID, MessageFromWorkflow, check.ID) {
+		t.Fatalf("failed Check Message=%#v", message)
+	}
+	run := store.runs[AgentRunID(message.ID)]
+	if run.Role != "implement" || run.MessageID != message.ID || store.jobs[job.ID].WorkflowPhase != "implementing" {
+		t.Fatalf("implementation AgentRun=%#v Job=%#v", run, store.jobs[job.ID])
+	}
+}
+
 var errBarrier = errors.New("proof barrier")
 
 type failBarrier struct {
@@ -500,10 +530,10 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{jobs: map[string]Job{}, messages: map[string][]Message{}, runs: map[string]AgentRun{}, actions: map[string]Action{}}
 }
 
-func (s *memoryStore) addMessage(jobID, callerID, input string) Message {
+func (s *memoryStore) addMessage(jobID, sourceID, input string) Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	message := Message{ID: MessageID(jobID, callerID), JobID: jobID, CallerID: callerID, Sequence: int64(len(s.messages[jobID]) + 1), Input: input, Intent: MessageFollow}
+	message := Message{ID: MessageID(jobID, MessageFromHuman, sourceID), JobID: jobID, FromKind: MessageFromHuman, FromID: sourceID, Sequence: int64(len(s.messages[jobID]) + 1), Input: input, Intent: MessageFollow}
 	s.messages[jobID] = append(s.messages[jobID], message)
 	return message
 }
@@ -726,7 +756,7 @@ func (s *codingMemoryStore) RevisionCandidate(_ context.Context, jobID, base str
 	if latestFollow.State != AgentRunCompleted {
 		return AgentRun{}, false, nil
 	}
-	if job.WorkflowPhase != "implementing" && job.WorkflowPhase != "repairing" && job.WorkflowPhase != "review-repairing" {
+	if job.WorkflowPhase != "implementing" && job.WorkflowPhase != "review-feedback" {
 		return AgentRun{}, false, errors.New("revision candidate during " + job.WorkflowPhase)
 	}
 	return latestFollow, true, nil
@@ -827,23 +857,21 @@ func (s *codingMemoryStore) RecordCheck(_ context.Context, check Check, record E
 	return nil
 }
 
-func (s *codingMemoryStore) AdmitRepair(_ context.Context, check Check) (Message, bool, error) {
+func (s *codingMemoryStore) AdmitCheckMessage(_ context.Context, check Check) (Message, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[check.JobID]
-	if job.RepairCount != 0 {
-		for _, message := range s.messages[job.ID] {
-			if message.CallerID == "dorf:repair:1" {
-				return message, false, nil
-			}
+	for _, message := range s.messages[job.ID] {
+		if message.FromKind == MessageFromWorkflow && message.FromID == check.ID {
+			return message, false, nil
 		}
 	}
-	message := Message{ID: MessageID(job.ID, "dorf:repair:1"), JobID: job.ID, CallerID: "dorf:repair:1", Sequence: int64(len(s.messages[job.ID]) + 1), Input: "focused failed Check repair", Intent: MessageFollow}
+	message := Message{ID: MessageID(job.ID, MessageFromWorkflow, check.ID), JobID: job.ID, FromKind: MessageFromWorkflow, FromID: check.ID, Sequence: int64(len(s.messages[job.ID]) + 1), Input: "failed Check output", Intent: MessageFollow}
 	s.messages[job.ID] = append(s.messages[job.ID], message)
 	actionID, runID := TurnActionID(message.ID), AgentRunID(message.ID)
 	s.actions[actionID] = Action{ID: actionID, JobID: job.ID, MessageID: message.ID, Kind: ActionTurnStart, State: ActionPending}
-	s.runs[runID] = AgentRun{ID: runID, JobID: job.ID, MessageID: message.ID, ActionID: actionID, SessionID: job.SessionID, Role: "repair", State: AgentRunPending}
-	job.RepairCount, job.WorkflowPhase = 1, "repairing"
+	s.runs[runID] = AgentRun{ID: runID, JobID: job.ID, MessageID: message.ID, ActionID: actionID, SessionID: job.SessionID, Role: "implement", State: AgentRunPending}
+	job.WorkflowPhase = "implementing"
 	s.jobs[job.ID] = job
 	return message, true, nil
 }
@@ -892,11 +920,6 @@ func (s *codingMemoryStore) BlockWorkflow(_ context.Context, jobID, reason strin
 	return nil
 }
 
-type fakeRepository struct {
-	setupCalls, observationCalls, checkCalls int
-	firstRevision, repairedRevision          string
-}
-
 type receiptRepository struct {
 	revision                                                string
 	setupExecutions, observationExecutions, checkExecutions int
@@ -934,37 +957,6 @@ func (r *receiptRepository) RepositoryCheck(_ context.Context, _ Job, check Chec
 		r.checkObservations[check.ID] = observation
 	}
 	return observation, nil
-}
-
-func (r *fakeRepository) RepositorySetup(_ context.Context, _ Job, _ Action) (CommandObservation, []DeclaredCheck, error) {
-	r.setupCalls++
-	now := time.Now().UTC()
-	return CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now, Stdout: []byte("setup complete")}, []DeclaredCheck{{Name: "check", Command: "go test ./..."}}, nil
-}
-
-func (r *fakeRepository) RepositoryRevision(_ context.Context, job Job) (RevisionObservation, []byte, error) {
-	r.observationCalls++
-	revision := r.firstRevision
-	if job.RepairCount == 1 {
-		revision = r.repairedRevision
-	}
-	treeDigit := "1"
-	if r.observationCalls > 1 {
-		treeDigit = "2"
-	}
-	observation := RevisionObservation{ComparisonBase: job.Revision, Revision: revision, Tree: strings.Repeat(treeDigit, 40), Branch: job.Branch}
-	artifact, _ := json.Marshal(observation)
-	return observation, artifact, nil
-}
-
-func (r *fakeRepository) RepositoryCheck(_ context.Context, job Job, check Check) (CommandObservation, error) {
-	r.checkCalls++
-	now := time.Now().UTC()
-	exitCode := 0
-	if job.Revision == r.firstRevision {
-		exitCode = 1
-	}
-	return CommandObservation{Command: check.Command, ExitCode: exitCode, StartedAt: now, FinishedAt: now, Stdout: []byte("deterministic Check")}, nil
 }
 
 type fakeExternals struct {

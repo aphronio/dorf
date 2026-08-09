@@ -310,7 +310,12 @@ func preparePublicationFaultJob(t *testing.T, db *sql.DB, store postgres.Store, 
 	if _, err := db.ExecContext(ctx, `update dorf.checks set evidence_id=$2 where id=$1`, checkID, evidenceID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,final_plan,finalized_at) values($1,$2,'final',$3,$4)`, job.ID, job.Revision, `{"decision":"no-review","roles":[],"reasons":[]}`, now); err != nil {
+	// Keep the fixture aligned with the current one-plan-per-Revision schema.
+	// The former final_plan column was part of the retired review-plan shape;
+	// publication only needs the finalized plan and its corresponding facts.
+	facts := fmt.Sprintf(`{"revision":%q,"base_revision":%q,"paths":["internal/publication"],"checks_green":true,"documentation_only":false,"browser_ui":false,"authentication_authority":false,"declared_performance":false,"unknown":false}`, job.Revision, job.StartingRevision)
+	plan := `{"decision":"no-review","roles":[],"reasons":[]}`
+	if _, err := db.ExecContext(ctx, `insert into dorf.review_plans(job_id,revision,state,facts,plan,finalized_at) values($1,$2,'final',$3::jsonb,$4::jsonb,$5)`, job.ID, job.Revision, facts, plan, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
