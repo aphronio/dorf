@@ -66,8 +66,9 @@ durable task sequences explicit, named phases; it does not contain a generic use
   is not a new AgentRun.
 - Accepted client messages receive an immutable Job-local sequence and identity. Follow-up turns
   preserve FIFO order. A `steer` is an explicit priority lane targeting the active native turn, so
-  it may overtake already queued follow-ups; inspection must retain both the admission sequence and
-  targeted turn so this is never presented as ordinary FIFO delivery. A wake event only makes work
+  it may overtake already queued follow-ups. Default text and structured inspection, command help,
+  and admission acknowledgement expose the priority behavior, original admission sequence, and
+  targeted turn so it is never presented as ordinary FIFO delivery. A wake event only makes work
   eligible, and delivery is reconciled against the harness-native turn identity before retry.
 - A changed Revision invalidates Evidence whose claim depended on the previous Revision. It does not
   invalidate unrelated immutable facts.

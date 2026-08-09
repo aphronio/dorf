@@ -17,6 +17,10 @@ decisions whose rationale would not be evident from those sources.
 When sources disagree, inspect the authority and correct the stale projection. Do not make code,
 runtime state, or evidence match a narrative.
 
+Use Dorf inspection for product facts. Use `absurdctl list-tasks` and `absurdctl dump-task` for
+attempts, checkpoints, waits, and task history while debugging Absurd. Raw Absurd tables are a
+version-pinned white-box test or operator diagnostic surface, not production workflow authority.
+
 ## Take one bounded slice to a terminal
 
 1. Read the issue, relevant project decisions, repository guidance, and current observed state.

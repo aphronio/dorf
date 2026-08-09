@@ -1015,7 +1015,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   inspect those tables without making them product authority.
 - **Message order:** Every accepted message keeps a monotonic Job-local admission sequence. Follow-up
   turns are FIFO. A `steer` is an explicit priority lane for the active native turn and may overtake
-  queued follow-ups; inspection must expose its intent, target, and original admission sequence.
+  queued follow-ups. Default text and structured inspection, command help, and the admission
+  acknowledgement must expose its intent, target, original sequence, and priority effect; an
+  architecture document alone is not adequate observability.
 - **Review composition:** Deterministic policy supplies the mandatory Role floor. An implementation
   AgentRun may additionally make a structured, bounded request for an allowlisted Role and optional
   focus. The request cannot remove mandatory review, change capabilities, grant authority, create a
