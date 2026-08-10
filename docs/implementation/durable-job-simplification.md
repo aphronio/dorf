@@ -420,7 +420,7 @@ projections that repeat the same external fact.
       cleanup rather than duplicating Action progress.
 - [x] Delete row-shape and state-mirroring tests; retain recovery tests for immutable Action success,
       exact ownership, and retry convergence.
-- [ ] Dogfood the payload-free Action path through exact-Revision Proposal, terminal Outcome, and
+- [x] Dogfood the payload-free Action path through exact-Revision Proposal, terminal Outcome, and
       complete Route and Sandbox cleanup.
 
 Terminal: every external lifecycle fact has one durable authority, while an interrupted Action still
@@ -431,7 +431,13 @@ Sandbox/Route state ran Job `job-d461c7a212d5543f749f` from Sandbox creation thr
 PR #112. Both Checks passed. Closing the disposable PR recorded a rejected Outcome; immutable
 route-revoke and Sandbox-delete Actions completed cleanup, and both Incus and the Provider Gateway
 returned no exact resource. This proof predates generic Action payload removal; the simplified Action
-record still needs its fresh live terminal above.
+record received its fresh live terminal below.
+
+Payload-free proof (2026-08-10): Job `job-85573808ad06d0790f67` ran on a separate fresh PostgreSQL
+database through Sandbox creation, clone, setup, Checks, no-review policy, and exact-Revision PR #113.
+Closing the disposable PR recorded a rejected Outcome. Route revoke and Sandbox delete Actions reached
+success with only identity, kind, scope, and state; Incus and the Provider Gateway returned no exact
+resource after cleanup.
 
 ## Slice 7: Store GitHub authority once
 
