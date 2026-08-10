@@ -233,7 +233,22 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		return spine.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
 	}
 	runID := spine.AgentRunID(initial.ID)
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID}); err != nil {
+	sandboxID := spine.MainSandboxName(id)
+	ownerNonce, err := reviewNonce()
+	if err != nil {
+		return spine.Job{}, false, err
+	}
+	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, OwnershipNonce: ownerNonce})); err != nil {
+		// A retry must retain the originally reserved ownership nonce.
+		if _, getErr := queries.GetSandbox(ctx, sandboxID); getErr != nil {
+			return spine.Job{}, false, err
+		}
+	}
+	routeActionID := spine.ScopedActionID(id, spine.ActionRouteCreate, sandboxID)
+	if err := expectOneRows(queries.ReserveRoute(ctx, dbsql.ReserveRouteParams{ID: spine.ProviderRouteID(routeActionID), SandboxID: sandboxID})); err != nil {
+		return spine.Job{}, false, err
+	}
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, SandboxID: sandboxID}); err != nil {
 		return spine.Job{}, false, err
 	}
 	if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
@@ -359,7 +374,7 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if role != "implement" {
 		return spine.Message{}, false, fmt.Errorf("steer target AgentRun has unsupported role %s", role)
 	}
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID}); err != nil {
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)}); err != nil {
 		return spine.Message{}, false, err
 	}
 	if harness != "" || threadID != "" {
@@ -403,8 +418,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
 		ProviderConnection: row.ProviderConnection,
 		Model:              row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
-		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, SandboxID: row.SandboxID, SandboxState: row.SandboxState,
-		RouteID: row.RouteID, RouteState: row.RouteState, WorkflowPhase: row.WorkflowPhase,
+		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, WorkflowPhase: row.WorkflowPhase,
 		WorkflowAttention: row.WorkflowAttention, CleanupAttention: row.CleanupAttention,
 	}, nil
 }
@@ -473,6 +487,9 @@ func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error
 }
 
 func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
+	if kind == spine.ActionSandboxCreate || kind == spine.ActionRouteCreate || kind == spine.ActionRouteRevoke || kind == spine.ActionSandboxDelete {
+		return s.BeginResourceAction(ctx, spine.MainSandboxName(jobID), kind)
+	}
 	desiredID := spine.ActionID(jobID, kind)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -483,16 +500,6 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: kind}); err != nil {
 		return spine.Action{}, err
 	}
-	switch kind {
-	case spine.ActionSandboxCreate:
-		if err := expectOneRows(queries.ReserveMainSandbox(ctx, dbsql.ReserveMainSandboxParams{JobID: jobID, ActionID: desiredID, IncusName: spine.MainSandboxName(jobID)})); err != nil {
-			return spine.Action{}, fmt.Errorf("reserve exact main Sandbox identity: %w", err)
-		}
-	case spine.ActionRouteCreate:
-		if err := expectOneRows(queries.ReserveMainRoute(ctx, dbsql.ReserveMainRouteParams{JobID: jobID, ActionID: desiredID, RouteID: spine.ProviderRouteID(desiredID)})); err != nil {
-			return spine.Action{}, fmt.Errorf("reserve exact main provider route identity: %w", err)
-		}
-	}
 	row, err := queries.GetUnscopedActionForUpdate(ctx, dbsql.GetUnscopedActionForUpdateParams{JobID: jobID, Kind: kind})
 	if err != nil {
 		return spine.Action{}, err
@@ -502,6 +509,82 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 		return spine.Action{}, err
 	}
 	return action, nil
+}
+
+func (s Store) BeginResourceAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
+	sandbox, err := dbsql.New(s.DB).GetSandbox(ctx, sandboxID)
+	if err != nil {
+		return spine.Action{}, err
+	}
+	switch kind {
+	case spine.ActionSandboxCreate, spine.ActionRouteCreate, spine.ActionReviewWorkspaceCreate, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	default:
+		return spine.Action{}, fmt.Errorf("unsupported resource Action %q", kind)
+	}
+	id := spine.ScopedActionID(sandbox.JobID, kind, sandboxID)
+	q := dbsql.New(s.DB)
+	if err := expectOneRows(q.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: id, JobID: sandbox.JobID, Kind: kind, ScopeKey: sandboxID})); err != nil {
+		row, getErr := q.GetScopedActionBySandbox(ctx, dbsql.GetScopedActionBySandboxParams{JobID: sandbox.JobID, Kind: kind, SandboxID: sandboxID})
+		if getErr != nil {
+			return spine.Action{}, err
+		}
+		return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+	}
+	row, err := q.GetScopedActionBySandbox(ctx, dbsql.GetScopedActionBySandboxParams{JobID: sandbox.JobID, Kind: kind, SandboxID: sandboxID})
+	if err != nil {
+		return spine.Action{}, err
+	}
+	return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+}
+
+func (s Store) Sandbox(ctx context.Context, id string) (spine.Sandbox, error) {
+	row, err := dbsql.New(s.DB).GetSandbox(ctx, id)
+	if err != nil {
+		return spine.Sandbox{}, err
+	}
+	return spine.Sandbox{ID: row.ID, JobID: row.JobID, State: row.State, OwnershipNonce: row.OwnershipNonce}, nil
+}
+func (s Store) Route(ctx context.Context, sandboxID string) (spine.Route, error) {
+	row, err := dbsql.New(s.DB).GetRouteBySandbox(ctx, sandboxID)
+	if err != nil {
+		return spine.Route{}, err
+	}
+	return spine.Route{ID: row.ID, SandboxID: row.SandboxID, State: row.State}, nil
+}
+func (s Store) Sandboxes(ctx context.Context, jobID string) ([]spine.Sandbox, error) {
+	rows, err := dbsql.New(s.DB).ListJobSandboxes(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]spine.Sandbox, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, spine.Sandbox{ID: r.ID, JobID: r.JobID, State: r.State, OwnershipNonce: r.OwnershipNonce})
+	}
+	return out, nil
+}
+
+func (s Store) AgentRuns(ctx context.Context, jobID string) ([]spine.AgentRun, error) {
+	rows, err := dbsql.New(s.DB).ListJobAgentRuns(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]spine.AgentRun, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, spine.AgentRun{ID: r.ID, JobID: r.JobID, MessageID: r.MessageID, State: r.State, Harness: r.Harness, ThreadID: r.ThreadID, BaselineRecorded: r.BaselineTurnID != "", BaselineTurnID: r.BaselineTurnID, TurnID: r.TurnID, TurnOutcome: r.TurnOutcome, Attention: r.Attention, Role: r.Role, Revision: r.Revision, Capability: r.Capability, SandboxID: r.SandboxID, SubmissionNonce: r.SubmissionNonce, StartedAt: timeValue(r.StartedAt), FinishedAt: timeValue(r.FinishedAt)})
+	}
+	return out, nil
+}
+
+func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
+	q := dbsql.New(s.DB)
+	row, err := q.GetAgentRunForBinding(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if row.State == spine.AgentRunCompleted || row.State == spine.AgentRunFailed || row.State == spine.AgentRunInterrupted {
+		return nil
+	}
+	return expectOneRows(q.InterruptAgentRun(ctx, dbsql.InterruptAgentRunParams{Reason: reason, RunID: runID}))
 }
 
 // BeginSetup returns only the setup generation currently selected by the Job.
@@ -946,7 +1029,7 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 		return spine.Message{}, false, err
 	}
 	runID := spine.AgentRunID(message.ID)
-	if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID})); err != nil {
+	if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)})); err != nil {
 		return spine.Message{}, false, err
 	}
 	if err := expectOneRows(queries.ReturnFailedCheckToImplementation(ctx, dbsql.ReturnFailedCheckToImplementationParams{JobID: check.JobID, Revision: check.Revision})); err != nil {
@@ -1014,88 +1097,55 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 	if err != nil {
 		return err
 	}
-	jobID, kind, scope := completed.JobID, completed.Kind, completed.ScopeKey
+	kind, scope := completed.Kind, completed.ScopeKey
 	switch kind {
 	case spine.ActionSandboxCreate:
-		if scope != "" {
-			var identity dbsql.GetReviewSandboxReceiptIdentityRow
-			if identity, err = queries.GetReviewSandboxReceiptIdentity(ctx, dbsql.GetReviewSandboxReceiptIdentityParams{RunID: scope, ActionID: id}); err == nil && (receipt.ExternalID != identity.SandboxName || receipt.Outcome != identity.Revision) {
-				err = fmt.Errorf("review Sandbox receipt conflicts with its host-owned identity")
-			}
-			if err == nil {
-				err = expectOneRows(queries.MarkReviewSandboxCreated(ctx, scope))
-			}
+		if scope == "" || receipt.ExternalID != scope {
+			err = fmt.Errorf("Sandbox receipt conflicts with its exact identity")
 			break
 		}
-		err = expectOneRows(queries.MarkMainSandboxCreated(ctx, dbsql.MarkMainSandboxCreatedParams{JobID: jobID, ActionID: id, IncusName: receipt.ExternalID}))
+		err = expectOneRows(queries.MarkSandboxCreated(ctx, scope))
 	case spine.ActionRouteCreate:
-		if scope != "" {
-			var expectedSandbox string
-			if expectedSandbox, err = queries.GetReviewRouteSandbox(ctx, dbsql.GetReviewRouteSandboxParams{RunID: scope, ActionID: id}); err != nil {
-				break
-			}
-			if strings.TrimSpace(receipt.ExternalID) == "" || receipt.Outcome != expectedSandbox {
-				err = fmt.Errorf("review provider route receipt is empty")
-			} else {
-				err = expectOneRows(queries.MarkReviewRouteActive(ctx, dbsql.MarkReviewRouteActiveParams{RouteID: sql.NullString{String: receipt.ExternalID, Valid: true}, RunID: scope}))
-			}
+		route, getErr := queries.GetRouteBySandbox(ctx, scope)
+		if getErr != nil {
+			err = getErr
 			break
 		}
-		err = expectOneRows(queries.MarkMainRouteActive(ctx, dbsql.MarkMainRouteActiveParams{JobID: jobID, ActionID: id, RouteID: receipt.ExternalID}))
+		if receipt.ExternalID != route.ID || receipt.Outcome != scope {
+			err = fmt.Errorf("provider route receipt conflicts with its exact Sandbox identity")
+			break
+		}
+		err = expectOneRows(queries.MarkRouteActive(ctx, dbsql.MarkRouteActiveParams{RouteID: route.ID, SandboxID: scope}))
 	case spine.ActionRouteRevoke:
-		if scope != "" {
-			var routeID sql.NullString
-			if routeID, err = queries.GetReviewRouteForCleanup(ctx, dbsql.GetReviewRouteForCleanupParams{RunID: scope, ActionID: id}); err == nil && receipt.Outcome != "revoked" {
-				err = fmt.Errorf("review route cleanup receipt is invalid")
-			}
-			if err == nil && receipt.ExternalID != "absent" && (!routeID.Valid || receipt.ExternalID != routeID.String) {
-				err = fmt.Errorf("review route cleanup receipt conflicts with its exact route")
-			}
-			if err == nil {
-				err = expectOneRows(queries.MarkReviewRouteRevoked(ctx, scope))
-			}
+		route, getErr := queries.GetRouteBySandbox(ctx, scope)
+		if getErr != nil {
+			err = getErr
 			break
 		}
-		var expectedRoute string
-		if expectedRoute, err = queries.GetMainRouteID(ctx, jobID); err == nil && (receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != expectedRoute)) {
-			err = fmt.Errorf("main route cleanup receipt conflicts with its persisted exact route ID")
+		if receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != route.ID) {
+			err = fmt.Errorf("route cleanup receipt conflicts with its exact route")
+			break
 		}
-		if err == nil {
-			err = expectOneRows(queries.MarkMainRouteRevoked(ctx, dbsql.MarkMainRouteRevokedParams{JobID: jobID, RouteID: expectedRoute}))
-		}
+		err = expectOneRows(queries.MarkRouteRevoked(ctx, dbsql.MarkRouteRevokedParams{RouteID: route.ID, SandboxID: scope}))
 	case spine.ActionSandboxDelete:
-		if scope != "" {
-			var expected string
-			if expected, err = queries.GetReviewSandboxForCleanup(ctx, dbsql.GetReviewSandboxForCleanupParams{RunID: scope, ActionID: id}); err == nil && (receipt.ExternalID != expected || receipt.Outcome != "deleted") {
-				err = fmt.Errorf("review Sandbox cleanup receipt conflicts with its host-owned identity")
-			}
-			if err == nil {
-				err = expectOneRows(queries.MarkReviewSandboxDeleted(ctx, scope))
-			}
+		if scope == "" || receipt.ExternalID != scope || receipt.Outcome != "deleted" {
+			err = fmt.Errorf("Sandbox cleanup receipt conflicts with its exact identity")
 			break
 		}
-		var expectedSandbox string
-		if expectedSandbox, err = queries.GetMainSandboxName(ctx, jobID); err == nil && (receipt.ExternalID != expectedSandbox || receipt.Outcome != "deleted") {
-			err = fmt.Errorf("main Sandbox cleanup receipt conflicts with its persisted exact Incus name")
-		}
-		if err == nil {
-			err = expectOneRows(queries.MarkMainSandboxDeleted(ctx, dbsql.MarkMainSandboxDeletedParams{JobID: jobID, IncusName: expectedSandbox}))
-		}
+		err = expectOneRows(queries.MarkSandboxDeleted(ctx, scope))
 	case spine.ActionReviewWorkspaceCreate:
-		var expectedRevision string
-		if expectedRevision, err = queries.GetReviewWorkspaceReceiptIdentity(ctx, dbsql.GetReviewWorkspaceReceiptIdentityParams{ActionID: id, RunID: scope}); err == nil && strings.TrimSpace(receipt.ExternalID) == "" {
+		if scope == "" || strings.TrimSpace(receipt.ExternalID) == "" {
 			err = fmt.Errorf("review workspace receipt has no materialized path")
+			break
 		}
-		if err == nil {
-			var tree string
-			var observedRevision string
-			observedRevision, tree, err = parseReviewStateOutcome(receipt.Outcome)
-			if err == nil && observedRevision != expectedRevision {
-				err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
-			}
-			if err == nil {
-				err = expectOneRows(queries.MarkReviewCheckoutVerified(ctx, dbsql.MarkReviewCheckoutVerifiedParams{Tree: sql.NullString{String: tree, Valid: true}, RunID: scope}))
-			}
+		expected, getErr := queries.GetReviewRevisionBySandbox(ctx, scope)
+		if getErr != nil {
+			err = getErr
+			break
+		}
+		parts := strings.Fields(receipt.Outcome)
+		if len(parts) != 3 || parts[2] != "clean" || !expected.Valid || parts[0] != expected.String || !ValidRevision(parts[1]) {
+			err = fmt.Errorf("review workspace receipt conflicts with its exact Revision/tree/clean state")
 		}
 	}
 	if err != nil {
@@ -1134,7 +1184,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*spine.Delivery,
 		Sequence: row.Sequence, Input: row.Input, Intent: spine.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID,
 	}
 	runID := spine.AgentRunID(message.ID)
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID}); err != nil {
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(jobID)}); err != nil {
 		return nil, err
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
@@ -1380,19 +1430,21 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if harnessMutations != 0 {
 		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation harness mutations", harnessMutations)
 	}
-	unsettled, err := queries.CountUnsettledReviewResources(ctx, jobID)
+	runs, err := queries.ListJobAgentRuns(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if run.State != spine.AgentRunCompleted && run.State != spine.AgentRunFailed && run.State != spine.AgentRunInterrupted {
+			return fmt.Errorf("cleanup cannot complete with unsettled AgentRun %s", run.ID)
+		}
+	}
+	unsettled, err := queries.CountUnsettledJobResources(ctx, jobID)
 	if err != nil {
 		return err
 	}
 	if unsettled != 0 {
-		return fmt.Errorf("cleanup cannot complete with %d retained reviewer resource sets", unsettled)
-	}
-	resources, err := queries.GetMainResourceStates(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if (resources.SandboxState != "" && resources.SandboxState != "deleted") || (resources.RouteState != "" && resources.RouteState != "revoked") {
-		return fmt.Errorf("cleanup cannot complete before exact Sandbox deletion and route revocation are observed")
+		return fmt.Errorf("cleanup cannot complete with %d unsettled Job resources", unsettled)
 	}
 	if err := expectOneRows(queries.CompleteCleanup(ctx, jobID)); err != nil {
 		return err

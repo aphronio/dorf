@@ -3,19 +3,18 @@ insert into dorf.actions(id,job_id,kind,state)
 values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending')
 on conflict do nothing;
 
--- name: ReserveMainSandbox :execrows
-insert into dorf.sandboxes(job_id,action_id,incus_name,state)
-values(sqlc.arg(job_id),sqlc.arg(action_id),sqlc.arg(incus_name),'pending')
-on conflict(job_id) do update set action_id=dorf.sandboxes.action_id
-where dorf.sandboxes.action_id=excluded.action_id
-  and dorf.sandboxes.incus_name=excluded.incus_name;
+-- name: ReserveSandbox :execrows
+insert into dorf.sandboxes(id,job_id,state,ownership_nonce)
+values(sqlc.arg(id),sqlc.arg(job_id),'pending',sqlc.arg(ownership_nonce))
+on conflict(id) do update set id=dorf.sandboxes.id
+where dorf.sandboxes.job_id=excluded.job_id
+  and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce;
 
--- name: ReserveMainRoute :execrows
-insert into dorf.routes(job_id,action_id,route_id,state)
-values(sqlc.arg(job_id),sqlc.arg(action_id),sqlc.arg(route_id),'pending')
-on conflict(job_id) do update set action_id=dorf.routes.action_id
-where dorf.routes.action_id=excluded.action_id
-  and dorf.routes.route_id=excluded.route_id;
+-- name: ReserveRoute :execrows
+insert into dorf.routes(id,sandbox_id,state)
+values(sqlc.arg(id),sqlc.arg(sandbox_id),'pending')
+on conflict(sandbox_id) do update set sandbox_id=dorf.routes.sandbox_id
+where dorf.routes.id=excluded.id;
 
 -- name: GetUnscopedActionForUpdate :one
 select id,job_id,kind,state,
@@ -76,95 +75,29 @@ update dorf.actions
 set state='uncertain'
 where id=sqlc.arg(action_id) and state<>'succeeded';
 
--- name: GetReviewSandboxReceiptIdentity :one
-select sandbox_name,revision
-from dorf.review_resources
-where run_id=sqlc.arg(run_id) and sandbox_create_action_id=sqlc.arg(action_id);
-
--- name: MarkReviewSandboxCreated :execrows
-update dorf.review_resources
-set sandbox_state='created'
-where run_id=sqlc.arg(run_id) and sandbox_state in ('pending','created');
-
--- name: MarkMainSandboxCreated :execrows
+-- name: MarkSandboxCreated :execrows
 update dorf.sandboxes
-set state='created',observed_at=clock_timestamp()
-where job_id=sqlc.arg(job_id) and action_id=sqlc.arg(action_id)
-  and incus_name=sqlc.arg(incus_name) and state in ('pending','created');
+set state='created'
+where id=sqlc.arg(sandbox_id) and state in ('pending','created');
 
--- name: GetReviewRouteSandbox :one
-select sandbox_name
-from dorf.review_resources
-where run_id=sqlc.arg(run_id) and route_create_action_id=sqlc.arg(action_id);
-
--- name: MarkReviewRouteActive :execrows
-update dorf.review_resources
-set route_id=coalesce(route_id,sqlc.arg(route_id)),route_state='active'
-where run_id=sqlc.arg(run_id) and sandbox_state='created'
-  and route_state in ('pending','active')
-  and (route_id is null or route_id=sqlc.arg(route_id));
-
--- name: MarkMainRouteActive :execrows
+-- name: MarkRouteActive :execrows
 update dorf.routes
-set state='active',observed_at=clock_timestamp()
-where job_id=sqlc.arg(job_id) and action_id=sqlc.arg(action_id)
-  and route_id=sqlc.arg(route_id) and state in ('pending','active');
+set state='active'
+where id=sqlc.arg(route_id) and sandbox_id=sqlc.arg(sandbox_id)
+  and state in ('pending','active');
 
--- name: GetReviewRouteForCleanup :one
-select route_id
-from dorf.review_resources
-where run_id=sqlc.arg(run_id) and route_revoke_action_id=sqlc.arg(action_id);
-
--- name: MarkReviewRouteRevoked :execrows
-update dorf.review_resources
-set route_state='revoked',route_revoked_at=coalesce(route_revoked_at,clock_timestamp())
-where run_id=sqlc.arg(run_id) and route_state in ('pending','active','revoked');
-
--- name: GetMainRouteID :one
-select route_id
-from dorf.routes
-where job_id=sqlc.arg(job_id);
-
--- name: MarkMainRouteRevoked :execrows
+-- name: MarkRouteRevoked :execrows
 update dorf.routes
-set state='revoked',observed_at=clock_timestamp()
-where job_id=sqlc.arg(job_id) and route_id=sqlc.arg(route_id)
+set state='revoked'
+where id=sqlc.arg(route_id) and sandbox_id=sqlc.arg(sandbox_id)
   and state in ('pending','active','revoked');
 
--- name: GetReviewSandboxForCleanup :one
-select sandbox_name
-from dorf.review_resources
-where run_id=sqlc.arg(run_id) and sandbox_delete_action_id=sqlc.arg(action_id);
-
--- name: MarkReviewSandboxDeleted :execrows
-update dorf.review_resources
-set sandbox_state='deleted',sandbox_deleted_at=coalesce(sandbox_deleted_at,clock_timestamp())
-where run_id=sqlc.arg(run_id) and route_state='revoked'
-  and sandbox_state in ('pending','created','deleted');
-
--- name: GetMainSandboxName :one
-select incus_name
-from dorf.sandboxes
-where job_id=sqlc.arg(job_id);
-
--- name: MarkMainSandboxDeleted :execrows
-update dorf.sandboxes
-set state='deleted',observed_at=clock_timestamp()
-where job_id=sqlc.arg(job_id) and incus_name=sqlc.arg(incus_name)
-  and state in ('pending','created','deleted');
-
--- name: GetReviewWorkspaceReceiptIdentity :one
-select rr.revision
-from dorf.review_resources rr
-where rr.materialize_action_id=sqlc.arg(action_id) and rr.run_id=sqlc.arg(run_id);
-
--- name: MarkReviewCheckoutVerified :execrows
-update dorf.review_resources
-set checkout_state='verified',revision_tree=coalesce(revision_tree,sqlc.arg(tree)),
-    checkout_verified_at=coalesce(checkout_verified_at,clock_timestamp())
-where run_id=sqlc.arg(run_id) and sandbox_state='created'
-  and checkout_state in ('pending','verified')
-  and (revision_tree is null or revision_tree=sqlc.arg(tree));
+-- name: MarkSandboxDeleted :execrows
+update dorf.sandboxes s
+set state='deleted'
+where s.id=sqlc.arg(sandbox_id)
+  and not exists(select 1 from dorf.routes where sandbox_id=sqlc.arg(sandbox_id) and state<>'revoked')
+  and s.state in ('pending','created','deleted');
 
 -- name: ListActions :many
 select a.id,a.kind,a.state,
@@ -174,3 +107,7 @@ from dorf.actions a
 left join dorf.evidence e on e.action_id=a.id
 where a.job_id=sqlc.arg(job_id)
 order by a.created_at,a.id;
+
+-- name: GetReviewRevisionBySandbox :one
+select revision from dorf.agent_runs
+where sandbox_id=sqlc.arg(sandbox_id) and revision is not null;

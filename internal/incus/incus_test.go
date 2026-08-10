@@ -14,6 +14,8 @@ type scriptedRunner struct {
 	existing bool
 	head     string
 	remote   string
+	name     string
+	metadata map[string]string
 }
 
 type inventoryRunner struct {
@@ -35,42 +37,41 @@ func (r *inventoryRunner) Run(_ context.Context, command string, _ []byte, args 
 	return Result{}, nil
 }
 
-func TestReviewSandboxRequiresExactHostOwnedMetadataAndUniqueResource(t *testing.T) {
-	metadata := ReviewMetadata{JobID: "job-1", AgentRunID: "agent-run-1", Revision: strings.Repeat("a", 40), OwnershipNonce: strings.Repeat("b", 64)}
-	name := "dorf-review-owned"
+func TestSandboxRequiresExactDurableOwnership(t *testing.T) {
+	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	config := map[string]string{
-		"user.dorf.owner": "review", "user.dorf.job": metadata.JobID, "user.dorf.agent_run": metadata.AgentRunID,
-		"user.dorf.revision": metadata.Revision, "user.dorf.ownership_nonce": metadata.OwnershipNonce,
+		"user.dorf.owner": "sandbox", "user.dorf.job": metadata.JobID, "user.dorf.sandbox": metadata.SandboxID,
+		"user.dorf.ownership_nonce": metadata.OwnershipNonce,
 	}
-	runner := &inventoryRunner{exists: true, instances: []reviewInstance{{Name: name, Config: config}}}
+	runner := &inventoryRunner{exists: true, instances: []reviewInstance{{Name: metadata.SandboxID, Config: config}}}
 	sandbox := Sandbox{Runner: runner}
-	if err := sandbox.AttestReview(context.Background(), name, metadata); err != nil {
+	if err := sandbox.AttestOwnership(context.Background(), metadata); err != nil {
 		t.Fatal(err)
 	}
 	wrong := metadata
 	wrong.OwnershipNonce = strings.Repeat("c", 64)
-	if err := sandbox.AttestReview(context.Background(), name, wrong); err == nil || !strings.Contains(err.Error(), "ownership_nonce") {
+	if err := sandbox.AttestOwnership(context.Background(), wrong); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched owner metadata error=%v", err)
 	}
-	runner.instances = append(runner.instances, reviewInstance{Name: "dorf-review-competing", Config: config})
-	if err := sandbox.AttestReview(context.Background(), name, metadata); err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("ambiguous review Sandbox error=%v", err)
+	runner.instances = append(runner.instances, reviewInstance{Name: "dorf-competing", Config: config})
+	if err := sandbox.AttestOwnership(context.Background(), metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("ambiguous Sandbox error=%v", err)
 	}
 }
 
-func TestReviewSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testing.T) {
-	metadata := ReviewMetadata{JobID: "job-1", AgentRunID: "agent-run-1", Revision: strings.Repeat("a", 40), OwnershipNonce: strings.Repeat("b", 64)}
+func TestSandboxDeletionIsRetrySafeButNeverDeletesForeignMetadata(t *testing.T) {
+	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
 	runner := &inventoryRunner{}
 	sandbox := Sandbox{Runner: runner}
 	for range 2 {
-		if err := sandbox.DeleteReview(context.Background(), "dorf-review-owned", metadata); err != nil {
+		if err := sandbox.DeleteOwned(context.Background(), metadata); err != nil {
 			t.Fatal(err)
 		}
 	}
 	runner.exists = true
-	runner.instances = []reviewInstance{{Name: "dorf-review-owned", Config: map[string]string{"user.dorf.agent_run": metadata.AgentRunID, "user.dorf.owner": "foreign"}}}
-	if err := sandbox.DeleteReview(context.Background(), "dorf-review-owned", metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
-		t.Fatalf("foreign review Sandbox deletion error=%v", err)
+	runner.instances = []reviewInstance{{Name: metadata.SandboxID, Config: map[string]string{"user.dorf.sandbox": metadata.SandboxID, "user.dorf.owner": "foreign"}}}
+	if err := sandbox.DeleteOwned(context.Background(), metadata); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("foreign Sandbox deletion error=%v", err)
 	}
 }
 
@@ -78,6 +79,14 @@ func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, ar
 	r.calls = append(r.calls, append([]string{command}, args...))
 	r.inputs = append(r.inputs, append([]byte(nil), input...))
 	joined := strings.Join(args, " ")
+	if strings.HasPrefix(joined, "list ") {
+		instances := []reviewInstance{}
+		if r.existing && r.metadata != nil {
+			instances = append(instances, reviewInstance{Name: r.name, Config: r.metadata})
+		}
+		payload, _ := json.Marshal(instances)
+		return Result{Stdout: string(payload)}, nil
+	}
 	if strings.HasPrefix(joined, "info ") && !r.existing {
 		return Result{ExitCode: 1, Stderr: "not found"}, nil
 	}
@@ -86,6 +95,18 @@ func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, ar
 	}
 	if strings.HasPrefix(joined, "init ") {
 		r.existing = true
+		r.name = args[2]
+		r.metadata = make(map[string]string)
+		for i := 3; i+1 < len(args); i++ {
+			if args[i] != "-c" {
+				continue
+			}
+			key, value, ok := strings.Cut(args[i+1], "=")
+			if ok {
+				r.metadata[key] = value
+			}
+			i++
+		}
 	}
 	if strings.Contains(joined, "git clone --no-checkout") {
 		r.existing = true
@@ -102,14 +123,15 @@ func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, ar
 	return Result{}, nil
 }
 
-func TestSandboxCreationUsesStableNameAndCredentialFreeBoundary(t *testing.T) {
+func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *testing.T) {
 	runner := &scriptedRunner{}
 	sandbox := Sandbox{Config: Config{Image: "dorf-codex", Network: "incusbr0", DiskSize: "40GiB", Workspace: "/workspace/job"}, Runner: runner, Sleep: func(_ time.Duration) {}}
-	first, err := sandbox.ReconcileCreate(context.Background(), "job-1")
+	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
+	first, err := sandbox.ReconcileOwnedCreate(context.Background(), metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := sandbox.ReconcileCreate(context.Background(), "job-1")
+	second, err := sandbox.ReconcileOwnedCreate(context.Background(), metadata)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -106,7 +106,7 @@ establish, and deterministic mechanisms do not pretend to answer questions requi
   attention before logs.
 - **Precise interruption:** humans are asked only for consequential boundary decisions or genuine
   ambiguity without a safe default.
-- **One proposal:** a coding Job owns one Sandbox, branch, Revision line, and pull-request proposal.
+- **One proposal:** a coding Job owns its Sandboxes, branch, Revision line, and pull-request proposal.
 - **Honest terminal:** completion, rejection, abandonment, and cleanup are separate observable facts
   until all have converged.
 
@@ -123,6 +123,9 @@ L4  Clients              CLI first; other trusted clients later
 The durable core owns mechanisms and facts. The coding workflow owns coding semantics and review
 policy. Adapters translate existing tools; they do not create a second workflow. Clients invoke and
 render the same application boundary; they do not become authorities.
+
+Resource ownership follows lifetime: the Job owns every Sandbox created for the task; each Sandbox
+owns its scoped Provider Route; AgentRuns use a Sandbox. Cleanup walks Job → Sandboxes → Routes.
 
 ## Non-goals until evidence demands them
 

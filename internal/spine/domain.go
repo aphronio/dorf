@@ -68,13 +68,25 @@ type Job struct {
 	CleanupState       CleanupState `json:"cleanup_state"`
 	TaskID             string       `json:"task_id"`
 	CleanupTaskID      string       `json:"cleanup_task_id,omitempty"`
-	SandboxID          string       `json:"sandbox_id,omitempty"`
-	SandboxState       string       `json:"sandbox_state,omitempty"`
-	RouteID            string       `json:"route_id,omitempty"`
-	RouteState         string       `json:"route_state,omitempty"`
 	WorkflowPhase      string       `json:"workflow_phase"`
 	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
 	CleanupAttention   string       `json:"cleanup_attention,omitempty"`
+}
+
+// Sandbox is infrastructure owned for the lifetime of a Job. AgentRuns use a
+// Sandbox, but never own it.
+type Sandbox struct {
+	ID             string `json:"id"`
+	JobID          string `json:"job_id"`
+	State          string `json:"state"`
+	OwnershipNonce string `json:"-"`
+}
+
+// Route is the provider route serving one Sandbox.
+type Route struct {
+	ID        string `json:"id"`
+	SandboxID string `json:"sandbox_id"`
+	State     string `json:"state"`
 }
 
 type MessageFromKind string
@@ -121,6 +133,8 @@ type AgentRun struct {
 	Role             string        `json:"role"`
 	Revision         string        `json:"revision,omitempty"`
 	Capability       string        `json:"capability,omitempty"`
+	SandboxID        string        `json:"sandbox_id,omitempty"`
+	SubmissionNonce  string        `json:"-"`
 	StartedAt        time.Time     `json:"started_at,omitempty"`
 	FinishedAt       time.Time     `json:"finished_at,omitempty"`
 }

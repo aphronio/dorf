@@ -215,27 +215,6 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	}); err != nil {
 		return "", err
 	}
-	sandboxCreateAction := spine.ScopedActionID(jobID, spine.ActionSandboxCreate, runID)
-	routeCreateAction := spine.ScopedActionID(jobID, spine.ActionRouteCreate, runID)
-	createAction := spine.ScopedActionID(jobID, spine.ActionReviewWorkspaceCreate, runID)
-	routeRevokeAction := spine.ScopedActionID(jobID, spine.ActionRouteRevoke, runID)
-	sandboxDeleteAction := spine.ScopedActionID(jobID, spine.ActionSandboxDelete, runID)
-	for _, action := range []struct {
-		id   string
-		kind spine.ActionKind
-	}{{sandboxCreateAction, spine.ActionSandboxCreate}, {routeCreateAction, spine.ActionRouteCreate}, {createAction, spine.ActionReviewWorkspaceCreate}, {routeRevokeAction, spine.ActionRouteRevoke}, {sandboxDeleteAction, spine.ActionSandboxDelete}} {
-		if err := queries.InsertReviewAction(ctx, dbsql.InsertReviewActionParams{
-			ID: action.id, JobID: jobID, Kind: action.kind, ScopeKey: runID,
-		}); err != nil {
-			return "", err
-		}
-	}
-	if err := queries.InsertReviewAgentRun(ctx, dbsql.InsertReviewAgentRunParams{
-		ID: runID, JobID: jobID, MessageID: message.ID, Role: role, Revision: revision,
-		Capability: spine.ReviewReadOnlyCapability,
-	}); err != nil {
-		return "", err
-	}
 	ownerNonce, err := reviewNonce()
 	if err != nil {
 		return "", err
@@ -244,12 +223,15 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	if err != nil {
 		return "", err
 	}
-	if err := queries.InsertReviewResource(ctx, dbsql.InsertReviewResourceParams{
-		RunID: runID, JobID: jobID, Revision: revision, SandboxName: spine.ReviewSandboxName(runID),
-		OwnershipNonce: ownerNonce, SubmissionNonce: submissionNonce,
-		SandboxCreateActionID: sandboxCreateAction, RouteCreateActionID: routeCreateAction,
-		MaterializeActionID: createAction, RouteRevokeActionID: routeRevokeAction, SandboxDeleteActionID: sandboxDeleteAction,
-	}); err != nil {
+	sandboxID := spine.ReviewSandboxName(runID)
+	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: jobID, OwnershipNonce: ownerNonce})); err != nil {
+		return "", err
+	}
+	routeActionID := spine.ScopedActionID(jobID, spine.ActionRouteCreate, sandboxID)
+	if err := expectOneRows(queries.ReserveRoute(ctx, dbsql.ReserveRouteParams{ID: spine.ProviderRouteID(routeActionID), SandboxID: sandboxID})); err != nil {
+		return "", err
+	}
+	if err := queries.InsertReviewAgentRun(ctx, dbsql.InsertReviewAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, Role: role, Revision: revision, Capability: spine.ReviewReadOnlyCapability, SandboxID: sandboxID, SubmissionNonce: submissionNonce}); err != nil {
 		return "", err
 	}
 	return runID, nil
@@ -277,16 +259,11 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 			ID: row.ID, JobID: row.JobID, MessageID: row.MessageID, Harness: row.Harness, ThreadID: row.ThreadID,
 			State: spine.AgentRunState(row.State), BaselineRecorded: row.BaselineRecorded, BaselineTurnID: row.BaselineTurnID,
 			TurnID: row.TurnID, TurnOutcome: row.TurnOutcome, Attention: row.Attention, Role: row.Role,
-			Revision: row.Revision, Capability: row.Capability,
+			Revision: row.Revision, Capability: row.Capability, SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
 		},
 		Request: messageFromValues(row.MessageID, row.JobID, spine.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, spine.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
-		ReviewRunProjection: spine.ReviewRunProjection{
-			ReviewerSandboxID: row.ReviewerSandboxID, ReviewerRouteID: row.ReviewerRouteID,
-			ReviewerOwnerNonce: row.ReviewerOwnerNonce,
-			SubmissionNonce:    row.SubmissionNonce, RevisionTree: row.RevisionTree,
-			ReviewerSandboxState: row.ReviewerSandboxState, ReviewerRouteState: row.ReviewerRouteState,
-			CheckoutState: row.CheckoutState, PostReviewState: row.PostReviewState,
-		},
+		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, State: row.SandboxState, OwnershipNonce: row.OwnershipNonce},
+		Route:   spine.Route{ID: row.RouteID, SandboxID: row.SandboxID, State: row.RouteState},
 	}
 	if row.StartedAt.Valid {
 		view.StartedAt = row.StartedAt.Time
@@ -331,100 +308,12 @@ func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewR
 	return result, nil
 }
 
-// CleanupReviewRuns returns only AgentRuns backed by persisted reviewer
-// resources, including partial rows that cleanup must validate or reject.
-func (s Store) CleanupReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
-	rows, err := dbsql.New(s.DB).ListCleanupReviewRuns(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]spine.ReviewRunView, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, reviewRunView(row))
-	}
-	return result, nil
-}
-
-func (s Store) beginReviewAction(ctx context.Context, runID string, kind spine.ActionKind) (spine.Action, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRouteCreate, spine.ActionReviewWorkspaceCreate,
-		spine.ActionRouteRevoke, spine.ActionSandboxDelete:
-	default:
-		return spine.Action{}, fmt.Errorf("unsupported review Action %q", kind)
-	}
-	actionID, err := queries.GetReviewActionID(ctx, dbsql.GetReviewActionIDParams{Kind: string(kind), RunID: runID})
-	if err != nil {
-		return spine.Action{}, err
-	}
-	row, err := queries.GetReviewActionForUpdate(ctx, actionID)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	action := spine.Action{ID: row.ID, JobID: row.JobID, Kind: row.Kind, State: row.State, ExternalID: row.ExternalID, Outcome: row.ExternalOutcome, Scope: row.ScopeKey}
-	if err = tx.Commit(); err != nil {
-		return spine.Action{}, err
-	}
-	return action, nil
-}
-
-func (s Store) BeginReviewSandbox(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionSandboxCreate)
-}
-func (s Store) BeginReviewRoute(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionRouteCreate)
-}
 func (s Store) BeginReviewWorkspace(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionReviewWorkspaceCreate)
-}
-func (s Store) BeginReviewRouteCleanup(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionRouteRevoke)
-}
-func (s Store) BeginReviewSandboxCleanup(ctx context.Context, runID string) (spine.Action, error) {
-	return s.beginReviewAction(ctx, runID, spine.ActionSandboxDelete)
-}
-
-func (s Store) InterruptReviewRun(ctx context.Context, runID, reason string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
+	run, err := s.ReviewRun(ctx, runID)
 	if err != nil {
-		return err
+		return spine.Action{}, err
 	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	state, err := queries.GetReviewRunStateForUpdate(ctx, dbsql.GetReviewRunStateForUpdateParams{RunID: runID, Capability: spine.ReviewReadOnlyCapability})
-	if err != nil {
-		return err
-	}
-	if state == spine.AgentRunCompleted || state == spine.AgentRunFailed || state == spine.AgentRunInterrupted {
-		return tx.Commit()
-	}
-	if err := expectOneRows(queries.InterruptReviewAgentRun(ctx, dbsql.InterruptReviewAgentRunParams{Reason: reason, RunID: runID})); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s Store) RecordReviewPostState(ctx context.Context, runID string, receipt spine.Receipt) error {
-	revision, tree, err := parseReviewStateOutcome(receipt.Outcome)
-	if err != nil {
-		return err
-	}
-	return expectOneRows(dbsql.New(s.DB).VerifyReviewPostState(ctx, dbsql.VerifyReviewPostStateParams{
-		RunID: runID, Revision: revision, RevisionTree: tree,
-	}))
-}
-
-func parseReviewStateOutcome(outcome string) (string, string, error) {
-	parts := strings.Fields(outcome)
-	if len(parts) != 3 || parts[2] != "clean" || !ValidRevision(parts[0]) || !ValidRevision(parts[1]) {
-		return "", "", fmt.Errorf("review checkout observation is not exact Revision/tree/clean state")
-	}
-	return parts[0], parts[1], nil
+	return s.BeginResourceAction(ctx, run.Sandbox.ID, spine.ActionReviewWorkspaceCreate)
 }
 
 // RecordReviewFeedback retains one reviewer's exact prose and feeds it back to
@@ -487,13 +376,13 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 		}
 		implementationRunID := spine.AgentRunID(message.ID)
 		if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{
-			ID: implementationRunID, JobID: run.JobID, MessageID: message.ID,
+			ID: implementationRunID, JobID: run.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(run.JobID),
 		})); err != nil {
 			return spine.Message{}, false, err
 		}
 		created = true
 	}
-	missing, err := queries.CountMissingReviewFeedback(ctx, dbsql.CountMissingReviewFeedbackParams{JobID: run.JobID, Revision: run.Revision})
+	missing, err := queries.CountMissingReviewFeedback(ctx, dbsql.CountMissingReviewFeedbackParams{JobID: run.JobID, Revision: sql.NullString{String: run.Revision, Valid: true}})
 	if err != nil {
 		return spine.Message{}, false, err
 	}

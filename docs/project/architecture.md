@@ -42,12 +42,17 @@ be understood.
 | Job goal, lifecycle, current Revision, inbox order, selected ReviewPlan, AgentRun inputs/state and exact Harness/Thread/Turn binding, and terminal outcome | Dorf-owned PostgreSQL tables |
 | Task claims, runs, checkpoints, retry schedule, sleeps, and wake events | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, harness tool items, and Thread and Turn history | The selected agent Harness |
-| Mutable checkout, running processes, and local build output | The Job's Sandbox |
+| Mutable checkout, running processes, and local build output | A Job-owned Sandbox |
 | Branch, commits, pull request, review state, and merge result | Git and GitHub |
 | Retained proof | Content-addressed Evidence referenced by Dorf records and pinned to a Revision |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project these
 facts for inspection, but they are disposable and rebuildable.
+
+Resource ownership follows lifetime. A Job is the aggregate and lifetime owner of one or more
+Sandboxes. Each Sandbox owns its scoped Provider Route. AgentRuns use a Sandbox and retain the
+binding they used; they do not own infrastructure. Cleanup starts at the Job and walks its
+Sandboxes, revoking each Route before deleting its Sandbox. There is no polymorphic owner kind/id.
 
 ## Execution model
 

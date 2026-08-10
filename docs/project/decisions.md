@@ -1262,3 +1262,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A second concrete Harness cannot express a resumable Thread and bounded Turn,
   or dogfood proves that one AgentRun cannot retain enough identity to reconcile uncertain
   submission without a distinct durable effect record.
+
+## D056 — Jobs own Sandbox lifetimes and Sandboxes own Provider Routes
+
+- **Status:** Accepted resource-lifecycle simplification — 2026-08-10
+- **Decision:** The Job is the aggregate and lifetime owner of every Sandbox created for the coding
+  task, including isolated review Sandboxes. A Sandbox owns its scoped Provider Route. AgentRuns use
+  a Sandbox and record that binding, but do not own infrastructure. Cleanup walks Job → Sandboxes →
+  Routes, revoking each Route before deleting its Sandbox. Ownership is represented with ordinary
+  foreign keys; there is no polymorphic owner kind/id.
+- **Why:** Ownership follows the longest relevant lifetime, keeps database relationships concrete,
+  permits AgentRun retries and follow-ups to reuse a Sandbox, and gives one cleanup inventory without
+  copied reviewer-resource state or role-specific cleanup algorithms.
+- **Reconsider when:** A concrete workflow requires resources to outlive their Job, or a Sandbox must
+  be shared safely by multiple Jobs; either case would require an explicit new aggregate and custody
+  rules rather than a polymorphic owner shortcut.

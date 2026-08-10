@@ -525,6 +525,26 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
+	sandboxes, err := store.Sandboxes(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	type sandboxView struct {
+		Sandbox spine.Sandbox `json:"sandbox"`
+		Route   *spine.Route  `json:"route,omitempty"`
+	}
+	resources := make([]sandboxView, 0, len(sandboxes))
+	for _, sandbox := range sandboxes {
+		route, routeErr := store.Route(ctx, sandbox.ID)
+		if errors.Is(routeErr, sql.ErrNoRows) {
+			resources = append(resources, sandboxView{Sandbox: sandbox})
+			continue
+		}
+		if routeErr != nil {
+			return routeErr
+		}
+		resources = append(resources, sandboxView{Sandbox: sandbox, Route: &route})
+	}
 	var currentPlan *spine.ReviewPlanRecord
 	for i := range plans {
 		if plans[i].Revision == job.Revision {
@@ -549,11 +569,18 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		return err
 	}
 	continuation := continuationFor(job, outcome, runEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "sandboxes": resources, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState))
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision)
+	for _, resource := range resources {
+		if resource.Route == nil {
+			fmt.Fprintf(stdout, "  sandbox: %s state=%s\n", resource.Sandbox.ID, resource.Sandbox.State)
+		} else {
+			fmt.Fprintf(stdout, "  sandbox: %s state=%s route=%s state=%s\n", resource.Sandbox.ID, resource.Sandbox.State, resource.Route.ID, resource.Route.State)
+		}
+	}
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -608,7 +635,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
 			latency = run.FinishedAt.Sub(run.StartedAt)
 		}
-		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s harness=%s thread=%s turn=%s latency=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.Harness), empty(run.ThreadID), empty(run.TurnID), latency, empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), run.Stale)
+		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s harness=%s thread=%s turn=%s latency=%s sandbox=%s route=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.Harness), empty(run.ThreadID), empty(run.TurnID), latency, empty(run.Sandbox.ID), empty(run.Route.ID), run.Stale)
 	}
 	for _, record := range evidenceRecords {
 		verification := "verified"

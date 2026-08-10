@@ -58,7 +58,7 @@ func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
 }
 
 func TestCleanupProofBarriersRequireIssue39Phrase(t *testing.T) {
-	for _, point := range []string{spine.BarrierReviewerRouteRevoked, spine.BarrierReviewerSandboxDeleted, spine.BarrierMainRouteRevoked, spine.BarrierMainSandboxDeleted} {
+	for _, point := range []string{spine.BarrierRouteRevoked, spine.BarrierSandboxDeleted} {
 		t.Run(point, func(t *testing.T) {
 			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
 			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")

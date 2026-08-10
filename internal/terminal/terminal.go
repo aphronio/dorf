@@ -27,8 +27,11 @@ func (e Externals) repository() repository.Manager {
 	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
 }
 
-func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	id, err := e.Sandbox.ReconcileCreate(ctx, job.ID)
+func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+	if sandbox.JobID != job.ID {
+		return spine.Receipt{}, fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
+	}
+	id, err := e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
 	return spine.Receipt{ExternalID: id}, err
 }
 
@@ -65,14 +68,14 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (po
 }
 
 func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
-	if run.ReviewerSandboxID == "" {
+	if run.SandboxID == "" {
 		return spine.Receipt{}, fmt.Errorf("review materialization requires a dedicated reviewer Sandbox")
 	}
 	if run.Revision != job.Revision {
 		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision")
 	}
 	workspace := e.Sandbox.Config.Workspace
-	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
+	if err := e.Sandbox.AttachReviewMetadata(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
 		return spine.Receipt{}, err
 	}
 	sourceScript := `set -eu
@@ -109,55 +112,22 @@ test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"
 printf '%s %s clean\n' "$head" "$tree"`
-	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", workspace, run.Revision)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
 	if result.ExitCode != 0 {
 		return spine.Receipt{}, fmt.Errorf("materialize exact review checkout: %s", strings.TrimSpace(result.Stderr))
 	}
-	return spine.Receipt{ExternalID: workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
+	return spine.Receipt{ExternalID: run.SandboxID, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
-func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
-	if run.ReviewerSandboxID != spine.ReviewSandboxName(run.ID) || run.ReviewerSandboxID == e.Sandbox.Name(job.ID) {
-		return spine.Receipt{}, fmt.Errorf("reviewer Sandbox identity is not isolated from the implementation Sandbox")
+func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewWorkspaceObservation, error) {
+	if run.SandboxID == "" {
+		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
 	}
-	id, err := e.Sandbox.ReconcileReviewCreate(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
-	return spine.Receipt{ExternalID: id, Outcome: run.Revision}, err
-}
-
-func (e Externals) ReviewRouteCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, action spine.Action) (spine.Receipt, error) {
-	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
-		return spine.Receipt{}, err
-	}
-	baseURL, err := e.Gateway.BaseURL()
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	bridgeIPv4, err := e.Sandbox.BridgeIPv4(ctx)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
-		return spine.Receipt{}, err
-	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "review:"+run.ID, action.ID)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	if err := e.Sandbox.InstallRoute(ctx, run.ReviewerSandboxID, route.BaseURL, route.APIKey); err != nil {
-		return spine.Receipt{}, err
-	}
-	return spine.Receipt{ExternalID: route.ID, Outcome: run.ReviewerSandboxID}, nil
-}
-
-func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.Receipt, error) {
-	if run.ReviewerSandboxID == "" {
-		return spine.Receipt{}, fmt.Errorf("legacy implementation-Sandbox review cannot produce isolated post-turn attestation")
-	}
-	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
-		return spine.Receipt{}, err
+	if err := e.Sandbox.AttestReview(ctx, run.SandboxID, reviewMetadata(job, run)); err != nil {
+		return spine.ReviewWorkspaceObservation{}, err
 	}
 	script := `set -eu
 workspace=$1; revision=$2
@@ -167,48 +137,15 @@ test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 printf '%s %s clean\n' "$head" "$tree"`
 	workspace := e.Sandbox.Config.Workspace
-	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.SandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.Revision)
 	if err != nil || result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
+		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
-	return spine.Receipt{ExternalID: workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
-}
-
-func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
-	present, err := e.Sandbox.ReviewPresent(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
-	if err != nil {
-		return spine.Receipt{}, err
+	fields := strings.Fields(result.Stdout)
+	if len(fields) != 3 || fields[0] != run.Revision || fields[2] != "clean" {
+		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("reviewer checkout returned malformed post-turn attestation")
 	}
-	expectedRouteID, err := reviewerRouteID(job, run)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	id, err := e.Gateway.RevokeExact(ctx, "review:"+run.ID, expectedRouteID)
-	if err != nil {
-		return spine.Receipt{}, err
-	}
-	if present {
-		if err := e.Sandbox.RemoveRoute(ctx, run.ReviewerSandboxID); err != nil {
-			return spine.Receipt{}, err
-		}
-	}
-	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
-}
-
-func reviewerRouteID(job spine.Job, run spine.ReviewRunView) (string, error) {
-	if run.JobID != job.ID || strings.TrimSpace(run.ID) == "" {
-		return "", fmt.Errorf("reviewer route cleanup identity does not belong to exact Job %s", job.ID)
-	}
-	if run.ReviewerRouteID != "" {
-		return run.ReviewerRouteID, nil
-	}
-	createActionID := spine.ScopedActionID(job.ID, spine.ActionRouteCreate, run.ID)
-	return gateway.RouteID(createActionID), nil
-}
-
-func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
-	err := e.Sandbox.DeleteReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run))
-	return spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}, err
+	return spine.ReviewWorkspaceObservation{Revision: fields[0], Tree: fields[1]}, nil
 }
 
 func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
@@ -216,7 +153,7 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spi
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.StartStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
@@ -226,7 +163,7 @@ func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.Rev
 	if err != nil {
 		return spine.HarnessHistory{}, err
 	}
-	history, err := e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	history, err := e.Agent.ReadStrictReviewTurns(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	history.ControllerID = reviewControllerID(run)
 	return history, err
 }
@@ -236,7 +173,7 @@ func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.R
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
@@ -246,13 +183,13 @@ func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.Revi
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.WaitStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
 
 func reviewControllerID(run spine.ReviewRunView) string {
-	return spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	return spine.ReviewControllerID(run.ID, run.SandboxID, run.Sandbox.OwnershipNonce)
 }
 
 type reviewInputError string
@@ -268,7 +205,11 @@ func reviewInput(run spine.ReviewRunView) (string, error) {
 }
 
 func reviewMetadata(job spine.Job, run spine.ReviewRunView) incus.ReviewMetadata {
-	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.Revision, OwnershipNonce: run.ReviewerOwnerNonce}
+	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.Revision, OwnershipNonce: run.Sandbox.OwnershipNonce}
+}
+
+func ownershipMetadata(sandbox spine.Sandbox) incus.OwnershipMetadata {
+	return incus.OwnershipMetadata{JobID: sandbox.JobID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
 }
 
 func reviewEffort(role, implementationEffort string) string {
@@ -278,7 +219,13 @@ func reviewEffort(role, implementationEffort string) string {
 	return "medium"
 }
 
-func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
+func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, expected spine.Route, action spine.Action) (spine.Receipt, error) {
+	if sandbox.JobID != job.ID || expected.SandboxID != sandbox.ID || expected.ID == "" {
+		return spine.Receipt{}, fmt.Errorf("provider Route does not belong to exact Job Sandbox")
+	}
+	if err := e.Sandbox.AttestOwnership(ctx, ownershipMetadata(sandbox)); err != nil {
+		return spine.Receipt{}, err
+	}
 	baseURL, err := e.Gateway.BaseURL()
 	if err != nil {
 		return spine.Receipt{}, err
@@ -290,11 +237,14 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
 		return spine.Receipt{}, err
 	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, "sandbox:"+job.ID, action.ID)
+	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, routeConsumer(sandbox), action.ID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	if err := e.Sandbox.InstallRoute(ctx, e.Sandbox.Name(job.ID), route.BaseURL, route.APIKey); err != nil {
+	if route.ID != expected.ID {
+		return spine.Receipt{}, fmt.Errorf("provider Gateway returned a foreign Route identity")
+	}
+	if err := e.Sandbox.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey); err != nil {
 		return spine.Receipt{}, err
 	}
 	return spine.Receipt{ExternalID: route.ID}, nil
@@ -331,26 +281,35 @@ func (e Externals) AgentWait(ctx context.Context, job spine.Job, threadID, turnI
 	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), threadID, turnID)
 }
 
-func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	if job.RouteID == "" {
-		return spine.Receipt{}, fmt.Errorf("main route cleanup has no recorded exact route ID")
+func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine.Sandbox, route spine.Route, _ spine.Action) (spine.Receipt, error) {
+	if sandbox.JobID != job.ID || route.SandboxID != sandbox.ID || route.ID == "" {
+		return spine.Receipt{}, fmt.Errorf("Route cleanup has no exact Job-owned identity")
 	}
-	id, err := e.Gateway.RevokeExact(ctx, "sandbox:"+job.ID, job.RouteID)
+	id, err := e.Gateway.RevokeExact(ctx, routeConsumer(sandbox), route.ID)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
-	_ = e.Sandbox.RemoveRoute(ctx, e.Sandbox.Name(job.ID))
+	present, presentErr := e.Sandbox.OwnedPresent(ctx, ownershipMetadata(sandbox))
+	if presentErr != nil {
+		return spine.Receipt{}, presentErr
+	}
+	if present {
+		if err := e.Sandbox.RemoveRoute(ctx, sandbox.ID); err != nil {
+			return spine.Receipt{}, err
+		}
+	}
 	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
 }
 
-func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	name := job.SandboxID
-	if name == "" {
-		return spine.Receipt{}, fmt.Errorf("main Sandbox cleanup has no recorded exact Incus name")
+func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+	if sandbox.JobID != job.ID || sandbox.ID == "" {
+		return spine.Receipt{}, fmt.Errorf("Sandbox cleanup has no exact Job-owned identity")
 	}
-	err := e.Sandbox.Delete(ctx, name)
-	return spine.Receipt{ExternalID: name, Outcome: "deleted"}, err
+	err := e.Sandbox.DeleteOwned(ctx, ownershipMetadata(sandbox))
+	return spine.Receipt{ExternalID: sandbox.ID, Outcome: "deleted"}, err
 }
+
+func routeConsumer(sandbox spine.Sandbox) string { return "sandbox:" + sandbox.ID }
 
 func requireBridgeRoute(baseURL, bridgeIPv4 string) error {
 	parsed, err := url.Parse(baseURL)

@@ -2,6 +2,7 @@ package spine
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -79,7 +80,8 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	if outcome.Status != "completed" {
 		return outcome, fmt.Errorf("review Role %s settled as %s", run.Role, outcome.Status)
 	}
-	if err := s.verifyReviewPostState(ctx, job, run, store, externals); err != nil {
+	post, err := s.verifyReviewPostState(ctx, job, run, externals)
+	if err != nil {
 		return outcome, err
 	}
 	run, err = store.ReviewRun(ctx, run.ID)
@@ -89,7 +91,7 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	if strings.TrimSpace(outcome.Output) == "" {
 		return outcome, reviewBoundaryError(fmt.Sprintf("review Role %s returned no feedback text", run.Role))
 	}
-	observed, err := s.reviewEvidence(run)
+	observed, err := s.reviewEvidence(run, post)
 	if err != nil {
 		return outcome, err
 	}
@@ -102,25 +104,33 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	return outcome, nil
 }
 
-func (s Service) verifyReviewPostState(ctx context.Context, job Job, run ReviewRunView, store ReviewStore, externals ReviewExternals) error {
+func (s Service) verifyReviewPostState(ctx context.Context, job Job, run ReviewRunView, externals ReviewExternals) (ReviewWorkspaceObservation, error) {
 	post, err := externals.ReviewWorkspaceVerify(ctx, job, run)
 	if err != nil {
 		reason := "reviewer checkout post-turn attestation failed: " + err.Error()
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
-		return reviewBoundaryError(reason)
+		return ReviewWorkspaceObservation{}, reviewBoundaryError(reason)
 	}
-	if err := store.RecordReviewPostState(ctx, run.ID, post); err != nil {
-		reason := "reviewer checkout post-turn state conflicts with durable input: " + err.Error()
+	if post.Revision != run.Revision || !fullGitObjectID(post.Tree) {
+		reason := "reviewer checkout post-turn attestation is not the exact Revision with a full tree identity"
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
-		return reviewBoundaryError(reason)
+		return ReviewWorkspaceObservation{}, reviewBoundaryError(reason)
 	}
-	return nil
+	return post, nil
+}
+
+func fullGitObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView, externals ReviewExternals, store ReviewStore) (HarnessTurn, error) {
 	expectedFromID := ReviewRequestFromID(original.Revision, original.Role)
 	expectedMessageID := ReviewRequestMessageID(job.ID, original.Revision, original.Role)
-	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 {
+	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
 		reason := "review AgentRun request Message, Sandbox ownership, or exact submission contract is invalid"
 		_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
 		return HarnessTurn{}, reviewBoundaryError(reason)
@@ -140,9 +150,9 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
 		return HarnessTurn{}, reviewBoundaryError(reason)
 	}
-	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	expectedController := ReviewControllerID(run.ID, run.Sandbox.ID, run.Sandbox.OwnershipNonce)
 	request := run.Request
-	projection := run.ReviewRunProjection
+	sandbox, route := run.Sandbox, run.Route
 	contract := agentRunContract{
 		service:             s,
 		delivery:            Delivery{AgentRun: run.AgentRun},
@@ -151,16 +161,16 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		label:               "review",
 		bindUnsupportedTurn: false,
 		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(run, request, projection))
+			return externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(run, request, sandbox, route))
 		},
 		recover: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewRecover(ctx, job, reviewRunAttempt(run, request, projection))
+			return externals.ReviewRecover(ctx, job, reviewRunAttempt(run, request, sandbox, route))
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return externals.ReviewTurns(ctx, job, reviewRunAttempt(run, request, projection))
+			return externals.ReviewTurns(ctx, job, reviewRunAttempt(run, request, sandbox, route))
 		},
 		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
-			return externals.ReviewWait(ctx, job, reviewRunAttempt(run, request, projection), turnID)
+			return externals.ReviewWait(ctx, job, reviewRunAttempt(run, request, sandbox, route), turnID)
 		},
 		validateOwner: func(binding HarnessBinding) error {
 			return validateReviewController(expectedController, binding)
@@ -195,8 +205,8 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	return contract.execute(ctx)
 }
 
-func reviewRunAttempt(run AgentRun, request Message, projection ReviewRunProjection) ReviewRunView {
-	return ReviewRunView{AgentRun: run, Request: request, ReviewRunProjection: projection}
+func reviewRunAttempt(run AgentRun, request Message, sandbox Sandbox, route Route) ReviewRunView {
+	return ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox, Route: route}
 }
 
 func validateReviewController(expected string, binding HarnessBinding) error {
@@ -216,15 +226,15 @@ func (s Service) recordReviewReadError(ctx context.Context, runID string, err er
 }
 
 func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original ReviewRunView, store ReviewStore, externals ReviewExternals) error {
-	if original.ReviewerSandboxID != ReviewSandboxName(original.ID) {
+	if original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}
-	sandbox, err := store.BeginReviewSandbox(ctx, original.ID)
+	sandbox, err := s.Store.BeginResourceAction(ctx, original.Sandbox.ID, ActionSandboxCreate)
 	if err != nil {
 		return err
 	}
 	if sandbox.State != ActionSucceeded {
-		receipt, err := externals.ReviewSandboxCreate(ctx, job, original, sandbox)
+		receipt, err := s.Externals.SandboxCreate(ctx, job, original.Sandbox, sandbox)
 		if err != nil {
 			_ = s.Store.UncertainAction(ctx, sandbox.ID)
 			return err
@@ -250,12 +260,16 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Re
 			return err
 		}
 	}
-	route, err := store.BeginReviewRoute(ctx, original.ID)
+	route, err := s.Store.BeginResourceAction(ctx, original.Sandbox.ID, ActionRouteCreate)
 	if err != nil {
 		return err
 	}
 	if route.State != ActionSucceeded {
-		receipt, err := externals.ReviewRouteCreate(ctx, job, original, route)
+		persistedRoute, loadErr := s.Store.Route(ctx, original.Sandbox.ID)
+		if loadErr != nil {
+			return loadErr
+		}
+		receipt, err := s.Externals.RouteCreate(ctx, job, original.Sandbox, persistedRoute, route)
 		if err != nil {
 			_ = s.Store.UncertainAction(ctx, route.ID)
 			return err
@@ -267,7 +281,7 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Re
 	return nil
 }
 
-func (s Service) reviewEvidence(run ReviewRunView) (Evidence, error) {
+func (s Service) reviewEvidence(run ReviewRunView, post ReviewWorkspaceObservation) (Evidence, error) {
 	finished := run.FinishedAt.UTC().Truncate(time.Microsecond)
 	started := run.StartedAt.UTC().Truncate(time.Microsecond)
 	if started.IsZero() || finished.IsZero() || started.After(finished) {
@@ -275,7 +289,7 @@ func (s Service) reviewEvidence(run ReviewRunView) (Evidence, error) {
 	}
 	artifact, err := json.Marshal(reviewObservationArtifact{
 		AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
-		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
+		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, PostState: post,
 	})
 	if err != nil {
 		return Evidence{}, err

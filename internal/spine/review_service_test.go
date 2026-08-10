@@ -26,25 +26,28 @@ func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 
 func TestReviewAttemptKeepsItsExactRequestMessage(t *testing.T) {
 	request := Message{ID: "message-review", JobID: "job-1", Input: "review this exact revision"}
-	projection := ReviewRunProjection{ReviewerSandboxID: "sandbox-1"}
-	run := AgentRun{ID: "agent-run-review", JobID: request.JobID, MessageID: request.ID, Harness: "codex"}
+	sandbox := Sandbox{ID: "sandbox-1", JobID: request.JobID}
+	route := Route{ID: "route-1", SandboxID: sandbox.ID}
+	run := AgentRun{ID: "agent-run-review", JobID: request.JobID, MessageID: request.ID, SandboxID: sandbox.ID, Harness: "codex"}
 
-	attempt := reviewRunAttempt(run, request, projection)
-	if attempt.AgentRun != run || attempt.Request != request || attempt.ReviewRunProjection != projection {
+	attempt := reviewRunAttempt(run, request, sandbox, route)
+	if attempt.AgentRun != run || attempt.Request != request || attempt.Sandbox != sandbox || attempt.Route != route {
 		t.Fatalf("review attempt lost durable input: %#v", attempt)
 	}
 }
 
-func TestReviewEvidenceObservesTheAgentRunWithoutCopyingFeedback(t *testing.T) {
+func TestReviewEvidenceObservesAgentRunAndExactPostReviewTreeWithoutCopyingFeedback(t *testing.T) {
 	blobs := evidence.Store{Root: t.TempDir()}
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	post := ReviewWorkspaceObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	run := ReviewRunView{AgentRun: AgentRun{
-		ID: "agent-run-review", JobID: "job-1", Revision: "revision-1", Role: "critical-boundary",
+		ID: "agent-run-review", JobID: "job-1", Revision: revision, Role: "critical-boundary",
 		Capability: ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
 		TurnOutcome: "completed", State: AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
 
-	record, err := (Service{Evidence: blobs}).reviewEvidence(run)
+	record, err := (Service{Evidence: blobs}).reviewEvidence(run, post)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +62,7 @@ func TestReviewEvidenceObservesTheAgentRunWithoutCopyingFeedback(t *testing.T) {
 	if err := json.Unmarshal(contents, &artifact); err != nil {
 		t.Fatal(err)
 	}
-	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome}
+	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, PostState: post}
 	if artifact != want {
 		t.Fatalf("review observation = %#v, want %#v", artifact, want)
 	}

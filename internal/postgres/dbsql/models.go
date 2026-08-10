@@ -31,13 +31,25 @@ type DorfReviewRunProjection struct {
 	RequestInput          string
 	RequestDeliveryIntent string
 	RequestTargetTurnID   string
-	ReviewerSandboxID     string
-	ReviewerRouteID       string
-	ReviewerOwnerNonce    string
+	SandboxID             string
+	RouteID               string
+	OwnershipNonce        string
 	SubmissionNonce       string
-	RevisionTree          string
-	ReviewerSandboxState  string
-	ReviewerRouteState    string
-	CheckoutState         string
-	PostReviewState       string
+	SandboxState          string
+	RouteState            string
+}
+
+// One scoped provider route belonging to a Sandbox
+type DorfRoute struct {
+	ID        string
+	SandboxID string
+	State     string
+}
+
+// Job-owned isolated workstations used by one or more AgentRuns
+type DorfSandbox struct {
+	ID             string
+	JobID          string
+	State          string
+	OwnershipNonce string
 }

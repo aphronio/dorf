@@ -336,8 +336,8 @@ func (q *Queries) ImplementationThreadExists(ctx context.Context, arg Implementa
 }
 
 const insertImplementationAgentRun = `-- name: InsertImplementationAgentRun :execrows
-insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state)
-select $1,j.id,$2,prior.harness,prior.thread_id,'implement','pending'
+insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,sandbox_id)
+select $1,j.id,$2,prior.harness,prior.thread_id,'implement','pending',$3
 from dorf.jobs j
 left join lateral (
     select ar.harness,ar.thread_id
@@ -347,18 +347,24 @@ left join lateral (
     order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
     limit 1
 ) prior on true
-where j.id=$3
+where j.id=$4
 on conflict do nothing
 `
 
 type InsertImplementationAgentRunParams struct {
 	ID        string
 	MessageID string
+	SandboxID string
 	JobID     string
 }
 
 func (q *Queries) InsertImplementationAgentRun(ctx context.Context, arg InsertImplementationAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertImplementationAgentRun, arg.ID, arg.MessageID, arg.JobID)
+	result, err := q.db.ExecContext(ctx, insertImplementationAgentRun,
+		arg.ID,
+		arg.MessageID,
+		arg.SandboxID,
+		arg.JobID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -387,6 +393,80 @@ func (q *Queries) ListImplementationThreadBindings(ctx context.Context, jobID st
 	for rows.Next() {
 		var i ListImplementationThreadBindingsRow
 		if err := rows.Scan(&i.Harness, &i.ThreadID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJobAgentRuns = `-- name: ListJobAgentRuns :many
+select id,job_id,message_id,state,
+       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       coalesce(baseline_turn_id,'') as baseline_turn_id,
+       coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
+       coalesce(attention,'') as attention,role,coalesce(revision,'') as revision,
+       coalesce(capability,'') as capability,sandbox_id,
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
+from dorf.agent_runs
+where job_id=$1
+order by id
+`
+
+type ListJobAgentRunsRow struct {
+	ID              string
+	JobID           string
+	MessageID       string
+	State           spine.AgentRunState
+	Harness         string
+	ThreadID        string
+	BaselineTurnID  string
+	TurnID          string
+	TurnOutcome     string
+	Attention       string
+	Role            string
+	Revision        string
+	Capability      string
+	SandboxID       string
+	SubmissionNonce string
+	StartedAt       sql.NullTime
+	FinishedAt      sql.NullTime
+}
+
+func (q *Queries) ListJobAgentRuns(ctx context.Context, jobID string) ([]ListJobAgentRunsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listJobAgentRuns, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJobAgentRunsRow
+	for rows.Next() {
+		var i ListJobAgentRunsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.MessageID,
+			&i.State,
+			&i.Harness,
+			&i.ThreadID,
+			&i.BaselineTurnID,
+			&i.TurnID,
+			&i.TurnOutcome,
+			&i.Attention,
+			&i.Role,
+			&i.Revision,
+			&i.Capability,
+			&i.SandboxID,
+			&i.SubmissionNonce,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

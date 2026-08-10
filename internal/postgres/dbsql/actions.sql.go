@@ -162,123 +162,14 @@ func (q *Queries) GetActionStateForUpdate(ctx context.Context, arg GetActionStat
 	return state, err
 }
 
-const getMainRouteID = `-- name: GetMainRouteID :one
-select route_id
-from dorf.routes
-where job_id=$1
+const getReviewRevisionBySandbox = `-- name: GetReviewRevisionBySandbox :one
+select revision from dorf.agent_runs
+where sandbox_id=$1 and revision is not null
 `
 
-func (q *Queries) GetMainRouteID(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getMainRouteID, jobID)
-	var route_id string
-	err := row.Scan(&route_id)
-	return route_id, err
-}
-
-const getMainSandboxName = `-- name: GetMainSandboxName :one
-select incus_name
-from dorf.sandboxes
-where job_id=$1
-`
-
-func (q *Queries) GetMainSandboxName(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getMainSandboxName, jobID)
-	var incus_name string
-	err := row.Scan(&incus_name)
-	return incus_name, err
-}
-
-const getReviewRouteForCleanup = `-- name: GetReviewRouteForCleanup :one
-select route_id
-from dorf.review_resources
-where run_id=$1 and route_revoke_action_id=$2
-`
-
-type GetReviewRouteForCleanupParams struct {
-	RunID    string
-	ActionID string
-}
-
-func (q *Queries) GetReviewRouteForCleanup(ctx context.Context, arg GetReviewRouteForCleanupParams) (sql.NullString, error) {
-	row := q.db.QueryRowContext(ctx, getReviewRouteForCleanup, arg.RunID, arg.ActionID)
-	var route_id sql.NullString
-	err := row.Scan(&route_id)
-	return route_id, err
-}
-
-const getReviewRouteSandbox = `-- name: GetReviewRouteSandbox :one
-select sandbox_name
-from dorf.review_resources
-where run_id=$1 and route_create_action_id=$2
-`
-
-type GetReviewRouteSandboxParams struct {
-	RunID    string
-	ActionID string
-}
-
-func (q *Queries) GetReviewRouteSandbox(ctx context.Context, arg GetReviewRouteSandboxParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewRouteSandbox, arg.RunID, arg.ActionID)
-	var sandbox_name string
-	err := row.Scan(&sandbox_name)
-	return sandbox_name, err
-}
-
-const getReviewSandboxForCleanup = `-- name: GetReviewSandboxForCleanup :one
-select sandbox_name
-from dorf.review_resources
-where run_id=$1 and sandbox_delete_action_id=$2
-`
-
-type GetReviewSandboxForCleanupParams struct {
-	RunID    string
-	ActionID string
-}
-
-func (q *Queries) GetReviewSandboxForCleanup(ctx context.Context, arg GetReviewSandboxForCleanupParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewSandboxForCleanup, arg.RunID, arg.ActionID)
-	var sandbox_name string
-	err := row.Scan(&sandbox_name)
-	return sandbox_name, err
-}
-
-const getReviewSandboxReceiptIdentity = `-- name: GetReviewSandboxReceiptIdentity :one
-select sandbox_name,revision
-from dorf.review_resources
-where run_id=$1 and sandbox_create_action_id=$2
-`
-
-type GetReviewSandboxReceiptIdentityParams struct {
-	RunID    string
-	ActionID string
-}
-
-type GetReviewSandboxReceiptIdentityRow struct {
-	SandboxName string
-	Revision    string
-}
-
-func (q *Queries) GetReviewSandboxReceiptIdentity(ctx context.Context, arg GetReviewSandboxReceiptIdentityParams) (GetReviewSandboxReceiptIdentityRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewSandboxReceiptIdentity, arg.RunID, arg.ActionID)
-	var i GetReviewSandboxReceiptIdentityRow
-	err := row.Scan(&i.SandboxName, &i.Revision)
-	return i, err
-}
-
-const getReviewWorkspaceReceiptIdentity = `-- name: GetReviewWorkspaceReceiptIdentity :one
-select rr.revision
-from dorf.review_resources rr
-where rr.materialize_action_id=$1 and rr.run_id=$2
-`
-
-type GetReviewWorkspaceReceiptIdentityParams struct {
-	ActionID string
-	RunID    string
-}
-
-func (q *Queries) GetReviewWorkspaceReceiptIdentity(ctx context.Context, arg GetReviewWorkspaceReceiptIdentityParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewWorkspaceReceiptIdentity, arg.ActionID, arg.RunID)
-	var revision string
+func (q *Queries) GetReviewRevisionBySandbox(ctx context.Context, sandboxID string) (sql.NullString, error) {
+	row := q.db.QueryRowContext(ctx, getReviewRevisionBySandbox, sandboxID)
+	var revision sql.NullString
 	err := row.Scan(&revision)
 	return revision, err
 }
@@ -446,212 +337,112 @@ func (q *Queries) MarkActionUncertain(ctx context.Context, actionID string) erro
 	return err
 }
 
-const markMainRouteActive = `-- name: MarkMainRouteActive :execrows
+const markRouteActive = `-- name: MarkRouteActive :execrows
 update dorf.routes
-set state='active',observed_at=clock_timestamp()
-where job_id=$1 and action_id=$2
-  and route_id=$3 and state in ('pending','active')
+set state='active'
+where id=$1 and sandbox_id=$2
+  and state in ('pending','active')
 `
 
-type MarkMainRouteActiveParams struct {
-	JobID    string
-	ActionID string
-	RouteID  string
+type MarkRouteActiveParams struct {
+	RouteID   string
+	SandboxID string
 }
 
-func (q *Queries) MarkMainRouteActive(ctx context.Context, arg MarkMainRouteActiveParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMainRouteActive, arg.JobID, arg.ActionID, arg.RouteID)
+func (q *Queries) MarkRouteActive(ctx context.Context, arg MarkRouteActiveParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRouteActive, arg.RouteID, arg.SandboxID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const markMainRouteRevoked = `-- name: MarkMainRouteRevoked :execrows
+const markRouteRevoked = `-- name: MarkRouteRevoked :execrows
 update dorf.routes
-set state='revoked',observed_at=clock_timestamp()
-where job_id=$1 and route_id=$2
+set state='revoked'
+where id=$1 and sandbox_id=$2
   and state in ('pending','active','revoked')
 `
 
-type MarkMainRouteRevokedParams struct {
-	JobID   string
-	RouteID string
+type MarkRouteRevokedParams struct {
+	RouteID   string
+	SandboxID string
 }
 
-func (q *Queries) MarkMainRouteRevoked(ctx context.Context, arg MarkMainRouteRevokedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMainRouteRevoked, arg.JobID, arg.RouteID)
+func (q *Queries) MarkRouteRevoked(ctx context.Context, arg MarkRouteRevokedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markRouteRevoked, arg.RouteID, arg.SandboxID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const markMainSandboxCreated = `-- name: MarkMainSandboxCreated :execrows
+const markSandboxCreated = `-- name: MarkSandboxCreated :execrows
 update dorf.sandboxes
-set state='created',observed_at=clock_timestamp()
-where job_id=$1 and action_id=$2
-  and incus_name=$3 and state in ('pending','created')
+set state='created'
+where id=$1 and state in ('pending','created')
 `
 
-type MarkMainSandboxCreatedParams struct {
-	JobID     string
-	ActionID  string
-	IncusName string
-}
-
-func (q *Queries) MarkMainSandboxCreated(ctx context.Context, arg MarkMainSandboxCreatedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMainSandboxCreated, arg.JobID, arg.ActionID, arg.IncusName)
+func (q *Queries) MarkSandboxCreated(ctx context.Context, sandboxID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSandboxCreated, sandboxID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const markMainSandboxDeleted = `-- name: MarkMainSandboxDeleted :execrows
-update dorf.sandboxes
-set state='deleted',observed_at=clock_timestamp()
-where job_id=$1 and incus_name=$2
-  and state in ('pending','created','deleted')
+const markSandboxDeleted = `-- name: MarkSandboxDeleted :execrows
+update dorf.sandboxes s
+set state='deleted'
+where s.id=$1
+  and not exists(select 1 from dorf.routes where sandbox_id=$1 and state<>'revoked')
+  and s.state in ('pending','created','deleted')
 `
 
-type MarkMainSandboxDeletedParams struct {
-	JobID     string
-	IncusName string
-}
-
-func (q *Queries) MarkMainSandboxDeleted(ctx context.Context, arg MarkMainSandboxDeletedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMainSandboxDeleted, arg.JobID, arg.IncusName)
+func (q *Queries) MarkSandboxDeleted(ctx context.Context, sandboxID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSandboxDeleted, sandboxID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const markReviewCheckoutVerified = `-- name: MarkReviewCheckoutVerified :execrows
-update dorf.review_resources
-set checkout_state='verified',revision_tree=coalesce(revision_tree,$1),
-    checkout_verified_at=coalesce(checkout_verified_at,clock_timestamp())
-where run_id=$2 and sandbox_state='created'
-  and checkout_state in ('pending','verified')
-  and (revision_tree is null or revision_tree=$1)
+const reserveRoute = `-- name: ReserveRoute :execrows
+insert into dorf.routes(id,sandbox_id,state)
+values($1,$2,'pending')
+on conflict(sandbox_id) do update set sandbox_id=dorf.routes.sandbox_id
+where dorf.routes.id=excluded.id
 `
 
-type MarkReviewCheckoutVerifiedParams struct {
-	Tree  sql.NullString
-	RunID string
+type ReserveRouteParams struct {
+	ID        string
+	SandboxID string
 }
 
-func (q *Queries) MarkReviewCheckoutVerified(ctx context.Context, arg MarkReviewCheckoutVerifiedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewCheckoutVerified, arg.Tree, arg.RunID)
+func (q *Queries) ReserveRoute(ctx context.Context, arg ReserveRouteParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveRoute, arg.ID, arg.SandboxID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const markReviewRouteActive = `-- name: MarkReviewRouteActive :execrows
-update dorf.review_resources
-set route_id=coalesce(route_id,$1),route_state='active'
-where run_id=$2 and sandbox_state='created'
-  and route_state in ('pending','active')
-  and (route_id is null or route_id=$1)
+const reserveSandbox = `-- name: ReserveSandbox :execrows
+insert into dorf.sandboxes(id,job_id,state,ownership_nonce)
+values($1,$2,'pending',$3)
+on conflict(id) do update set id=dorf.sandboxes.id
+where dorf.sandboxes.job_id=excluded.job_id
+  and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce
 `
 
-type MarkReviewRouteActiveParams struct {
-	RouteID sql.NullString
-	RunID   string
+type ReserveSandboxParams struct {
+	ID             string
+	JobID          string
+	OwnershipNonce string
 }
 
-func (q *Queries) MarkReviewRouteActive(ctx context.Context, arg MarkReviewRouteActiveParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewRouteActive, arg.RouteID, arg.RunID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markReviewRouteRevoked = `-- name: MarkReviewRouteRevoked :execrows
-update dorf.review_resources
-set route_state='revoked',route_revoked_at=coalesce(route_revoked_at,clock_timestamp())
-where run_id=$1 and route_state in ('pending','active','revoked')
-`
-
-func (q *Queries) MarkReviewRouteRevoked(ctx context.Context, runID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewRouteRevoked, runID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markReviewSandboxCreated = `-- name: MarkReviewSandboxCreated :execrows
-update dorf.review_resources
-set sandbox_state='created'
-where run_id=$1 and sandbox_state in ('pending','created')
-`
-
-func (q *Queries) MarkReviewSandboxCreated(ctx context.Context, runID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewSandboxCreated, runID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markReviewSandboxDeleted = `-- name: MarkReviewSandboxDeleted :execrows
-update dorf.review_resources
-set sandbox_state='deleted',sandbox_deleted_at=coalesce(sandbox_deleted_at,clock_timestamp())
-where run_id=$1 and route_state='revoked'
-  and sandbox_state in ('pending','created','deleted')
-`
-
-func (q *Queries) MarkReviewSandboxDeleted(ctx context.Context, runID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewSandboxDeleted, runID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const reserveMainRoute = `-- name: ReserveMainRoute :execrows
-insert into dorf.routes(job_id,action_id,route_id,state)
-values($1,$2,$3,'pending')
-on conflict(job_id) do update set action_id=dorf.routes.action_id
-where dorf.routes.action_id=excluded.action_id
-  and dorf.routes.route_id=excluded.route_id
-`
-
-type ReserveMainRouteParams struct {
-	JobID    string
-	ActionID string
-	RouteID  string
-}
-
-func (q *Queries) ReserveMainRoute(ctx context.Context, arg ReserveMainRouteParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reserveMainRoute, arg.JobID, arg.ActionID, arg.RouteID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const reserveMainSandbox = `-- name: ReserveMainSandbox :execrows
-insert into dorf.sandboxes(job_id,action_id,incus_name,state)
-values($1,$2,$3,'pending')
-on conflict(job_id) do update set action_id=dorf.sandboxes.action_id
-where dorf.sandboxes.action_id=excluded.action_id
-  and dorf.sandboxes.incus_name=excluded.incus_name
-`
-
-type ReserveMainSandboxParams struct {
-	JobID     string
-	ActionID  string
-	IncusName string
-}
-
-func (q *Queries) ReserveMainSandbox(ctx context.Context, arg ReserveMainSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reserveMainSandbox, arg.JobID, arg.ActionID, arg.IncusName)
+func (q *Queries) ReserveSandbox(ctx context.Context, arg ReserveSandboxParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reserveSandbox, arg.ID, arg.JobID, arg.OwnershipNonce)
 	if err != nil {
 		return 0, err
 	}

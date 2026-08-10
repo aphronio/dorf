@@ -106,17 +106,17 @@ func (q *Queries) CountDeclaredReviewChecks(ctx context.Context, jobID string) (
 
 const countMissingReviewFeedback = `-- name: CountMissingReviewFeedback :one
 select count(*)
-from dorf.review_resources rr
-where rr.job_id=$1 and rr.revision=$2
+from dorf.agent_runs ar
+where ar.job_id=$1 and ar.revision=$2
   and not exists(
       select 1 from dorf.job_messages m
-      where m.job_id=rr.job_id and m.from_kind='agent' and m.from_id=rr.run_id
+      where m.job_id=ar.job_id and m.from_kind='agent' and m.from_id=ar.id
   )
 `
 
 type CountMissingReviewFeedbackParams struct {
 	JobID    string
-	Revision string
+	Revision sql.NullString
 }
 
 func (q *Queries) CountMissingReviewFeedback(ctx context.Context, arg CountMissingReviewFeedbackParams) (int64, error) {
@@ -150,63 +150,6 @@ func (q *Queries) FinalizeReviewPlan(ctx context.Context, arg FinalizeReviewPlan
 		arg.Revision,
 	)
 	return err
-}
-
-const getReviewActionForUpdate = `-- name: GetReviewActionForUpdate :one
-select id,job_id,kind,state,coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
-from dorf.actions
-where id=$1
-for update
-`
-
-type GetReviewActionForUpdateRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
-}
-
-func (q *Queries) GetReviewActionForUpdate(ctx context.Context, actionID string) (GetReviewActionForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewActionForUpdate, actionID)
-	var i GetReviewActionForUpdateRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
-		&i.ScopeKey,
-	)
-	return i, err
-}
-
-const getReviewActionID = `-- name: GetReviewActionID :one
-select case $1::text
-    when 'sandbox-create' then rr.sandbox_create_action_id
-    when 'provider-route-create' then rr.route_create_action_id
-    when 'review-workspace-create' then rr.materialize_action_id
-    when 'provider-route-revoke' then rr.route_revoke_action_id
-    when 'sandbox-delete' then rr.sandbox_delete_action_id
-end::text as action_id
-from dorf.review_resources rr
-where rr.run_id=$2
-`
-
-type GetReviewActionIDParams struct {
-	Kind  string
-	RunID string
-}
-
-func (q *Queries) GetReviewActionID(ctx context.Context, arg GetReviewActionIDParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewActionID, arg.Kind, arg.RunID)
-	var action_id string
-	err := row.Scan(&action_id)
-	return action_id, err
 }
 
 const getReviewCurrentRevision = `-- name: GetReviewCurrentRevision :one
@@ -396,7 +339,7 @@ func (q *Queries) GetReviewPlanForUpdate(ctx context.Context, arg GetReviewPlanF
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, reviewer_sandbox_id, reviewer_route_id, reviewer_owner_nonce, submission_nonce, revision_tree, reviewer_sandbox_state, reviewer_route_state, checkout_state, post_review_state
+select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, sandbox_id, route_id, ownership_nonce, submission_nonce, sandbox_state, route_state
 from dorf.review_run_projection
 where id=$1
 `
@@ -427,37 +370,14 @@ func (q *Queries) GetReviewRun(ctx context.Context, runID string) (DorfReviewRun
 		&i.RequestInput,
 		&i.RequestDeliveryIntent,
 		&i.RequestTargetTurnID,
-		&i.ReviewerSandboxID,
-		&i.ReviewerRouteID,
-		&i.ReviewerOwnerNonce,
+		&i.SandboxID,
+		&i.RouteID,
+		&i.OwnershipNonce,
 		&i.SubmissionNonce,
-		&i.RevisionTree,
-		&i.ReviewerSandboxState,
-		&i.ReviewerRouteState,
-		&i.CheckoutState,
-		&i.PostReviewState,
+		&i.SandboxState,
+		&i.RouteState,
 	)
 	return i, err
-}
-
-const getReviewRunStateForUpdate = `-- name: GetReviewRunStateForUpdate :one
-select ar.state
-from dorf.agent_runs ar
-join dorf.review_resources rr on rr.run_id=ar.id
-where ar.id=$1 and ar.capability=$2::text
-for update of ar
-`
-
-type GetReviewRunStateForUpdateParams struct {
-	RunID      string
-	Capability string
-}
-
-func (q *Queries) GetReviewRunStateForUpdate(ctx context.Context, arg GetReviewRunStateForUpdateParams) (spine.AgentRunState, error) {
-	row := q.db.QueryRowContext(ctx, getReviewRunStateForUpdate, arg.RunID, arg.Capability)
-	var state spine.AgentRunState
-	err := row.Scan(&state)
-	return state, err
 }
 
 const insertReviewAction = `-- name: InsertReviewAction :exec
@@ -484,19 +404,21 @@ func (q *Queries) InsertReviewAction(ctx context.Context, arg InsertReviewAction
 }
 
 const insertReviewAgentRun = `-- name: InsertReviewAgentRun :exec
-insert into dorf.agent_runs(id,job_id,message_id,role,state,revision,capability)
+insert into dorf.agent_runs(id,job_id,message_id,role,state,revision,capability,sandbox_id,submission_nonce)
 values($1,$2,$3,$4,'pending',
-       $5::text,$6::text)
+       $5::text,$6::text,$7,$8::text)
 on conflict do nothing
 `
 
 type InsertReviewAgentRunParams struct {
-	ID         string
-	JobID      string
-	MessageID  string
-	Role       string
-	Revision   string
-	Capability string
+	ID              string
+	JobID           string
+	MessageID       string
+	Role            string
+	Revision        string
+	Capability      string
+	SandboxID       string
+	SubmissionNonce string
 }
 
 func (q *Queries) InsertReviewAgentRun(ctx context.Context, arg InsertReviewAgentRunParams) error {
@@ -507,6 +429,8 @@ func (q *Queries) InsertReviewAgentRun(ctx context.Context, arg InsertReviewAgen
 		arg.Role,
 		arg.Revision,
 		arg.Capability,
+		arg.SandboxID,
+		arg.SubmissionNonce,
 	)
 	return err
 }
@@ -526,50 +450,7 @@ func (q *Queries) InsertReviewPlan(ctx context.Context, arg InsertReviewPlanPara
 	return err
 }
 
-const insertReviewResource = `-- name: InsertReviewResource :exec
-insert into dorf.review_resources(
-    run_id,job_id,revision,sandbox_name,ownership_nonce,submission_nonce,
-    sandbox_create_action_id,route_create_action_id,materialize_action_id,route_revoke_action_id,sandbox_delete_action_id
-) values(
-    $1,$2,$3,$4,$5,
-    $6,$7,$8,
-    $9,$10,$11
-)
-on conflict do nothing
-`
-
-type InsertReviewResourceParams struct {
-	RunID                 string
-	JobID                 string
-	Revision              string
-	SandboxName           string
-	OwnershipNonce        string
-	SubmissionNonce       string
-	SandboxCreateActionID string
-	RouteCreateActionID   string
-	MaterializeActionID   string
-	RouteRevokeActionID   string
-	SandboxDeleteActionID string
-}
-
-func (q *Queries) InsertReviewResource(ctx context.Context, arg InsertReviewResourceParams) error {
-	_, err := q.db.ExecContext(ctx, insertReviewResource,
-		arg.RunID,
-		arg.JobID,
-		arg.Revision,
-		arg.SandboxName,
-		arg.OwnershipNonce,
-		arg.SubmissionNonce,
-		arg.SandboxCreateActionID,
-		arg.RouteCreateActionID,
-		arg.MaterializeActionID,
-		arg.RouteRevokeActionID,
-		arg.SandboxDeleteActionID,
-	)
-	return err
-}
-
-const interruptReviewAgentRun = `-- name: InterruptReviewAgentRun :execrows
+const interruptAgentRun = `-- name: InterruptAgentRun :execrows
 update dorf.agent_runs
 set state='interrupted',
     turn_outcome=case when turn_id is null then null else 'interrupted' end,
@@ -578,13 +459,13 @@ set state='interrupted',
 where id=$2 and state in ('pending','submitting','active','uncertain')
 `
 
-type InterruptReviewAgentRunParams struct {
+type InterruptAgentRunParams struct {
 	Reason string
 	RunID  string
 }
 
-func (q *Queries) InterruptReviewAgentRun(ctx context.Context, arg InterruptReviewAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptReviewAgentRun, arg.Reason, arg.RunID)
+func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, interruptAgentRun, arg.Reason, arg.RunID)
 	if err != nil {
 		return 0, err
 	}
@@ -592,7 +473,7 @@ func (q *Queries) InterruptReviewAgentRun(ctx context.Context, arg InterruptRevi
 }
 
 const listAllReviewRuns = `-- name: ListAllReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.reviewer_sandbox_id, p.reviewer_route_id, p.reviewer_owner_nonce, p.submission_nonce, p.revision_tree, p.reviewer_sandbox_state, p.reviewer_route_state, p.checkout_state, p.post_review_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.route_id, p.ownership_nonce, p.submission_nonce, p.sandbox_state, p.route_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -639,80 +520,14 @@ func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAl
 			&i.DorfReviewRunProjection.RequestInput,
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
-			&i.DorfReviewRunProjection.ReviewerSandboxID,
-			&i.DorfReviewRunProjection.ReviewerRouteID,
-			&i.DorfReviewRunProjection.ReviewerOwnerNonce,
+			&i.DorfReviewRunProjection.SandboxID,
+			&i.DorfReviewRunProjection.RouteID,
+			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.DorfReviewRunProjection.RevisionTree,
-			&i.DorfReviewRunProjection.ReviewerSandboxState,
-			&i.DorfReviewRunProjection.ReviewerRouteState,
-			&i.DorfReviewRunProjection.CheckoutState,
-			&i.DorfReviewRunProjection.PostReviewState,
+			&i.DorfReviewRunProjection.SandboxState,
+			&i.DorfReviewRunProjection.RouteState,
 			&i.FeedbackMessageID,
 			&i.Stale,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCleanupReviewRuns = `-- name: ListCleanupReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.reviewer_sandbox_id, p.reviewer_route_id, p.reviewer_owner_nonce, p.submission_nonce, p.revision_tree, p.reviewer_sandbox_state, p.reviewer_route_state, p.checkout_state, p.post_review_state
-from dorf.review_run_projection p
-join dorf.review_resources rr on rr.run_id=p.id
-where rr.job_id=$1
-order by rr.revision,p.role
-`
-
-func (q *Queries) ListCleanupReviewRuns(ctx context.Context, jobID string) ([]DorfReviewRunProjection, error) {
-	rows, err := q.db.QueryContext(ctx, listCleanupReviewRuns, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []DorfReviewRunProjection
-	for rows.Next() {
-		var i DorfReviewRunProjection
-		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
-			&i.MessageID,
-			&i.State,
-			&i.Harness,
-			&i.ThreadID,
-			&i.BaselineRecorded,
-			&i.BaselineTurnID,
-			&i.TurnID,
-			&i.TurnOutcome,
-			&i.Attention,
-			&i.Role,
-			&i.Revision,
-			&i.Capability,
-			&i.StartedAt,
-			&i.FinishedAt,
-			&i.RequestFromKind,
-			&i.RequestFromID,
-			&i.RequestSequence,
-			&i.RequestInput,
-			&i.RequestDeliveryIntent,
-			&i.RequestTargetTurnID,
-			&i.ReviewerSandboxID,
-			&i.ReviewerRouteID,
-			&i.ReviewerOwnerNonce,
-			&i.SubmissionNonce,
-			&i.RevisionTree,
-			&i.ReviewerSandboxState,
-			&i.ReviewerRouteState,
-			&i.CheckoutState,
-			&i.PostReviewState,
 		); err != nil {
 			return nil, err
 		}
@@ -809,7 +624,7 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 }
 
 const listReviewRuns = `-- name: ListReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.reviewer_sandbox_id, p.reviewer_route_id, p.reviewer_owner_nonce, p.submission_nonce, p.revision_tree, p.reviewer_sandbox_state, p.reviewer_route_state, p.checkout_state, p.post_review_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.route_id, p.ownership_nonce, p.submission_nonce, p.sandbox_state, p.route_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -861,15 +676,12 @@ func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) 
 			&i.DorfReviewRunProjection.RequestInput,
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
-			&i.DorfReviewRunProjection.ReviewerSandboxID,
-			&i.DorfReviewRunProjection.ReviewerRouteID,
-			&i.DorfReviewRunProjection.ReviewerOwnerNonce,
+			&i.DorfReviewRunProjection.SandboxID,
+			&i.DorfReviewRunProjection.RouteID,
+			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.DorfReviewRunProjection.RevisionTree,
-			&i.DorfReviewRunProjection.ReviewerSandboxState,
-			&i.DorfReviewRunProjection.ReviewerRouteState,
-			&i.DorfReviewRunProjection.CheckoutState,
-			&i.DorfReviewRunProjection.PostReviewState,
+			&i.DorfReviewRunProjection.SandboxState,
+			&i.DorfReviewRunProjection.RouteState,
 			&i.FeedbackMessageID,
 			&i.Stale,
 		); err != nil {
@@ -925,11 +737,13 @@ func (q *Queries) ListVerifiedReviewEvidenceIDs(ctx context.Context, arg ListVer
 
 const reviewBoundaryReady = `-- name: ReviewBoundaryReady :one
 select exists(
-    select 1 from dorf.review_resources rr
-    join dorf.agent_runs ar on ar.id=rr.run_id
-    where rr.run_id=$1 and rr.sandbox_state='created' and rr.route_state='active'
-      and rr.checkout_state='verified' and rr.post_review_state='verified'
-      and rr.revision_tree is not null and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
+    select 1 from dorf.agent_runs ar
+    join dorf.sandboxes s on s.id=ar.sandbox_id
+    join dorf.routes r on r.sandbox_id=s.id
+    where ar.id=$1 and s.state='created' and r.state='active'
+      and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
+      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+          and a.kind='review-workspace-create' and a.scope_key=s.id and a.state='succeeded')
 )
 `
 
@@ -938,27 +752,4 @@ func (q *Queries) ReviewBoundaryReady(ctx context.Context, runID string) (bool, 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const verifyReviewPostState = `-- name: VerifyReviewPostState :execrows
-update dorf.review_resources rr
-set post_review_state='verified',post_review_verified_at=coalesce(post_review_verified_at,clock_timestamp())
-from dorf.agent_runs ar
-where rr.run_id=$1 and ar.id=rr.run_id and rr.sandbox_state='created' and rr.route_state='active'
-  and rr.checkout_state='verified' and rr.revision=$2 and rr.revision_tree=$3::text
-  and ar.capability='immutable-read-only'
-`
-
-type VerifyReviewPostStateParams struct {
-	RunID        string
-	Revision     string
-	RevisionTree string
-}
-
-func (q *Queries) VerifyReviewPostState(ctx context.Context, arg VerifyReviewPostStateParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, verifyReviewPostState, arg.RunID, arg.Revision, arg.RevisionTree)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }

@@ -84,19 +84,18 @@ create unique index actions_one_scoped_job_effect
     on dorf.actions(job_id,kind,scope_key) where scope_key<>'';
 
 create table dorf.sandboxes (
-    job_id text primary key references dorf.jobs(id),
-    action_id text not null unique references dorf.actions(id),
-    incus_name text not null unique,
+    id text primary key,
+    job_id text not null references dorf.jobs(id),
     state text not null check (state in ('pending','created','deleted')),
-    observed_at timestamptz not null default clock_timestamp()
+    ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
+    unique(job_id,id)
 );
+create index sandboxes_by_job on dorf.sandboxes(job_id,id);
 
 create table dorf.routes (
-    job_id text primary key references dorf.jobs(id),
-    action_id text not null unique references dorf.actions(id),
-    route_id text not null unique,
-    state text not null check (state in ('pending','active','revoked')),
-    observed_at timestamptz not null default clock_timestamp()
+    id text primary key,
+    sandbox_id text not null unique references dorf.sandboxes(id),
+    state text not null check (state in ('pending','active','revoked'))
 );
 
 create table dorf.agent_runs (
@@ -113,6 +112,8 @@ create table dorf.agent_runs (
     role text not null check (role in ('implement','general','browser-ui','auth-authority','performance','critical-boundary')),
     revision text,
     capability text,
+    sandbox_id text not null references dorf.sandboxes(id),
+    submission_nonce text unique,
     started_at timestamptz,
     finished_at timestamptz,
     constraint agent_runs_harness_thread_check check (
@@ -126,14 +127,16 @@ create table dorf.agent_runs (
         turn_outcome is null or turn_id is not null
     ),
     constraint agent_runs_review_binding_check check (
-        (role='implement' and revision is null and capability is null) or
+        (role='implement' and revision is null and capability is null and submission_nonce is null) or
         (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
-         revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$' and capability='immutable-read-only')
+         revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$' and capability='immutable-read-only' and
+         submission_nonce ~ '^[0-9a-f]{64}$')
     ),
     constraint agent_runs_timestamps_check check (
         (finished_at is null or (started_at is not null and finished_at>=started_at))
     ),
-    foreign key(job_id,message_id) references dorf.job_messages(job_id,id)
+    foreign key(job_id,message_id) references dorf.job_messages(job_id,id),
+    foreign key(job_id,sandbox_id) references dorf.sandboxes(job_id,id)
 );
 create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,revision,role) where revision is not null;
 
@@ -212,30 +215,6 @@ create table dorf.review_plans (
     primary key(job_id,revision)
 );
 
-create table dorf.review_resources (
-    run_id text primary key references dorf.agent_runs(id),
-    job_id text not null references dorf.jobs(id),
-    revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    sandbox_name text not null unique,
-    ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
-    submission_nonce text not null unique check (submission_nonce ~ '^[0-9a-f]{64}$'),
-    sandbox_create_action_id text not null unique references dorf.actions(id),
-    route_create_action_id text not null unique references dorf.actions(id),
-    materialize_action_id text not null unique references dorf.actions(id),
-    route_revoke_action_id text not null unique references dorf.actions(id),
-    sandbox_delete_action_id text not null unique references dorf.actions(id),
-    sandbox_state text not null default 'pending' check (sandbox_state in ('pending','created','deleted')),
-    route_state text not null default 'pending' check (route_state in ('pending','active','revoked')),
-    checkout_state text not null default 'pending' check (checkout_state in ('pending','verified')),
-    post_review_state text not null default 'pending' check (post_review_state in ('pending','verified')),
-    route_id text unique,
-    revision_tree text check (revision_tree is null or revision_tree ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    checkout_verified_at timestamptz,
-    post_review_verified_at timestamptz,
-    route_revoked_at timestamptz,
-    sandbox_deleted_at timestamptz
-);
-
 create view dorf.review_run_projection as
 select
     ar.id,
@@ -260,18 +239,16 @@ select
     request.input as request_input,
     request.delivery_intent as request_delivery_intent,
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
-    coalesce(rr.sandbox_name,'') as reviewer_sandbox_id,
-    coalesce(rr.route_id,'') as reviewer_route_id,
-    coalesce(rr.ownership_nonce,'') as reviewer_owner_nonce,
-    coalesce(rr.submission_nonce,'') as submission_nonce,
-    coalesce(rr.revision_tree,'') as revision_tree,
-    coalesce(rr.sandbox_state,'') as reviewer_sandbox_state,
-    coalesce(rr.route_state,'') as reviewer_route_state,
-    coalesce(rr.checkout_state,'') as checkout_state,
-    coalesce(rr.post_review_state,'') as post_review_state
+    ar.sandbox_id as sandbox_id,
+    coalesce(route.id,'') as route_id,
+    sandbox.ownership_nonce as ownership_nonce,
+    coalesce(ar.submission_nonce,'') as submission_nonce,
+    sandbox.state as sandbox_state,
+    coalesce(route.state,'') as route_state
 from dorf.agent_runs ar
 join dorf.job_messages request on request.id=ar.message_id and request.job_id=ar.job_id
-left join dorf.review_resources rr on rr.run_id=ar.id;
+join dorf.sandboxes sandbox on sandbox.id=ar.sandbox_id
+left join dorf.routes route on route.sandbox_id=sandbox.id;
 
 alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
 
@@ -321,7 +298,8 @@ comment on schema dorf is 'Dorf-owned product facts; Absurd execution state rema
 comment on table dorf.job_messages is 'Immutable client input and Job-local admission order; follow is FIFO and steer is an explicit priority lane';
 comment on table dorf.agent_runs is 'Harness Thread and Turn bindings plus lifecycle outcome; the harness owns transcript and context';
 comment on table dorf.evidence is 'Immutable content-addressed Evidence references; bytes live in deployment-owned storage';
-comment on table dorf.review_resources is 'One Dorf-owned isolated Sandbox and provider route fact set per review Role';
+comment on table dorf.sandboxes is 'Job-owned isolated workstations used by one or more AgentRuns';
+comment on table dorf.routes is 'One scoped provider route belonging to a Sandbox';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome bound to the retained GitHub proposal';
 

@@ -39,7 +39,7 @@ func FromEnv() (spine.FaultBarrier, error) {
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierHarnessActive
 	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCheckExited
 	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted
-	cleanupPoint := point == spine.BarrierReviewerRouteRevoked || point == spine.BarrierReviewerSandboxDeleted || point == spine.BarrierMainRouteRevoked || point == spine.BarrierMainSandboxDeleted
+	cleanupPoint := point == spine.BarrierRouteRevoked || point == spine.BarrierSandboxDeleted
 	if !messagePoint && !workflowPoint && !publicationPoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}

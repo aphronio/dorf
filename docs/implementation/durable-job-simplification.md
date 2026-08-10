@@ -358,32 +358,35 @@ attempt also exposed and fixed one missing-Message projection at the reviewer ad
 ## Slice 6: Unify owned resources and isolate Cleanup
 
 Goal: leave Cleanup as the only independently scheduled lifecycle task and give it one inventory of
-exact resources owned by a Job or AgentRun.
+exact resources owned by the Job aggregate.
 
 ```text
-Job or AgentRun
-  -> owned Sandbox
-  -> owned provider Route
+Job
+  -> Sandboxes
+       -> owned provider Route
+  AgentRuns use a Sandbox
   -> stable create and cleanup Actions
 ```
 
-- [ ] Represent main and reviewer Sandboxes through one concrete owned-Sandbox shape.
-- [ ] Represent main and reviewer provider Routes through one concrete owned-Route shape.
-- [ ] Retain exact external identities and lifecycle facts needed for reconciliation; derive stable
+- [x] Agree that the Job owns all Sandboxes, each Sandbox owns its Provider Route, and AgentRuns use
+      a Sandbox; no polymorphic owner kind/id is needed.
+- [x] Represent main and reviewer Sandboxes through one concrete Job-owned Sandbox shape.
+- [x] Represent main and reviewer provider Routes through one concrete Sandbox-owned Route shape.
+- [x] Retain exact external identities and lifecycle facts needed for reconciliation; derive stable
       Action IDs instead of copying them into review resource rows.
-- [ ] Delete copied reviewer Sandbox/Route/checkout/post-review states when Actions or verified Evidence
+- [x] Delete copied reviewer Sandbox/Route/checkout/post-review states when Actions or verified Evidence
       already own the fact.
-- [ ] Close admission and request cancellation before destructive cleanup reconciliation starts.
-- [ ] Reconcile unsettled AgentRuns and Actions before deleting resources.
-- [ ] Revoke every owned Route and delete every owned Sandbox through one cleanup loop and the shared
+- [x] Close admission and request cancellation before destructive cleanup reconciliation starts.
+- [x] Reconcile unsettled AgentRuns and Actions before deleting resources.
+- [x] Revoke every owned Route and delete every owned Sandbox through one cleanup loop and the shared
       external Action executor.
-- [ ] Keep Cleanup as its own observable Absurd task with stable Action identities, attention,
+- [x] Keep Cleanup as its own observable Absurd task with stable Action identities, attention,
       retry, and explicit completion.
-- [ ] Delete the separate main/reviewer cleanup algorithms, broad Job fencing, and the superseded
+- [x] Delete the separate main/reviewer cleanup algorithms, broad Job fencing, and the superseded
       `review_resources` projection.
-- [ ] Replace duplicated cleanup choreography tests with exact-identity, partial-success, attention,
+- [x] Replace duplicated cleanup choreography tests with exact-identity, partial-success, attention,
       and retry-convergence stories.
-- [ ] Dogfood terminal Outcome cleanup with at least one reviewer resource present.
+- [ ] Dogfood terminal Outcome cleanup with at least one reviewer Sandbox present.
 
 Terminal: cleanup can fail visibly, retry safely, and eventually prove that every exact owned resource
 is gone through one path.

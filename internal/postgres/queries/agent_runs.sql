@@ -1,6 +1,6 @@
 -- name: InsertImplementationAgentRun :execrows
-insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state)
-select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending'
+insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,sandbox_id)
+select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending',sqlc.arg(sandbox_id)
 from dorf.jobs j
 left join lateral (
     select ar.harness,ar.thread_id
@@ -12,6 +12,18 @@ left join lateral (
 ) prior on true
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
+
+-- name: ListJobAgentRuns :many
+select id,job_id,message_id,state,
+       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       coalesce(baseline_turn_id,'') as baseline_turn_id,
+       coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
+       coalesce(attention,'') as attention,role,coalesce(revision,'') as revision,
+       coalesce(capability,'') as capability,sandbox_id,
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
+from dorf.agent_runs
+where job_id=sqlc.arg(job_id)
+order by id;
 
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
