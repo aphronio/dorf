@@ -56,47 +56,6 @@ func (q *Queries) GetActiveImplementationTurn(ctx context.Context, jobID string)
 	return i, err
 }
 
-const getCheckMessage = `-- name: GetCheckMessage :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
-from dorf.job_messages
-where job_id=$1 and from_kind='workflow' and from_id=$2
-`
-
-type GetCheckMessageParams struct {
-	JobID  string
-	FromID string
-}
-
-type GetCheckMessageRow struct {
-	ID                string
-	JobID             string
-	FromKind          spine.MessageFromKind
-	FromID            string
-	Sequence          int64
-	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
-	SteerTargetTurnID string
-	AdmittedAt        time.Time
-}
-
-func (q *Queries) GetCheckMessage(ctx context.Context, arg GetCheckMessageParams) (GetCheckMessageRow, error) {
-	row := q.db.QueryRowContext(ctx, getCheckMessage, arg.JobID, arg.FromID)
-	var i GetCheckMessageRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.FromKind,
-		&i.FromID,
-		&i.Sequence,
-		&i.Input,
-		&i.DeliveryIntent,
-		&i.SteerTargetTurnID,
-		&i.AdmittedAt,
-	)
-	return i, err
-}
-
 const getFirstUnsettledInput = `-- name: GetFirstUnsettledInput :one
 select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as attention
 from dorf.job_messages m
@@ -144,7 +103,28 @@ func (q *Queries) GetInitialMessage(ctx context.Context, arg GetInitialMessagePa
 	return i, err
 }
 
-const getLatestFollowRun = `-- name: GetLatestFollowRun :one
+const getLatestImplementationRun = `-- name: GetLatestImplementationRun :one
+select ar.id,ar.state
+from dorf.job_messages m
+join dorf.agent_runs ar on ar.message_id=m.id
+where m.job_id=$1 and ar.role='implement'
+order by m.sequence desc
+limit 1
+`
+
+type GetLatestImplementationRunRow struct {
+	ID    string
+	State spine.AgentRunState
+}
+
+func (q *Queries) GetLatestImplementationRun(ctx context.Context, jobID string) (GetLatestImplementationRunRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestImplementationRun, jobID)
+	var i GetLatestImplementationRunRow
+	err := row.Scan(&i.ID, &i.State)
+	return i, err
+}
+
+const getLatestTurnStartRun = `-- name: GetLatestTurnStartRun :one
 select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
        exists (
            select 1 from dorf.evidence e
@@ -152,12 +132,15 @@ select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_
        ) as observed
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1 and m.delivery_intent='follow' and ar.role='implement'
+where m.job_id=$1 and ar.role='implement'
+  and (m.delivery_intent='follow' or (
+    m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
+  ))
 order by m.sequence desc
 limit 1
 `
 
-type GetLatestFollowRunRow struct {
+type GetLatestTurnStartRunRow struct {
 	ID            string
 	JobID         string
 	State         spine.AgentRunState
@@ -166,9 +149,9 @@ type GetLatestFollowRunRow struct {
 	Observed      bool
 }
 
-func (q *Queries) GetLatestFollowRun(ctx context.Context, jobID string) (GetLatestFollowRunRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestFollowRun, jobID)
-	var i GetLatestFollowRunRow
+func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetLatestTurnStartRunRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestTurnStartRun, jobID)
+	var i GetLatestTurnStartRunRow
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,

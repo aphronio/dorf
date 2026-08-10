@@ -481,6 +481,26 @@ func (s Store) CloseAdmission(ctx context.Context, jobID string) error {
 	return expectOneRows(dbsql.New(s.DB).CloseAdmission(ctx, jobID))
 }
 
+func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(s.DB).WithTx(tx)
+	if _, err := queries.GetCleanupJobForUpdate(ctx, jobID); err != nil {
+		return err
+	}
+	closed, err := queries.CloseAdmissionForCleanup(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if closed != 1 {
+		return fmt.Errorf("cleanup cannot close admission while a pull-request Action or Proposal lacks a recorded Outcome")
+	}
+	return tx.Commit()
+}
+
 func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
 	return expectOneRows(dbsql.New(s.DB).SetCleanupTaskID(ctx, dbsql.SetCleanupTaskIDParams{CleanupTaskID: sql.NullString{String: taskID, Valid: true}, JobID: jobID}))
 }
@@ -537,7 +557,7 @@ func (s Store) AgentRuns(ctx context.Context, jobID string) ([]spine.AgentRun, e
 	}
 	out := make([]spine.AgentRun, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, spine.AgentRun{ID: r.ID, JobID: r.JobID, MessageID: r.MessageID, State: r.State, Harness: r.Harness, ThreadID: r.ThreadID, BaselineRecorded: r.BaselineTurnID != "", BaselineTurnID: r.BaselineTurnID, TurnID: r.TurnID, TurnOutcome: r.TurnOutcome, Attention: r.Attention, Role: r.Role, InputRevision: r.InputRevision, Capability: r.Capability, SandboxID: r.SandboxID, SubmissionNonce: r.SubmissionNonce, StartedAt: timeValue(r.StartedAt), FinishedAt: timeValue(r.FinishedAt)})
+		out = append(out, spine.AgentRun{ID: r.ID, JobID: r.JobID, MessageID: r.MessageID, State: r.State, Harness: r.Harness, ThreadID: r.ThreadID, BaselineRecorded: r.BaselineRecorded, BaselineTurnID: r.BaselineTurnID, TurnID: r.TurnID, TurnOutcome: r.TurnOutcome, Attention: r.Attention, Role: r.Role, InputRevision: r.InputRevision, Capability: r.Capability, SandboxID: r.SandboxID, SubmissionNonce: r.SubmissionNonce, StartedAt: timeValue(r.StartedAt), FinishedAt: timeValue(r.FinishedAt)})
 	}
 	return out, nil
 }
@@ -697,7 +717,17 @@ func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (spine.A
 	if unsettled != 0 {
 		return spine.AgentRun{}, false, nil
 	}
-	row, err := queries.GetLatestFollowRun(ctx, jobID)
+	latestInput, err := queries.GetLatestImplementationRun(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return spine.AgentRun{}, false, nil
+	}
+	if err != nil {
+		return spine.AgentRun{}, false, err
+	}
+	if latestInput.State != spine.AgentRunCompleted {
+		return spine.AgentRun{}, false, nil
+	}
+	row, err := queries.GetLatestTurnStartRun(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.AgentRun{}, false, nil
 	}
@@ -996,7 +1026,8 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	if err != nil {
 		return spine.Message{}, false, err
 	}
-	existingRow, err := queries.GetCheckMessage(ctx, dbsql.GetCheckMessageParams{JobID: check.JobID, FromID: check.ID})
+	messageSender := dbsql.GetMessageBySenderParams{JobID: check.JobID, FromKind: spine.MessageFromWorkflow, FromID: check.ID}
+	existingRow, err := queries.GetMessageBySender(ctx, messageSender)
 	if err == nil {
 		existing := messageFromValues(existingRow.ID, existingRow.JobID, existingRow.FromKind, existingRow.FromID, existingRow.Sequence, existingRow.Input, existingRow.DeliveryIntent, existingRow.SteerTargetTurnID)
 		existing.AdmittedAt = existingRow.AdmittedAt
@@ -1033,7 +1064,7 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{JobID: check.JobID, Source: sql.NullString{String: check.ID, Valid: true}}); err != nil {
 		return spine.Message{}, false, err
 	}
-	storedMessage, err := queries.GetCheckMessage(ctx, dbsql.GetCheckMessageParams{JobID: check.JobID, FromID: check.ID})
+	storedMessage, err := queries.GetMessageBySender(ctx, messageSender)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
@@ -1364,13 +1395,6 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	}
 	if job.CleanupTaskID == "" {
 		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
-	}
-	harnessMutations, err := queries.CountImplementationHarnessMutations(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if harnessMutations != 0 {
-		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation harness mutations", harnessMutations)
 	}
 	runs, err := queries.ListJobAgentRuns(ctx, jobID)
 	if err != nil {

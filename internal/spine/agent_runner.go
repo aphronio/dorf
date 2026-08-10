@@ -28,7 +28,7 @@ type agentRunContract struct {
 	wait        func(context.Context, AgentRun, string) (HarnessBinding, error)
 
 	validateOwner  func(HarnessBinding) error
-	beforeBind     func(context.Context) error
+	beforeRecord   func(context.Context) error
 	onReadError    func(context.Context, string, error)
 	onSubmitError  func(context.Context, AgentRun, HarnessBinding, error) (HarnessTurn, error)
 	onRecoverError func(context.Context, AgentRun, error) error
@@ -69,6 +69,9 @@ func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 	if run.ThreadID == "" {
 		preparedBeforeCall := run.BaselineRecorded
 		if !run.BaselineRecorded {
+			if err := c.beforeDurableWrite(ctx); err != nil {
+				return HarnessTurn{}, err
+			}
 			if err := c.store.PrepareAgentRun(ctx, run.ID, run.Harness, ""); err != nil {
 				return HarnessTurn{}, err
 			}
@@ -94,8 +97,7 @@ func (c agentRunContract) completedTurn(ctx context.Context, run AgentRun) (Harn
 		return HarnessTurn{}, err
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, err
+		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
 	}
 	for _, turn := range history.Turns {
 		if turn.ID == run.TurnID {
@@ -118,8 +120,7 @@ func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (H
 		return c.submitAndSettle(ctx, run, c.submitNew)
 	}
 	if err := c.validateBinding(run, binding, false); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, err
+		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
 	}
 	return c.bindAndSettle(ctx, run, binding)
 }
@@ -131,13 +132,15 @@ func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (H
 		return HarnessTurn{}, err
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, err
+		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
 	}
 	if !run.BaselineRecorded {
 		baseline := ""
 		if len(history.Turns) > 0 {
 			baseline = history.Turns[len(history.Turns)-1].ID
+		}
+		if err := c.beforeDurableWrite(ctx); err != nil {
+			return HarnessTurn{}, err
 		}
 		if err := c.store.PrepareAgentRun(ctx, run.ID, run.Harness, baseline); err != nil {
 			return HarnessTurn{}, err
@@ -186,8 +189,7 @@ func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, sub
 		return HarnessTurn{}, err
 	}
 	if err := c.validateBinding(run, binding, run.ThreadID != ""); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, err
+		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
 	}
 	if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {
 		return HarnessTurn{}, err
@@ -202,8 +204,7 @@ func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run Agent
 		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reason)
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, true, err
+		return HarnessTurn{}, true, c.recordUncertainError(ctx, run.ID, err)
 	}
 	reconciliation := ReconcileTurns(true, run.BaselineTurnID, "", history.Turns)
 	switch reconciliation.Classification {
@@ -245,14 +246,13 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 		return HarnessTurn{}, err
 	}
 	if err := c.validateBinding(run, waited, true); err != nil {
-		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return HarnessTurn{}, err
+		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
 	}
 	if waited.Turn.ID != binding.Turn.ID {
 		reason := fmt.Sprintf("%s wait returned turn %s for bound turn %s", c.label, waited.Turn.ID, binding.Turn.ID)
 		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
 	}
-	if err := c.beforeDurableBind(ctx); err != nil {
+	if err := c.beforeDurableWrite(ctx); err != nil {
 		return HarnessTurn{}, err
 	}
 	if err := c.store.BindAgentRun(ctx, run.ID, waited.Harness, waited.ThreadID, waited.Turn.ID, waited.Turn.Status); err != nil {
@@ -262,7 +262,7 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 }
 
 func (c agentRunContract) durableBind(ctx context.Context, run AgentRun, binding HarnessBinding) error {
-	if err := c.beforeDurableBind(ctx); err != nil {
+	if err := c.beforeDurableWrite(ctx); err != nil {
 		return err
 	}
 	return c.store.BindAgentRun(ctx, run.ID, binding.Harness, binding.ThreadID, binding.Turn.ID, binding.Turn.Status)
@@ -292,11 +292,11 @@ func (c agentRunContract) validateHistory(run AgentRun, history HarnessHistory) 
 	return c.validateHarnessIdentity(run, HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, ControllerID: history.ControllerID}, run.ThreadID != "")
 }
 
-func (c agentRunContract) beforeDurableBind(ctx context.Context) error {
-	if c.beforeBind == nil {
-		return nil
+func (c agentRunContract) beforeDurableWrite(ctx context.Context) error {
+	if c.beforeRecord == nil {
+		return fmt.Errorf("%s AgentRun has no durable claim check", c.label)
 	}
-	return c.beforeBind(ctx)
+	return c.beforeRecord(ctx)
 }
 
 func (c agentRunContract) recordReadError(ctx context.Context, runID string, err error) {
@@ -306,10 +306,24 @@ func (c agentRunContract) recordReadError(ctx context.Context, runID string, err
 }
 
 func (c agentRunContract) markUncertain(ctx context.Context, runID, reason string) error {
-	if err := c.store.UncertainAgentRun(ctx, runID, reason); err != nil {
+	if err := c.recordUncertain(ctx, runID, reason); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s reconciliation is uncertain: %s", c.label, reason)
+}
+
+func (c agentRunContract) recordUncertain(ctx context.Context, runID, reason string) error {
+	if err := c.beforeDurableWrite(ctx); err != nil {
+		return err
+	}
+	return c.store.UncertainAgentRun(ctx, runID, reason)
+}
+
+func (c agentRunContract) recordUncertainError(ctx context.Context, runID string, cause error) error {
+	if err := c.recordUncertain(ctx, runID, cause.Error()); err != nil {
+		return err
+	}
+	return cause
 }
 
 func (c agentRunContract) reach(ctx context.Context, point string) error {

@@ -105,6 +105,65 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	}
 }
 
+func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, _ := preparePublishedOutcomeJob(t, store, "steer-fallback")
+	threadID := "thread-" + job.ID
+	priorTurnID := "turn-" + job.ID
+
+	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
+	if err != nil || !created {
+		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
+	}
+	target, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || target == nil || target.Message.ID != follow.ID {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", priorTurnID); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-outcome-target-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: spine.MessageSteer})
+	if err != nil || !created {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || fallback == nil || fallback.Message.ID != steer.ID {
+		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
+	}
+	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, "turn-outcome-fallback-"+job.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
+	if err != nil || !ready || candidate.ID != fallback.AgentRun.ID {
+		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	observed := integrationEvidence(candidate.ID, "git-revision", "", "", job.Revision, "e")
+	observed.AgentRunID = candidate.ID
+	revision := spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, candidate.ID, revision, observed); err != nil || !recorded {
+		t.Fatalf("fallback observation recorded=%v err=%v", recorded, err)
+	}
+	merge := spine.JobOutcome{
+		JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed",
+		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
+	}
+	if _, created, err := store.RecordOutcome(ctx, merge); err != nil || !created {
+		t.Fatalf("observed fallback outcome created=%v err=%v", created, err)
+	}
+}
+
 func TestPostgresOutcomeFirstWriteWinsAndLeavesProposalAuthorityUntouched(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "first-write")

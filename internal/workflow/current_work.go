@@ -359,7 +359,13 @@ func decideCurrentWork(f Snapshot) Work {
 		}
 		return work(WorkDeliverMessage, run.ID, fmt.Sprintf("Message %d", f.Delivery.Message.Sequence))
 	}
-	if latest := latestImplementationFollow(f); latest != nil && latest.State != spine.AgentRunCompleted {
+	if latest := latestImplementationInput(f); latest != nil && latest.State != spine.AgentRunCompleted {
+		// A failed steer may have no Turn identity when its terminal-target
+		// fallback failed before binding. It is still the latest accepted input
+		// and must not be skipped in favor of an older observed Turn.
+		return work(WorkAttention, latest.ID, attentionDetail(f.Job, latest.ID, agentRunAttention(*latest)))
+	}
+	if latest := latestImplementationTurnStart(f); latest != nil && latest.State != spine.AgentRunCompleted {
 		// Pending and active Runs normally appear as DeliveryCandidate. If any
 		// nonterminal Run does not, there is no safe delivery operation to
 		// execute from these facts. In particular, a submitting Run must be
@@ -484,14 +490,14 @@ func revisionCandidate(f Snapshot) *spine.AgentRun {
 			observed[record.AgentRunID] = true
 		}
 	}
-	latest := latestImplementationFollow(f)
+	latest := latestImplementationTurnStart(f)
 	if latest == nil || latest.State != spine.AgentRunCompleted || observed[latest.ID] {
 		return nil
 	}
 	return latest
 }
 
-func latestImplementationFollow(f Snapshot) *spine.AgentRun {
+func latestImplementationInput(f Snapshot) *spine.AgentRun {
 	messages := make(map[string]spine.MessageView, len(f.Messages))
 	for _, message := range f.Messages {
 		messages[message.ID] = message
@@ -501,7 +507,24 @@ func latestImplementationFollow(f Snapshot) *spine.AgentRun {
 	for i := range f.AgentRuns {
 		run := &f.AgentRuns[i]
 		message, ok := messages[run.MessageID]
-		if run.Role == "implement" && ok && message.Intent == spine.MessageFollow && message.Sequence >= latestSequence {
+		if run.Role == "implement" && ok && message.Sequence >= latestSequence {
+			latest, latestSequence = run, message.Sequence
+		}
+	}
+	return latest
+}
+
+func latestImplementationTurnStart(f Snapshot) *spine.AgentRun {
+	messages := make(map[string]spine.MessageView, len(f.Messages))
+	for _, message := range f.Messages {
+		messages[message.ID] = message
+	}
+	var latest *spine.AgentRun
+	var latestSequence int64
+	for i := range f.AgentRuns {
+		run := &f.AgentRuns[i]
+		message, ok := messages[run.MessageID]
+		if run.Role == "implement" && ok && spine.StartsImplementationTurn(message.Message, *run) && message.Sequence >= latestSequence {
 			latest, latestSequence = run, message.Sequence
 		}
 	}

@@ -38,6 +38,15 @@ type ReviewEvidenceVerification struct {
 	Error              string `json:"error,omitempty"`
 }
 
+// StartsImplementationTurn distinguishes an input which owns a new mutable
+// checkout boundary from a steer handled by its target Turn. A terminal-target
+// steer becomes a turn start only after it is durably bound to a different
+// Turn.
+func StartsImplementationTurn(message Message, run AgentRun) bool {
+	return message.Intent == MessageFollow ||
+		message.Intent == MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
+}
+
 type commandEvidenceArtifact struct {
 	Identity        string    `json:"identity"`
 	Revision        string    `json:"revision"`
@@ -159,11 +168,15 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		assessment.Reason = "persisted review decision and selected Roles disagree"
 		return assessment
 	}
-	byRole := make(map[string]ReviewRunView, len(reviews))
+	exactReviews := make([]ReviewRunView, 0, len(reviews))
 	for _, run := range reviews {
 		if run.JobID == job.ID && run.InputRevision == job.Revision {
-			byRole[run.Role] = run
+			exactReviews = append(exactReviews, run)
 		}
+	}
+	byRole := make(map[string]ReviewRunView, len(exactReviews))
+	for _, run := range exactReviews {
+		byRole[run.Role] = run
 	}
 	messageByID := make(map[string]MessageView, len(messages))
 	for _, message := range messages {
@@ -210,7 +223,9 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		}
 	}
 
-	var latestFollow AgentRun
+	var latestInput AgentRun
+	var latestInputSequence int64
+	var latestTurnStart AgentRun
 	var latestSequence int64
 	for _, run := range agentRuns {
 		if run.JobID != job.ID || run.Role != "implement" {
@@ -225,17 +240,24 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no retained input Message", run.ID)
 			return assessment
 		}
-		if message.Intent == MessageFollow && (latestFollow.ID == "" || message.Sequence > latestSequence) {
-			latestFollow, latestSequence = run, message.Sequence
+		if latestInput.ID == "" || message.Sequence > latestInputSequence {
+			latestInput, latestInputSequence = run, message.Sequence
+		}
+		if StartsImplementationTurn(message.Message, run) && (latestTurnStart.ID == "" || message.Sequence > latestSequence) {
+			latestTurnStart, latestSequence = run, message.Sequence
 		}
 	}
-	if latestFollow.ID != "" {
-		if latestFollow.State != AgentRunCompleted || latestFollow.TurnOutcome != "completed" || latestFollow.InputRevision == "" {
-			assessment.Reason = fmt.Sprintf("latest implementation Follow AgentRun %s has not completed successfully", latestFollow.ID)
+	if latestInput.ID != "" && latestInput.State != AgentRunCompleted {
+		assessment.Reason = fmt.Sprintf("latest implementation input AgentRun %s has not completed successfully", latestInput.ID)
+		return assessment
+	}
+	if latestTurnStart.ID != "" {
+		if latestTurnStart.State != AgentRunCompleted || latestTurnStart.TurnOutcome != "completed" || latestTurnStart.InputRevision == "" {
+			assessment.Reason = fmt.Sprintf("latest implementation turn-start AgentRun %s has not completed successfully", latestTurnStart.ID)
 			return assessment
 		}
-		if err := verifyGitRevisionObservation(job, latestFollow, records, blobs); err != nil {
-			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no valid Git observation: %v", latestFollow.ID, err)
+		if err := verifyGitRevisionObservation(job, latestTurnStart, records, blobs); err != nil {
+			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no valid Git observation: %v", latestTurnStart.ID, err)
 			return assessment
 		}
 	}

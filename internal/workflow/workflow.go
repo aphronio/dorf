@@ -46,9 +46,8 @@ func WakeEvent(jobID string, sequence int64) string {
 }
 
 func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime) {
-	service.ClaimCheck = absurdruntime.RequireClaim
-	proposal.Publication.ClaimCheck = absurdruntime.RequireClaim
-	proposal.Outcome.ClaimCheck = absurdruntime.RequireClaim
+	proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
+	proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
 	if proposal.PollInterval <= 0 {
 		proposal.PollInterval = 30 * time.Second
 	}
@@ -215,16 +214,15 @@ func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 	if job.CleanupState == spine.CleanupComplete {
 		return job, nil
 	}
-	if err := cleanupPublicationSafe(ctx, store, job); err != nil {
+	// Publication and cleanup both lock the Job before claiming authority.
+	// The winner makes the loser fail without leaving a half-owned workflow.
+	if err := store.CloseAdmissionForCleanup(ctx, jobID); err != nil {
 		return spine.Job{}, err
 	}
 	// Close admission before taking the long Job effect fence, then cancel
 	// through Absurd's public API. A running handler observes cancellation at
 	// its heartbeat and cancels the opaque child context; the Job fence still
 	// prevents cleanup from overtaking any late external effect.
-	if err := store.CloseAdmission(ctx, jobID); err != nil {
-		return spine.Job{}, err
-	}
 	// Reload after admission closes so cancellation uses the current durable
 	// task binding rather than the earlier snapshot.
 	job, err = store.Job(ctx, jobID)

@@ -111,7 +111,7 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		AgentRun: AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
 		Request:  Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
 	}
-	observed, err := (Service{Evidence: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
+	observed, err := (Service{evidence: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,9 +127,42 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		t.Fatalf("feedback without Git observation satisfied readiness: %#v", handled)
 	}
 	gitEvidence := gitObservationEvidence(t, store, job, implementation, now.Add(2*time.Second))
-	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed, gitEvidence}, store, &selected, []ReviewRunView{run}, []MessageView{feedback}, []AgentRun{implementation})
+	stale := run
+	stale.ID = "zz-stale-same-role-run"
+	stale.InputRevision = strings.Repeat("f", 40)
+	stale.State = AgentRunFailed
+	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed, gitEvidence}, store, &selected, []ReviewRunView{run, stale}, []MessageView{feedback}, []AgentRun{implementation})
 	if !settled.Ready || !strings.Contains(settled.Reason, "returned feedback") {
-		t.Fatalf("settled selected readiness=%#v", settled)
+		t.Fatalf("stale same-Role review blocked exact-Revision readiness=%#v", settled)
+	}
+}
+
+func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *testing.T) {
+	store, jobID, revision, declared, check, checkEvidence := readinessFixture(t)
+	job := Job{ID: jobID, Revision: revision, Branch: "dorf/readiness"}
+	plan := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
+	message := MessageView{Message: Message{
+		ID: "message-fallback", JobID: jobID, Sequence: 2,
+		Intent: MessageSteer, TargetTurnID: "turn-old",
+	}}
+	run := AgentRun{
+		ID: "run-fallback", JobID: jobID, MessageID: message.ID, Role: "implement",
+		InputRevision: revision, State: AgentRunCompleted, TurnID: "turn-new", TurnOutcome: "completed",
+	}
+	observed := gitObservationEvidence(t, store, job, run, time.Now().UTC().Truncate(time.Microsecond))
+	ready := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence, observed}, store, &plan, nil, []MessageView{message}, []AgentRun{run})
+	if !ready.Ready {
+		t.Fatalf("observed terminal-target steer fallback was not ready: %#v", ready)
+	}
+
+	missing := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence}, store, &plan, nil, []MessageView{message}, []AgentRun{run})
+	if missing.Ready || !strings.Contains(missing.Reason, "no valid Git observation") {
+		t.Fatalf("unobserved terminal-target steer fallback satisfied readiness: %#v", missing)
+	}
+	run.State, run.TurnID, run.TurnOutcome = AgentRunFailed, "", "failed"
+	failed := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence}, store, &plan, nil, []MessageView{message}, []AgentRun{run})
+	if failed.Ready || !strings.Contains(failed.Reason, "has not completed successfully") {
+		t.Fatalf("failed terminal-target steer fallback satisfied readiness: %#v", failed)
 	}
 }
 

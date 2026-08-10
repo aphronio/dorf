@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
@@ -48,7 +49,8 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	workflow.Register(client, spine.Service{Store: store}, store, workflow.ProposalRuntime{})
+	service := spine.NewService(store, &integrationExternals{}, evidence.Store{}, nil, func(context.Context) error { return nil })
+	workflow.Register(client, service, store, workflow.ProposalRuntime{})
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -468,6 +470,12 @@ func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
 	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
+	runs, err := store.AgentRuns(ctx, job.ID)
+	if err != nil || !slices.ContainsFunc(runs, func(run spine.AgentRun) bool {
+		return run.ID == delivery.AgentRun.ID && run.BaselineRecorded && run.BaselineTurnID == ""
+	}) {
+		t.Fatalf("prepared AgentRun baseline=%#v err=%v", runs, err)
+	}
 	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
 	if err != nil || !created {
 		t.Fatalf("later Follow=%#v created=%v err=%v", later, created, err)
@@ -486,6 +494,88 @@ func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
 	}
 	if next, err := store.DeliveryCandidate(ctx, job.ID); err != nil || next == nil || next.Message.ID != later.ID {
 		t.Fatalf("next candidate=%#v err=%v, want later Follow", next, err)
+	}
+}
+
+func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "submitting-steer-recovery")
+	target, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "recover-submitting-steer", Input: "adjust the active Turn", Intent: spine.MessageSteer})
+	if err != nil || !created {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	selected, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || selected == nil || selected.Message.ID != steer.ID {
+		t.Fatalf("selected steer=%#v err=%v", selected, err)
+	}
+	if err := store.PrepareAgentRun(ctx, selected.AgentRun.ID, "codex", targetTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "queued-after-steer", Input: "run after the active Turn"}); err != nil || !created {
+		t.Fatalf("queued Follow created=%v err=%v", created, err)
+	}
+
+	for _, load := range []struct {
+		name string
+		fn   func() (*spine.Delivery, error)
+	}{
+		{name: "read-only", fn: func() (*spine.Delivery, error) { return store.DeliveryCandidate(ctx, job.ID) }},
+		{name: "binding", fn: func() (*spine.Delivery, error) { return store.NextDelivery(ctx, job.ID) }},
+	} {
+		candidate, err := load.fn()
+		if err != nil || candidate == nil || candidate.Message.ID != steer.ID || candidate.AgentRun.State != spine.AgentRunSubmitting {
+			t.Fatalf("%s submitting steer candidate=%#v err=%v", load.name, candidate, err)
+		}
+	}
+}
+
+func TestTerminalTargetSteerFallbackIsLatestRevisionCandidate(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "steer-fallback-revision")
+	target, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || target == nil {
+		t.Fatalf("target delivery=%#v err=%v", target, err)
+	}
+	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetTurnID := "turn-target-" + job.ID
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: spine.MessageSteer})
+	if err != nil || !created {
+		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	}
+	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || fallback == nil || fallback.Message.ID != steer.ID {
+		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
+	}
+	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, "turn-fallback-"+job.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
+	if err != nil || !ready || candidate.ID != fallback.AgentRun.ID {
+		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
 	}
 }
 
@@ -595,6 +685,16 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	}
 }
 
+func reviewRunsForRevision(ctx context.Context, store postgres.Store, jobID, revision string) ([]spine.ReviewRunView, error) {
+	runs, err := store.AllReviewRuns(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(runs, func(run spine.ReviewRunView) bool {
+		return run.InputRevision != revision
+	}), nil
+}
+
 func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -628,7 +728,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 			if err != nil || persisted.RecordedAt.IsZero() || persisted.Facts.Revision != revision || persisted.Plan.Decision != plan.Decision {
 				t.Fatalf("persisted plan=%#v err=%v", persisted, err)
 			}
-			runs, err := store.ReviewRuns(ctx, job.ID, revision)
+			runs, err := reviewRunsForRevision(ctx, store, job.ID, revision)
 			if len(test.roles) == 0 {
 				if err != nil || len(runs) != 0 || persisted.Plan.Decision != "no-review" {
 					t.Fatalf("no-review runs=%#v plan=%#v err=%v", runs, persisted, err)
@@ -659,6 +759,77 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
+func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	prepare := func(t *testing.T, suffix string) (spine.Job, spine.ReviewPlanRecord) {
+		t.Helper()
+		job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
+		facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/review.md"}, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := policy.ReviewPolicy(facts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return job, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
+	}
+
+	t.Run("closed Job rejects only a new policy", func(t *testing.T) {
+		job, record := prepare(t, "review-policy-closed")
+		if err := store.CloseAdmission(ctx, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordReviewPolicy(ctx, record); err == nil || !strings.Contains(err.Error(), "cannot record a new review policy") {
+			t.Fatalf("closed Job policy error=%v", err)
+		}
+		if _, err := store.ReviewPlan(ctx, job.ID, record.Revision); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("closed Job persisted a new review policy: %v", err)
+		}
+	})
+
+	t.Run("recorded policy remains an exact replay", func(t *testing.T) {
+		job, record := prepare(t, "review-policy-replay-closed")
+		if err := store.RecordReviewPolicy(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CloseAdmission(ctx, job.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordReviewPolicy(ctx, record); err != nil {
+			t.Fatalf("exact policy replay after closure: %v", err)
+		}
+	})
+
+	t.Run("concurrent close leaves one truthful result", func(t *testing.T) {
+		job, record := prepare(t, "review-policy-close-race")
+		start := make(chan struct{})
+		policyResult := make(chan error, 1)
+		closeResult := make(chan error, 1)
+		go func() {
+			<-start
+			policyResult <- store.RecordReviewPolicy(ctx, record)
+		}()
+		go func() {
+			<-start
+			closeResult <- store.CloseAdmission(ctx, job.ID)
+		}()
+		close(start)
+		policyErr, closeErr := <-policyResult, <-closeResult
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		_, planErr := store.ReviewPlan(ctx, job.ID, record.Revision)
+		if policyErr == nil && planErr != nil {
+			t.Fatalf("successful policy was not durable: %v", planErr)
+		}
+		if policyErr != nil && (!strings.Contains(policyErr.Error(), "cannot record a new review policy") || !errors.Is(planErr, sql.ErrNoRows)) {
+			t.Fatalf("rejected policy=%v durable plan error=%v", policyErr, planErr)
+		}
+	})
+}
+
 func TestReviewPolicyRejectsAnyDeclaredCheckWithoutExactPassingEvidence(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -680,7 +851,7 @@ func TestReviewPolicyRejectsAnyDeclaredCheckWithoutExactPassingEvidence(t *testi
 	if _, err := store.ReviewPlan(ctx, job.ID, revision); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("invalid review inputs persisted a plan: %v", err)
 	}
-	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	runs, err := reviewRunsForRevision(ctx, store, job.ID, revision)
 	if err != nil || len(runs) != 0 {
 		t.Fatalf("invalid review inputs persisted runs=%#v err=%v", runs, err)
 	}
@@ -721,7 +892,7 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 	if err := store.RecordReviewPolicy(ctx, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
-	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	runs, err := reviewRunsForRevision(ctx, store, job.ID, revision)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("review runs=%#v err=%v", runs, err)
 	}
@@ -770,7 +941,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
-	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	runs, err := reviewRunsForRevision(ctx, store, job.ID, revision)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("review runs=%#v err=%v", runs, err)
 	}
@@ -1197,7 +1368,28 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if cleaning.AdmissionOpen {
 		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
-	service := spine.Service{Store: store, Externals: externals}
+	claimLost := errors.New("cleanup claim lost")
+	stale := spine.NewService(store, externals, evidence.Store{}, nil, func(context.Context) error { return claimLost })
+	if _, _, err := stale.PrepareCleanup(ctx, job.ID); !errors.Is(err, claimLost) {
+		t.Fatalf("stale cleanup error = %v", err)
+	}
+	runs, err := store.AgentRuns(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, run := range runs {
+		if run.ID == delivery.AgentRun.ID {
+			found = true
+			if run.State != spine.AgentRunActive || run.ThreadID != threadID || run.TurnID != turnID {
+				t.Fatalf("stale cleanup history overwrote active replacement: %#v", run)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("active AgentRun %s disappeared", delivery.AgentRun.ID)
+	}
+	service := spine.NewService(store, externals, evidence.Store{}, nil, func(context.Context) error { return nil })
 	cleanupOnce := func() error {
 		cleaning, sandboxes, err := service.PrepareCleanup(ctx, job.ID)
 		if err != nil || cleaning.CleanupState == spine.CleanupComplete {
@@ -1251,6 +1443,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 }
 
 type integrationExternals struct {
+	spine.ServiceExternals
 	mu        sync.Mutex
 	turns     []spine.HarnessTurn
 	submitted []int64

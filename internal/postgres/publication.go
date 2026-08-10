@@ -49,7 +49,11 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		if err != nil {
 			return spine.Job{}, spine.Action{}, spine.Action{}, err
 		}
-		latest, err := queries.GetLatestFollowRun(ctx, jobID)
+		latestInput, err := queries.GetLatestImplementationRun(ctx, jobID)
+		if err != nil || latestInput.State != spine.AgentRunCompleted {
+			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
+		}
+		latest, err := queries.GetLatestTurnStartRun(ctx, jobID)
 		if err != nil || unsettled != 0 || latest.State != spine.AgentRunCompleted || latest.Role != "implement" || !latest.Observed {
 			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}

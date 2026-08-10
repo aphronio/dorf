@@ -11,6 +11,27 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+const closeAdmissionForCleanup = `-- name: CloseAdmissionForCleanup :execrows
+update dorf.jobs j
+set admission_open=false
+where j.id=$1
+  and (
+    exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)
+    or (
+      not exists(select 1 from dorf.actions a where a.job_id=j.id and a.kind='github-pull-request')
+      and not exists(select 1 from dorf.github_proposals p where p.job_id=j.id)
+    )
+  )
+`
+
+func (q *Queries) CloseAdmissionForCleanup(ctx context.Context, jobID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, closeAdmissionForCleanup, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const completeCleanup = `-- name: CompleteCleanup :execrows
 update dorf.jobs
 set cleanup_state='complete',cleanup_attention=null,

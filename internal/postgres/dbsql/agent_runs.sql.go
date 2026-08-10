@@ -116,20 +116,6 @@ func (q *Queries) BindSteer(ctx context.Context, arg BindSteerParams) (string, e
 	return turn_outcome, err
 }
 
-const countImplementationHarnessMutations = `-- name: CountImplementationHarnessMutations :one
-select count(*)
-from dorf.agent_runs
-where job_id=$1 and role='implement'
-  and state in ('submitting','active','uncertain')
-`
-
-func (q *Queries) CountImplementationHarnessMutations(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countImplementationHarnessMutations, jobID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const failAgentRun = `-- name: FailAgentRun :execrows
 update dorf.agent_runs
 set state='failed',
@@ -421,6 +407,7 @@ func (q *Queries) ListImplementationThreadBindings(ctx context.Context, jobID st
 const listJobAgentRuns = `-- name: ListJobAgentRuns :many
 select id,job_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
@@ -432,23 +419,24 @@ order by id
 `
 
 type ListJobAgentRunsRow struct {
-	ID              string
-	JobID           string
-	MessageID       string
-	State           spine.AgentRunState
-	Harness         string
-	ThreadID        string
-	BaselineTurnID  string
-	TurnID          string
-	TurnOutcome     string
-	Attention       string
-	Role            string
-	InputRevision   string
-	Capability      string
-	SandboxID       string
-	SubmissionNonce string
-	StartedAt       sql.NullTime
-	FinishedAt      sql.NullTime
+	ID               string
+	JobID            string
+	MessageID        string
+	State            spine.AgentRunState
+	Harness          string
+	ThreadID         string
+	BaselineRecorded bool
+	BaselineTurnID   string
+	TurnID           string
+	TurnOutcome      string
+	Attention        string
+	Role             string
+	InputRevision    string
+	Capability       string
+	SandboxID        string
+	SubmissionNonce  string
+	StartedAt        sql.NullTime
+	FinishedAt       sql.NullTime
 }
 
 func (q *Queries) ListJobAgentRuns(ctx context.Context, jobID string) ([]ListJobAgentRunsRow, error) {
@@ -467,6 +455,7 @@ func (q *Queries) ListJobAgentRuns(ctx context.Context, jobID string) ([]ListJob
 			&i.State,
 			&i.Harness,
 			&i.ThreadID,
+			&i.BaselineRecorded,
 			&i.BaselineTurnID,
 			&i.TurnID,
 			&i.TurnOutcome,

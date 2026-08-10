@@ -211,6 +211,56 @@ func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 	}
 }
 
+func TestTerminalTargetSteerFallbackBecomesLatestRevisionBoundary(t *testing.T) {
+	facts := readyFacts()
+	facts.Checks = nil
+	facts.ReviewPlans = nil
+	facts.Messages = []spine.MessageView{
+		{Message: spine.Message{ID: "initial", Sequence: 1, Intent: spine.MessageFollow}},
+		{Message: spine.Message{ID: "fallback", Sequence: 2, Intent: spine.MessageSteer, TargetTurnID: "turn-old"}},
+	}
+	facts.AgentRuns = []spine.AgentRun{
+		{ID: "run-initial", MessageID: "initial", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-old", TurnOutcome: "completed"},
+		{ID: "run-fallback", MessageID: "fallback", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-new", TurnOutcome: "completed"},
+	}
+	facts.Evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: "run-initial", Revision: facts.Job.Revision}}
+
+	if got := decideCurrentWork(facts); got.Kind != WorkObserveRevision || got.FactID != "run-fallback" {
+		t.Fatalf("CurrentWork = %#v, want terminal-target steer fallback observation", got)
+	}
+	facts.AgentRuns[1].State = spine.AgentRunFailed
+	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-fallback" {
+		t.Fatalf("CurrentWork = %#v, want failed terminal-target steer fallback attention", got)
+	}
+	facts.AgentRuns[1].State = spine.AgentRunUncertain
+	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-fallback" {
+		t.Fatalf("CurrentWork = %#v, want uncertain terminal-target steer fallback attention", got)
+	}
+	facts.AgentRuns[1].TurnID = ""
+	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-fallback" {
+		t.Fatalf("CurrentWork = %#v, want unbound uncertain fallback input attention", got)
+	}
+	facts.AgentRuns[1].State = spine.AgentRunFailed
+	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-fallback" {
+		t.Fatalf("CurrentWork = %#v, want unbound failed fallback input attention", got)
+	}
+	facts.Messages = append(facts.Messages, spine.MessageView{Message: spine.Message{ID: "recovery", Sequence: 3, Intent: spine.MessageFollow}})
+	facts.AgentRuns = append(facts.AgentRuns, spine.AgentRun{ID: "run-recovery", MessageID: "recovery", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-recovery", TurnOutcome: "completed"})
+	if got := decideCurrentWork(facts); got.Kind != WorkObserveRevision || got.FactID != "run-recovery" {
+		t.Fatalf("CurrentWork = %#v, want later successful turn start to recover failed fallback", got)
+	}
+	facts.Messages = facts.Messages[:2]
+	facts.AgentRuns = facts.AgentRuns[:2]
+
+	// A steer bound to its target is handled inside the original Turn and does
+	// not create another Git observation boundary.
+	facts.AgentRuns[1].State = spine.AgentRunCompleted
+	facts.AgentRuns[1].TurnID = "turn-old"
+	if got := revisionCandidate(facts); got != nil {
+		t.Fatalf("shared-turn steer became a Revision candidate: %#v", got)
+	}
+}
+
 func TestLaterSuccessfulFollowRecoversEarlierFailure(t *testing.T) {
 	facts := readyFacts()
 	facts.Checks = nil

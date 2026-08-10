@@ -100,7 +100,7 @@ func TestPostgresMissingOrTamperedEvidenceNeverReachesPushExternals(t *testing.T
 			}
 			github := &forbiddenPublicationGitHub{}
 			repository := &forbiddenPublicationRepository{}
-			service := publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: evidence.Store{Root: root}}
+			service := (publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: evidence.Store{Root: root}}).WithClaimCheck(func(context.Context) error { return nil })
 			err = service.Push(context.Background(), job.ID, revision)
 			if err == nil || !strings.Contains(err.Error(), "publication lost exact-Revision readiness") {
 				t.Fatalf("Push readiness error=%v", err)

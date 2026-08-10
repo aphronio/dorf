@@ -97,12 +97,12 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	currentRevision, err := queries.GetReviewJobForUpdate(ctx, proposed.JobID)
+	job, err := queries.GetReviewJobForUpdate(ctx, proposed.JobID)
 	if err != nil {
 		return err
 	}
-	if currentRevision != proposed.Revision {
-		return fmt.Errorf("review policy conflicts with current Revision %s", currentRevision)
+	if job.Revision != proposed.Revision {
+		return fmt.Errorf("review policy conflicts with current Revision %s", job.Revision)
 	}
 	storedDigest, err := queries.GetReviewPlanDigestForUpdate(ctx, dbsql.GetReviewPlanDigestForUpdateParams{JobID: proposed.JobID, Revision: proposed.Revision})
 	if err == nil {
@@ -116,6 +116,9 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	if !job.AdmissionOpen || job.OutcomeExists {
+		return fmt.Errorf("Job %s cannot record a new review policy after admission closes or an Outcome is recorded", proposed.JobID)
 	}
 	declaredChecks, err := reviewCheckInputs(ctx, queries, proposed.JobID, proposed.Revision)
 	if err != nil {
@@ -227,18 +230,6 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 	return view
 }
 
-func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.ReviewRunView, error) {
-	rows, err := dbsql.New(s.DB).ListReviewRuns(ctx, dbsql.ListReviewRunsParams{JobID: jobID, Revision: revision})
-	if err != nil {
-		return nil, err
-	}
-	views := make([]spine.ReviewRunView, 0, len(rows))
-	for _, row := range rows {
-		views = append(views, reviewRunView(row.DorfReviewRunProjection))
-	}
-	return views, nil
-}
-
 func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
 	rows, err := dbsql.New(s.DB).ListAllReviewRuns(ctx, jobID)
 	if err != nil {
@@ -274,17 +265,14 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 		observed.ID != spine.EvidenceID(runID, "review-observation") || observed.Kind != "review-observation" || observed.ActionID != "" || observed.CheckID != "" {
 		return spine.Message{}, false, fmt.Errorf("review feedback conflicts with its completed exact-Revision reviewer AgentRun")
 	}
-	boundaryReady, err := queries.ReviewBoundaryReady(ctx, runID)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	if !boundaryReady {
+	if !run.BoundaryReady {
 		return spine.Message{}, false, fmt.Errorf("review feedback lacks an attested isolated reviewer boundary")
 	}
 
 	expectedMessage := spine.Message{ID: spine.MessageID(run.JobID, spine.MessageFromAgent, runID), JobID: run.JobID, FromKind: spine.MessageFromAgent, FromID: runID, Input: outcome.Output, Intent: spine.MessageFollow}
 	created := false
-	storedMessage, err := queries.GetReviewFeedbackMessage(ctx, dbsql.GetReviewFeedbackMessageParams{JobID: run.JobID, RunID: runID})
+	messageSender := dbsql.GetMessageBySenderParams{JobID: run.JobID, FromKind: spine.MessageFromAgent, FromID: runID}
+	storedMessage, err := queries.GetMessageBySender(ctx, messageSender)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return spine.Message{}, false, err
 	}
@@ -313,7 +301,7 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 			return spine.Message{}, false, err
 		}
 		created = true
-		storedMessage, err = queries.GetReviewFeedbackMessage(ctx, dbsql.GetReviewFeedbackMessageParams{JobID: run.JobID, RunID: runID})
+		storedMessage, err = queries.GetMessageBySender(ctx, messageSender)
 		if err != nil {
 			return spine.Message{}, false, err
 		}

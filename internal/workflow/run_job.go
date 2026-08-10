@@ -35,7 +35,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		if err != nil {
 			return Work{}, err
 		}
-		work := snapshot.Project(service.Evidence).CurrentWork
+		work := snapshot.Project(service.EvidenceStore()).CurrentWork
 		if work.Kind == WorkComplete || work.Kind == WorkAttention {
 			return work, nil
 		}
@@ -48,7 +48,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			if work.Scope == sandbox.ID {
 				err = runSandboxAction(ctx, service, store, job, sandbox, work)
 			} else {
-				err = runReviewAction(ctx, service, store, job, work)
+				err = runReviewAction(ctx, service, store, job, snapshot.currentReviewRuns(), work)
 			}
 		case WorkSetupRepository:
 			err = runSetupStep(ctx, service, store, job, work)
@@ -102,11 +102,7 @@ func runSetupStep(ctx context.Context, service spine.Service, store postgres.Sto
 	})
 }
 
-func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {
-	runs, err := store.ReviewRuns(ctx, job.ID, job.Revision)
-	if err != nil {
-		return err
-	}
+func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, runs []spine.ReviewRunView, work Work) error {
 	var selected *spine.ReviewRunView
 	for i := range runs {
 		if runs[i].Sandbox.ID == work.Scope {
@@ -226,7 +222,7 @@ func runCheckStep(ctx context.Context, service spine.Service, store postgres.Sto
 			return err
 		}
 		if check.State == "passed" {
-			continue
+			return nil
 		}
 		if err := runFactStep(ctx, checkStepName(check.ID), check.ID, func(workCtx context.Context) error {
 			return service.ExecuteCheck(workCtx, job, check)

@@ -2,6 +2,7 @@ package publication
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +174,37 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	}
 }
 
+func TestPublicationReadinessAndBodySeeOnlyExactRevisionReviewRuns(t *testing.T) {
+	jobID := "job-exact-review"
+	currentRevision := strings.Repeat("a", 40)
+	oldRevision := strings.Repeat("f", 40)
+	role := "critical-boundary"
+	currentRunID := spine.AgentRunID(spine.ReviewRequestMessageID(jobID, currentRevision, role))
+	oldRunID := spine.AgentRunID(spine.ReviewRequestMessageID(jobID, oldRevision, role))
+	runs := []spine.ReviewRunView{
+		{AgentRun: spine.AgentRun{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, State: spine.AgentRunCompleted}},
+		// The stale same-Role run deliberately follows the current run.
+		{AgentRun: spine.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: spine.AgentRunFailed}},
+	}
+
+	exact := reviewRunsAtRevision(runs, jobID, currentRevision)
+	if len(exact) != 1 || exact[0].ID != currentRunID || exact[0].State != spine.AgentRunCompleted {
+		t.Fatalf("exact-Revision review runs = %#v", exact)
+	}
+
+	observedID := spine.EvidenceID(currentRunID, "review-observation")
+	body := Body(
+		spine.Job{ID: jobID, Goal: "keep publication exact", Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
+		spine.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled", ReviewEvidence: []spine.ReviewEvidenceVerification{{AgentRunID: currentRunID, ObservedEvidenceID: observedID, Verified: true}}},
+		nil,
+		[]spine.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
+		exact,
+	)
+	if !strings.Contains(body, currentRunID) || strings.Contains(body, oldRunID) || strings.Contains(body, oldRevision) {
+		t.Fatalf("body mixed review Revisions:\n%s", body)
+	}
+}
+
 func TestPublicationTextProjectionRemainsValidUTF8AtLimits(t *testing.T) {
 	const truncated = "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
 	goal := strings.Repeat("a", 1199) + "界tail"
@@ -300,5 +332,25 @@ func TestPullRecoveryBlocksClosedWrongBaseAndDraftButRefreshesTitle(t *testing.T
 func TestSanitizeAlwaysRedactsCredential(t *testing.T) {
 	if got := sanitize([]byte("failure secret-value suffix"), "secret-value"); got != "failure [REDACTED_GITHUB_TOKEN] suffix" {
 		t.Fatal(got)
+	}
+}
+
+func TestPublicationRefusesDurableRecordWithoutClaimCheck(t *testing.T) {
+	recorded := false
+	err := (Service{}).recordAfterClaim(context.Background(), func() error {
+		recorded = true
+		return nil
+	})
+	if err == nil || recorded {
+		t.Fatalf("missing durable executor claim check recorded=%t err=%v", recorded, err)
+	}
+}
+
+func TestPublicationLostClaimDoesNotRecordAttention(t *testing.T) {
+	claimLost := errors.New("claim lost")
+	service := (Service{}).WithClaimCheck(func(context.Context) error { return claimLost })
+	err := service.block(context.Background(), spine.Job{ID: "job-1", Revision: "revision-1"}, spine.Action{ID: "action-1"}, "stale attention")
+	if !errors.Is(err, claimLost) {
+		t.Fatalf("block error = %v", err)
 	}
 }

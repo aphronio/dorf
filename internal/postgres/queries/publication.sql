@@ -76,6 +76,7 @@ where dorf.jobs.id=sqlc.arg(job_id) and dorf.jobs.revision=sqlc.arg(revision)
     where a.id=sqlc.arg(action_id) and a.job_id=dorf.jobs.id
       and a.scope_key=sqlc.arg(revision)
       and a.kind in ('repository-push','github-pull-request')
+      and a.state='unsettled'
   );
 
 -- name: ClearPublicationAttention :exec

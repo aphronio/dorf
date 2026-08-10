@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -84,7 +85,7 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // this fault story. The nil embedded interface makes any unexpected external
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
-	spine.Externals
+	spine.ServiceExternals
 	effect *reconcilingFaultEffect
 	runID  string
 }
@@ -127,15 +128,17 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 				return faultActionResultV1{}, err
 			}
 			runID := task.RunID()
-			service := spine.Service{
-				Store:     store,
-				Externals: faultActionExternals{effect: effect, runID: runID},
-				ClaimCheck: func(claimCtx context.Context) error {
+			service := spine.NewService(
+				store,
+				faultActionExternals{effect: effect, runID: runID},
+				evidence.Store{},
+				nil,
+				func(claimCtx context.Context) error {
 					err := absurdruntime.RequireClaim(claimCtx)
 					effect.recordClaim(runID, err)
 					return err
 				},
-			}
+			)
 			if err := service.ExecuteSandboxAction(workCtx, job, sandbox, action); err != nil {
 				return faultActionResultV1{}, err
 			}

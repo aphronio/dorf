@@ -1,6 +1,7 @@
 package spine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -8,6 +9,22 @@ import (
 
 	"github.com/aphronio/dorf/internal/evidence"
 )
+
+func TestLostClaimCannotRecordReviewFeedback(t *testing.T) {
+	claimLost := errors.New("claim lost")
+	service := Service{claimCheck: func(context.Context) error { return claimLost }}
+	if _, _, err := service.recordReviewFeedback(context.Background(), "run-1", HarnessTurn{}, Evidence{}); !errors.Is(err, claimLost) {
+		t.Fatalf("record review feedback error = %v", err)
+	}
+}
+
+func TestLostClaimCannotRecordReviewPolicy(t *testing.T) {
+	claimLost := errors.New("claim lost")
+	service := Service{claimCheck: func(context.Context) error { return claimLost }}
+	if err := service.recordReviewPolicy(context.Background(), ReviewPlanRecord{}); !errors.Is(err, claimLost) {
+		t.Fatalf("record review policy error = %v", err)
+	}
+}
 
 func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 	expected := ReviewControllerID("run-1", "sandbox-1", "owner-nonce")
@@ -46,7 +63,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 		TurnOutcome: "completed", State: AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
 
-	record, err := (Service{Evidence: blobs}).reviewEvidence(run, post)
+	record, err := (Service{evidence: blobs}).reviewEvidence(run, post)
 	if err != nil {
 		t.Fatal(err)
 	}

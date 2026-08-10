@@ -120,6 +120,14 @@ select (
       and ar.state not in ('completed','failed','interrupted')
   )
   and coalesce((
+    select ar.state='completed'
+    from dorf.agent_runs ar
+    join dorf.job_messages m on m.id=ar.message_id
+    where ar.job_id=$1 and ar.role='implement'
+    order by m.sequence desc
+    limit 1
+  ),false)
+  and coalesce((
     select ar.state='completed' and exists (
       select 1 from dorf.evidence e
       where e.agent_run_id=ar.id and e.kind='git-revision' and e.revision=j.revision
@@ -127,7 +135,10 @@ select (
     from dorf.agent_runs ar
     join dorf.job_messages m on m.id=ar.message_id
     join dorf.jobs j on j.id=ar.job_id
-    where ar.job_id=$1 and ar.role='implement' and m.delivery_intent='follow'
+    where ar.job_id=$1 and ar.role='implement'
+      and (m.delivery_intent='follow' or (
+        m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
+      ))
     order by m.sequence desc
     limit 1
   ),false)

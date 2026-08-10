@@ -75,6 +75,7 @@ type ServiceExternals interface {
 
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
+	ReachWorkflow(context.Context, string, string, string) error
 }
 
 const commandEvidenceProducer = "dorf-command-observer"
@@ -92,41 +93,69 @@ const (
 )
 
 type Service struct {
-	Store      Store
-	Externals  Externals
-	Barrier    FaultBarrier
-	Evidence   evidence.Store
-	ClaimCheck func(context.Context) error
-
-	codingStore     CodingStore
-	reviewStore     ReviewStore
-	repository      RepositoryExternals
-	reviewExternals ReviewExternals
+	store      ServiceStore
+	externals  ServiceExternals
+	barrier    FaultBarrier
+	evidence   evidence.Store
+	claimCheck func(context.Context) error
 }
 
-func NewService(store ServiceStore, externals ServiceExternals, records evidence.Store, barrier FaultBarrier) Service {
+func NewService(store ServiceStore, externals ServiceExternals, records evidence.Store, barrier FaultBarrier, claimCheck func(context.Context) error) Service {
 	return Service{
-		Store:           store,
-		Externals:       externals,
-		Barrier:         barrier,
-		Evidence:        records,
-		codingStore:     store,
-		reviewStore:     store,
-		repository:      externals,
-		reviewExternals: externals,
+		store:      store,
+		externals:  externals,
+		barrier:    barrier,
+		evidence:   records,
+		claimCheck: claimCheck,
 	}
 }
+
+func (s Service) EvidenceStore() evidence.Store { return s.evidence }
 
 func (s Service) requireClaim(ctx context.Context) error {
-	if s.ClaimCheck == nil {
-		return nil
+	if s.claimCheck == nil {
+		return errors.New("durable executor claim check is not configured")
 	}
-	return s.ClaimCheck(ctx)
+	return s.claimCheck(ctx)
+}
+
+func (s Service) recordAgentRun(ctx context.Context, record func() error) error {
+	return claimBeforeAgentRunRecord(ctx, s.requireClaim, record)
+}
+
+func claimBeforeAgentRunRecord(ctx context.Context, claimCheck func(context.Context) error, record func() error) error {
+	if err := claimCheck(ctx); err != nil {
+		return err
+	}
+	return record()
+}
+
+func (s Service) agentRunAttention(ctx context.Context, runID, detail string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.AgentRunAttention(ctx, runID, detail) })
+}
+
+func (s Service) prepareAgentRun(ctx context.Context, runID, harness, baseline string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.PrepareAgentRun(ctx, runID, harness, baseline) })
+}
+
+func (s Service) bindAgentRun(ctx context.Context, runID, harness, threadID, turnID, outcome string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.BindAgentRun(ctx, runID, harness, threadID, turnID, outcome) })
+}
+
+func (s Service) bindSteer(ctx context.Context, runID, turnID, outcome string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.BindSteer(ctx, runID, turnID, outcome) })
+}
+
+func (s Service) failAgentRun(ctx context.Context, runID, reason string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.FailAgentRun(ctx, runID, reason) })
+}
+
+func (s Service) uncertainAgentRun(ctx context.Context, runID, reason string) error {
+	return s.recordAgentRun(ctx, func() error { return s.store.UncertainAgentRun(ctx, runID, reason) })
 }
 
 func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error {
-	store := s.codingStore
-	observation, declared, err := s.repository.RepositorySetup(ctx, job, action)
+	observation, declared, err := s.externals.RepositorySetup(ctx, job, action)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, action.ID, err)
@@ -148,18 +177,14 @@ func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	if err := store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
+	if err := s.store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
 		return err
-	}
-	if observation.ExitCode != 0 {
-		return nil
 	}
 	return nil
 }
 
 func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) error {
-	store := s.codingStore
-	observation, err := s.repository.RepositoryRevision(ctx, job)
+	observation, err := s.externals.RepositoryRevision(ctx, job)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
@@ -179,25 +204,18 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	recorded, err := store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
-	if err != nil {
-		return err
-	}
-	if !recorded {
-		return nil
-	}
-	return nil
+	_, err = s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
+	return err
 }
 
 func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
-	store := s.codingStore
 	if check.State == "passed" {
 		return nil
 	}
 	if check.State == "failed" {
-		return s.HandleFailedCheck(ctx, job, check)
+		return s.handleFailedCheck(ctx, check)
 	}
-	observation, err := s.repository.RepositoryCheck(ctx, job, check)
+	observation, err := s.externals.RepositoryCheck(ctx, job, check)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, check.ID, err)
@@ -219,19 +237,22 @@ func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	if err := store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
+	if err := s.store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
 		return err
 	}
 	check.State, check.ExitCode, check.EvidenceID = "passed", observation.ExitCode, evidenceRecord.ID
 	if observation.ExitCode != 0 {
 		check.State = "failed"
-		return s.HandleFailedCheck(ctx, job, check)
+		return s.handleFailedCheck(ctx, check)
 	}
 	return nil
 }
 
 func (s Service) setWorkflowAttention(ctx context.Context, jobID, source string, cause error) error {
-	if err := s.codingStore.SetWorkflowAttention(ctx, jobID, source, cause.Error()); err != nil {
+	if err := s.requireClaim(ctx); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := s.store.SetWorkflowAttention(ctx, jobID, source, cause.Error()); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
@@ -242,9 +263,8 @@ func attentionNeeded(err error) bool {
 	return errors.As(err, &attention) && attention.AttentionNeeded()
 }
 
-func (s Service) HandleFailedCheck(ctx context.Context, job Job, check Check) error {
-	store := s.codingStore
-	if _, _, err := store.AdmitCheckMessage(ctx, check); err != nil {
+func (s Service) handleFailedCheck(ctx context.Context, check Check) error {
+	if _, _, err := s.store.AdmitCheckMessage(ctx, check); err != nil {
 		return err
 	}
 	return nil
@@ -274,7 +294,7 @@ func commandArtifact(identity, revision string, observation CommandObservation) 
 }
 
 func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
-	blob, err := s.Evidence.Put(contents)
+	blob, err := s.evidence.Put(contents)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -282,40 +302,35 @@ func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, re
 }
 
 func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
-	barrier, ok := s.Barrier.(interface {
-		ReachWorkflow(context.Context, string, string, string) error
-	})
-	if !ok {
+	if s.barrier == nil {
 		return nil
 	}
-	return barrier.ReachWorkflow(ctx, point, jobID, identity)
+	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
 func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		_, err := s.deliverSteer(ctx, job, delivery)
-		return err
+		return s.deliverSteer(ctx, job, delivery)
 	}
-	_, err := s.deliverAgentRun(ctx, job, delivery)
-	return err
+	return s.deliverAgentRun(ctx, job, delivery)
 }
 
-func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery) (bool, error) {
+func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery) error {
 	run := delivery.AgentRun
 	contract := agentRunContract{
-		store:               s.Store,
+		store:               s.store,
 		reachBarrier:        s.reach,
 		delivery:            delivery,
 		run:                 run,
-		harness:             s.Externals.Harness(),
+		harness:             s.externals.Harness(),
 		label:               "harness",
 		bindUnsupportedTurn: true,
 		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
 			delivery.AgentRun = run
-			return s.Externals.AgentInitialTurn(ctx, job, delivery)
+			return s.externals.AgentInitialTurn(ctx, job, delivery)
 		},
 		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
-			history, err := s.Externals.AgentInitialTurns(ctx, job)
+			history, err := s.externals.AgentInitialTurns(ctx, job)
 			if err != nil || history.ThreadID == "" || len(history.Turns) == 0 {
 				return HarnessBinding{}, err
 			}
@@ -323,117 +338,105 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 		},
 		submitBound: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
 			delivery.AgentRun = run
-			return s.Externals.AgentSubmit(ctx, job, delivery)
+			return s.externals.AgentSubmit(ctx, job, delivery)
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.Externals.AgentTurns(ctx, job, run.ThreadID)
+			return s.externals.AgentTurns(ctx, job, run.ThreadID)
 		},
 		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
-			return s.Externals.AgentWait(ctx, job, run.ThreadID, turnID)
+			return s.externals.AgentWait(ctx, job, run.ThreadID, turnID)
 		},
-		beforeBind: s.requireClaim,
+		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.Store.AgentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
+			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
 		},
 		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
+				if failErr := s.failAgentRun(ctx, run.ID, err.Error()); failErr != nil {
 					return HarnessTurn{}, failErr
 				}
 			}
 			if attentionNeeded(err) {
-				if uncertainErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
+				if uncertainErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
 					return HarnessTurn{}, uncertainErr
 				}
 			}
 			return HarnessTurn{}, err
 		},
 	}
-	outcome, err := contract.execute(ctx)
-	if err != nil {
-		return false, err
-	}
-	return terminalHarness(outcome.Status), nil
+	_, err := contract.execute(ctx)
+	return err
 }
 
-func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (bool, error) {
+func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {
 	run := delivery.AgentRun
-	history, err := s.Externals.AgentTurns(ctx, job, run.ThreadID)
+	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
 	if err != nil {
-		_ = s.Store.AgentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
-		return false, err
+		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
+		return err
 	}
 	turns := history.Turns
 	reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 	if reconciliation.Classification == "completed" {
-		if err := s.requireClaim(ctx); err != nil {
-			return false, err
-		}
-		return true, s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
+		return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
-			return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
+			return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 		}
 		return s.deliverAgentRun(ctx, job, delivery)
 	}
 	if reconciliation.Classification == "uncertain" {
-		return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
+		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 	}
 	if !run.BaselineRecorded {
-		if err := s.Store.PrepareAgentRun(ctx, run.ID, run.Harness, delivery.Message.TargetTurnID); err != nil {
-			return false, err
+		if err := s.prepareAgentRun(ctx, run.ID, run.Harness, delivery.Message.TargetTurnID); err != nil {
+			return err
 		}
 		delivery.AgentRun.BaselineRecorded = true
 		delivery.AgentRun.BaselineTurnID = delivery.Message.TargetTurnID
 	}
 	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
-		return false, err
+		return err
 	}
-	acceptedTurnID, err := s.Externals.AgentSteer(ctx, job, delivery)
+	acceptedTurnID, err := s.externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observedHistory, inspectErr := s.Externals.AgentTurns(ctx, job, run.ThreadID)
+		observedHistory, inspectErr := s.externals.AgentTurns(ctx, job, run.ThreadID)
 		if inspectErr != nil {
 			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
-			return false, s.Store.UncertainAgentRun(ctx, run.ID, reason)
+			return s.uncertainAgentRun(ctx, run.ID, reason)
 		}
 		observed := observedHistory.Turns
 		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
 		if reconciled.Classification == "completed" {
-			if claimErr := s.requireClaim(ctx); claimErr != nil {
-				return false, claimErr
-			}
-			return true, s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
+			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
-				return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
+				return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 			}
 			return s.deliverAgentRun(ctx, job, delivery)
 		}
 		if reconciled.Classification == "uncertain" {
-			return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciled.Reason)
+			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
 		}
-		return false, err
+		return err
 	}
 	if acceptedTurnID != delivery.Message.TargetTurnID {
-		return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness steer acknowledgement named a different active turn")
+		return s.uncertainAgentRun(ctx, run.ID, "harness steer acknowledgement named a different active turn")
 	}
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
-		return false, err
+		return err
 	}
-	if err := s.requireClaim(ctx); err != nil {
-		return false, err
-	}
-	return true, s.Store.BindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
+	return s.bindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
 }
 
 func (s Service) reach(ctx context.Context, point string, delivery Delivery) error {
-	if s.Barrier == nil {
+	if s.barrier == nil {
 		return nil
 	}
-	return s.Barrier.Reach(ctx, point, delivery)
+	return s.barrier.Reach(ctx, point, delivery)
 }
 
 func terminalHarness(status string) bool {
@@ -450,7 +453,7 @@ func activeHarness(status string) bool {
 // whose cleanup Actions the workflow must execute under their own stable
 // Action Steps.
 func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
-	job, err := s.Store.Job(ctx, jobID)
+	job, err := s.store.Job(ctx, jobID)
 	if err != nil {
 		return Job{}, nil, err
 	}
@@ -463,21 +466,21 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandb
 	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
 		return Job{}, nil, err
 	}
-	runs, err := s.Store.AgentRuns(ctx, job.ID)
+	runs, err := s.store.AgentRuns(ctx, job.ID)
 	if err != nil {
-		_ = s.Store.SetCleanupAttention(ctx, job.ID, "enumerating unsettled AgentRuns: "+err.Error())
+		_ = s.store.SetCleanupAttention(ctx, job.ID, "enumerating unsettled AgentRuns: "+err.Error())
 		return Job{}, nil, err
 	}
 	for _, run := range runs {
 		settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 		if !settled {
-			if err := s.Store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
-				_ = s.Store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled AgentRun "+run.ID+": "+err.Error())
+			if err := s.store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
+				_ = s.store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled AgentRun "+run.ID+": "+err.Error())
 				return Job{}, nil, err
 			}
 		}
 	}
-	sandboxes, err := s.Store.Sandboxes(ctx, job.ID)
+	sandboxes, err := s.store.Sandboxes(ctx, job.ID)
 	if err != nil {
 		return Job{}, nil, err
 	}
@@ -485,11 +488,11 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandb
 }
 
 func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
-	if err := s.Store.SetCleanupAttention(ctx, jobID, detail); err != nil {
+	if err := s.store.SetCleanupAttention(ctx, jobID, detail); err != nil {
 		return err
 	}
 	if err := fn(); err != nil {
-		_ = s.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
+		_ = s.store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
 	}
 	return nil
@@ -503,7 +506,7 @@ func emptyCleanupIdentity(value string) string {
 }
 
 func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
-	delivery, err := s.Store.HarnessMutationDelivery(ctx, job.ID)
+	delivery, err := s.store.HarnessMutationDelivery(ctx, job.ID)
 	if err != nil || delivery == nil {
 		return err
 	}
@@ -514,7 +517,7 @@ func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
 	threadID := run.ThreadID
 	var history HarnessHistory
 	if threadID == "" {
-		history, err = s.Externals.AgentInitialTurns(ctx, job)
+		history, err = s.externals.AgentInitialTurns(ctx, job)
 		if err == nil && history.ThreadID == "" && len(history.Turns) > 0 {
 			err = fmt.Errorf("cleanup initial history returned turns without a harness thread")
 		}
@@ -524,18 +527,18 @@ func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
 			delivery.AgentRun = run
 		}
 	} else {
-		history, err = s.Externals.AgentTurns(ctx, job, threadID)
+		history, err = s.externals.AgentTurns(ctx, job, threadID)
 	}
 	if err != nil {
 		var attention interface{ AttentionNeeded() bool }
 		if errors.As(err, &attention) && attention.AttentionNeeded() {
-			if persistErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
+			if persistErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
 				return persistErr
 			}
 			return cleanupBlocked(*delivery, err.Error())
 		}
 		reason := "cleanup could not inspect the bound harness thread: " + err.Error()
-		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		_ = s.agentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
 	turns := history.Turns
@@ -543,15 +546,15 @@ func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
 		reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 		switch reconciliation.Classification {
 		case "completed":
-			return s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
+			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 		case "no-submit":
-			return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
+			return s.failAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
 		case "target-terminal":
 			if !run.BaselineRecorded {
-				return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
+				return s.failAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
 			}
 		default:
-			if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
+			if err := s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
 				return err
 			}
 			return cleanupBlocked(*delivery, reconciliation.Reason)
@@ -561,38 +564,38 @@ func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
 	switch reconciliation.Classification {
 	case "no-submit":
 		reason := "cleanup closed delivery after harness history proved no turn was submitted"
-		if err := s.Store.FailAgentRun(ctx, run.ID, reason); err != nil {
+		if err := s.failAgentRun(ctx, run.ID, reason); err != nil {
 			return err
 		}
 		return nil
 	case "uncertain":
 		if reconciliation.Turn.ID != "" {
-			if err := s.Store.BindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+			if err := s.bindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
 				return err
 			}
-		} else if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
+		} else if err := s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
 			return err
 		}
 		return cleanupBlocked(*delivery, reconciliation.Reason)
 	}
-	if err := s.Store.BindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+	if err := s.bindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
 		return err
 	}
 	if reconciliation.Classification != "active" {
 		return nil
 	}
-	outcome, err := s.Externals.AgentWait(ctx, job, threadID, reconciliation.Turn.ID)
+	outcome, err := s.externals.AgentWait(ctx, job, threadID, reconciliation.Turn.ID)
 	if err != nil {
 		reason := "cleanup is waiting for the exact harness turn outcome: " + err.Error()
-		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		_ = s.agentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
-	if err := s.Store.BindAgentRun(ctx, run.ID, outcome.Harness, outcome.ThreadID, outcome.Turn.ID, outcome.Turn.Status); err != nil {
+	if err := s.bindAgentRun(ctx, run.ID, outcome.Harness, outcome.ThreadID, outcome.Turn.ID, outcome.Turn.Status); err != nil {
 		return err
 	}
 	if !terminalHarness(outcome.Turn.Status) {
 		reason := fmt.Sprintf("cleanup inspection returned nonterminal harness status %q", outcome.Turn.Status)
-		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
+		_ = s.agentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
 	return nil
@@ -614,19 +617,19 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	var err error
 	switch action.Kind {
 	case ActionSandboxCreate:
-		err = s.Externals.SandboxCreate(ctx, job, sandbox)
+		err = s.externals.SandboxCreate(ctx, job, sandbox)
 	case ActionRepositoryClone:
-		err = s.Externals.RepositoryClone(ctx, job, sandbox)
+		err = s.externals.RepositoryClone(ctx, job, sandbox)
 	case ActionRouteCreate, ActionRouteRevoke:
 		route := RouteForSandbox(sandbox)
 		if action.Kind == ActionRouteCreate {
-			err = s.Externals.RouteCreate(ctx, job, sandbox, route)
+			err = s.externals.RouteCreate(ctx, job, sandbox, route)
 		}
 		if action.Kind == ActionRouteRevoke {
-			err = s.Externals.RouteRevoke(ctx, job, sandbox, route)
+			err = s.externals.RouteRevoke(ctx, job, sandbox, route)
 		}
 	case ActionSandboxDelete:
-		err = s.Externals.SandboxDelete(ctx, job, sandbox)
+		err = s.externals.SandboxDelete(ctx, job, sandbox)
 	default:
 		return fmt.Errorf("unsupported Sandbox Action kind %q", action.Kind)
 	}
@@ -648,7 +651,7 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	if err := s.Store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+	if err := s.store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
 		return err
 	}
 	return nil

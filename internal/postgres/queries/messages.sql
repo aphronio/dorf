@@ -55,7 +55,15 @@ left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)
   and ar.role='implement' and ar.state not in ('completed','failed','interrupted');
 
--- name: GetLatestFollowRun :one
+-- name: GetLatestImplementationRun :one
+select ar.id,ar.state
+from dorf.job_messages m
+join dorf.agent_runs ar on ar.message_id=m.id
+where m.job_id=sqlc.arg(job_id) and ar.role='implement'
+order by m.sequence desc
+limit 1;
+
+-- name: GetLatestTurnStartRun :one
 select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
        exists (
            select 1 from dorf.evidence e
@@ -63,15 +71,12 @@ select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_
        ) as observed
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id) and m.delivery_intent='follow' and ar.role='implement'
+where m.job_id=sqlc.arg(job_id) and ar.role='implement'
+  and (m.delivery_intent='follow' or (
+    m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
+  ))
 order by m.sequence desc
 limit 1;
-
--- name: GetCheckMessage :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
-from dorf.job_messages
-where job_id=sqlc.arg(job_id) and from_kind='workflow' and from_id=sqlc.arg(from_id);
 
 -- name: ListMessages :many
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,

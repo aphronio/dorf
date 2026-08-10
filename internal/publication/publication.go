@@ -32,15 +32,24 @@ type Repository interface {
 	Push(context.Context, spine.Job, string) error
 }
 
+type WorkflowBarrier interface {
+	ReachWorkflow(context.Context, string, string, string) error
+}
+
 type Service struct {
 	Store      postgres.Store
 	GitHub     GitHub
 	Repository Repository
 	Evidence   evidence.Store
-	Barrier    any
-	// ClaimCheck validates the current durable executor claim immediately
-	// before locally-recorded Action success makes an external effect durable.
-	ClaimCheck func(context.Context) error
+	Barrier    WorkflowBarrier
+	claimCheck func(context.Context) error
+}
+
+// WithClaimCheck binds the durable executor claim used immediately before a
+// locally-recorded Action success makes an external effect durable.
+func (s Service) WithClaimCheck(check func(context.Context) error) Service {
+	s.claimCheck = check
+	return s
 }
 
 type AttentionError struct{ Reason string }
@@ -88,10 +97,11 @@ func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Tim
 	if err != nil {
 		return view, err
 	}
-	view.ReviewRuns, err = s.Store.AllReviewRuns(ctx, job.ID)
+	allReviewRuns, err := s.Store.AllReviewRuns(ctx, job.ID)
 	if err != nil {
 		return view, err
 	}
+	view.ReviewRuns = reviewRunsAtRevision(allReviewRuns, job.ID, job.Revision)
 	messages, err := s.Store.Messages(ctx, job.ID)
 	if err != nil {
 		return view, err
@@ -109,6 +119,16 @@ func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Tim
 	}
 	view.Assessment = spine.AssessReviewReadiness(job, declared, view.Checks, view.Evidence, s.Evidence, plan, view.ReviewRuns, messages, agentRuns)
 	return view, nil
+}
+
+func reviewRunsAtRevision(runs []spine.ReviewRunView, jobID, revision string) []spine.ReviewRunView {
+	exact := make([]spine.ReviewRunView, 0, len(runs))
+	for _, run := range runs {
+		if run.JobID == jobID && run.InputRevision == revision {
+			exact = append(exact, run)
+		}
+	}
+	return exact
 }
 
 // Push reconciles and, when necessary, pushes the Job's exact Revision. It
@@ -323,6 +343,9 @@ func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHub
 }
 
 func (s Service) block(ctx context.Context, job spine.Job, action spine.Action, reason string) error {
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
 	if err := s.Store.BlockPublication(ctx, job.ID, job.Revision, action.ID, reason); err != nil {
 		return err
 	}
@@ -330,20 +353,17 @@ func (s Service) block(ctx context.Context, job spine.Job, action spine.Action, 
 }
 
 func (s Service) reach(ctx context.Context, point, jobID, identity string) error {
-	barrier, ok := s.Barrier.(interface {
-		ReachWorkflow(context.Context, string, string, string) error
-	})
-	if !ok {
+	if s.Barrier == nil {
 		return nil
 	}
-	return barrier.ReachWorkflow(ctx, point, jobID, identity)
+	return s.Barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
 func (s Service) requireClaim(ctx context.Context) error {
-	if s.ClaimCheck == nil {
-		return nil
+	if s.claimCheck == nil {
+		return fmt.Errorf("durable executor claim check is not configured")
 	}
-	return s.ClaimCheck(ctx)
+	return s.claimCheck(ctx)
 }
 
 func (s Service) recordAfterClaim(ctx context.Context, record func() error) error {

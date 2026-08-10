@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
@@ -80,7 +81,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "release-manifest":
 		return releaseManifest(args[1:], stdout, stderr)
 	}
-	client, service, err := application(db, cfg)
+	client, err := application(db, cfg)
 	if err != nil {
 		return err
 	}
@@ -100,12 +101,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "evidence":
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
-		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
+		return cleanup(ctx, store, client, args[1:], stdout, stderr)
 	case "abandon":
 		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 		return abandon(ctx, store, client, githubClient, args[1:], stdout)
 	default:
-		_ = service
 		return usage(stderr)
 	}
 }
@@ -123,25 +123,25 @@ func hostCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	return hostsetup.Ubuntu(ctx, *yes, stdout, stderr)
 }
 
-func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, error) {
+func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
 	if err != nil {
-		return nil, spine.Service{}, err
+		return nil, err
 	}
 	sandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
 	agent := codex.Agent{Sandbox: sandbox, Port: cfg.AppServerPort, Timeout: cfg.TurnTimeout}
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
 		client.Close()
-		return nil, spine.Service{}, err
+		return nil, err
 	}
 	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}
 	store := postgres.Store{DB: db}
-	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier)
+	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client})
-	return client, service, nil
+	return client, nil
 }
 
 func migrate(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
@@ -589,7 +589,7 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore ev
 	return nil
 }
 
-func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, service spine.Service, args []string, stdout, stderr io.Writer) error {
+func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	if err := set.Parse(args); err != nil {
@@ -609,7 +609,10 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
 		return fmt.Errorf("abandon requires one Job ID")
 	}
-	receipt, created, err := (outcomeapp.Service{Store: store, GitHub: githubClient}).Record(ctx, strings.TrimSpace(args[0]), spine.OutcomeAbandoned)
+	// This interactive command is the outcome authority; unlike a workflow
+	// executor, it has no Absurd claim to revalidate before the write.
+	direct := (outcomeapp.Service{Store: store, GitHub: githubClient}).WithClaimCheck(func(context.Context) error { return nil })
+	receipt, created, err := direct.Record(ctx, strings.TrimSpace(args[0]), spine.OutcomeAbandoned)
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,6 @@
 -- name: GetReviewJobForUpdate :one
-select revision
+select revision,admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
@@ -52,12 +53,6 @@ select *
 from dorf.review_run_projection
 where id=sqlc.arg(run_id) and role<>'implement';
 
--- name: ListReviewRuns :many
-select sqlc.embed(p)
-from dorf.review_run_projection p
-where p.job_id=sqlc.arg(job_id) and p.input_revision=sqlc.arg(revision) and p.role<>'implement'
-order by p.role;
-
 -- name: ListAllReviewRuns :many
 select sqlc.embed(p)
 from dorf.review_run_projection p
@@ -75,28 +70,15 @@ where id=sqlc.arg(run_id) and state in ('pending','submitting','active','uncerta
 -- name: GetReviewFeedbackRunForUpdate :one
 select ar.job_id,coalesce(ar.input_revision,'') as input_revision,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.capability,'') as capability,j.revision as current_revision,j.admission_open,
-       exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)::boolean as outcome_exists
+       exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)::boolean as outcome_exists,
+       (ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='sandbox-create' and a.scope_key=ar.sandbox_id and a.state='succeeded')
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='provider-route-create' and a.scope_key=ar.sandbox_id and a.state='succeeded')
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='review-checkout' and a.scope_key=ar.sandbox_id and a.state='succeeded'))::boolean as boundary_ready
 from dorf.agent_runs ar
 join dorf.jobs j on j.id=ar.job_id
 where ar.id=sqlc.arg(run_id)
 for update of j,ar;
-
--- name: ReviewBoundaryReady :one
-select exists(
-    select 1 from dorf.agent_runs ar
-    join dorf.sandboxes s on s.id=ar.sandbox_id
-    where ar.id=sqlc.arg(run_id)
-      and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='sandbox-create' and a.scope_key=s.id and a.state='succeeded')
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='provider-route-create' and a.scope_key=s.id and a.state='succeeded')
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='review-checkout' and a.scope_key=s.id and a.state='succeeded')
-);
-
--- name: GetReviewFeedbackMessage :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
-from dorf.job_messages m
-where m.job_id=sqlc.arg(job_id) and m.from_kind='agent' and m.from_id=sqlc.arg(run_id);

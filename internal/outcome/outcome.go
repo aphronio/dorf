@@ -24,7 +24,14 @@ type Service struct {
 	Store      Store
 	GitHub     GitHub
 	Now        func() time.Time
-	ClaimCheck func(context.Context) error
+	claimCheck func(context.Context) error
+}
+
+// WithClaimCheck returns a Service bound to the authority that may record the
+// observed terminal outcome.
+func (s Service) WithClaimCheck(check func(context.Context) error) Service {
+	s.claimCheck = check
+	return s
 }
 
 func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
@@ -82,10 +89,11 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 		JobID: job.ID, Kind: requested, ObservedState: pull.State, ObservedMerged: pull.Merged,
 		MergeCommitOID: pull.MergeCommitOID, ObservedAt: now().UTC(),
 	}
-	if s.ClaimCheck != nil {
-		if err := s.ClaimCheck(ctx); err != nil {
-			return spine.JobOutcome{}, false, err
-		}
+	if s.claimCheck == nil {
+		return spine.JobOutcome{}, false, fmt.Errorf("outcome authority check is not configured")
+	}
+	if err := s.claimCheck(ctx); err != nil {
+		return spine.JobOutcome{}, false, err
 	}
 	return s.Store.RecordOutcome(ctx, receipt)
 }

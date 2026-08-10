@@ -5,6 +5,18 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
+-- name: CloseAdmissionForCleanup :execrows
+update dorf.jobs j
+set admission_open=false
+where j.id=sqlc.arg(job_id)
+  and (
+    exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)
+    or (
+      not exists(select 1 from dorf.actions a where a.job_id=j.id and a.kind='github-pull-request')
+      and not exists(select 1 from dorf.github_proposals p where p.job_id=j.id)
+    )
+  );
+
 -- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s

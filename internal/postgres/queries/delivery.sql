@@ -14,14 +14,14 @@ with current_turn_start as (
       and steer.steer_target_turn_id=active.turn_id
     join dorf.agent_runs steer_run on steer_run.message_id=steer.id
     where active.state='active' and steer_run.role='implement'
-      and steer_run.state='pending' and steer_run.turn_id is null
+      and steer_run.state in ('pending','submitting') and steer_run.turn_id is null
     union all
     select message_id,1,0 from current_turn_start
     union all
     select m.id,2,m.sequence
     from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
     where m.job_id=sqlc.arg(job_id) and ar.role='implement'
-      and (ar.state='pending' or (ar.state='submitting' and m.delivery_intent='follow'))
+      and ar.state in ('pending','submitting')
       and ar.turn_id is null
       and not exists(select 1 from current_turn_start)
 )

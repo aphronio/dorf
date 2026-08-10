@@ -13,51 +13,17 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const getReviewFeedbackMessage = `-- name: GetReviewFeedbackMessage :one
-select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
-from dorf.job_messages m
-where m.job_id=$1 and m.from_kind='agent' and m.from_id=$2
-`
-
-type GetReviewFeedbackMessageParams struct {
-	JobID string
-	RunID string
-}
-
-type GetReviewFeedbackMessageRow struct {
-	ID                string
-	JobID             string
-	FromKind          spine.MessageFromKind
-	FromID            string
-	Sequence          int64
-	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
-	SteerTargetTurnID string
-	AdmittedAt        time.Time
-}
-
-func (q *Queries) GetReviewFeedbackMessage(ctx context.Context, arg GetReviewFeedbackMessageParams) (GetReviewFeedbackMessageRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewFeedbackMessage, arg.JobID, arg.RunID)
-	var i GetReviewFeedbackMessageRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.FromKind,
-		&i.FromID,
-		&i.Sequence,
-		&i.Input,
-		&i.DeliveryIntent,
-		&i.SteerTargetTurnID,
-		&i.AdmittedAt,
-	)
-	return i, err
-}
-
 const getReviewFeedbackRunForUpdate = `-- name: GetReviewFeedbackRunForUpdate :one
 select ar.job_id,coalesce(ar.input_revision,'') as input_revision,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.capability,'') as capability,j.revision as current_revision,j.admission_open,
-       exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)::boolean as outcome_exists
+       exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)::boolean as outcome_exists,
+       (ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='sandbox-create' and a.scope_key=ar.sandbox_id and a.state='succeeded')
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='provider-route-create' and a.scope_key=ar.sandbox_id and a.state='succeeded')
+        and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+            and a.kind='review-checkout' and a.scope_key=ar.sandbox_id and a.state='succeeded'))::boolean as boundary_ready
 from dorf.agent_runs ar
 join dorf.jobs j on j.id=ar.job_id
 where ar.id=$1
@@ -74,6 +40,7 @@ type GetReviewFeedbackRunForUpdateRow struct {
 	CurrentRevision string
 	AdmissionOpen   bool
 	OutcomeExists   bool
+	BoundaryReady   bool
 }
 
 func (q *Queries) GetReviewFeedbackRunForUpdate(ctx context.Context, runID string) (GetReviewFeedbackRunForUpdateRow, error) {
@@ -89,22 +56,30 @@ func (q *Queries) GetReviewFeedbackRunForUpdate(ctx context.Context, runID strin
 		&i.CurrentRevision,
 		&i.AdmissionOpen,
 		&i.OutcomeExists,
+		&i.BoundaryReady,
 	)
 	return i, err
 }
 
 const getReviewJobForUpdate = `-- name: GetReviewJobForUpdate :one
-select revision
+select revision,admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
 for update
 `
 
-func (q *Queries) GetReviewJobForUpdate(ctx context.Context, jobID string) (string, error) {
+type GetReviewJobForUpdateRow struct {
+	Revision      string
+	AdmissionOpen bool
+	OutcomeExists bool
+}
+
+func (q *Queries) GetReviewJobForUpdate(ctx context.Context, jobID string) (GetReviewJobForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getReviewJobForUpdate, jobID)
-	var revision string
-	err := row.Scan(&revision)
-	return revision, err
+	var i GetReviewJobForUpdateRow
+	err := row.Scan(&i.Revision, &i.AdmissionOpen, &i.OutcomeExists)
+	return i, err
 }
 
 const getReviewPlan = `-- name: GetReviewPlan :one
@@ -439,92 +414,4 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 		return nil, err
 	}
 	return items, nil
-}
-
-const listReviewRuns = `-- name: ListReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce
-from dorf.review_run_projection p
-where p.job_id=$1 and p.input_revision=$2 and p.role<>'implement'
-order by p.role
-`
-
-type ListReviewRunsParams struct {
-	JobID    string
-	Revision string
-}
-
-type ListReviewRunsRow struct {
-	DorfReviewRunProjection DorfReviewRunProjection
-}
-
-func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) ([]ListReviewRunsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listReviewRuns, arg.JobID, arg.Revision)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListReviewRunsRow
-	for rows.Next() {
-		var i ListReviewRunsRow
-		if err := rows.Scan(
-			&i.DorfReviewRunProjection.ID,
-			&i.DorfReviewRunProjection.JobID,
-			&i.DorfReviewRunProjection.MessageID,
-			&i.DorfReviewRunProjection.State,
-			&i.DorfReviewRunProjection.Harness,
-			&i.DorfReviewRunProjection.ThreadID,
-			&i.DorfReviewRunProjection.BaselineRecorded,
-			&i.DorfReviewRunProjection.BaselineTurnID,
-			&i.DorfReviewRunProjection.TurnID,
-			&i.DorfReviewRunProjection.TurnOutcome,
-			&i.DorfReviewRunProjection.Attention,
-			&i.DorfReviewRunProjection.Role,
-			&i.DorfReviewRunProjection.InputRevision,
-			&i.DorfReviewRunProjection.Capability,
-			&i.DorfReviewRunProjection.StartedAt,
-			&i.DorfReviewRunProjection.FinishedAt,
-			&i.DorfReviewRunProjection.RequestFromKind,
-			&i.DorfReviewRunProjection.RequestFromID,
-			&i.DorfReviewRunProjection.RequestSequence,
-			&i.DorfReviewRunProjection.RequestInput,
-			&i.DorfReviewRunProjection.RequestDeliveryIntent,
-			&i.DorfReviewRunProjection.RequestTargetTurnID,
-			&i.DorfReviewRunProjection.RequestAdmittedAt,
-			&i.DorfReviewRunProjection.SandboxID,
-			&i.DorfReviewRunProjection.OwnershipNonce,
-			&i.DorfReviewRunProjection.SubmissionNonce,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const reviewBoundaryReady = `-- name: ReviewBoundaryReady :one
-select exists(
-    select 1 from dorf.agent_runs ar
-    join dorf.sandboxes s on s.id=ar.sandbox_id
-    where ar.id=$1
-      and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='sandbox-create' and a.scope_key=s.id and a.state='succeeded')
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='provider-route-create' and a.scope_key=s.id and a.state='succeeded')
-      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='review-checkout' and a.scope_key=s.id and a.state='succeeded')
-)
-`
-
-func (q *Queries) ReviewBoundaryReady(ctx context.Context, runID string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, reviewBoundaryReady, runID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }

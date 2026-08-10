@@ -52,7 +52,7 @@ func outcomeFixture() (*outcomeStore, *outcomeGitHub, Service) {
 		proposal: &spine.GitHubProposal{JobID: "job-exact", Number: 39, URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision},
 	}
 	github := &outcomeGitHub{pull: githubapi.PullRequest{Number: 39, URL: store.proposal.URL, Repository: "aphronio/dorf", Head: "dorf/issue-39", Base: "greenfield", HeadSHA: revision}}
-	service := Service{Store: store, GitHub: github, Now: func() time.Time { return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) }}
+	service := (Service{Store: store, GitHub: github, Now: func() time.Time { return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) }}).WithClaimCheck(func(context.Context) error { return nil })
 	return store, github, service
 }
 
@@ -127,9 +127,19 @@ func TestOutcomeSameRequestIsIdempotentAndConflictAvoidsGitHub(t *testing.T) {
 func TestOutcomeRequiresClaimImmediatelyBeforeWrite(t *testing.T) {
 	store, github, service := outcomeFixture()
 	github.pull.State, github.pull.Merged, github.pull.MergeCommitOID = "closed", true, strings.Repeat("b", 40)
-	service.ClaimCheck = func(context.Context) error { return errors.New("claim lost") }
+	service = service.WithClaimCheck(func(context.Context) error { return errors.New("claim lost") })
 
 	if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAccepted); err == nil || store.writes != 0 {
 		t.Fatalf("lost claim wrote outcome: writes=%d err=%v", store.writes, err)
+	}
+}
+
+func TestOutcomeRefusesWriteWithoutAuthorityCheck(t *testing.T) {
+	store, github, service := outcomeFixture()
+	github.pull.State = "open"
+	service.claimCheck = nil
+
+	if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAbandoned); err == nil || store.writes != 0 {
+		t.Fatalf("missing authority check wrote outcome: writes=%d err=%v", store.writes, err)
 	}
 }

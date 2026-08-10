@@ -285,6 +285,7 @@ where dorf.jobs.id=$3 and dorf.jobs.revision=$4
     where a.id=$2 and a.job_id=dorf.jobs.id
       and a.scope_key=$4
       and a.kind in ('repository-push','github-pull-request')
+      and a.state='unsettled'
   )
 `
 

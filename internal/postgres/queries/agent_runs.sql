@@ -16,6 +16,7 @@ on conflict do nothing;
 -- name: ListJobAgentRuns :many
 select id,job_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
@@ -148,9 +149,3 @@ where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertai
   and ar.role='implement'
 order by m.sequence
 limit 1;
-
--- name: CountImplementationHarnessMutations :one
-select count(*)
-from dorf.agent_runs
-where job_id=sqlc.arg(job_id) and role='implement'
-  and state in ('submitting','active','uncertain');
