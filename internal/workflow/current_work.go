@@ -129,6 +129,9 @@ func loadCurrentWorkFacts(ctx context.Context, store postgres.Store, jobID strin
 	if err != nil {
 		return facts, err
 	}
+	if !codingPrerequisitesComplete(facts) {
+		return facts, nil
+	}
 	facts.delivery, err = store.DeliveryCandidate(ctx, jobID)
 	if err != nil {
 		return facts, err
@@ -168,6 +171,13 @@ func loadCurrentWorkFacts(ctx context.Context, store postgres.Store, jobID strin
 		return facts, err
 	}
 	return facts, nil
+}
+
+func codingPrerequisitesComplete(f currentWorkFacts) bool {
+	return actionSucceeded(f.actions, spine.ActionSandboxCreate, f.sandbox.ID) &&
+		actionSucceeded(f.actions, spine.ActionRepositoryClone, f.sandbox.ID) &&
+		f.setup != nil && f.setup.State == spine.ActionSucceeded &&
+		actionSucceeded(f.actions, spine.ActionRouteCreate, f.sandbox.ID)
 }
 
 // decideCurrentWork is intentionally an ordinary, coding-specific decision.

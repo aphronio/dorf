@@ -70,6 +70,22 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	})
 }
 
+func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
+	facts := readyFacts()
+	if !codingPrerequisitesComplete(facts) {
+		t.Fatal("complete infrastructure and setup were not ready for coding facts")
+	}
+	facts.setup.State = spine.ActionFailed
+	if codingPrerequisitesComplete(facts) {
+		t.Fatal("failed setup exposed downstream coding facts")
+	}
+	facts = readyFacts()
+	facts.actions = facts.actions[1:]
+	if codingPrerequisitesComplete(facts) {
+		t.Fatal("missing Sandbox creation exposed downstream coding facts")
+	}
+}
+
 func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	tests := []struct {
 		name      string
