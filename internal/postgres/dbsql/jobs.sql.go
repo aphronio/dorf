@@ -68,27 +68,6 @@ func (q *Queries) BlockDelivery(ctx context.Context, arg BlockDeliveryParams) er
 	return err
 }
 
-const blockNoRevision = `-- name: BlockNoRevision :execrows
-update dorf.jobs
-set workflow_phase='blocked',workflow_attention=$1
-where id=$2 and revision=$3
-  and workflow_phase in ('implementing','review-feedback')
-`
-
-type BlockNoRevisionParams struct {
-	Reason   sql.NullString
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) BlockNoRevision(ctx context.Context, arg BlockNoRevisionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, blockNoRevision, arg.Reason, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const blockWorkflow = `-- name: BlockWorkflow :execrows
 update dorf.jobs
 set workflow_phase='blocked',workflow_attention=$1
@@ -116,6 +95,36 @@ where id=$1
 
 func (q *Queries) CloseAdmission(ctx context.Context, jobID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, closeAdmission, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const completeUnchangedRun = `-- name: CompleteUnchangedRun :execrows
+update dorf.jobs
+set workflow_phase=case when exists (
+      select 1 from dorf.github_proposals p
+      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
+        and p.observed_remote_head=dorf.jobs.revision
+    ) then 'published' else 'blocked' end,
+    workflow_attention=case when exists (
+      select 1 from dorf.github_proposals p
+      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
+        and p.observed_remote_head=dorf.jobs.revision
+    ) then null else $1 end
+where id=$2 and revision=$3
+  and workflow_phase='implementing'
+`
+
+type CompleteUnchangedRunParams struct {
+	Reason   sql.NullString
+	JobID    string
+	Revision string
+}
+
+func (q *Queries) CompleteUnchangedRun(ctx context.Context, arg CompleteUnchangedRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeUnchangedRun, arg.Reason, arg.JobID, arg.Revision)
 	if err != nil {
 		return 0, err
 	}
@@ -173,7 +182,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 const getJob = `-- name: GetJob :one
 select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,j.starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
-       coalesce(j.base_branch,'') as base_branch,coalesce(j.publication_task_id,'') as publication_task_id,
+       coalesce(j.base_branch,'') as base_branch,
        j.provider_connection,coalesce(j.provider_gateway_state,'') as provider_gateway_state,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(sb.incus_name,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
@@ -199,7 +208,6 @@ type GetJobRow struct {
 	GithubRepository     string
 	GithubInstallationID string
 	BaseBranch           string
-	PublicationTaskID    string
 	ProviderConnection   string
 	ProviderGatewayState string
 	Model                string
@@ -233,7 +241,6 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.GithubRepository,
 		&i.GithubInstallationID,
 		&i.BaseBranch,
-		&i.PublicationTaskID,
 		&i.ProviderConnection,
 		&i.ProviderGatewayState,
 		&i.Model,

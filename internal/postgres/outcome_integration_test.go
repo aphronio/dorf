@@ -31,7 +31,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 	if _, err := store.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	job, push, pull, _, err := store.BeginPublication(ctx, job.ID, revision)
+	job, push, pull, err := store.BeginPublication(ctx, job.ID, revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +52,39 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 		t.Fatalf("published Job=%#v err=%v", job, err)
 	}
 	return job, proposal
+}
+
+func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	job, proposal := preparePublishedOutcomeJob(t, store, "follow-unchanged")
+	message, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
+		JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "github-comment-1",
+		Input: "Please explain the tradeoff without changing code.", Intent: spine.MessageFollow,
+	})
+	if err != nil || !created {
+		t.Fatalf("admit published follow=%#v created=%t err=%v", message, created, err)
+	}
+	merge := spine.JobOutcome{
+		JobID: job.ID, Kind: spine.OutcomeAccepted, Repository: proposal.Repository,
+		InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch,
+		HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL,
+		ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision,
+		ObservedState: "closed", ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: time.Now().UTC(),
+	}
+	if _, _, err := store.RecordOutcome(context.Background(), merge); err == nil {
+		t.Fatal("recorded an Outcome while proposal feedback was still being handled")
+	}
+	if _, err := store.DB.ExecContext(context.Background(), `update dorf.agent_runs set state='completed',native_turn_id='turn-completed' where job_id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.CompleteUnchangedRun(context.Background(), job.ID, spine.AgentRunID(message.ID), job.Revision, "no code change")
+	if err != nil || !completed {
+		t.Fatalf("complete unchanged=%t err=%v", completed, err)
+	}
+	stored, err := store.Job(context.Background(), job.ID)
+	if err != nil || stored.WorkflowPhase != "published" || stored.WorkflowAttention != "" {
+		t.Fatalf("stored=%#v err=%v", stored, err)
+	}
 }
 
 func TestPostgresOutcomeFirstWriteWinsAndRetainsExactProposalSnapshot(t *testing.T) {

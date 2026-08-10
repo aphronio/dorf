@@ -380,3 +380,18 @@ func (q *Queries) NextWakeSequence(ctx context.Context, jobID string) (int64, er
 	err := row.Scan(&column_1)
 	return column_1, err
 }
+
+const reopenPublishedForFollow = `-- name: ReopenPublishedForFollow :execrows
+update dorf.jobs
+set workflow_phase='implementing',workflow_attention=null
+where id=$1 and workflow_phase='published'
+  and not exists (select 1 from dorf.job_outcomes where job_id=dorf.jobs.id)
+`
+
+func (q *Queries) ReopenPublishedForFollow(ctx context.Context, jobID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, reopenPublishedForFollow, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

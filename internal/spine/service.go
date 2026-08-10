@@ -52,7 +52,7 @@ type steeringExternals interface {
 
 type CodingStore interface {
 	RevisionCandidate(context.Context, string, string) (AgentRun, bool, error)
-	BlockNoRevision(context.Context, string, string, string, string) (bool, error)
+	CompleteUnchangedRun(context.Context, string, string, string, string) (bool, error)
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
 	RecordRevision(context.Context, string, string, RevisionObservation, Evidence) (bool, error)
 	BeginCheck(context.Context, string, string, string, string) (Check, error)
@@ -88,8 +88,6 @@ const (
 	BarrierCheckExited            = "check-exited-before-record"
 	BarrierPushAccepted           = "push-accepted-before-record"
 	BarrierPullRequestAccepted    = "pull-request-accepted-before-record"
-	BarrierPublicationBegin       = "publication-begin-committed-before-spawn"
-	BarrierPublicationSpawn       = "publication-task-spawned-before-attach"
 	BarrierReviewerRouteRevoked   = "reviewer-route-revoked-before-record"
 	BarrierReviewerSandboxDeleted = "reviewer-sandbox-deleted-before-record"
 	BarrierMainRouteRevoked       = "main-route-revoked-before-record"
@@ -178,7 +176,7 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 			return nil
 		}
 		reason := fmt.Sprintf("AgentRun %s completed without a new committed Revision", run.ID)
-		blocked, err := store.BlockNoRevision(ctx, job.ID, run.ID, observation.ComparisonBase, reason)
+		blocked, err := store.CompleteUnchangedRun(ctx, job.ID, run.ID, observation.ComparisonBase, reason)
 		if err != nil {
 			return err
 		}

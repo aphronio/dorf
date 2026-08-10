@@ -41,7 +41,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	workflow.Register(client, spine.Service{Store: store}, store)
+	workflow.Register(client, spine.Service{Store: store}, store, workflow.ProposalRuntime{})
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -1683,7 +1683,7 @@ func TestTaskHandlersRecoverPublicSpawnBeforeDorfAttachment(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	externals := &integrationExternals{}
-	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store)
+	workflow.Register(client, spine.Service{Store: store, Externals: externals}, store, workflow.ProposalRuntime{})
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: "spawn-before-attach-" + suffix, Goal: "recover each public Spawn attachment", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/spawn-before-attach-" + suffix, ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
 	if err != nil || !created {

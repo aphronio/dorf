@@ -123,3 +123,13 @@ func TestOutcomeSameRequestIsIdempotentAndConflictAvoidsGitHub(t *testing.T) {
 		t.Fatalf("conflict calls=%d writes=%d err=%v", github.calls, store.writes, err)
 	}
 }
+
+func TestOutcomeRequiresClaimImmediatelyBeforeWrite(t *testing.T) {
+	store, github, service := outcomeFixture()
+	github.pull.State, github.pull.Merged, github.pull.MergeCommitOID = "closed", true, strings.Repeat("b", 40)
+	service.ClaimCheck = func(context.Context) error { return errors.New("claim lost") }
+
+	if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAccepted); err == nil || store.writes != 0 {
+		t.Fatalf("lost claim wrote outcome: writes=%d err=%v", store.writes, err)
+	}
+}

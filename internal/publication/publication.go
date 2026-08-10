@@ -37,26 +37,105 @@ type Service struct {
 	Repository Repository
 	Evidence   evidence.Store
 	Barrier    any
+	// ClaimCheck validates the current durable executor claim immediately
+	// before a locally-recorded receipt makes an external effect durable.
+	ClaimCheck func(context.Context) error
 }
 
 type AttentionError struct{ Reason string }
 
 func (e *AttentionError) Error() string { return e.Reason }
 
-func (s Service) Publish(ctx context.Context, jobID, revision string) error {
-	return s.Store.WithJobFence(ctx, jobID, func() error { return s.publishFenced(ctx, jobID, revision) })
+// Push reconciles and, when necessary, pushes the Job's exact Revision. It
+// owns no scheduling: its caller decides when this independently recoverable
+// effect is eligible to run.
+func (s Service) Push(ctx context.Context, jobID, revision string) error {
+	return s.Store.WithJobFence(ctx, jobID, func() error { return s.pushFenced(ctx, jobID, revision) })
 }
 
-func (s Service) publishFenced(ctx context.Context, jobID, revision string) error {
+func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	job, err := s.Store.Job(ctx, jobID)
 	if err != nil {
 		return err
 	}
 	if job.Revision != revision {
-		return fmt.Errorf("publication task scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
+		return fmt.Errorf("publication scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
 	}
 	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
-		return fmt.Errorf("publication task cannot mutate Git or GitHub after cleanup begins")
+		return fmt.Errorf("publication cannot mutate Git or GitHub after cleanup begins")
+	}
+	if job.WorkflowPhase != "publishing" {
+		return fmt.Errorf("Job %s publication is not active (phase %s)", job.ID, job.WorkflowPhase)
+	}
+	pushAction, _, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
+	if err != nil {
+		return err
+	}
+	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
+	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
+		_ = s.Store.UncertainAction(ctx, pushAction.ID)
+		return err
+	} else if !present {
+		return s.block(ctx, job, fmt.Sprintf("explicit GitHub base branch %s does not resolve in %s", job.BaseBranch, job.GitHubRepository))
+	}
+	remote, present, err := s.GitHub.RemoteHead(ctx, authority, job.Branch)
+	if err != nil {
+		_ = s.Store.UncertainAction(ctx, pushAction.ID)
+		return err
+	}
+	relation := ""
+	if present && remote != job.Revision {
+		var relationErr error
+		relation, relationErr = s.Repository.Relation(ctx, job, remote)
+		if relationErr != nil {
+			return s.block(ctx, job, relationErr.Error())
+		}
+	}
+	pushDecision, decisionErr := planPush(present, remote, job.Revision, relation)
+	if decisionErr != nil {
+		return s.block(ctx, job, decisionErr.Error())
+	}
+	if pushDecision == "push" {
+		token, err := s.GitHub.PushToken(ctx, authority)
+		if err != nil {
+			_ = s.Store.UncertainAction(ctx, pushAction.ID)
+			return err
+		}
+		if err := s.Repository.Push(ctx, job, token); err != nil {
+			_ = s.Store.UncertainAction(ctx, pushAction.ID)
+			return err
+		}
+		if err := s.reach(ctx, spine.BarrierPushAccepted, job.ID, pushAction.ID); err != nil {
+			return err
+		}
+	}
+	if pushAction.State != spine.ActionSucceeded {
+		if err := s.recordAfterClaim(ctx, pushAction.ID, func() error {
+			return s.Store.RecordPush(ctx, pushAction.ID, job.Revision)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Propose reconciles and, when necessary, creates or refreshes the one exact
+// GitHub pull-request proposal for the Job Revision. Push must already have a
+// durable success receipt; PostgreSQL also enforces that ordering.
+func (s Service) Propose(ctx context.Context, jobID, revision string) error {
+	return s.Store.WithJobFence(ctx, jobID, func() error { return s.proposeFenced(ctx, jobID, revision) })
+}
+
+func (s Service) proposeFenced(ctx context.Context, jobID, revision string) error {
+	job, err := s.Store.Job(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if job.Revision != revision {
+		return fmt.Errorf("publication scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
+	}
+	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
+		return fmt.Errorf("publication cannot mutate GitHub after cleanup begins")
 	}
 	if job.WorkflowPhase == "published" {
 		proposal, err := s.Store.Proposal(ctx, job.ID)
@@ -100,54 +179,12 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string) erro
 	body := Body(job, assessment, checks, records, runs)
 	bodyDigest := BodyDigest(body)
 	title := Title(job.Goal)
-	pushAction, pullAction, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
+	_, pullAction, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
 	if err != nil {
 		return err
-	}
-	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
-	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
-		_ = s.Store.UncertainAction(ctx, pushAction.ID)
-		return err
-	} else if !present {
-		return s.block(ctx, job, fmt.Sprintf("explicit GitHub base branch %s does not resolve in %s", job.BaseBranch, job.GitHubRepository))
-	}
-	remote, present, err := s.GitHub.RemoteHead(ctx, authority, job.Branch)
-	if err != nil {
-		_ = s.Store.UncertainAction(ctx, pushAction.ID)
-		return err
-	}
-	relation := ""
-	if present && remote != job.Revision {
-		var relationErr error
-		relation, relationErr = s.Repository.Relation(ctx, job, remote)
-		if relationErr != nil {
-			return s.block(ctx, job, relationErr.Error())
-		}
-	}
-	pushDecision, decisionErr := planPush(present, remote, job.Revision, relation)
-	if decisionErr != nil {
-		return s.block(ctx, job, decisionErr.Error())
-	}
-	if pushDecision == "push" {
-		token, err := s.GitHub.PushToken(ctx, authority)
-		if err != nil {
-			_ = s.Store.UncertainAction(ctx, pushAction.ID)
-			return err
-		}
-		if err := s.Repository.Push(ctx, job, token); err != nil {
-			_ = s.Store.UncertainAction(ctx, pushAction.ID)
-			return err
-		}
-		if err := s.reach(ctx, spine.BarrierPushAccepted, job.ID, pushAction.ID); err != nil {
-			return err
-		}
-	}
-	if pushAction.State != spine.ActionSucceeded {
-		if err := s.Store.RecordPush(ctx, pushAction.ID, job.Revision); err != nil {
-			return err
-		}
 	}
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
+	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch)
 	if err != nil {
 		_ = s.Store.UncertainAction(ctx, pullAction.ID)
@@ -198,7 +235,9 @@ func (s Service) publishFenced(ctx context.Context, jobID, revision string) erro
 		}
 	}
 	proposal := spine.GitHubProposal{JobID: job.ID, Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation, BaseBranch: job.BaseBranch, HeadBranch: job.Branch, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, ObservedRemoteHead: pull.HeadSHA, BodyDigest: bodyDigest}
-	return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
+	return s.recordAfterClaim(ctx, pullAction.ID, func() error {
+		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
+	})
 }
 
 func planPush(present bool, remote, revision, relation string) (string, error) {
@@ -249,6 +288,27 @@ func (s Service) reach(ctx context.Context, point, jobID, identity string) error
 		return nil
 	}
 	return barrier.ReachWorkflow(ctx, point, jobID, identity)
+}
+
+func (s Service) requireClaim(ctx context.Context) error {
+	if s.ClaimCheck == nil {
+		return nil
+	}
+	return s.ClaimCheck(ctx)
+}
+
+func (s Service) recordAfterClaim(ctx context.Context, actionID string, record func() error) error {
+	return claimBeforeRecord(ctx, s.requireClaim, func() error {
+		return s.Store.UncertainAction(ctx, actionID)
+	}, record)
+}
+
+func claimBeforeRecord(ctx context.Context, claimCheck func(context.Context) error, uncertain func() error, record func() error) error {
+	if err := claimCheck(ctx); err != nil {
+		_ = uncertain()
+		return err
+	}
+	return record()
 }
 
 func validatePullIdentity(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {

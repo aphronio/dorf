@@ -52,8 +52,10 @@ flowchart TD
     GeneralReview --> Feedback
     Feedback --> Respond["Original implementation Session decides what to do"]
     Respond -->|"committed change"| Revision
-    Respond -->|"clean unchanged checkout"| Proposal["Publish exact-Revision proposal"]
-    Proposal --> Outcome{"Accept, reject, or abandon"}
+    Respond -->|"clean unchanged checkout"| Proposal["Push and propose exact Revision"]
+    Proposal --> Observe["Observe exact pull request"]
+    Observe -->|"trusted comment"| Feedback
+    Observe -->|"merged or closed"| Outcome{"Accept, reject, or abandon"}
     Outcome --> Cleanup["Reconcile cleanup"]
     Cleanup --> Receipt["Evidence-backed terminal receipt"]
 ```
@@ -63,6 +65,10 @@ general reviewer for an unknown change. Each reviewer returns ordinary text. Dor
 a Message to the original implementation Session; it does not parse a universal review result. The
 implementation agent decides whether to act, explain, or leave the Revision unchanged. No agent
 replaces the durable Job as coordinator.
+
+The pull request is the acceptance UI. A comment from the repository owner or a collaborator becomes
+an ordinary human Message to the same implementation Session. Merging the exact pull request accepts
+the Job; closing it without merging rejects the Job. Explicit abandonment remains a Dorf command.
 
 ## The deterministic and agentic boundary
 

@@ -1179,3 +1179,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   implementation, generator churn repeatedly obscures review, or future measurements show the
   handwritten configuration and conversion surface outweighs the query plumbing it replaces without
   delivering useful drift failures.
+
+## D054 — The main Job task publishes and observes the exact proposal
+
+- **Status:** Accepted workflow simplification — 2026-08-10
+- **Decision:** The main Job task runs two direct, Revision-scoped Steps: push the exact Revision, then
+  create or adopt its exact pull request. Stable Actions reconcile Git and GitHub before an uncertain
+  effect repeats. There is no publication child task, attachment field, custom retry command, or
+  mirrored task state; operators use Absurd's public retry after resolving publication attention.
+- **Acceptance UI:** The same task observes the exact pull request. A comment from the repository
+  `OWNER` or `COLLABORATOR` becomes one idempotent human Message whose `FromID` is the GitHub comment
+  identity. Merge records acceptance, close without merge records rejection, and explicit Dorf
+  abandonment remains available. Dorf stores Messages, Proposal, and Outcome, but does not mirror a
+  comment cursor or mutable pull-request state.
+- **Why:** Push, propose, wait, and continue are one product story. Giving publication its own durable
+  scheduler duplicated retry and attachment mechanics already owned by Absurd. Treating GitHub input
+  like any other Message also lets the original implementation Session decide whether to act without
+  a new review-result or response type.
+- **Reconsider when:** GitHub polling is measurably wasteful enough to justify a webhook wake-up. A
+  webhook should wake the same observer; it must not create a second workflow authority.

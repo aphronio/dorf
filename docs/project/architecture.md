@@ -59,13 +59,15 @@ durable task sequences explicit, named phases; it does not contain a generic use
   reconciles the two facts rather than assuming both happened.
 - Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. It reads the
   product facts in order: Sandbox, clone, setup, route, AgentRun delivery, Revision observation,
-  Checks, then the existing review/publication continuations. Each repeatable operation uses a
+  Checks, selected review, exact-Revision push and proposal, then proposal observation. Each
+  repeatable operation uses a
   public Absurd Step with a stable name derived from its Action, AgentRun, Revision, or Check ID and
   a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
   Dorf keeps only product facts and Action receipts. The spine exposes single operations to this
   coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
-  `workflow_phase` remains a transitional domain guard and review/publication handoff projection until
-  those downstream paths become explicit; no second service-layer coordinator interprets it.
+  `workflow_phase` remains a transitional domain guard until Slice 6; no second service-layer
+  coordinator or publication task interprets it. Publication is two direct main-task Steps backed by
+  stable Actions. Absurd's public retry resumes that task after an operator resolves attention.
 - Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
   ordinary text input and output.
 - AgentRuns in the original implementation Session create one or many commits when they change
@@ -81,6 +83,10 @@ durable task sequences explicit, named phases; it does not contain a generic use
   eligible, and delivery is reconciled against the harness-native turn identity before retry.
 - A changed Revision invalidates Evidence whose claim depended on the previous Revision. It does not
   invalidate unrelated immutable facts.
+- After publication, the same Job task observes the exact pull request. An owner or collaborator
+  comment becomes an idempotent human Message and re-enters the implementation Session. Merge records
+  an accepted Outcome; close without merge records a rejected Outcome. A bounded wait keeps quiet
+  observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
 
 ## Deterministic effects
 

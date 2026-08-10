@@ -38,6 +38,12 @@ values(
     nullif(sqlc.arg(steer_target_turn_id)::text,'')
 );
 
+-- name: ReopenPublishedForFollow :execrows
+update dorf.jobs
+set workflow_phase='implementing',workflow_attention=null
+where id=sqlc.arg(job_id) and workflow_phase='published'
+  and not exists (select 1 from dorf.job_outcomes where job_id=dorf.jobs.id);
+
 -- name: GetFirstUnsettledInput :one
 select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as attention
 from dorf.job_messages m

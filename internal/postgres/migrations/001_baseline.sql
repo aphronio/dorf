@@ -19,7 +19,6 @@ create table dorf.jobs (
     github_repository text,
     github_installation_id text,
     base_branch text,
-    publication_task_id text unique,
     provider_connection text not null check (length(trim(provider_connection)) > 0),
     provider_gateway_state text,
     model text not null check (length(trim(model)) > 0),

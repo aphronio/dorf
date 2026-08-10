@@ -99,8 +99,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
-	case "publication":
-		return publicationCommand(ctx, store, client, service.Barrier, args[1:], stdout, stderr)
 	case "outcome":
 		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 		return outcomeCommand(ctx, store, client, githubClient, args[1:], stdout)
@@ -140,8 +138,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, 
 	service := spine.Service{Store: store, Externals: externals, Repository: externals, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
-	workflow.Register(client, service, store)
-	publication.Register(client, publicationService)
+	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client})
 	return client, service, nil
 }
 
@@ -550,12 +547,8 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
-	publicationEvidence, err := fetchTaskResult(ctx, client, job.PublicationTaskID)
-	if err != nil {
-		return err
-	}
-	continuation := continuationFor(job, outcome, runEvidence, publicationEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_publication": publicationEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	continuation := continuationFor(job, outcome, runEvidence, cleanupEvidence)
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
@@ -579,9 +572,6 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s\n", empty(runEvidence.TaskID), empty(string(runEvidence.State)))
 	if cleanupEvidence.TaskID != "" {
 		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s\n", cleanupEvidence.TaskID, cleanupEvidence.State)
-	}
-	if publicationEvidence.TaskID != "" {
-		fmt.Fprintf(stdout, "  Absurd publication: %s state=%s\n", publicationEvidence.TaskID, publicationEvidence.State)
 	}
 	fmt.Fprintln(stdout, "  Absurd history: use absurdctl dump-task --task-id=<task-id>")
 	fmt.Fprintln(stdout, "  claims: agent text is carried by Message; claims do not prove readiness")
@@ -684,37 +674,6 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
 }
 
-func publicationCommand(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "retry" {
-		return fmt.Errorf("publication requires: retry JOB_ID --revision EXACT_OID")
-	}
-	set := flag.NewFlagSet("publication retry", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	revision := set.String("revision", "", "exact publication Revision requiring retry")
-	jobID, err := parsePublicationTarget(set, args[1:], "publication retry")
-	if err != nil {
-		return err
-	}
-	if !postgres.ValidRevision(*revision) {
-		return fmt.Errorf("publication retry requires one Job ID and --revision with a lowercase full commit OID")
-	}
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if job.Revision != *revision {
-		return fmt.Errorf("publication retry Revision %s conflicts with Job current Revision %s", *revision, job.Revision)
-	}
-	if job.WorkflowPhase != "publishing" && job.WorkflowPhase != "publication-blocked" {
-		return fmt.Errorf("publication retry requires an already-scheduled or visibly blocked publication, not workflow phase %s", job.WorkflowPhase)
-	}
-	params, retried, err := publication.Retry(ctx, store, client, jobID, *revision)
-	if err != nil {
-		return err
-	}
-	return writeJSON(stdout, map[string]any{"job_id": params.JobID, "revision": params.Revision, "task_id": retried.TaskID, "run_id": retried.RunID, "attempt": retried.Attempt, "created": retried.Created, "scheduled": true})
-}
-
 func outcomeCommand(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
 	if len(args) != 2 || strings.TrimSpace(args[0]) == "" {
 		return fmt.Errorf("outcome requires: JOB_ID <accepted|rejected|abandoned>")
@@ -729,20 +688,6 @@ func outcomeCommand(ctx context.Context, store postgres.Store, client *absurd.Cl
 		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
 	}
 	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "cleanup_task_id": job.CleanupTaskID})
-}
-
-func parsePublicationTarget(set *flag.FlagSet, args []string, command string) (string, error) {
-	if len(args) == 0 || strings.TrimSpace(args[0]) == "" || strings.HasPrefix(args[0], "-") {
-		return "", fmt.Errorf("%s requires one Job ID before its flags", command)
-	}
-	jobID := strings.TrimSpace(args[0])
-	if err := set.Parse(args[1:]); err != nil {
-		return "", err
-	}
-	if set.NArg() != 0 {
-		return "", fmt.Errorf("%s accepts exactly one Job ID before its flags", command)
-	}
-	return jobID, nil
 }
 
 func readInput(path, command, noun string) (string, error) {
@@ -819,7 +764,7 @@ func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) 
 	return taskResultView{TaskID: taskID, State: snapshot.State, Result: snapshot.Result, Failure: snapshot.Failure}, nil
 }
 
-func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, publication, cleanup taskResultView) continuationStatus {
+func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, cleanup taskResultView) continuationStatus {
 	if job.CleanupState == spine.CleanupComplete {
 		if outcome == nil {
 			return continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
@@ -837,18 +782,12 @@ func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, publication,
 	}
 	switch job.WorkflowPhase {
 	case "published":
-		if job.PublicationTaskID == "" {
-			if run.State == "failed" || run.State == "cancelled" || run.State == "missing" {
-				return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the proposal was observed but publication-task attachment recovery lost its admitted Job task"}
-			}
-			return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "the exact proposal is observed and the admitted Job task is reconciling its publication-task attachment"}
+		if run.State == absurd.TaskFailed || run.State == absurd.TaskCancelled || run.State == "missing" {
+			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the Job task stopped observing the live proposal"}
 		}
-		return continuationStatus{Mode: "external-authority", Actor: "GitHub owner", Detail: "proposal is live; record accepted, rejected, or explicitly abandoned only after observing that authority"}
+		return continuationStatus{Mode: "external-authority", Actor: "GitHub owner", Detail: "proposal is live; trusted comments continue the Job and merge or close records its outcome"}
 	case "blocked", "publication-blocked":
 		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "durable attention must be resolved; no orchestration agent is silently advancing this Job"}
-	}
-	if publication.State == absurd.TaskFailed || publication.State == absurd.TaskCancelled {
-		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the exact publication task exhausted or was cancelled; repair the cause and use Absurd's in-place publication retry"}
 	}
 	if job.AdmissionOpen && (run.State == "failed" || run.State == "cancelled" || run.State == "missing") {
 		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the admitted Job task is terminal before the workflow reached its authority boundary"}
@@ -932,6 +871,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|publication|outcome|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|outcome|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

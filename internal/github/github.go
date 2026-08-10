@@ -51,6 +51,16 @@ type PullRequest struct {
 	MergeCommitOID string
 }
 
+// Comment is an observed GitHub issue comment. Trust and delivery policy belong
+// to callers; this adapter retains the authority facts GitHub supplied.
+type Comment struct {
+	ID                int64
+	Login             string
+	UserType          string
+	AuthorAssociation string
+	Body              string
+}
+
 func (c Client) PullRequest(ctx context.Context, authority Authority, number int64) (PullRequest, error) {
 	if number < 1 {
 		return PullRequest{}, fmt.Errorf("GitHub pull-request number must be positive")
@@ -64,6 +74,32 @@ func (c Client) PullRequest(ctx context.Context, authority Authority, number int
 		return PullRequest{}, err
 	}
 	return payload.pullRequest()
+}
+
+func (c Client) IssueComments(ctx context.Context, authority Authority, number int64) ([]Comment, error) {
+	if number < 1 {
+		return nil, fmt.Errorf("GitHub issue number must be positive")
+	}
+	token, err := c.mint(ctx, authority, "issues", "read")
+	if err != nil {
+		return nil, err
+	}
+	var payload []commentPayload
+	if _, err := c.request(ctx, token, http.MethodGet, "/repos/"+authority.Repository+"/issues/"+strconv.FormatInt(number, 10)+"/comments?per_page=100", nil, &payload); err != nil {
+		return nil, err
+	}
+	if payload == nil {
+		return nil, fmt.Errorf("GitHub issue-comment response omitted a JSON array")
+	}
+	comments := make([]Comment, 0, len(payload))
+	for _, item := range payload {
+		comment, err := item.comment()
+		if err != nil {
+			return nil, err
+		}
+		comments = append(comments, comment)
+	}
+	return comments, nil
 }
 
 type Client struct {
@@ -221,6 +257,23 @@ type pullPayload struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+}
+
+type commentPayload struct {
+	ID                int64  `json:"id"`
+	AuthorAssociation string `json:"author_association"`
+	Body              string `json:"body"`
+	User              struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"user"`
+}
+
+func (p commentPayload) comment() (Comment, error) {
+	if p.ID < 1 || p.User.Login == "" || p.User.Type == "" || p.AuthorAssociation == "" || p.Body == "" {
+		return Comment{}, fmt.Errorf("GitHub issue-comment response omitted exact identity or authoring facts")
+	}
+	return Comment{ID: p.ID, Login: p.User.Login, UserType: p.User.Type, AuthorAssociation: p.AuthorAssociation, Body: p.Body}, nil
 }
 
 func (p pullPayload) pullRequest() (PullRequest, error) {

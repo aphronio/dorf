@@ -3,6 +3,7 @@ package publication
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -16,6 +17,21 @@ type sandboxRunner func(context.Context, string, []byte, ...string) (incus.Resul
 
 func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, args ...string) (incus.Result, error) {
 	return f(ctx, command, input, args...)
+}
+
+func TestClaimLossMarksActionUncertainWithoutRecordingReceipt(t *testing.T) {
+	claimLost := errors.New("claim lost")
+	recorded, uncertain := false, false
+	err := claimBeforeRecord(context.Background(), func(context.Context) error { return claimLost }, func() error {
+		uncertain = true
+		return nil
+	}, func() error {
+		recorded = true
+		return nil
+	})
+	if !errors.Is(err, claimLost) || recorded || !uncertain {
+		t.Fatalf("claim-loss receipt recorded=%v uncertain=%v err=%v", recorded, uncertain, err)
+	}
 }
 
 func TestGitRepositoryPushUsesRecordedOIDAndRefWithoutCredentialInArgvOrSandbox(t *testing.T) {
@@ -328,7 +344,7 @@ func TestTitlePreservesUTF8At120ByteBudget(t *testing.T) {
 	}
 }
 
-func TestPublicationTaskRetryAdoptsPreviouslyAcceptedExternalEffects(t *testing.T) {
+func TestServiceRetryAdoptsPreviouslyAcceptedExternalEffects(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	if decision, err := planPush(true, revision, revision, ""); err != nil || decision != "adopt" {
 		t.Fatalf("accepted push decision=%s err=%v", decision, err)

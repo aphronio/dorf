@@ -231,6 +231,62 @@ func TestExactPullRequestObservationRetainsMergedAuthority(t *testing.T) {
 	}
 }
 
+func TestIssueCommentsRetainGitHubAuthoringFacts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/repos/aphronio/dorf/issues/39/comments" || request.URL.RawQuery != "per_page=100" {
+			t.Fatalf("unexpected issue-comment request %s %s", request.Method, request.URL.String())
+		}
+		_, _ = w.Write([]byte(`[{"id":91,"author_association":"MEMBER","body":"please add a focused test","user":{"login":"aphronio","type":"User"}}]`))
+	}))
+	defer server.Close()
+	authority := Authority{Repository: "aphronio/dorf", InstallationID: "42"}
+	client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(_ context.Context, got Authority, permission, level string) (string, error) {
+		if got != authority || permission != "issues" || level != "read" {
+			t.Fatalf("authority=%#v permission=%s:%s", got, permission, level)
+		}
+		return "ephemeral", nil
+	}}
+	comments, err := client.IssueComments(context.Background(), authority, 39)
+	if err != nil || len(comments) != 1 {
+		t.Fatalf("comments=%#v err=%v", comments, err)
+	}
+	got := comments[0]
+	if got.ID != 91 || got.Login != "aphronio" || got.UserType != "User" || got.AuthorAssociation != "MEMBER" || got.Body != "please add a focused test" {
+		t.Fatalf("comment=%#v", got)
+	}
+}
+
+func TestIssueCommentsRejectInvalidObservation(t *testing.T) {
+	for name, payload := range map[string]string{
+		"empty response":   "",
+		"null array":       "null",
+		"zero ID":          `[{"id":0,"author_association":"MEMBER","body":"body","user":{"login":"aphronio","type":"User"}}]`,
+		"missing login":    `[{"id":91,"author_association":"MEMBER","body":"body","user":{"type":"User"}}]`,
+		"missing type":     `[{"id":91,"author_association":"MEMBER","body":"body","user":{"login":"aphronio"}}]`,
+		"missing relation": `[{"id":91,"body":"body","user":{"login":"aphronio","type":"User"}}]`,
+		"empty body":       `[{"id":91,"author_association":"MEMBER","body":"","user":{"login":"aphronio","type":"User"}}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(payload))
+			}))
+			defer server.Close()
+			client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(context.Context, Authority, string, string) (string, error) { return "ephemeral", nil }}
+			comments, err := client.IssueComments(context.Background(), Authority{"aphronio/dorf", "42"}, 39)
+			if err == nil || comments != nil {
+				t.Fatalf("comments=%#v err=%v", comments, err)
+			}
+		})
+	}
+	client := Client{Mint: func(context.Context, Authority, string, string) (string, error) {
+		t.Fatal("mint called for invalid PR number")
+		return "", nil
+	}}
+	if comments, err := client.IssueComments(context.Background(), Authority{"aphronio/dorf", "42"}, 0); err == nil || comments != nil {
+		t.Fatalf("comments=%#v err=%v", comments, err)
+	}
+}
+
 func TestMergedPullRequestObservationRequiresExactMergeCommitOID(t *testing.T) {
 	var payload pullPayload
 	payload.Number, payload.HTMLURL, payload.Title, payload.State, payload.Merged = 39, "url", "title", "closed", true

@@ -21,9 +21,10 @@ type GitHub interface {
 }
 
 type Service struct {
-	Store  Store
-	GitHub GitHub
-	Now    func() time.Time
+	Store      Store
+	GitHub     GitHub
+	Now        func() time.Time
+	ClaimCheck func(context.Context) error
 }
 
 func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
@@ -84,6 +85,11 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 		ProposedRevision: proposal.ProposedRevision, ObservedHead: pull.HeadSHA,
 		ObservedState: pull.State, ObservedMerged: pull.Merged,
 		MergeCommitOID: pull.MergeCommitOID, ObservedAt: now().UTC(),
+	}
+	if s.ClaimCheck != nil {
+		if err := s.ClaimCheck(ctx); err != nil {
+			return spine.JobOutcome{}, false, err
+		}
 	}
 	return s.Store.RecordOutcome(ctx, receipt)
 }

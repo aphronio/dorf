@@ -334,6 +334,16 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if !job.AdmissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
 	}
+	if job.WorkflowPhase == "published" && input.Intent == spine.MessageFollow {
+		updated, err := queries.ReopenPublishedForFollow(ctx, input.JobID)
+		if err != nil {
+			return spine.Message{}, false, err
+		}
+		if updated != 1 {
+			return spine.Message{}, false, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
+		}
+		job.WorkflowPhase = "implementing"
+	}
 	if job.WorkflowPhase != "setup" && job.WorkflowPhase != "implementing" && job.WorkflowPhase != "review-feedback" {
 		return spine.Message{}, false, fmt.Errorf("Job %s does not accept implementation Messages during workflow phase %s", input.JobID, job.WorkflowPhase)
 	}
@@ -399,7 +409,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Goal: row.Goal, Repository: row.Repository,
 		Revision: row.Revision, RevisionGeneration: int(row.RevisionGeneration), StartingRevision: row.StartingRevision, Branch: row.Branch,
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
-		PublicationTaskID: row.PublicationTaskID, ProviderConnection: row.ProviderConnection, ProviderGatewayState: row.ProviderGatewayState,
+		ProviderConnection: row.ProviderConnection, ProviderGatewayState: row.ProviderGatewayState,
 		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
 		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, SandboxID: row.SandboxID, SandboxState: row.SandboxState,
 		RouteID: row.RouteID, RouteState: row.RouteState, SessionID: row.SessionID, WorkflowPhase: row.WorkflowPhase,
@@ -810,10 +820,11 @@ func (s Store) RecordRevision(ctx context.Context, jobID, runID string, observat
 	return true, nil
 }
 
-// BlockNoRevision records a completed no-change implementation result only if
-// the same AgentRun is still the latest accepted candidate. A Message admitted
-// after Git observation therefore wins the Job-row race and must run first.
-func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase, reason string) (bool, error) {
+// CompleteUnchangedRun records a completed no-change implementation result only
+// if the same AgentRun is still the latest accepted candidate. A follow-up to an
+// exact published proposal returns that proposal to published; initial no-change
+// runs remain blocked.
+func (s Store) CompleteUnchangedRun(ctx context.Context, jobID, runID, comparisonBase, reason string) (bool, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return false, fmt.Errorf("no-Revision attention requires a reason")
@@ -828,7 +839,7 @@ func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase
 	if err != nil {
 		return false, err
 	}
-	if locked.Revision != comparisonBase || locked.WorkflowPhase != "implementing" && locked.WorkflowPhase != "review-feedback" {
+	if locked.Revision != comparisonBase || locked.WorkflowPhase != "implementing" {
 		return false, fmt.Errorf("no-Revision result conflicts with current Revision %s or workflow phase %s", locked.Revision, locked.WorkflowPhase)
 	}
 	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
@@ -838,7 +849,7 @@ func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase
 	if !ready || candidate.ID != runID {
 		return false, nil
 	}
-	if err := expectOneRows(queries.BlockNoRevision(ctx, dbsql.BlockNoRevisionParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID, Revision: comparisonBase})); err != nil {
+	if err := expectOneRows(queries.CompleteUnchangedRun(ctx, dbsql.CompleteUnchangedRunParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID, Revision: comparisonBase})); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {

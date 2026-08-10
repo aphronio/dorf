@@ -38,7 +38,7 @@ func FromEnv() (spine.FaultBarrier, error) {
 	}
 	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierNativeActive
 	workflowPoint := point == spine.BarrierSetupComplete || point == spine.BarrierCheckExited
-	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted || point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
+	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted
 	cleanupPoint := point == spine.BarrierReviewerRouteRevoked || point == spine.BarrierReviewerSandboxDeleted || point == spine.BarrierMainRouteRevoked || point == spine.BarrierMainSandboxDeleted
 	if !messagePoint && !workflowPoint && !publicationPoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
@@ -82,8 +82,7 @@ func (b Barrier) ReachWorkflow(ctx context.Context, point, jobID, identity strin
 	if point != b.Point || jobID != b.JobID {
 		return nil
 	}
-	scheduling := point == spine.BarrierPublicationBegin || point == spine.BarrierPublicationSpawn
-	return b.reach(ctx, jobID, identity, point, fmt.Sprintf("job=%s\nidentity=%s\npoint=%s\n", jobID, identity, point), !scheduling)
+	return b.reach(ctx, jobID, identity, point, fmt.Sprintf("job=%s\nidentity=%s\npoint=%s\n", jobID, identity, point), true)
 }
 
 func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload string, heartbeat bool) error {

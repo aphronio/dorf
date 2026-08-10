@@ -12,81 +12,58 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const (
-	PublicationTaskName        = "dorf-github-publication-v2"
-	PublicationTaskMaxAttempts = 5
-)
-
-func PublicationTaskKey(jobID, revision string) string {
-	return fmt.Sprintf("publication:v2:%s:%s", jobID, revision)
-}
-
-func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (spine.Job, spine.Action, spine.Action, bool, error) {
+func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (spine.Job, spine.Action, spine.Action, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		return spine.Job{}, spine.Action{}, spine.Action{}, err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
 	locked, err := queries.GetPublicationJobForUpdate(ctx, jobID)
 	if err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		return spine.Job{}, spine.Action{}, spine.Action{}, err
 	}
-	alreadyPublished := false
-	spawn := false
 	if !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication cannot start after Job admission closes or cleanup begins")
+		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot start after Job admission closes or cleanup begins")
 	}
 	if locked.Revision != revision || !ValidRevision(revision) {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication Revision %s conflicts with exact ready Revision %s", revision, locked.Revision)
+		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication Revision %s conflicts with exact ready Revision %s", revision, locked.Revision)
 	}
 	if err := githubapi.ValidateAuthority(locked.Repository, locked.GithubRepository, locked.GithubInstallationID, locked.BaseBranch, locked.Branch); err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication authority unresolved: %w", err)
+		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication authority unresolved: %w", err)
 	}
 	switch locked.WorkflowPhase {
 	case "ready":
-		spawn = true
+		if err := expectOneRows(queries.StartPublicationIntent(ctx, dbsql.StartPublicationIntentParams{JobID: jobID, Revision: revision})); err != nil {
+			return spine.Job{}, spine.Action{}, spine.Action{}, err
+		}
 	case "publishing":
-		// An empty attachment is the recoverable window after the Dorf
-		// publication intent committed and before the public Absurd Spawn
-		// result was attached. The stable key decides create versus adopt.
-		spawn = locked.PublicationTaskID == ""
 	case "published":
 		proposal, proposalErr := queries.GetProposal(ctx, jobID)
-		if proposalErr == nil && proposal.ProposedRevision == revision {
-			alreadyPublished = true
-			// The deterministic task may have won the Job fence and completed
-			// after Spawn but before its ID was attached. Re-adopt that same
-			// stable task without reopening publication.
-			spawn = locked.PublicationTaskID == ""
+		if proposalErr == nil && proposal.ProposedRevision == revision && proposal.ObservedRemoteHead == revision {
 		} else {
-			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("published Job is not stale at a later exact ready Revision")
+			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("published Job is not stale at a later exact ready Revision")
 		}
 	case "publication-blocked":
-		// An attached failed task is retried only through Absurd RetryTask.
-		// The empty case is still the same Spawn/Attach recovery window.
-		spawn = locked.PublicationTaskID == ""
-	default:
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", locked.WorkflowPhase)
-	}
-	if spawn && !alreadyPublished && locked.WorkflowPhase == "ready" {
-		if err := expectOneRows(queries.StartPublicationIntent(ctx, dbsql.StartPublicationIntentParams{JobID: jobID, Revision: revision})); err != nil {
-			return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		if err := expectOneRows(queries.ResumePublicationPhase(ctx, dbsql.ResumePublicationPhaseParams{JobID: jobID, Revision: revision})); err != nil {
+			return spine.Job{}, spine.Action{}, spine.Action{}, err
 		}
+	default:
+		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", locked.WorkflowPhase)
 	}
 	push, err := beginPublicationAction(ctx, queries, jobID, spine.ActionRepositoryPush, revision)
 	if err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		return spine.Job{}, spine.Action{}, spine.Action{}, err
 	}
 	pull, err := beginPublicationAction(ctx, queries, jobID, spine.ActionGitHubPullRequest, revision)
 	if err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		return spine.Job{}, spine.Action{}, spine.Action{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
+		return spine.Job{}, spine.Action{}, spine.Action{}, err
 	}
 	job, err := s.Job(ctx, jobID)
-	return job, push, pull, spawn, err
+	return job, push, pull, err
 }
 
 func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {
@@ -116,14 +93,6 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 	}
 	pull, err := load(spine.ActionGitHubPullRequest)
 	return push, pull, err
-}
-
-func (s Store) AttachPublicationTask(ctx context.Context, jobID, revision, taskID string) error {
-	return expectOneRows(dbsql.New(s.DB).AttachPublicationTaskID(ctx, dbsql.AttachPublicationTaskIDParams{TaskID: taskID, JobID: jobID, Revision: revision}))
-}
-
-func (s Store) ResumePublication(ctx context.Context, jobID, revision string) error {
-	return expectOneRows(dbsql.New(s.DB).ResumePublicationPhase(ctx, dbsql.ResumePublicationPhaseParams{JobID: jobID, Revision: revision}))
 }
 
 func (s Store) RecordPush(ctx context.Context, actionID, revision string) error {

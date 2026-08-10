@@ -11,28 +11,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const attachPublicationTaskID = `-- name: AttachPublicationTaskID :execrows
-update dorf.jobs
-set publication_task_id=coalesce(publication_task_id,$1::text)
-where id=$2 and revision=$3
-  and workflow_phase in ('publishing','publication-blocked','published')
-  and (publication_task_id is null or publication_task_id=$1)
-`
-
-type AttachPublicationTaskIDParams struct {
-	TaskID   string
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) AttachPublicationTaskID(ctx context.Context, arg AttachPublicationTaskIDParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, attachPublicationTaskID, arg.TaskID, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const blockPublicationPhase = `-- name: BlockPublicationPhase :execrows
 update dorf.jobs
 set workflow_phase='publication-blocked',workflow_attention=$1::text
@@ -295,7 +273,6 @@ const getPublicationJobForUpdate = `-- name: GetPublicationJobForUpdate :one
 select revision,workflow_phase,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch,branch,repository,
-       coalesce(publication_task_id,'') as publication_task_id,
        admission_open,cleanup_state
 from dorf.jobs
 where id=$1
@@ -310,7 +287,6 @@ type GetPublicationJobForUpdateRow struct {
 	BaseBranch           string
 	Branch               string
 	Repository           string
-	PublicationTaskID    string
 	AdmissionOpen        bool
 	CleanupState         spine.CleanupState
 }
@@ -326,7 +302,6 @@ func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) 
 		&i.BaseBranch,
 		&i.Branch,
 		&i.Repository,
-		&i.PublicationTaskID,
 		&i.AdmissionOpen,
 		&i.CleanupState,
 	)
@@ -378,8 +353,7 @@ const resumePublicationPhase = `-- name: ResumePublicationPhase :execrows
 update dorf.jobs
 set workflow_phase='publishing',workflow_attention=null
 where id=$1 and revision=$2
-  and publication_task_id is not null
-  and workflow_phase in ('publishing','publication-blocked')
+  and workflow_phase='publication-blocked'
 `
 
 type ResumePublicationPhaseParams struct {

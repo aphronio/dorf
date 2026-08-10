@@ -63,7 +63,6 @@ type Job struct {
 	GitHubRepository     string       `json:"github_repository,omitempty"`
 	GitHubInstallation   string       `json:"github_installation_id,omitempty"`
 	BaseBranch           string       `json:"base_branch,omitempty"`
-	PublicationTaskID    string       `json:"publication_task_id,omitempty"`
 	ProviderConnection   string       `json:"provider_connection"`
 	ProviderGatewayState string       `json:"provider_gateway_state,omitempty"`
 	Model                string       `json:"model"`

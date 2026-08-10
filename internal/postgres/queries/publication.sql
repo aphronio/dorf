@@ -2,7 +2,6 @@
 select revision,workflow_phase,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch,branch,repository,
-       coalesce(publication_task_id,'') as publication_task_id,
        admission_open,cleanup_state
 from dorf.jobs
 where id=sqlc.arg(job_id)
@@ -33,19 +32,11 @@ select id,job_id,coalesce(message_id,'') as message_id,kind,state,
 from dorf.actions
 where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key);
 
--- name: AttachPublicationTaskID :execrows
-update dorf.jobs
-set publication_task_id=coalesce(publication_task_id,sqlc.arg(task_id)::text)
-where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
-  and workflow_phase in ('publishing','publication-blocked','published')
-  and (publication_task_id is null or publication_task_id=sqlc.arg(task_id));
-
 -- name: ResumePublicationPhase :execrows
 update dorf.jobs
 set workflow_phase='publishing',workflow_attention=null
 where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
-  and publication_task_id is not null
-  and workflow_phase in ('publishing','publication-blocked');
+  and workflow_phase='publication-blocked';
 
 -- name: CompleteRepositoryPush :execrows
 update dorf.actions

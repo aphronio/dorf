@@ -1,7 +1,7 @@
 -- name: GetJob :one
 select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,j.starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
-       coalesce(j.base_branch,'') as base_branch,coalesce(j.publication_task_id,'') as publication_task_id,
+       coalesce(j.base_branch,'') as base_branch,
        j.provider_connection,coalesce(j.provider_gateway_state,'') as provider_gateway_state,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(sb.incus_name,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
@@ -118,11 +118,20 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
--- name: BlockNoRevision :execrows
+-- name: CompleteUnchangedRun :execrows
 update dorf.jobs
-set workflow_phase='blocked',workflow_attention=sqlc.arg(reason)
+set workflow_phase=case when exists (
+      select 1 from dorf.github_proposals p
+      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
+        and p.observed_remote_head=dorf.jobs.revision
+    ) then 'published' else 'blocked' end,
+    workflow_attention=case when exists (
+      select 1 from dorf.github_proposals p
+      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
+        and p.observed_remote_head=dorf.jobs.revision
+    ) then null else sqlc.arg(reason) end
 where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
-  and workflow_phase in ('implementing','review-feedback');
+  and workflow_phase='implementing';
 
 -- name: SetWorkflowPhaseAfterSetup :execrows
 update dorf.jobs

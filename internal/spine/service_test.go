@@ -762,7 +762,7 @@ func (s *codingMemoryStore) RevisionCandidate(_ context.Context, jobID, base str
 	return latestFollow, true, nil
 }
 
-func (s *codingMemoryStore) BlockNoRevision(_ context.Context, jobID, runID, base, reason string) (bool, error) {
+func (s *codingMemoryStore) CompleteUnchangedRun(_ context.Context, jobID, runID, base, reason string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job := s.jobs[jobID]

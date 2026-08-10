@@ -272,15 +272,19 @@ removed without residue.
 
 Goal: make an exact-Revision Proposal the direct successor of readiness.
 
-- [ ] Execute publication through named, Revision-scoped Actions and Steps.
-- [ ] Express publication visibly as `push exact Revision -> create or adopt exact PR`.
-- [ ] Reconcile Git and GitHub before repeating an uncertain effect.
-- [ ] Use Absurd retry instead of a Dorf publication retry scheduler.
-- [ ] Keep Proposal and Outcome as Dorf product facts.
-- [ ] Replace publication-specific task attachment fields with the smallest task handle needed for
-      correlation or cancellation.
-- [ ] Delete publication polling, attachment verification, mirrored task state, and custom retry state.
-- [ ] Consolidate duplicate publication adoption tests.
+- [x] Execute publication through named, Revision-scoped Actions and Steps.
+- [x] Express publication visibly as `push exact Revision -> create or adopt exact PR`.
+- [x] Reconcile Git and GitHub before repeating an uncertain effect.
+- [x] Use Absurd retry instead of a Dorf publication retry scheduler.
+- [x] Keep Proposal and Outcome as Dorf product facts.
+- [x] Remove the publication-specific task attachment; the main Job task owns publication and
+      observation.
+- [x] Delete publication polling tasks, attachment verification, mirrored task state, and custom
+      retry state. Keep one bounded exact-PR observation loop in the main task.
+- [x] Consolidate duplicate publication adoption tests around Action and Proposal invariants.
+- [x] Turn trusted owner/collaborator pull-request comments into idempotent human Messages.
+- [x] Observe merge as acceptance and close without merge as rejection.
+- [ ] Dogfood comment feedback and a terminal pull-request outcome through one real Dorf Job.
 
 Terminal: a ready Revision produces at most one exact-Revision PR Proposal and can reach an explicit
 Outcome.

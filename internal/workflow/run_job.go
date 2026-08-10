@@ -28,7 +28,7 @@ func verifyStepName(job, revision string) string {
 
 // RunJob tells the coding story in order. PostgreSQL owns the facts; each
 // external operation gets one stable Absurd Step derived from its Dorf fact.
-func RunJob(ctx context.Context, client *absurd.Client, service spine.Service, store postgres.Store, jobID string) (spine.RunDisposition, error) {
+func RunJob(ctx context.Context, service spine.Service, store postgres.Store, proposal ProposalRuntime, jobID string) (spine.RunDisposition, error) {
 	if service.Repository == nil {
 		return spine.RunIdle, fmt.Errorf("coding workflow requires repository externals")
 	}
@@ -95,10 +95,12 @@ func RunJob(ctx context.Context, client *absurd.Client, service spine.Service, s
 		switch job.WorkflowPhase {
 		case "blocked":
 			return spine.RunBlocked, nil
-		case "ready", "publishing", "publication-blocked", "published":
-			if err := continuePublication(ctx, store, client, service.Barrier, job); err != nil {
+		case "ready", "publishing", "publication-blocked":
+			if err := runPublicationSteps(ctx, store, proposal, job); err != nil {
 				return spine.RunIdle, err
 			}
+			return spine.RunIdle, nil
+		case "published":
 			return spine.RunIdle, nil
 		case "review-planning":
 			if err := runFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
@@ -165,6 +167,31 @@ func RunJob(ctx context.Context, client *absurd.Client, service spine.Service, s
 			return spine.RunIdle, fmt.Errorf("unsupported coding workflow phase %q", job.WorkflowPhase)
 		}
 	}
+}
+
+func runPublicationSteps(ctx context.Context, store postgres.Store, proposal ProposalRuntime, job spine.Job) error {
+	current, push, pull, err := store.BeginPublication(ctx, job.ID, job.Revision)
+	if err != nil {
+		return err
+	}
+	if current.WorkflowPhase == "published" {
+		return nil
+	}
+	if push.State != spine.ActionSucceeded {
+		if err := runFactStep(ctx, actionStepName(push.ID), push.ID, func(workCtx context.Context) error {
+			return proposal.Publication.Push(workCtx, job.ID, job.Revision)
+		}); err != nil {
+			return fmt.Errorf("publish exact Revision: %w", err)
+		}
+	}
+	if pull.State != spine.ActionSucceeded {
+		if err := runFactStep(ctx, actionStepName(pull.ID), pull.ID, func(workCtx context.Context) error {
+			return proposal.Publication.Propose(workCtx, job.ID, job.Revision)
+		}); err != nil {
+			return fmt.Errorf("propose exact Revision: %w", err)
+		}
+	}
+	return nil
 }
 
 func runActionStep(ctx context.Context, service spine.Service, job spine.Job, action spine.Action) error {

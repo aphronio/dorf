@@ -2,12 +2,13 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/publication"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -33,28 +34,68 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service, store postgres.Store) {
+func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime) {
 	service.ClaimCheck = absurdruntime.RequireClaim
+	proposal.Publication.ClaimCheck = absurdruntime.RequireClaim
+	proposal.Outcome.ClaimCheck = absurdruntime.RequireClaim
+	if proposal.PollInterval <= 0 {
+		proposal.PollInterval = 30 * time.Second
+	}
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
 			return Result{}, err
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
+		pollRevision := ""
+		poll := 0
 		for {
-			disposition, err := RunJob(ctx, client, service, store, params.JobID)
+			disposition, err := RunJob(ctx, service, store, proposal, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
 			if disposition == spine.RunClosed {
 				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
+			job, err := store.Job(ctx, params.JobID)
+			if err != nil {
+				return Result{}, err
+			}
+			if job.WorkflowPhase == "published" {
+				if pollRevision != job.Revision {
+					pollRevision, poll = job.Revision, 0
+				}
+				observation, err := observeProposalStep(ctx, proposal, job.ID, job.Revision, poll)
+				if err != nil {
+					return Result{}, err
+				}
+				poll++
+				if observation.Outcome != "" {
+					task := absurd.MustTaskContext(ctx)
+					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
+						return Result{}, err
+					}
+					return Result{JobID: params.JobID, Outcome: string(observation.Outcome)}, nil
+				}
+				if observation.NewMessages > 0 {
+					continue
+				}
+			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
-			wake, err := absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)})
+			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
+			if job.WorkflowPhase == "published" {
+				options.StepName = fmt.Sprintf("dorf/proposal-wake/v1/%s/%020d", job.Revision, poll-1)
+				options.Timeout = proposal.PollInterval
+			}
+			wake, err := absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
+				var timeout *absurd.TimeoutError
+				if job.WorkflowPhase == "published" && errors.As(err, &timeout) {
+					continue
+				}
 				return Result{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
@@ -77,16 +118,20 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func continuePublication(ctx context.Context, store postgres.Store, client *absurd.Client, barrier any, job spine.Job) error {
-	needsSchedule := job.WorkflowPhase == "ready" ||
-		(job.WorkflowPhase == "publishing" || job.WorkflowPhase == "published") && job.PublicationTaskID == ""
-	if !needsSchedule {
-		return nil
+func observeProposalStep(ctx context.Context, proposal ProposalRuntime, jobID, revision string, poll int) (ProposalObservationResultV1, error) {
+	name := fmt.Sprintf("dorf/proposal-observe/v1/%s/%s/%020d", jobID, revision, poll)
+	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (ProposalObservationResultV1, error) {
+		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (ProposalObservationResultV1, error) {
+			return proposal.Observe(workCtx, jobID, revision, poll)
+		})
+	})
+	if err != nil {
+		return ProposalObservationResultV1{}, err
 	}
-	if _, _, _, err := publication.Schedule(ctx, store, client, barrier, job.ID, job.Revision); err != nil {
-		return fmt.Errorf("continue exact-Revision publication: %w", err)
+	if result.Revision != revision || result.Poll != poll {
+		return ProposalObservationResultV1{}, fmt.Errorf("proposal observation conflicts with Revision %s poll %d", revision, poll)
 	}
-	return nil
+	return result, nil
 }
 
 func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewJob) (spine.Job, bool, error) {
@@ -146,6 +191,10 @@ func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client
 }
 
 func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (spine.Job, error) {
+	return scheduleCleanup(ctx, store, client, jobID, "")
+}
+
+func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID, skipTaskID string) (spine.Job, error) {
 	job, err := store.Job(ctx, jobID)
 	if err != nil {
 		return spine.Job{}, err
@@ -163,15 +212,13 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 	if err := store.CloseAdmission(ctx, jobID); err != nil {
 		return spine.Job{}, err
 	}
-	// Reload after admission closes: a publication scheduler may have attached
-	// its public Spawn result while this cleanup request was waiting on the Job
-	// row. Cancellation must cover the current trusted bindings, not the stale
-	// snapshot read before the close.
+	// Reload after admission closes so cancellation uses the current durable
+	// task binding rather than the earlier snapshot.
 	job, err = store.Job(ctx, jobID)
 	if err != nil {
 		return spine.Job{}, err
 	}
-	if err := cancelAttachedTasks(ctx, client, job); err != nil {
+	if err := cancelAttachedTasks(ctx, client, job, skipTaskID); err != nil {
 		return spine.Job{}, err
 	}
 	var result spine.Job
@@ -183,10 +230,8 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if err := cleanupPublicationSafe(ctx, store, current); err != nil {
 			return err
 		}
-		// Close the scheduler-attach race after acquiring the Job fence. A
-		// publication task attached after the pre-fence reload is cancelled
-		// here before cleanup can become eligible.
-		if err := cancelAttachedTasks(ctx, client, current); err != nil {
+		// Recheck the binding under the Job fence before cleanup becomes eligible.
+		if err := cancelAttachedTasks(ctx, client, current, skipTaskID); err != nil {
 			return err
 		}
 		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:v3:" + jobID})
@@ -202,9 +247,9 @@ func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 	return result, err
 }
 
-func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.Job) error {
-	for _, taskID := range []string{job.TaskID, job.PublicationTaskID} {
-		if taskID == "" {
+func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.Job, skipTaskID string) error {
+	for _, taskID := range []string{job.TaskID} {
+		if taskID == "" || taskID == skipTaskID {
 			continue
 		}
 		if err := client.CancelTask(ctx, client.QueueName(), taskID); err != nil {
