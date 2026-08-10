@@ -4,22 +4,17 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
--- name: ListVerifiedReviewEvidenceIDs :many
-select e.id
+-- name: ListReviewCheckInputs :many
+select r.name,coalesce(e.id,'') as evidence_id
 from dorf.repository_commands r
-join dorf.checks c
+left join dorf.checks c
   on c.job_id=r.job_id and c.name=r.name and c.command=r.command
  and c.revision=sqlc.arg(revision)
-join dorf.evidence e
+ and c.state='passed' and c.exit_code=0
+left join dorf.evidence e
   on e.id=c.evidence_id and e.job_id=c.job_id and e.check_id=c.id and e.revision=c.revision
 where r.job_id=sqlc.arg(job_id) and r.name in ('check','smoke')
-  and c.state='passed' and c.exit_code=0
 order by r.name;
-
--- name: CountDeclaredReviewChecks :one
-select count(*)
-from dorf.repository_commands
-where job_id=sqlc.arg(job_id) and name in ('check','smoke');
 
 -- name: GetReviewPlan :one
 select job_id,revision,facts::text as facts,plan::text as plan,
@@ -45,12 +40,6 @@ insert into dorf.review_plans(job_id,revision,facts,plan,policy_digest)
 values(sqlc.arg(job_id),sqlc.arg(revision),sqlc.arg(facts)::jsonb,
        sqlc.arg(plan)::jsonb,sqlc.arg(policy_digest)::text)
 on conflict do nothing;
-
--- name: ListDeclaredReviewCheckNames :many
-select name
-from dorf.repository_commands
-where job_id=sqlc.arg(job_id) and name in ('check','smoke')
-order by name;
 
 -- name: InsertReviewAgentRun :execrows
 insert into dorf.agent_runs(id,job_id,message_id,role,state,input_revision,capability,sandbox_id,submission_nonce)

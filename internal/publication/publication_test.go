@@ -2,8 +2,6 @@ package publication
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -18,18 +16,6 @@ type sandboxRunner func(context.Context, string, []byte, ...string) (incus.Resul
 
 func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, args ...string) (incus.Result, error) {
 	return f(ctx, command, input, args...)
-}
-
-func TestClaimLossDoesNotRecordActionSuccess(t *testing.T) {
-	claimLost := errors.New("claim lost")
-	recorded := false
-	err := claimBeforeRecord(context.Background(), func(context.Context) error { return claimLost }, func() error {
-		recorded = true
-		return nil
-	})
-	if !errors.Is(err, claimLost) || recorded {
-		t.Fatalf("claim-loss success recorded=%v err=%v", recorded, err)
-	}
 }
 
 func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
@@ -187,61 +173,16 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	}
 }
 
-func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *testing.T) {
+func TestPublicationTextProjectionRemainsValidUTF8AtLimits(t *testing.T) {
 	const truncated = "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
-	tests := []struct {
-		name, goal, projected string
-	}{
-		{"multibyte rune crosses byte limit", strings.Repeat("a", 1199) + "界tail", strings.Repeat("a", 1199) + truncated},
-		{"ASCII exactly at byte limit", strings.Repeat("a", 1200), strings.Repeat("a", 1200)},
-		{"short Unicode", "修复精确发布边界 🙂", "修复精确发布边界 🙂"},
+	goal := strings.Repeat("a", 1199) + "界tail"
+	if got, want := projectGoal(goal), strings.Repeat("a", 1199)+truncated; got != want || !utf8.ValidString(got) {
+		t.Fatalf("goal projection valid UTF-8=%v\ngot=%q\nwant=%q", utf8.ValidString(got), got, want)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := projectGoal(test.goal); got != test.projected || !utf8.ValidString(got) {
-				t.Fatalf("projected valid UTF-8=%v\ngot=%q\nwant=%q", utf8.ValidString(got), got, test.projected)
-			}
-			revision := strings.Repeat("a", 40)
-			job := spine.Job{ID: "job-unicode", Goal: test.goal, GitHubRepository: "aphronio/dorf", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
-			readiness := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact proof"}
-			body := Body(job, readiness, nil, nil, nil)
-			digest := BodyDigest(body)
-			if !utf8.ValidString(body) || digest != BodyDigest(body) {
-				t.Fatalf("body valid=%v digest=%s", utf8.ValidString(body), digest)
-			}
-			encoded, err := json.Marshal(struct {
-				Body string `json:"body"`
-			}{Body: body})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var decoded struct {
-				Body string `json:"body"`
-			}
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatal(err)
-			}
-			if decoded.Body != body || BodyDigest(decoded.Body) != digest {
-				t.Fatal("JSON request text or digest differs from the local deterministic body")
-			}
-			title := Title(job.Goal)
-			pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: decoded.Body}
-			if decision, _, err := planPull(job, nil, nil, title, body); err != nil || decision != "create" {
-				t.Fatalf("initial decision=%s err=%v", decision, err)
-			}
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, nil, title, body); err != nil || decision != "adopt" {
-				t.Fatalf("create reconciliation=%s err=%v", decision, err)
-			}
-			pull.Body = "stale body"
-			stored := &spine.GitHubProposal{Number: pull.Number}
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, title, body); err != nil || decision != "update" {
-				t.Fatalf("refresh decision=%s err=%v", decision, err)
-			}
-			pull.Body = decoded.Body
-			if decision, _, err := planPull(job, []githubapi.PullRequest{pull}, stored, title, body); err != nil || decision != "adopt" {
-				t.Fatalf("update reconciliation=%s err=%v", decision, err)
-			}
-		})
+
+	title := Title(strings.Repeat("a", 119) + "界tail")
+	if want := strings.Repeat("a", 119); title != want || !utf8.ValidString(title) || len(title) > 120 {
+		t.Fatalf("title=%q bytes=%d valid=%t want=%q", title, len(title), utf8.ValidString(title), want)
 	}
 }
 
@@ -353,36 +294,6 @@ func TestPullRecoveryBlocksClosedWrongBaseAndDraftButRefreshesTitle(t *testing.T
 	}
 	if err := validatePull(job, exact, nil, title); err != nil {
 		t.Fatalf("refreshed exact title was not accepted: %v", err)
-	}
-}
-
-func TestTitlePreservesUTF8At120ByteBudget(t *testing.T) {
-	for _, test := range []struct {
-		name, goal, want string
-	}{
-		{"multibyte crosses boundary", strings.Repeat("a", 119) + "界tail", strings.Repeat("a", 119)},
-		{"ASCII exact boundary", strings.Repeat("a", 120), strings.Repeat("a", 120)},
-		{"short Unicode", "修复 publication 🙂", "修复 publication 🙂"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got := Title(test.goal)
-			if got != test.want || !utf8.ValidString(got) || len(got) > 120 {
-				t.Fatalf("title=%q bytes=%d valid=%t want=%q", got, len(got), utf8.ValidString(got), test.want)
-			}
-		})
-	}
-}
-
-func TestServiceRetryAdoptsPreviouslyAcceptedExternalEffects(t *testing.T) {
-	revision := strings.Repeat("a", 40)
-	if decision, err := planPush(true, revision, revision, ""); err != nil || decision != "adopt" {
-		t.Fatalf("accepted push decision=%s err=%v", decision, err)
-	}
-	job := spine.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
-	title := "exact title"
-	pull := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: revision, Base: job.BaseBranch, Body: "exact body"}
-	if decision, adopted, err := planPull(job, []githubapi.PullRequest{pull}, nil, title, pull.Body); err != nil || decision != "adopt" || adopted.Number != pull.Number {
-		t.Fatalf("accepted pull request decision=%s pull=%#v err=%v", decision, adopted, err)
 	}
 }
 

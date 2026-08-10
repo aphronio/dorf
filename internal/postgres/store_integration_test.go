@@ -659,6 +659,33 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
+func TestReviewPolicyRejectsAnyDeclaredCheckWithoutExactPassingEvidence(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, _ := prepareReviewIntegrationJob(t, store, "missing-review-evidence")
+	if _, err := db.ExecContext(ctx, `update dorf.checks set state='failed',exit_code=1 where job_id=$1 and revision=$2 and name='check'`, job.ID, revision); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPolicy(ctx, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err == nil || !strings.Contains(err.Error(), "0 of 1 declared Checks have passing Evidence") {
+		t.Fatalf("review policy admission error=%v", err)
+	}
+	if _, err := store.ReviewPlan(ctx, job.ID, revision); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("invalid review inputs persisted a plan: %v", err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 0 {
+		t.Fatalf("invalid review inputs persisted runs=%#v err=%v", runs, err)
+	}
+}
+
 func TestReviewerFeedbackBecomesIdempotentObservedImplementationMessage(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -1170,10 +1197,31 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if cleaning.AdmissionOpen {
 		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
-	if err := (spine.Service{Store: store, Externals: externals}).Cleanup(ctx, job.ID); err != nil {
+	service := spine.Service{Store: store, Externals: externals}
+	cleanupOnce := func() error {
+		cleaning, sandboxes, err := service.PrepareCleanup(ctx, job.ID)
+		if err != nil || cleaning.CleanupState == spine.CleanupComplete {
+			return err
+		}
+		for _, owned := range sandboxes {
+			for _, kind := range []spine.ActionKind{spine.ActionRouteRevoke, spine.ActionSandboxDelete} {
+				action, err := store.GetOrCreateSandboxAction(ctx, owned.ID, kind)
+				if err != nil {
+					return err
+				}
+				if action.State != spine.ActionSucceeded {
+					if err := service.ExecuteSandboxAction(ctx, cleaning, owned, action); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return store.CompleteCleanup(ctx, job.ID)
+	}
+	if err := cleanupOnce(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (spine.Service{Store: store, Externals: externals}).Cleanup(ctx, job.ID); err != nil {
+	if err := cleanupOnce(); err != nil {
 		t.Fatal(err)
 	}
 	cleaned, err := store.Job(ctx, job.ID)

@@ -17,19 +17,23 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func verifyReviewInputs(ctx context.Context, queries *dbsql.Queries, jobID, revision string) error {
-	ids, err := queries.ListVerifiedReviewEvidenceIDs(ctx, dbsql.ListVerifiedReviewEvidenceIDsParams{JobID: jobID, Revision: revision})
+func reviewCheckInputs(ctx context.Context, queries *dbsql.Queries, jobID, revision string) ([]string, error) {
+	rows, err := queries.ListReviewCheckInputs(ctx, dbsql.ListReviewCheckInputsParams{JobID: jobID, Revision: revision})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	declared, err := queries.CountDeclaredReviewChecks(ctx, jobID)
-	if err != nil {
-		return err
+	names := make([]string, 0, len(rows))
+	verified := 0
+	for _, row := range rows {
+		names = append(names, row.Name)
+		if row.EvidenceID != "" {
+			verified++
+		}
 	}
-	if declared == 0 || int64(len(ids)) != declared {
-		return fmt.Errorf("Revision %s is not review-admissible: %d of %d declared Checks have passing Evidence", revision, len(ids), declared)
+	if len(rows) == 0 || verified != len(rows) {
+		return nil, fmt.Errorf("Revision %s is not review-admissible: %d of %d declared Checks have passing Evidence", revision, verified, len(rows))
 	}
-	return nil
+	return names, nil
 }
 
 func (s Store) ReviewPlan(ctx context.Context, jobID, revision string) (spine.ReviewPlanRecord, error) {
@@ -113,7 +117,8 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err := verifyReviewInputs(ctx, queries, proposed.JobID, proposed.Revision); err != nil {
+	declaredChecks, err := reviewCheckInputs(ctx, queries, proposed.JobID, proposed.Revision)
+	if err != nil {
 		return err
 	}
 	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, proposed.JobID); err != nil {
@@ -126,8 +131,15 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	})); err != nil {
 		return err
 	}
-	for _, role := range proposed.Plan.Roles {
-		if _, err := createReviewRunTx(ctx, queries, proposed.JobID, proposed.Revision, string(role), proposed.Facts); err != nil {
+	var nextSequence int64
+	if len(proposed.Plan.Roles) > 0 {
+		nextSequence, err = queries.NextMessageSequence(ctx, proposed.JobID)
+		if err != nil {
+			return err
+		}
+	}
+	for index, role := range proposed.Plan.Roles {
+		if _, err := createReviewRunTx(ctx, queries, proposed.JobID, proposed.Revision, string(role), proposed.Facts, declaredChecks, nextSequence+int64(index)); err != nil {
 			return err
 		}
 	}
@@ -145,11 +157,7 @@ func clearReviewPolicyAttention(ctx context.Context, queries *dbsql.Queries, job
 	return err
 }
 
-func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts) (string, error) {
-	declaredChecks, err := queries.ListDeclaredReviewCheckNames(ctx, jobID)
-	if err != nil {
-		return "", err
-	}
+func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts, declaredChecks []string, sequence int64) (string, error) {
 	input := policy.RolePrompt(policy.Role(role), facts, declaredChecks)
 	fromID := spine.ReviewRequestFromID(revision, role)
 	message := spine.Message{
@@ -157,10 +165,7 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 		FromKind: spine.MessageFromWorkflow, FromID: fromID, Input: input, Intent: spine.MessageFollow,
 	}
 	runID := spine.AgentRunID(message.ID)
-	message.Sequence, err = queries.NextMessageSequence(ctx, jobID)
-	if err != nil {
-		return "", err
-	}
+	message.Sequence = sequence
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
 		ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID,
 		Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent,

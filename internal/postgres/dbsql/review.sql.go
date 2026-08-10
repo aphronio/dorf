@@ -13,19 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const countDeclaredReviewChecks = `-- name: CountDeclaredReviewChecks :one
-select count(*)
-from dorf.repository_commands
-where job_id=$1 and name in ('check','smoke')
-`
-
-func (q *Queries) CountDeclaredReviewChecks(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countDeclaredReviewChecks, jobID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const getReviewFeedbackMessage = `-- name: GetReviewFeedbackMessage :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
@@ -361,26 +348,42 @@ func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAl
 	return items, nil
 }
 
-const listDeclaredReviewCheckNames = `-- name: ListDeclaredReviewCheckNames :many
-select name
-from dorf.repository_commands
-where job_id=$1 and name in ('check','smoke')
-order by name
+const listReviewCheckInputs = `-- name: ListReviewCheckInputs :many
+select r.name,coalesce(e.id,'') as evidence_id
+from dorf.repository_commands r
+left join dorf.checks c
+  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
+ and c.revision=$1
+ and c.state='passed' and c.exit_code=0
+left join dorf.evidence e
+  on e.id=c.evidence_id and e.job_id=c.job_id and e.check_id=c.id and e.revision=c.revision
+where r.job_id=$2 and r.name in ('check','smoke')
+order by r.name
 `
 
-func (q *Queries) ListDeclaredReviewCheckNames(ctx context.Context, jobID string) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listDeclaredReviewCheckNames, jobID)
+type ListReviewCheckInputsParams struct {
+	Revision string
+	JobID    string
+}
+
+type ListReviewCheckInputsRow struct {
+	Name       string
+	EvidenceID string
+}
+
+func (q *Queries) ListReviewCheckInputs(ctx context.Context, arg ListReviewCheckInputsParams) ([]ListReviewCheckInputsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReviewCheckInputs, arg.Revision, arg.JobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []ListReviewCheckInputsRow
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var i ListReviewCheckInputsRow
+		if err := rows.Scan(&i.Name, &i.EvidenceID); err != nil {
 			return nil, err
 		}
-		items = append(items, name)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -494,47 +497,6 @@ func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) 
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listVerifiedReviewEvidenceIDs = `-- name: ListVerifiedReviewEvidenceIDs :many
-select e.id
-from dorf.repository_commands r
-join dorf.checks c
-  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
- and c.revision=$1
-join dorf.evidence e
-  on e.id=c.evidence_id and e.job_id=c.job_id and e.check_id=c.id and e.revision=c.revision
-where r.job_id=$2 and r.name in ('check','smoke')
-  and c.state='passed' and c.exit_code=0
-order by r.name
-`
-
-type ListVerifiedReviewEvidenceIDsParams struct {
-	Revision string
-	JobID    string
-}
-
-func (q *Queries) ListVerifiedReviewEvidenceIDs(ctx context.Context, arg ListVerifiedReviewEvidenceIDsParams) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listVerifiedReviewEvidenceIDs, arg.Revision, arg.JobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

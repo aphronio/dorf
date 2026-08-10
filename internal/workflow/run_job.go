@@ -14,8 +14,11 @@ type FactStepResultV1 struct {
 	FactID string `json:"fact_id"`
 }
 
+type ActionStepResultV1 struct {
+	ActionID string `json:"action_id"`
+}
+
 func actionStepName(id string) string   { return "dorf/action/v1/" + id }
-func setupStepName(id string) string    { return "dorf/setup/v1/" + id }
 func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
 func checkStepName(id string) string    { return "dorf/check/v1/" + id }
@@ -57,6 +60,12 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			err = runSetupStep(ctx, service, store, job, work)
 		case WorkCreateRoute:
 			err = runSandboxAction(ctx, service, store, job, sandbox, spine.ActionRouteCreate)
+		case WorkCreateReviewSandbox:
+			err = runReviewAction(ctx, service, store, job, work, spine.ActionSandboxCreate)
+		case WorkCheckoutReview:
+			err = runReviewAction(ctx, service, store, job, work, spine.ActionReviewCheckout)
+		case WorkCreateReviewRoute:
+			err = runReviewAction(ctx, service, store, job, work, spine.ActionRouteCreate)
 		case WorkRunReviewer:
 			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.RunReview(workCtx, job, work.FactID)
@@ -66,13 +75,13 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, store, job, work)
 		case WorkRunChecks:
-			err = runCheckSteps(ctx, service, store, job)
+			err = runCheckStep(ctx, service, store, job, work)
 		case WorkChooseReview:
 			err = runFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
 				return service.PlanReview(workCtx, job)
 			})
 		case WorkPublishProposal:
-			err = runPublicationSteps(ctx, store, proposal, job)
+			err = runPublicationStep(ctx, store, proposal, job)
 		case WorkObserveProposal:
 			observation, observeErr := observeProposal(ctx, proposal, job.ID, job.Revision)
 			if observeErr != nil {
@@ -102,8 +111,45 @@ func runSetupStep(ctx context.Context, service spine.Service, store postgres.Sto
 	if setup.State == spine.ActionSucceeded || setup.State == spine.ActionFailed {
 		return nil
 	}
-	return runFactStep(ctx, setupStepName(setup.ID), setup.ID, func(workCtx context.Context) error {
+	return runActionStep(ctx, setup.ID, func(workCtx context.Context) error {
 		return service.ExecuteSetup(workCtx, job, setup)
+	})
+}
+
+func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work, kind spine.ActionKind) error {
+	runs, err := store.ReviewRuns(ctx, job.ID, job.Revision)
+	if err != nil {
+		return err
+	}
+	var selected *spine.ReviewRunView
+	for i := range runs {
+		if runs[i].Sandbox.ID == work.Scope {
+			selected = &runs[i]
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("review Action %s has no selected reviewer Sandbox %s", work.FactID, work.Scope)
+	}
+	expectedID := spine.ScopedActionID(job.ID, kind, selected.Sandbox.ID)
+	if expectedID != work.FactID {
+		return fmt.Errorf("review Action changed from %s to %s", work.FactID, expectedID)
+	}
+	action, err := store.GetOrCreateSandboxAction(ctx, selected.Sandbox.ID, kind)
+	if err != nil {
+		return err
+	}
+	if action.ID != work.FactID {
+		return fmt.Errorf("selected review Action changed from %s to %s", work.FactID, action.ID)
+	}
+	if action.State == spine.ActionSucceeded {
+		return nil
+	}
+	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
+		if kind == spine.ActionReviewCheckout {
+			return service.ExecuteReviewCheckout(workCtx, job, selected.ID, action)
+		}
+		return service.ExecuteSandboxAction(workCtx, job, selected.Sandbox, action)
 	})
 }
 
@@ -139,24 +185,20 @@ func runRevisionStep(ctx context.Context, service spine.Service, store postgres.
 	})
 }
 
-func runPublicationSteps(ctx context.Context, store postgres.Store, proposal ProposalRuntime, job spine.Job) error {
+func runPublicationStep(ctx context.Context, store postgres.Store, proposal ProposalRuntime, job spine.Job) error {
 	_, push, pull, err := store.BeginPublication(ctx, job.ID, job.Revision)
 	if err != nil {
 		return err
 	}
 	if push.State != spine.ActionSucceeded {
-		if err := runFactStep(ctx, actionStepName(push.ID), push.ID, func(workCtx context.Context) error {
+		return runActionStep(ctx, push.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Push(workCtx, job.ID, job.Revision)
-		}); err != nil {
-			return fmt.Errorf("publish exact Revision: %w", err)
-		}
+		})
 	}
 	if pull.State != spine.ActionSucceeded {
-		if err := runFactStep(ctx, actionStepName(pull.ID), pull.ID, func(workCtx context.Context) error {
+		return runActionStep(ctx, pull.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Propose(workCtx, job.ID, job.Revision)
-		}); err != nil {
-			return fmt.Errorf("propose exact Revision: %w", err)
-		}
+		})
 	}
 	return nil
 }
@@ -169,17 +211,20 @@ func runSandboxAction(ctx context.Context, service spine.Service, store postgres
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
-	return runFactStep(ctx, actionStepName(action.ID), action.ID, func(workCtx context.Context) error {
+	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
 		return service.ExecuteSandboxAction(workCtx, job, sandbox, action)
 	})
 }
 
-func runCheckSteps(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job) error {
+func runCheckStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {
 	declared, err := store.DeclaredChecks(ctx, job.ID)
 	if err != nil {
 		return err
 	}
 	for _, declaration := range declared {
+		if spine.CheckID(job.ID, job.Revision, declaration.Name) != work.FactID {
+			continue
+		}
 		check, err := store.BeginCheck(ctx, job.ID, job.Revision, declaration.Name, declaration.Command)
 		if err != nil {
 			return err
@@ -192,11 +237,9 @@ func runCheckSteps(ctx context.Context, service spine.Service, store postgres.St
 		}); err != nil {
 			return err
 		}
-		// A failed Check has now admitted feedback as a normal Message. Let the
-		// shared decision choose delivery before any later Check.
 		return nil
 	}
-	return nil
+	return fmt.Errorf("selected Check %s is not declared for Revision %s", work.FactID, job.Revision)
 }
 
 func runFactStep(ctx context.Context, name, factID string, work func(context.Context) error) error {
@@ -213,6 +256,25 @@ func runFactStep(ctx context.Context, name, factID string, work func(context.Con
 	}
 	if result.FactID != factID {
 		return fmt.Errorf("Step %s returned fact %q, want %q", name, result.FactID, factID)
+	}
+	return nil
+}
+
+func runActionStep(ctx context.Context, actionID string, work func(context.Context) error) error {
+	name := actionStepName(actionID)
+	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (ActionStepResultV1, error) {
+		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (ActionStepResultV1, error) {
+			if err := work(workCtx); err != nil {
+				return ActionStepResultV1{}, err
+			}
+			return ActionStepResultV1{ActionID: actionID}, nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+	if result.ActionID != actionID {
+		return fmt.Errorf("Step %s returned Action %q, want %q", name, result.ActionID, actionID)
 	}
 	return nil
 }

@@ -107,13 +107,11 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		if err := verifyAttachedTask(ctx, store, params.JobID, CleanupTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		return absurd.Step(ctx, "dorf/cleanup/v1", func(stepCtx context.Context) (TaskResultV1, error) {
-			return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (TaskResultV1, error) {
-				if err := service.Cleanup(workCtx, params.JobID); err != nil {
-					return TaskResultV1{}, err
-				}
-				return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
-			})
+		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
+			if err := runCleanup(workCtx, service, store, params.JobID); err != nil {
+				return TaskResultV1{}, err
+			}
+			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }

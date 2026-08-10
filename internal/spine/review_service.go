@@ -83,6 +83,38 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 	return err
 }
 
+// ExecuteReviewCheckout prepares one selected reviewer's exact immutable
+// checkout. The workflow owns the surrounding Action Step; this operation
+// only reconciles and records that Action's external effect.
+func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action Action) error {
+	store, ok := s.Store.(ReviewStore)
+	if !ok {
+		return fmt.Errorf("review requires durable ReviewStore")
+	}
+	externals, ok := s.Externals.(ReviewExternals)
+	if !ok {
+		return fmt.Errorf("review requires Revision-isolated review externals")
+	}
+	run, err := store.ReviewRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID ||
+		action.ID != ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
+		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
+	}
+	if action.State == ActionSucceeded {
+		return nil
+	}
+	if err := externals.PrepareReviewCheckout(ctx, job, run); err != nil {
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	return s.Store.RecordSandboxActionSuccess(ctx, action.ID)
+}
+
 func (s Service) executeAndRecordReview(ctx context.Context, job Job, run ReviewRunView, store ReviewStore, externals ReviewExternals) (HarnessTurn, error) {
 	outcome, err := s.executeReviewRun(ctx, job, run, externals, store)
 	if err != nil {
@@ -143,10 +175,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
 		return HarnessTurn{}, reviewBoundaryError(reason)
 	}
-	if err := s.ensureReviewCheckout(ctx, job, original, store, externals); err != nil {
-		if attentionNeeded(err) {
-			_ = s.Store.UncertainAgentRun(ctx, original.ID, err.Error())
-		}
+	if err := s.requireReviewActions(ctx, job, original, store); err != nil {
 		return HarnessTurn{}, err
 	}
 	run, err := store.ReviewRun(ctx, original.ID)
@@ -213,6 +242,30 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	return contract.execute(ctx)
 }
 
+func (s Service) requireReviewActions(ctx context.Context, job Job, run ReviewRunView, store ReviewStore) error {
+	if run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != job.ID {
+		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
+	}
+	actions, err := store.Actions(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	for _, kind := range []ActionKind{ActionSandboxCreate, ActionReviewCheckout, ActionRouteCreate} {
+		expectedID := ScopedActionID(job.ID, kind, run.Sandbox.ID)
+		ready := false
+		for _, action := range actions {
+			if action.ID == expectedID && action.JobID == job.ID && action.Kind == kind && action.Scope == run.Sandbox.ID && action.State == ActionSucceeded {
+				ready = true
+				break
+			}
+		}
+		if !ready {
+			return fmt.Errorf("review AgentRun %s requires succeeded %s Action %s", run.ID, kind, expectedID)
+		}
+	}
+	return nil
+}
+
 func reviewRunAttempt(run AgentRun, request Message, sandbox Sandbox) ReviewRunView {
 	return ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox}
 }
@@ -231,34 +284,6 @@ func (s Service) recordReviewReadError(ctx context.Context, runID string, err er
 	} else if attentionNeeded(err) {
 		_ = s.Store.UncertainAgentRun(ctx, runID, err.Error())
 	}
-}
-
-func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original ReviewRunView, store ReviewStore, externals ReviewExternals) error {
-	if original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID {
-		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
-	}
-	if err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionSandboxCreate); err != nil {
-		return err
-	}
-	checkout, err := s.Store.GetOrCreateSandboxAction(ctx, original.Sandbox.ID, ActionReviewCheckout)
-	if err != nil {
-		return err
-	}
-	if checkout.State != ActionSucceeded {
-		if err := externals.PrepareReviewCheckout(ctx, job, original); err != nil {
-			return err
-		}
-		if err := s.requireClaim(ctx); err != nil {
-			return err
-		}
-		if err := s.Store.RecordSandboxActionSuccess(ctx, checkout.ID); err != nil {
-			return err
-		}
-	}
-	if err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionRouteCreate); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObservation) (Evidence, error) {

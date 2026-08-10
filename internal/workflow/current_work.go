@@ -17,29 +17,34 @@ import (
 type WorkKind string
 
 const (
-	WorkComplete        WorkKind = "complete"
-	WorkAttention       WorkKind = "attention"
-	WorkCreateSandbox   WorkKind = "create-sandbox"
-	WorkCloneRepository WorkKind = "clone-repository"
-	WorkSetupRepository WorkKind = "setup-repository"
-	WorkCreateRoute     WorkKind = "create-route"
-	WorkRunReviewer     WorkKind = "run-reviewer"
-	WorkDeliverMessage  WorkKind = "deliver-message"
-	WorkObserveRevision WorkKind = "observe-revision"
-	WorkRunChecks       WorkKind = "run-checks"
-	WorkChooseReview    WorkKind = "choose-review"
-	WorkPublishProposal WorkKind = "publish-proposal"
-	WorkObserveProposal WorkKind = "observe-proposal"
+	WorkComplete            WorkKind = "complete"
+	WorkAttention           WorkKind = "attention"
+	WorkCreateSandbox       WorkKind = "create-sandbox"
+	WorkCloneRepository     WorkKind = "clone-repository"
+	WorkSetupRepository     WorkKind = "setup-repository"
+	WorkCreateRoute         WorkKind = "create-route"
+	WorkCreateReviewSandbox WorkKind = "create-review-sandbox"
+	WorkCheckoutReview      WorkKind = "checkout-review-revision"
+	WorkCreateReviewRoute   WorkKind = "create-review-route"
+	WorkRunReviewer         WorkKind = "run-reviewer"
+	WorkDeliverMessage      WorkKind = "deliver-message"
+	WorkObserveRevision     WorkKind = "observe-revision"
+	WorkRunChecks           WorkKind = "run-checks"
+	WorkChooseReview        WorkKind = "choose-review"
+	WorkPublishProposal     WorkKind = "publish-proposal"
+	WorkObserveProposal     WorkKind = "observe-proposal"
 )
 
 // Work names the natural fact which owns the next operation. FactID is an
 // Action, AgentRun, Check, Revision, Proposal, or Outcome identity as
-// appropriate. It is useful for explanation and exact execution, but Work is
-// deliberately not durable.
+// appropriate. Scope names the concrete resource only when an Action needs
+// one. Work is useful for explanation and exact execution, but deliberately
+// not durable.
 type Work struct {
 	Kind     WorkKind `json:"kind"`
 	Revision string   `json:"revision,omitempty"`
 	FactID   string   `json:"fact_id,omitempty"`
+	Scope    string   `json:"scope,omitempty"`
 	Detail   string   `json:"detail,omitempty"`
 }
 
@@ -61,6 +66,12 @@ func (w Work) Description() string {
 		return "Run repository setup"
 	case WorkCreateRoute:
 		return "Create provider Route"
+	case WorkCreateReviewSandbox:
+		return "Provision reviewer Sandbox"
+	case WorkCheckoutReview:
+		return "Check out exact Revision for reviewer"
+	case WorkCreateReviewRoute:
+		return "Create reviewer provider Route"
 	case WorkRunReviewer:
 		return "Run selected reviewer"
 	case WorkDeliverMessage:
@@ -272,6 +283,18 @@ func decideCurrentWork(f currentWorkFacts) Work {
 			if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted || run.State == spine.AgentRunUncertain {
 				return work(WorkAttention, run.ID, attentionDetail(f.job, run.ID, agentRunAttention(run.AgentRun)))
 			}
+			if run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.job.ID {
+				return work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role))
+			}
+			if !actionSucceeded(f.actions, spine.ActionSandboxCreate, run.Sandbox.ID) {
+				return reviewActionWork(f, WorkCreateReviewSandbox, spine.ActionSandboxCreate, run, string(role))
+			}
+			if !actionSucceeded(f.actions, spine.ActionReviewCheckout, run.Sandbox.ID) {
+				return reviewActionWork(f, WorkCheckoutReview, spine.ActionReviewCheckout, run, string(role))
+			}
+			if !actionSucceeded(f.actions, spine.ActionRouteCreate, run.Sandbox.ID) {
+				return reviewActionWork(f, WorkCreateReviewRoute, spine.ActionRouteCreate, run, string(role))
+			}
 			return work(WorkRunReviewer, run.ID, string(role))
 		}
 	}
@@ -343,6 +366,16 @@ func decideCurrentWork(f currentWorkFacts) Work {
 		return work(WorkObserveProposal, f.proposal.URL, fmt.Sprintf("pull request #%d", f.proposal.Number))
 	}
 	return work(WorkPublishProposal, f.job.Revision, "")
+}
+
+func reviewActionWork(f currentWorkFacts, kind WorkKind, actionKind spine.ActionKind, run spine.ReviewRunView, role string) Work {
+	return Work{
+		Kind:     kind,
+		Revision: f.job.Revision,
+		FactID:   spine.ScopedActionID(f.job.ID, actionKind, run.Sandbox.ID),
+		Scope:    run.Sandbox.ID,
+		Detail:   role,
+	}
 }
 
 func reviewFeedbackReturned(messages []spine.MessageView, jobID, runID string) bool {

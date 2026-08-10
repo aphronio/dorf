@@ -41,13 +41,31 @@ func readyFacts() currentWorkFacts {
 }
 
 func TestCurrentWorkDependencyOrder(t *testing.T) {
-	t.Run("selected reviewer precedes implementation feedback", func(t *testing.T) {
+	t.Run("selected reviewer Actions precede its AgentRun and implementation feedback", func(t *testing.T) {
 		facts := readyFacts()
 		facts.reviewPlan.Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		facts.reviewRuns = []spine.ReviewRunView{{AgentRun: spine.AgentRun{ID: "review-1", Role: string(policy.RoleGeneral), State: spine.AgentRunPending}}}
+		reviewer := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-1", JobID: facts.job.ID, Role: string(policy.RoleGeneral), State: spine.AgentRunPending, SandboxID: spine.ReviewSandboxName("review-1")}}
+		reviewer.Sandbox = spine.Sandbox{ID: reviewer.SandboxID, JobID: facts.job.ID}
+		facts.reviewRuns = []spine.ReviewRunView{reviewer}
 		facts.delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
-		if got := decideCurrentWork(facts); got.Kind != WorkRunReviewer || got.FactID != "review-1" {
-			t.Fatalf("CurrentWork = %#v, want selected reviewer", got)
+		steps := []struct {
+			work   WorkKind
+			action spine.ActionKind
+		}{
+			{WorkCreateReviewSandbox, spine.ActionSandboxCreate},
+			{WorkCheckoutReview, spine.ActionReviewCheckout},
+			{WorkCreateReviewRoute, spine.ActionRouteCreate},
+		}
+		for _, step := range steps {
+			got := decideCurrentWork(facts)
+			wantID := spine.ScopedActionID(facts.job.ID, step.action, reviewer.Sandbox.ID)
+			if got.Kind != step.work || got.FactID != wantID || got.Scope != reviewer.Sandbox.ID {
+				t.Fatalf("CurrentWork = %#v, want %s Action %s", got, step.action, wantID)
+			}
+			facts.actions = append(facts.actions, spine.Action{ID: wantID, JobID: facts.job.ID, Kind: step.action, State: spine.ActionSucceeded, Scope: reviewer.Sandbox.ID})
+		}
+		if got := decideCurrentWork(facts); got.Kind != WorkRunReviewer || got.FactID != reviewer.ID {
+			t.Fatalf("CurrentWork = %#v, want selected reviewer after its exact Actions", got)
 		}
 	})
 

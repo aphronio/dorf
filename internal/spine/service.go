@@ -423,47 +423,42 @@ func activeHarness(status string) bool {
 	return status == "running" || status == "inProgress"
 }
 
-func (s Service) Cleanup(ctx context.Context, jobID string) error {
+// PrepareCleanup reconciles harness ownership and returns the exact Sandboxes
+// whose cleanup Actions the workflow must execute under their own stable
+// Action Steps.
+func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
 	job, err := s.Store.Job(ctx, jobID)
 	if err != nil {
-		return err
+		return Job{}, nil, err
 	}
 	if job.AdmissionOpen {
-		return fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
+		return Job{}, nil, fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
 	}
 	if job.CleanupState == CleanupComplete {
-		return nil
+		return job, nil, nil
 	}
 	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
-		return err
+		return Job{}, nil, err
 	}
 	runs, err := s.Store.AgentRuns(ctx, job.ID)
 	if err != nil {
 		_ = s.Store.SetCleanupAttention(ctx, job.ID, "enumerating unsettled AgentRuns: "+err.Error())
-		return err
+		return Job{}, nil, err
 	}
 	for _, run := range runs {
 		settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 		if !settled {
 			if err := s.Store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
 				_ = s.Store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled AgentRun "+run.ID+": "+err.Error())
-				return err
+				return Job{}, nil, err
 			}
 		}
 	}
 	sandboxes, err := s.Store.Sandboxes(ctx, job.ID)
 	if err != nil {
-		return err
+		return Job{}, nil, err
 	}
-	for _, sandbox := range sandboxes {
-		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
-			detail := fmt.Sprintf("reconciling %s for Sandbox %s", kind, sandbox.ID)
-			if err := s.cleanupStep(ctx, job.ID, detail, func() error { return s.reconcileSandboxAction(ctx, job, sandbox, kind) }); err != nil {
-				return fmt.Errorf("reconcile %s for Sandbox %s: %w", kind, sandbox.ID, err)
-			}
-		}
-	}
-	return s.cleanupStep(ctx, job.ID, "verifying no owned resource or non-cleanup Job claim remains unsettled", func() error { return s.Store.CompleteCleanup(ctx, job.ID) })
+	return job, sandboxes, nil
 }
 
 func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
@@ -585,17 +580,6 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 		reason = string(delivery.AgentRun.State)
 	}
 	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
-}
-
-func (s Service) reconcileSandboxAction(ctx context.Context, job Job, sandbox Sandbox, kind ActionKind) error {
-	action, err := s.Store.GetOrCreateSandboxAction(ctx, sandbox.ID, kind)
-	if err != nil {
-		return err
-	}
-	if action.State == ActionSucceeded {
-		return nil
-	}
-	return s.ExecuteSandboxAction(ctx, job, sandbox, action)
 }
 
 // ExecuteSandboxAction reconciles one external mutation against its exact
