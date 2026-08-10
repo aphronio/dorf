@@ -94,6 +94,3 @@ where j.revision=sqlc.arg(revision)
     where a.id=sqlc.arg(action_id) and a.job_id=j.id
       and a.scope_key=sqlc.arg(revision)
   );
-
--- name: GetProposalCurrentRevision :one
-select revision from dorf.jobs where id=sqlc.arg(job_id);

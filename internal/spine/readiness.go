@@ -22,7 +22,6 @@ type EvidenceVerification struct {
 }
 
 type ReadinessAssessment struct {
-	Status         string                       `json:"status"`
 	Ready          bool                         `json:"ready"`
 	Revision       string                       `json:"revision"`
 	Reason         string                       `json:"reason"`
@@ -109,7 +108,7 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 			continue
 		}
 		result.Digest = record.Digest
-		if record.ID != EvidenceID(check.ID, "check-output") || record.CheckID != check.ID || record.ActionID != "" || record.AgentRunID != "" || record.Revision != revision || record.Kind != "check-output" || record.MediaType != "application/vnd.dorf.observation+json" || record.Producer != commandEvidenceProducer || check.EvidenceDigest != record.Digest {
+		if record.ID != EvidenceID(check.ID, "check-output") || record.CheckID != check.ID || record.ActionID != "" || record.AgentRunID != "" || record.Revision != revision || record.Kind != "check-output" || record.MediaType != "application/vnd.dorf.observation+json" || record.Producer != commandEvidenceProducer {
 			fail("Evidence metadata does not match its Check, Revision, producer, or digest")
 		}
 		if record.StartedAt.IsZero() || record.FinishedAt.Before(record.StartedAt) || !record.StartedAt.Equal(check.StartedAt) || !record.FinishedAt.Equal(check.FinishedAt) {
@@ -143,18 +142,16 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 
 func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, messages []MessageView, agentRuns []AgentRun) ReadinessAssessment {
 	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
-	assessment := ReadinessAssessment{Status: "not_ready", Revision: job.Revision, Evidence: verified}
+	assessment := ReadinessAssessment{Revision: job.Revision, Evidence: verified}
 	if err != nil {
 		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
 		return assessment
 	}
 	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
-		assessment.Status, assessment.Ready = "not_ready", false
 		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
 		return assessment
 	}
 	if plan.Plan.Decision != "no-review" && plan.Plan.Decision != "selected" {
-		assessment.Status, assessment.Ready = "not_ready", false
 		assessment.Reason = "persisted review plan has no final decision"
 		return assessment
 	}
@@ -168,11 +165,14 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 			byRole[run.Role] = run
 		}
 	}
+	messageByID := make(map[string]MessageView, len(messages))
+	for _, message := range messages {
+		messageByID[message.ID] = message
+	}
 	verifyRun := func(run ReviewRunView) bool {
 		verification := VerifyReviewRunEvidence(run, records, blobs)
 		assessment.ReviewEvidence = append(assessment.ReviewEvidence, verification)
 		if !verification.Verified {
-			assessment.Status, assessment.Ready = "not_ready", false
 			assessment.Reason = fmt.Sprintf("review AgentRun %s Evidence is invalid: %s", run.ID, verification.Error)
 			return false
 		}
@@ -182,25 +182,21 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	feedback := make([]feedbackOwner, 0, len(plan.Plan.Roles))
 	for _, role := range plan.Plan.Roles {
 		run, ok := byRole[string(role)]
-		expectedRunID := ReviewAgentRunID(job.ID, job.Revision, string(role))
 		expectedRequestID := ReviewRequestMessageID(job.ID, job.Revision, string(role))
+		expectedRunID := AgentRunID(expectedRequestID)
 		expectedRequestFromID := ReviewRequestFromID(job.Revision, string(role))
 		expectedMessageID := MessageID(job.ID, MessageFromAgent, expectedRunID)
-		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != AgentRunCompleted || run.FeedbackMessageID != expectedMessageID {
-			assessment.Status, assessment.Ready = "not_ready", false
+		feedbackMessage, feedbackOK := messageByID[expectedMessageID]
+		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != AgentRunCompleted || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != MessageFollow {
 			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
 			return assessment
 		}
 		if !verifyRun(run) {
 			return assessment
 		}
-		feedback = append(feedback, feedbackOwner{messageID: run.FeedbackMessageID, reviewerID: run.ID})
+		feedback = append(feedback, feedbackOwner{messageID: expectedMessageID, reviewerID: run.ID})
 	}
 
-	messageByID := make(map[string]MessageView, len(messages))
-	for _, message := range messages {
-		messageByID[message.ID] = message
-	}
 	runByMessage := make(map[string]AgentRun, len(agentRuns))
 	for _, run := range agentRuns {
 		runByMessage[run.MessageID] = run
@@ -243,7 +239,7 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 			return assessment
 		}
 	}
-	assessment.Status, assessment.Ready = "ready", true
+	assessment.Ready = true
 	if plan.Plan.Decision == "no-review" {
 		assessment.Reason = "Checks have observed Evidence and ReviewPolicy explicitly selected no agent review for the exact Revision"
 	} else {

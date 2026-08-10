@@ -45,14 +45,3 @@ func TestReviewPolicyTable(t *testing.T) {
 		})
 	}
 }
-
-func TestMandatoryRulesAreDeterministic(t *testing.T) {
-	facts, err := FactsFromPaths(strings.Repeat("a", 40), strings.Repeat("b", 40), []string{"auth/login.go"}, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := ReviewPolicy(facts)
-	if err != nil || !reflect.DeepEqual(plan.Roles, []Role{RoleAuthAuthority}) {
-		t.Fatalf("mandatory plan=%#v err=%v", plan, err)
-	}
-}

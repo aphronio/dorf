@@ -266,7 +266,7 @@ func decideCurrentWork(f currentWorkFacts) Work {
 			if !ok {
 				return work(WorkAttention, f.job.Revision, fmt.Sprintf("selected reviewer %s has no AgentRun", role))
 			}
-			if run.FeedbackMessageID != "" {
+			if reviewFeedbackReturned(f.messages, f.job.ID, run.ID) {
 				continue
 			}
 			if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted || run.State == spine.AgentRunUncertain {
@@ -339,10 +339,20 @@ func decideCurrentWork(f currentWorkFacts) Work {
 		return work(WorkAttention, f.reviewPlan.Revision, "ReviewPlan does not match the current Revision")
 	}
 
-	if f.proposal != nil && !f.proposal.Stale && f.proposal.ProposedRevision == f.job.Revision {
+	if f.proposal != nil && f.proposal.ProposedRevision == f.job.Revision {
 		return work(WorkObserveProposal, f.proposal.URL, fmt.Sprintf("pull request #%d", f.proposal.Number))
 	}
 	return work(WorkPublishProposal, f.job.Revision, "")
+}
+
+func reviewFeedbackReturned(messages []spine.MessageView, jobID, runID string) bool {
+	expectedID := spine.MessageID(jobID, spine.MessageFromAgent, runID)
+	for _, message := range messages {
+		if message.ID == expectedID && message.JobID == jobID && message.FromKind == spine.MessageFromAgent && message.FromID == runID && message.Intent == spine.MessageFollow {
+			return true
+		}
+	}
+	return false
 }
 
 func actionSucceeded(actions []spine.Action, kind spine.ActionKind, scope string) bool {
@@ -466,7 +476,7 @@ func unchangedAttention(f currentWorkFacts) (string, string) {
 	if len(observations) > 1 {
 		previous = observations[len(observations)-2].sequence
 	}
-	exactProposal := f.proposal != nil && !f.proposal.Stale && f.proposal.ProposedRevision == f.job.Revision
+	exactProposal := f.proposal != nil && f.proposal.ProposedRevision == f.job.Revision
 	for _, message := range f.messages {
 		if message.Sequence <= previous || message.Sequence > last.sequence || !implementationMessages[message.ID] {
 			continue

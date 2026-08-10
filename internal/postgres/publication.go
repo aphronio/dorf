@@ -182,11 +182,6 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 		return nil, err
 	}
 	proposal := githubProposal(row)
-	current, err := queries.GetProposalCurrentRevision(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	proposal.Stale = proposal.ProposedRevision != current
 	return &proposal, nil
 }
 

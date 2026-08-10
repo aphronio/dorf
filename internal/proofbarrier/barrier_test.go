@@ -23,7 +23,7 @@ func TestProofBarrierIsDisabledByDefaultAndRequiresExplicitPhrase(t *testing.T) 
 	if _, err := FromEnv(); err == nil || !strings.Contains(err.Error(), "proof-only enable phrase") {
 		t.Fatalf("unsafe activation error=%v", err)
 	}
-	t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", messageEnablePhrase)
+	t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", proofEnablePhrase)
 	if barrier, err := FromEnv(); err != nil || barrier == nil {
 		t.Fatalf("explicit proof barrier=%v err=%v", barrier, err)
 	}
@@ -35,44 +35,6 @@ func TestProofBarrierRejectsTimingThatCouldOutliveItsClaim(t *testing.T) {
 	err := barrier.Reach(context.Background(), spine.BarrierBeforeSubmit, delivery)
 	if err == nil || !strings.Contains(err.Error(), "unsafe proof barrier timing") {
 		t.Fatalf("timing error=%v", err)
-	}
-}
-
-func TestPublicationProofBarriersRequireIssue43Phrase(t *testing.T) {
-	for _, point := range []string{spine.BarrierPushAccepted, spine.BarrierPullRequestAccepted} {
-		t.Run(point, func(t *testing.T) {
-			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", workflowEnablePhrase)
-			if _, err := FromEnv(); err == nil {
-				t.Fatal("older workflow proof phrase enabled publication barrier")
-			}
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", publicationEnablePhrase)
-			barrier, err := FromEnv()
-			if err != nil || barrier == nil {
-				t.Fatalf("barrier=%v err=%v", barrier, err)
-			}
-		})
-	}
-}
-
-func TestCleanupProofBarriersRequireIssue39Phrase(t *testing.T) {
-	for _, point := range []string{spine.BarrierRouteRevoked, spine.BarrierSandboxDeleted} {
-		t.Run(point, func(t *testing.T) {
-			t.Setenv("DORF_PROOF_FAULT_BARRIER", point)
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_JOB", "job-exact")
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_DIR", t.TempDir())
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", publicationEnablePhrase)
-			if _, err := FromEnv(); err == nil {
-				t.Fatal("publication proof phrase enabled cleanup barrier")
-			}
-			t.Setenv("DORF_PROOF_FAULT_BARRIER_ENABLE", cleanupEnablePhrase)
-			barrier, err := FromEnv()
-			if err != nil || barrier == nil {
-				t.Fatalf("barrier=%v err=%v", barrier, err)
-			}
-		})
 	}
 }
 

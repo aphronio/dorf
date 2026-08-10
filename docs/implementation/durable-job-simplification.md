@@ -23,7 +23,11 @@ Goal
        -> committed change: observe a new Revision; loop
        -> clean unchanged checkout: continue
   -> exact-Revision PR Proposal
-  -> accepted, rejected, or abandoned Outcome
+  -> observe exact pull request
+       -> trusted owner/collaborator comment: human Message; loop
+       -> merge: accepted Outcome
+       -> close without merge: rejected Outcome
+       -> explicit abandon: abandoned Outcome
   -> separate observable, retryable Cleanup
 ```
 

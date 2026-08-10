@@ -70,7 +70,8 @@ jq -e '.claims.messages | map(select(.sequence == 1 and .harness == "codex" and 
 jq -e --arg source "$SOURCE_COMMIT" '
   (.claims.messages | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
   .job.revision == $source and
-  .job.revision_generation == 0 and
+  (.observed_facts.revisions | length == 1) and
+  (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and
   (.observed_facts.evidence | any(
     .kind == "git-revision" and
     .agent_run_id == $agent_run_id and
@@ -94,7 +95,7 @@ jq -n \
   --arg source "$SOURCE_COMMIT" \
   --arg provider "$PROVIDER" \
   --arg job "$JOB_ID" \
-  '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_generation:0,git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
+  '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
   >"$EVIDENCE_DIR/image-proof.json"
 printf 'Candidate image setup/Harness Turn/no-change/cleanup proof passed: %s\n' "$JOB_ID"
 JOB_ID=""

@@ -29,6 +29,8 @@ type reconcilingFaultEffect struct {
 	mu           sync.Mutex
 	accepted     bool
 	mutations    int
+	claimPassed  []string
+	claimFailed  []string
 	firstRun     chan string
 	releaseFirst chan struct{}
 	releaseOnce  sync.Once
@@ -62,6 +64,36 @@ func (e *reconcilingFaultEffect) mutationCount() int {
 	return e.mutations
 }
 
+func (e *reconcilingFaultEffect) recordClaim(runID string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err == nil {
+		e.claimPassed = append(e.claimPassed, runID)
+		return
+	}
+	e.claimFailed = append(e.claimFailed, runID)
+}
+
+func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.claimPassed...), append([]string(nil), e.claimFailed...)
+}
+
+// faultActionExternals controls only the repository-clone effect exercised by
+// this fault story. The nil embedded interface makes any unexpected external
+// call fail the test instead of teaching this focused fake unrelated behavior.
+type faultActionExternals struct {
+	spine.Externals
+	effect *reconcilingFaultEffect
+	runID  string
+}
+
+func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
+	e.effect.reconcile(e.runID)
+	return nil
+}
+
 func repositoryCloneAction(actions []spine.Action) (spine.Action, bool) {
 	for _, action := range actions {
 		if action.Kind == spine.ActionRepositoryClone {
@@ -82,15 +114,29 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (faultActionResultV1, error) {
+			job, err := store.Job(workCtx, params.JobID)
+			if err != nil {
+				return faultActionResultV1{}, err
+			}
+			sandbox, err := store.Sandbox(workCtx, spine.MainSandboxName(params.JobID))
+			if err != nil {
+				return faultActionResultV1{}, err
+			}
 			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), spine.ActionRepositoryClone)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			effect.reconcile(task.RunID())
-			if err := absurdruntime.RequireClaim(workCtx); err != nil {
-				return faultActionResultV1{}, err
+			runID := task.RunID()
+			service := spine.Service{
+				Store:     store,
+				Externals: faultActionExternals{effect: effect, runID: runID},
+				ClaimCheck: func(claimCtx context.Context) error {
+					err := absurdruntime.RequireClaim(claimCtx)
+					effect.recordClaim(runID, err)
+					return err
+				},
 			}
-			if err := store.RecordSandboxActionSuccess(workCtx, action.ID); err != nil {
+			if err := service.ExecuteSandboxAction(workCtx, job, sandbox, action); err != nil {
 				return faultActionResultV1{}, err
 			}
 			return faultActionResultV1{ActionID: action.ID}, nil
@@ -159,7 +205,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	go func() {
 		workerDone <- client.WorkBatch(context.Background(), absurd.WorkBatchOptions{WorkerID: "fault-cancel", BatchSize: 1, ClaimTimeout: time.Minute})
 	}()
-	<-effect.firstRun
+	firstRunID := <-effect.firstRun
 	if err := client.CancelTask(context.Background(), queueName, spawned.TaskID); err != nil {
 		t.Fatal(err)
 	}
@@ -171,8 +217,9 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	snapshot, err := client.FetchTaskResult(context.Background(), queueName, spawned.TaskID)
 	actions, actionsErr := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
-	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != spine.ActionUnsettled || effect.mutationCount() != 1 {
-		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d errors=%v/%v", snapshot, actions, effect.mutationCount(), err, actionsErr)
+	passed, failed := effect.claims()
+	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != spine.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 0 || len(failed) != 1 || failed[0] != firstRunID {
+		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", snapshot, actions, effect.mutationCount(), passed, failed, err, actionsErr)
 	}
 }
 
@@ -238,7 +285,8 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	}
 	actions, err := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
-	if err != nil || !found || action.State != spine.ActionSucceeded || effect.mutationCount() != 1 {
-		t.Fatalf("reconciled actions=%#v mutations=%d err=%v", actions, effect.mutationCount(), err)
+	passed, failed := effect.claims()
+	if err != nil || !found || action.State != spine.ActionSucceeded || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] == firstRunID || len(failed) != 1 || failed[0] != firstRunID {
+		t.Fatalf("reconciled actions=%#v mutations=%d claims passed=%v failed=%v err=%v", actions, effect.mutationCount(), passed, failed, err)
 	}
 }

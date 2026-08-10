@@ -26,19 +26,6 @@ func (q *Queries) CountDeclaredReviewChecks(ctx context.Context, jobID string) (
 	return count, err
 }
 
-const getReviewCurrentRevision = `-- name: GetReviewCurrentRevision :one
-select revision
-from dorf.jobs
-where id=$1
-`
-
-func (q *Queries) GetReviewCurrentRevision(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewCurrentRevision, jobID)
-	var revision string
-	err := row.Scan(&revision)
-	return revision, err
-}
-
 const getReviewFeedbackMessage = `-- name: GetReviewFeedbackMessage :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
@@ -314,19 +301,14 @@ func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunPa
 }
 
 const listAllReviewRuns = `-- name: ListAllReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce
 from dorf.review_run_projection p
-join dorf.jobs j on j.id=p.job_id
-left join dorf.job_messages m
-  on m.job_id=p.job_id and m.from_kind='agent' and m.from_id=p.id
 where p.job_id=$1 and p.input_revision<>'' and p.role<>'implement'
 order by p.input_revision,p.role
 `
 
 type ListAllReviewRunsRow struct {
 	DorfReviewRunProjection DorfReviewRunProjection
-	FeedbackMessageID       string
-	Stale                   bool
 }
 
 func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAllReviewRunsRow, error) {
@@ -365,8 +347,6 @@ func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAl
 			&i.DorfReviewRunProjection.SandboxID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.FeedbackMessageID,
-			&i.Stale,
 		); err != nil {
 			return nil, err
 		}
@@ -459,11 +439,8 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 }
 
 const listReviewRuns = `-- name: ListReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce
 from dorf.review_run_projection p
-join dorf.jobs j on j.id=p.job_id
-left join dorf.job_messages m
-  on m.job_id=p.job_id and m.from_kind='agent' and m.from_id=p.id
 where p.job_id=$1 and p.input_revision=$2 and p.role<>'implement'
 order by p.role
 `
@@ -475,8 +452,6 @@ type ListReviewRunsParams struct {
 
 type ListReviewRunsRow struct {
 	DorfReviewRunProjection DorfReviewRunProjection
-	FeedbackMessageID       string
-	Stale                   bool
 }
 
 func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) ([]ListReviewRunsRow, error) {
@@ -515,8 +490,6 @@ func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) 
 			&i.DorfReviewRunProjection.SandboxID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.FeedbackMessageID,
-			&i.Stale,
 		); err != nil {
 			return nil, err
 		}

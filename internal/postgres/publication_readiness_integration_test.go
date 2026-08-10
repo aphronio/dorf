@@ -76,11 +76,20 @@ func TestPostgresMissingOrTamperedEvidenceNeverReachesPushExternals(t *testing.T
 			}
 			root := t.TempDir()
 			if test.tamper {
-				checks, err := store.Checks(context.Background(), job.ID)
-				if err != nil || len(checks) == 0 {
-					t.Fatalf("Checks=%#v err=%v", checks, err)
+				records, err := store.Evidence(context.Background(), job.ID)
+				if err != nil || len(records) == 0 {
+					t.Fatalf("Evidence=%#v err=%v", records, err)
 				}
-				digest := checks[0].EvidenceDigest
+				var digest string
+				for _, record := range records {
+					if record.CheckID != "" {
+						digest = record.Digest
+						break
+					}
+				}
+				if digest == "" {
+					t.Fatal("no Check Evidence found")
+				}
 				path := filepath.Join(root, "sha256", digest[:2], digest[2:])
 				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 					t.Fatal(err)

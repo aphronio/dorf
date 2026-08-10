@@ -1,11 +1,32 @@
 package workflow
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+func TestPersistedWorkflowContractsV1(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"task result", TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
+		{"wake", WakeV1{JobID: "job-1", Sequence: 2}, `{"job_id":"job-1","sequence":2}`},
+		{"fact step result", FactStepResultV1{FactID: "action-1"}, `{"fact_id":"action-1"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := json.Marshal(test.value)
+			if err != nil || string(encoded) != test.want {
+				t.Fatalf("persisted JSON = %s, want %s: %v", encoded, test.want, err)
+			}
+		})
+	}
+}
 
 func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	if WakeEvent("job-a", 2) != WakeEvent("job-a", 2) {

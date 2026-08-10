@@ -51,6 +51,20 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		}
 	})
 
+	t.Run("review feedback Message enters the ordinary implementation lane", func(t *testing.T) {
+		facts := readyFacts()
+		facts.reviewPlan.Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
+		requestID := spine.ReviewRequestMessageID(facts.job.ID, facts.job.Revision, string(policy.RoleGeneral))
+		reviewerID := spine.AgentRunID(requestID)
+		facts.reviewRuns = []spine.ReviewRunView{{AgentRun: spine.AgentRun{ID: reviewerID, Role: string(policy.RoleGeneral), State: spine.AgentRunCompleted}}}
+		feedback := spine.Message{ID: spine.MessageID(facts.job.ID, spine.MessageFromAgent, reviewerID), JobID: facts.job.ID, FromKind: spine.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: spine.MessageFollow}
+		facts.messages = []spine.MessageView{{Message: feedback}}
+		facts.delivery = &spine.Delivery{Message: feedback, AgentRun: spine.AgentRun{ID: spine.AgentRunID(feedback.ID), State: spine.AgentRunPending}}
+		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != facts.delivery.AgentRun.ID {
+			t.Fatalf("CurrentWork = %#v, want ordinary feedback Message delivery", got)
+		}
+	})
+
 	t.Run("message precedes Git observation and Checks", func(t *testing.T) {
 		facts := readyFacts()
 		facts.reviewPlan = nil
@@ -58,6 +72,20 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		facts.delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != "implement-2" {
 			t.Fatalf("CurrentWork = %#v, want Message delivery", got)
+		}
+	})
+
+	t.Run("submitting Follow is reconciled before Checks", func(t *testing.T) {
+		facts := readyFacts()
+		facts.reviewPlan = nil
+		facts.checks = nil
+		message := spine.Message{ID: "message-2", JobID: facts.job.ID, Sequence: 2, Intent: spine.MessageFollow}
+		run := spine.AgentRun{ID: spine.AgentRunID(message.ID), JobID: facts.job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunSubmitting}
+		facts.messages = []spine.MessageView{{Message: message}}
+		facts.runs = []spine.AgentRun{run}
+		facts.delivery = &spine.Delivery{Message: message, AgentRun: run}
+		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != run.ID {
+			t.Fatalf("CurrentWork = %#v, want submitting Follow reconciliation", got)
 		}
 	})
 

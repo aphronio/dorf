@@ -52,14 +52,6 @@ func TestCreateManifestRejectsImageWithoutGo(t *testing.T) {
 	}
 }
 
-func TestValidationRejectsPreCutoverImageSchema(t *testing.T) {
-	archive := filepath.Join(t.TempDir(), ArchiveName)
-	manifest := Manifest{SchemaVersion: 3, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine"}
-	if err := validate(manifest, archive); err == nil || !strings.Contains(err.Error(), "unsupported product shape") {
-		t.Fatalf("schema-3 image validation error=%v", err)
-	}
-}
-
 func TestPublishedImageAssetAuthorityIsExact(t *testing.T) {
 	asset := githubAsset{Name: manifestName, Size: 10, Digest: "sha256:" + strings.Repeat("a", 64), URL: "https://github.com/aphronio/dorf/releases/download/v0.2.0/" + manifestName}
 	if _, err := exactAsset([]githubAsset{asset}, manifestName, "v0.2.0"); err != nil {

@@ -1,13 +1,12 @@
 # Greenfield Architecture — Go + Absurd
 
-This document records the accepted architecture direction for replacing Dorf's current Python
-implementation. It defines durable boundaries and engineering constraints. GitHub issues own the
+This document records Dorf's accepted Go and Absurd architecture. It defines durable boundaries and
+engineering constraints. GitHub issues own the
 implementation sequence, acceptance criteria, and live execution ledger; code owns concrete package
 and API shape.
 
-During the cutover, the Python implementation is evidence about observed behavior, not a
-compatibility target. There are no users or durable installations to migrate. Old local state,
-SQLite schemas, Python APIs, CLI shapes, and document formats may be discarded.
+The superseded Python implementation is historical evidence, not a compatibility target. Old local
+state, SQLite schemas, Python APIs, CLI shapes, and document formats are not supported.
 
 ## System shape
 

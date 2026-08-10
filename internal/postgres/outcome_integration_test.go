@@ -47,7 +47,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 		t.Fatal(err)
 	}
 	stored, err := store.Proposal(ctx, job.ID)
-	if err != nil || stored == nil || stored.Stale || stored.ProposedRevision != revision {
+	if err != nil || stored == nil || stored.ProposedRevision != revision {
 		t.Fatalf("current Proposal=%#v err=%v", stored, err)
 	}
 	return job, proposal

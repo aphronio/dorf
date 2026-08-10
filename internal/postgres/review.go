@@ -146,7 +146,6 @@ func clearReviewPolicyAttention(ctx context.Context, queries *dbsql.Queries, job
 }
 
 func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts) (string, error) {
-	runID := spine.ReviewAgentRunID(jobID, revision, role)
 	declaredChecks, err := queries.ListDeclaredReviewCheckNames(ctx, jobID)
 	if err != nil {
 		return "", err
@@ -157,6 +156,7 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 		ID: spine.ReviewRequestMessageID(jobID, revision, role), JobID: jobID,
 		FromKind: spine.MessageFromWorkflow, FromID: fromID, Input: input, Intent: spine.MessageFollow,
 	}
+	runID := spine.AgentRunID(message.ID)
 	message.Sequence, err = queries.NextMessageSequence(ctx, jobID)
 	if err != nil {
 		return "", err
@@ -213,7 +213,6 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce},
 	}
 	view.Request.AdmittedAt = row.RequestAdmittedAt
-	view.Route = spine.RouteForSandbox(view.Sandbox)
 	if row.StartedAt.Valid {
 		view.StartedAt = row.StartedAt.Time
 	}
@@ -224,20 +223,13 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 }
 
 func (s Store) ReviewRuns(ctx context.Context, jobID, revision string) ([]spine.ReviewRunView, error) {
-	queries := dbsql.New(s.DB)
-	if _, err := queries.GetReviewCurrentRevision(ctx, jobID); err != nil {
-		return nil, err
-	}
-	rows, err := queries.ListReviewRuns(ctx, dbsql.ListReviewRunsParams{JobID: jobID, Revision: revision})
+	rows, err := dbsql.New(s.DB).ListReviewRuns(ctx, dbsql.ListReviewRunsParams{JobID: jobID, Revision: revision})
 	if err != nil {
 		return nil, err
 	}
 	views := make([]spine.ReviewRunView, 0, len(rows))
 	for _, row := range rows {
-		view := reviewRunView(row.DorfReviewRunProjection)
-		view.FeedbackMessageID = row.FeedbackMessageID
-		view.Stale = row.Stale
-		views = append(views, view)
+		views = append(views, reviewRunView(row.DorfReviewRunProjection))
 	}
 	return views, nil
 }
@@ -249,10 +241,7 @@ func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewR
 	}
 	result := make([]spine.ReviewRunView, 0, len(rows))
 	for _, row := range rows {
-		view := reviewRunView(row.DorfReviewRunProjection)
-		view.FeedbackMessageID = row.FeedbackMessageID
-		view.Stale = row.Stale
-		result = append(result, view)
+		result = append(result, reviewRunView(row.DorfReviewRunProjection))
 	}
 	return result, nil
 }

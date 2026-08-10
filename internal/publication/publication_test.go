@@ -126,7 +126,7 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-1", Goal: "Implement durable publication", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
-	assessment := spine.ReadinessAssessment{Status: "ready", Ready: true, Revision: revision, Reason: "exact checks and selected review settled"}
+	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact checks and selected review settled"}
 	checks := []spine.Check{{Name: "smoke", State: "passed", Revision: revision, EvidenceID: "e-smoke"}, {Name: "check", State: "passed", Revision: revision, EvidenceID: "e-check"}}
 	evidence := []spine.Evidence{{ID: "e-check", Digest: strings.Repeat("1", 64)}, {ID: "e-smoke", Digest: strings.Repeat("2", 64)}}
 	first := Body(job, assessment, checks, evidence, nil)
@@ -145,8 +145,9 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback", Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
 	role := "critical-boundary"
-	runID := spine.ReviewAgentRunID(job.ID, revision, role)
 	requestID := spine.ReviewRequestMessageID(job.ID, revision, role)
+	runID := spine.AgentRunID(requestID)
+	feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, runID)
 	observedID := spine.EvidenceID(runID, "review-observation")
 	runs := []spine.ReviewRunView{{
 		AgentRun: spine.AgentRun{
@@ -155,19 +156,17 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 			Role:          role,
 			InputRevision: revision,
 		},
-		Request:           spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
-		FeedbackMessageID: "message-review-feedback",
+		Request: spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
 	}, {
-		AgentRun:          spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
-		Request:           spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
-		FeedbackMessageID: "message-unselected",
+		AgentRun: spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
+		Request:  spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
 	}}
 	evidence := []spine.Evidence{
 		{ID: observedID, Digest: strings.Repeat("2", 64)},
 		{ID: "e-unselected", Digest: strings.Repeat("3", 64)},
 	}
 	assessment := spine.ReadinessAssessment{
-		Status: "ready",
+		Ready:  true,
 		Reason: "review feedback handled",
 		ReviewEvidence: []spine.ReviewEvidenceVerification{{
 			AgentRunID: runID, Role: role, Revision: revision,
@@ -176,7 +175,7 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	}
 
 	body := Body(job, assessment, nil, evidence, runs)
-	for _, want := range []string{role, "AgentRun `" + runID + "`", "feedback Message `message-review-feedback`", "handled by an implementation AgentRun", observedID, strings.Repeat("2", 64)} {
+	for _, want := range []string{role, "AgentRun `" + runID + "`", "feedback Message `" + feedbackMessageID + "`", "handled by an implementation AgentRun", observedID, strings.Repeat("2", 64)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body is missing %q:\n%s", want, body)
 		}
@@ -204,7 +203,7 @@ func TestGoalProjectionPreservesExactUTF8AcrossJSONAndPullReconciliation(t *test
 			}
 			revision := strings.Repeat("a", 40)
 			job := spine.Job{ID: "job-unicode", Goal: test.goal, GitHubRepository: "aphronio/dorf", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
-			readiness := spine.ReadinessAssessment{Status: "ready", Ready: true, Revision: revision, Reason: "exact proof"}
+			readiness := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact proof"}
 			body := Body(job, readiness, nil, nil, nil)
 			digest := BodyDigest(body)
 			if !utf8.ValidString(body) || digest != BodyDigest(body) {

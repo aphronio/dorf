@@ -35,7 +35,8 @@ with current_turn_start as (
     select m.id,2,m.sequence
     from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
     where m.job_id=$1 and ar.role='implement'
-      and ar.state='pending' and ar.turn_id is null
+      and (ar.state='pending' or (ar.state='submitting' and m.delivery_intent='follow'))
+      and ar.turn_id is null
       and not exists(select 1 from current_turn_start)
 )
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,

@@ -49,7 +49,7 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	if proposal == nil || proposal.Stale || proposal.ProposedRevision != job.Revision {
+	if proposal == nil || proposal.ProposedRevision != job.Revision {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}

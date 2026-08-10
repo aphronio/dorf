@@ -212,6 +212,12 @@ func TestPullRequestResponseRequiresExactHeadSHA(t *testing.T) {
 
 func TestExactPullRequestObservationRetainsMergedAuthority(t *testing.T) {
 	merge := strings.Repeat("b", 40)
+	var missingMerge pullPayload
+	missingMerge.Number, missingMerge.HTMLURL, missingMerge.Title, missingMerge.State, missingMerge.Merged = 39, "url", "title", "closed", true
+	missingMerge.Head.Ref, missingMerge.Head.SHA, missingMerge.Head.Repo.FullName, missingMerge.Base.Ref = "dorf/issue-39", strings.Repeat("a", 40), "aphronio/dorf", "greenfield"
+	if _, err := missingMerge.pullRequest(); err == nil {
+		t.Fatal("merged pull request without exact merge commit OID was accepted")
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != "/repos/aphronio/dorf/pulls/39" {
 			t.Fatalf("unexpected exact observation request %s %s", request.Method, request.URL.Path)
@@ -340,14 +346,5 @@ func TestIssueCommentsRejectInvalidObservation(t *testing.T) {
 	}}
 	if comments, err := client.IssueComments(context.Background(), Authority{"aphronio/dorf", "42"}, 0); err == nil || comments != nil {
 		t.Fatalf("comments=%#v err=%v", comments, err)
-	}
-}
-
-func TestMergedPullRequestObservationRequiresExactMergeCommitOID(t *testing.T) {
-	var payload pullPayload
-	payload.Number, payload.HTMLURL, payload.Title, payload.State, payload.Merged = 39, "url", "title", "closed", true
-	payload.Head.Ref, payload.Head.SHA, payload.Head.Repo.FullName, payload.Base.Ref = "dorf/issue-39", strings.Repeat("a", 40), "aphronio/dorf", "greenfield"
-	if _, err := payload.pullRequest(); err == nil {
-		t.Fatal("merged pull request without exact merge commit OID was accepted")
 	}
 }

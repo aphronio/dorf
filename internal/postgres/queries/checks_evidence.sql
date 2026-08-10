@@ -47,11 +47,6 @@ select id,job_id,name,command,revision,state,coalesce(exit_code,0)::integer as e
 from dorf.checks
 where id=sqlc.arg(id);
 
--- name: GetEvidenceDigest :one
-select digest
-from dorf.evidence
-where id=sqlc.arg(id);
-
 -- name: GetCheckForUpdate :one
 select job_id,revision,command
 from dorf.checks
@@ -66,15 +61,13 @@ set state=sqlc.arg(state),exit_code=sqlc.arg(exit_code),
 where id=sqlc.arg(id);
 
 -- name: ListChecks :many
-select c.id,c.job_id,c.name,c.command,c.revision,c.state,
-       coalesce(c.exit_code,0)::integer as exit_code,
-       coalesce(c.evidence_id,'') as evidence_id,
-       coalesce(e.digest,'') as evidence_digest,
-       c.started_at,c.finished_at
-from dorf.checks c
-left join dorf.evidence e on e.id=c.evidence_id
-where c.job_id=sqlc.arg(job_id)
-order by c.started_at nulls last,c.id;
+select id,job_id,name,command,revision,state,
+       coalesce(exit_code,0)::integer as exit_code,
+       coalesce(evidence_id,'') as evidence_id,
+       started_at,finished_at
+from dorf.checks
+where job_id=sqlc.arg(job_id)
+order by started_at nulls last,id;
 
 -- name: ListEvidence :many
 select id,digest,byte_size,media_type,producer,kind,

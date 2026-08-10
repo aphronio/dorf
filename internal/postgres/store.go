@@ -395,7 +395,7 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	}
 	return spine.Job{
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Goal: row.Goal, Repository: row.Repository,
-		Revision: row.Revision, RevisionGeneration: int(row.RevisionGeneration), StartingRevision: row.StartingRevision, Branch: row.Branch,
+		Revision: row.Revision, StartingRevision: row.StartingRevision, Branch: row.Branch,
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
 		ProviderConnection: row.ProviderConnection,
 		Model:              row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
@@ -466,8 +466,8 @@ func agentRunFromValues(id, jobID, messageID string, state spine.AgentRunState, 
 	return spine.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
 }
 
-func checkFromValues(id, jobID, name, command, revision, state string, exitCode int32, evidenceID, evidenceDigest string, startedAt, finishedAt sql.NullTime) spine.Check {
-	return spine.Check{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision, State: state, ExitCode: int(exitCode), EvidenceID: evidenceID, EvidenceDigest: evidenceDigest, StartedAt: timeValue(startedAt), FinishedAt: timeValue(finishedAt)}
+func checkFromValues(id, jobID, name, command, revision, state string, exitCode int32, evidenceID string, startedAt, finishedAt sql.NullTime) spine.Check {
+	return spine.Check{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision, State: state, ExitCode: int(exitCode), EvidenceID: evidenceID, StartedAt: timeValue(startedAt), FinishedAt: timeValue(finishedAt)}
 }
 
 func timeValue(value sql.NullTime) time.Time {
@@ -945,15 +945,9 @@ func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command st
 	if err != nil {
 		return spine.Check{}, err
 	}
-	check := checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, "", row.StartedAt, row.FinishedAt)
+	check := checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.StartedAt, row.FinishedAt)
 	if check.Command != command {
 		return spine.Check{}, fmt.Errorf("Check %s command conflicts at Revision %s", name, revision)
-	}
-	if check.EvidenceID != "" {
-		check.EvidenceDigest, err = queries.GetEvidenceDigest(ctx, check.EvidenceID)
-		if err != nil {
-			return spine.Check{}, err
-		}
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.Check{}, err
@@ -1027,7 +1021,7 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	if err != nil {
 		return spine.Message{}, false, err
 	}
-	input := fmt.Sprintf("The deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Resolve the failure if code changes are warranted, keep the checkout clean, and return control so Dorf can observe either a new Revision or an unchanged HEAD before rerunning verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
+	input := fmt.Sprintf("The deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and the observed output is retained as Evidence %s. Resolve the failure if code changes are warranted, keep the checkout clean, and return control so Dorf can observe either a new Revision or an unchanged HEAD before rerunning verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceID)
 	message := spine.Message{ID: spine.MessageID(check.JobID, spine.MessageFromWorkflow, check.ID), JobID: check.JobID, FromKind: spine.MessageFromWorkflow, FromID: check.ID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent}); err != nil {
 		return spine.Message{}, false, err
@@ -1318,34 +1312,14 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 		return nil, err
 	}
 	var views []spine.MessageView
-	var roles []string
 	for _, row := range rows {
 		view := spine.MessageView{
 			Message:    messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
 			AgentRunID: row.AgentRunID, State: row.State, Harness: row.Harness, ThreadID: row.ThreadID, TurnID: row.TurnID,
-			TurnOutcome: row.TurnOutcome, Attention: row.Attention, Delivered: row.Delivered,
+			TurnOutcome: row.TurnOutcome, Attention: row.Attention,
 		}
 		view.AdmittedAt = row.AdmittedAt
 		views = append(views, view)
-		roles = append(roles, row.Role)
-	}
-	var blocker *spine.MessageView
-	for i := range views {
-		view := &views[i]
-		if roles[i] != "implement" {
-			continue
-		}
-		if blocker != nil && !(view.Intent == spine.MessageSteer && blocker.State == spine.AgentRunActive && view.TargetTurnID == blocker.TurnID) {
-			view.BlockingSeq = blocker.Sequence
-			view.BlockingReason = string(blocker.State)
-			if blocker.Attention != "" {
-				view.BlockingReason += ": " + blocker.Attention
-			}
-		}
-		turnStartActive := (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain) && (view.Intent == spine.MessageFollow || view.TurnID != "" && view.TurnID != view.TargetTurnID)
-		if blocker == nil && ((!view.Delivered && view.State != spine.AgentRunCompleted) || turnStartActive) {
-			blocker = view
-		}
 	}
 	return views, nil
 }
@@ -1439,7 +1413,7 @@ func (s Store) Checks(ctx context.Context, jobID string) ([]spine.Check, error) 
 	}
 	var checks []spine.Check
 	for _, row := range rows {
-		checks = append(checks, checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.EvidenceDigest, row.StartedAt, row.FinishedAt))
+		checks = append(checks, checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.StartedAt, row.FinishedAt))
 	}
 	return checks, nil
 }

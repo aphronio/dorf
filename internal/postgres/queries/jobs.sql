@@ -1,5 +1,5 @@
 -- name: GetJob :one
-select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,
+select j.id,j.admission_key,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
@@ -10,7 +10,6 @@ select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generatio
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
-left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
 join dorf.revisions initial on initial.job_id=j.id and initial.generation=0
 where j.id=sqlc.arg(job_id);
 

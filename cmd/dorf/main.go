@@ -418,20 +418,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	delivery := "queued"
-	var blockingSequence int64
-	var blockingReason string
-	views, err := store.Messages(ctx, accepted.JobID)
-	if err != nil {
-		return err
-	}
-	for _, view := range views {
-		if view.ID == accepted.ID && view.BlockingSeq > 0 {
-			delivery, blockingSequence, blockingReason = "blocked", view.BlockingSeq, view.BlockingReason
-			break
-		}
-	}
-	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": delivery, "blocking_sequence": blockingSequence, "blocking_reason": blockingReason})
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": "queued"})
 }
 
 func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -527,9 +514,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	if err != nil {
 		return err
 	}
-	declared, declaredErr := store.DeclaredChecks(ctx, job.ID)
-	if declaredErr != nil {
-		declared = nil
+	declared, err := store.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return err
 	}
 	plans, err := store.ReviewPlans(ctx, job.ID)
 	if err != nil {
@@ -538,18 +525,6 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	reviewRuns, err := store.AllReviewRuns(ctx, job.ID)
 	if err != nil {
 		return err
-	}
-	sandboxes, err := store.Sandboxes(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	type sandboxView struct {
-		Sandbox spine.Sandbox `json:"sandbox"`
-		Route   spine.Route   `json:"route"`
-	}
-	resources := make([]sandboxView, 0, len(sandboxes))
-	for _, sandbox := range sandboxes {
-		resources = append(resources, sandboxView{Sandbox: sandbox, Route: spine.RouteForSandbox(sandbox)})
 	}
 	var currentPlan *spine.ReviewPlanRecord
 	for i := range plans {
@@ -568,6 +543,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	}
 	history := workflowHistory(job, messages, actions, agentRuns, revisions, checks, plans, evidenceRecords, proposal, outcome)
 	if *jsonOutput {
+		sandboxes, err := store.Sandboxes(ctx, job.ID)
+		if err != nil {
+			return err
+		}
 		runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
 		if err != nil {
 			return err
@@ -576,14 +555,29 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 		if err != nil {
 			return err
 		}
-		view := map[string]any{"job": job, "current_work": currentWork, "workflow_history": history, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "claims": map[string]any{"messages": messages, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "agent_runs": agentRuns, "review_agent_runs": reviewRuns, "revisions": revisions, "checks": checks, "evidence": evidenceRecords, "sandboxes": resources, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
+		view := map[string]any{
+			"job":          job,
+			"current_work": currentWork,
+			"readiness":    assessment,
+			"proposal":     proposal,
+			"outcome":      outcome,
+			"claims":       map[string]any{"messages": messages},
+			"observed_facts": map[string]any{
+				"actions": actions, "agent_runs": agentRuns, "revisions": revisions,
+				"checks": checks, "evidence": evidenceRecords, "review_plans": plans,
+				"sandboxes": sandboxes,
+			},
+			"absurd_run":     runEvidence,
+			"absurd_cleanup": cleanupEvidence,
+		}
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, assessment.Status, assessment.Reason)
-	renderWorkflow(stdout, currentWork)
-	for _, resource := range resources {
-		fmt.Fprintf(stdout, "  sandbox: %s route=%s\n", resource.Sandbox.ID, resource.Route.ID)
+	readiness := "not ready"
+	if assessment.Ready {
+		readiness = "ready"
 	}
+	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -593,12 +587,20 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	if proposal == nil {
 		fmt.Fprintln(stdout, "  proposal: none")
 	} else {
-		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s body=%s stale=%t\n", proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.BodyDigest, proposal.Stale)
+		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s", proposal.Number, proposal.URL, proposal.ProposedRevision)
+		if proposal.ProposedRevision != job.Revision {
+			fmt.Fprint(stdout, " (stale)")
+		}
+		fmt.Fprintln(stdout)
 	}
 	if outcome == nil {
 		fmt.Fprintln(stdout, "  outcome: none")
 	} else {
-		fmt.Fprintf(stdout, "  outcome: %s state=%s merged=%t merge=%s observed-at=%s\n", outcome.Kind, outcome.ObservedState, outcome.ObservedMerged, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
+		fmt.Fprintf(stdout, "  outcome: %s (GitHub %s)", outcome.Kind, outcome.ObservedState)
+		if outcome.MergeCommitOID != "" {
+			fmt.Fprintf(stdout, " merge=%s", outcome.MergeCommitOID)
+		}
+		fmt.Fprintf(stdout, " observed-at=%s\n", outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
 	renderHistory(stdout, history)
 	return nil
@@ -764,31 +766,34 @@ func workflowHistory(
 	}
 	add(job.AdmittedAt, "Job", "admitted")
 	add(job.WorkflowAttentionAt, "Attention", job.WorkflowAttention)
+	messageSequences := make(map[string]int64, len(messages))
 	for _, message := range messages {
-		from := string(message.FromKind)
-		if message.FromID != "" {
-			from += "/" + message.FromID
-		}
-		add(message.AdmittedAt, "Message", fmt.Sprintf("%d admitted from %s", message.Sequence, from))
+		messageSequences[message.ID] = message.Sequence
+		add(message.AdmittedAt, "Message", fmt.Sprintf("%d admitted from %s", message.Sequence, message.FromKind))
 	}
 	for _, action := range actions {
-		scope := ""
-		if action.Scope != "" {
-			scope = " scope=" + action.Scope
-		}
-		add(action.CreatedAt, "Action", fmt.Sprintf("%s %s created%s", action.ID, action.Kind, scope))
-		add(action.SettledAt, "Action", fmt.Sprintf("%s %s %s%s", action.ID, action.Kind, action.State, scope))
+		add(action.CreatedAt, "Action", fmt.Sprintf("%s created", action.Kind))
+		add(action.SettledAt, "Action", fmt.Sprintf("%s %s", action.Kind, action.State))
 		if action.Kind == spine.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && proposal != nil && proposal.ProposedRevision == action.Scope {
 			add(action.SettledAt, "Proposal", fmt.Sprintf("#%d recorded for Revision %s", proposal.Number, proposal.ProposedRevision))
 		}
 	}
 	for _, run := range agentRuns {
-		revision := ""
-		if run.InputRevision != "" {
-			revision = " Revision=" + run.InputRevision
+		role := run.Role
+		if role == "implement" {
+			role = "implementation"
+		} else {
+			role += " review"
 		}
-		add(run.StartedAt, "AgentRun", fmt.Sprintf("%s started Role=%s Message=%s%s", run.ID, run.Role, run.MessageID, revision))
-		add(run.FinishedAt, "AgentRun", fmt.Sprintf("%s %s Role=%s%s", run.ID, run.State, run.Role, revision))
+		input := ""
+		if sequence := messageSequences[run.MessageID]; sequence > 0 {
+			input = fmt.Sprintf(" for Message %d", sequence)
+		}
+		if run.InputRevision != "" {
+			input += " at Revision " + run.InputRevision
+		}
+		add(run.StartedAt, "AgentRun", fmt.Sprintf("%s started%s", role, input))
+		add(run.FinishedAt, "AgentRun", fmt.Sprintf("%s %s%s", role, run.State, input))
 	}
 	for _, revision := range revisions {
 		detail := fmt.Sprintf("generation %d observed Revision %s", revision.Generation, revision.OID)
@@ -807,19 +812,9 @@ func workflowHistory(
 		add(plan.RecordedAt, "ReviewPolicy", fmt.Sprintf("%s for Revision %s Roles=%v", plan.Plan.Decision, plan.Revision, plan.Plan.Roles))
 	}
 	for _, record := range records {
-		owner := record.AgentRunID
-		if owner == "" {
-			owner = record.CheckID
-		}
-		if owner == "" {
-			owner = record.ActionID
-		}
-		detail := fmt.Sprintf("%s %s recorded", record.ID, record.Kind)
+		detail := record.Kind + " recorded"
 		if record.Revision != "" {
 			detail += " for Revision " + record.Revision
-		}
-		if owner != "" {
-			detail += " by " + owner
 		}
 		add(record.FinishedAt, "Evidence", detail)
 	}

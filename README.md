@@ -49,8 +49,9 @@ dorf abandon JOB
 dorf cleanup JOB
 ```
 
-`inspect` separates agent claims from observed Actions, Checks, Revision-pinned Evidence, Absurd
-task state, GitHub proposal/outcome facts, and cleanup state.
+`inspect` shows the current work and separates agent claims from observed Actions, Checks,
+Revision-pinned Evidence, GitHub proposal/outcome facts, and cleanup state. Use `absurdctl list-tasks`
+and `absurdctl dump-task` for task attempts, checkpoints, waits, and leases.
 
 ## Development
 

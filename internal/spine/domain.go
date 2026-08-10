@@ -54,7 +54,6 @@ type Job struct {
 	Goal                    string       `json:"goal"`
 	Repository              string       `json:"repository"`
 	Revision                string       `json:"revision"`
-	RevisionGeneration      int          `json:"revision_generation"`
 	StartingRevision        string       `json:"starting_revision"`
 	Branch                  string       `json:"branch"`
 	GitHubRepository        string       `json:"github_repository,omitempty"`
@@ -150,16 +149,13 @@ type Delivery struct {
 
 type MessageView struct {
 	Message
-	AgentRunID     string        `json:"agent_run_id,omitempty"`
-	State          AgentRunState `json:"state,omitempty"`
-	Harness        string        `json:"harness,omitempty"`
-	ThreadID       string        `json:"thread_id,omitempty"`
-	TurnID         string        `json:"turn_id,omitempty"`
-	TurnOutcome    string        `json:"turn_outcome,omitempty"`
-	Attention      string        `json:"attention,omitempty"`
-	BlockingSeq    int64         `json:"blocking_sequence,omitempty"`
-	BlockingReason string        `json:"blocking_reason,omitempty"`
-	Delivered      bool          `json:"delivered"`
+	AgentRunID  string        `json:"agent_run_id,omitempty"`
+	State       AgentRunState `json:"state,omitempty"`
+	Harness     string        `json:"harness,omitempty"`
+	ThreadID    string        `json:"thread_id,omitempty"`
+	TurnID      string        `json:"turn_id,omitempty"`
+	TurnOutcome string        `json:"turn_outcome,omitempty"`
+	Attention   string        `json:"attention,omitempty"`
 }
 
 type Action struct {
@@ -205,17 +201,16 @@ type Revision struct {
 }
 
 type Check struct {
-	ID             string    `json:"id"`
-	JobID          string    `json:"job_id"`
-	Name           string    `json:"name"`
-	Command        string    `json:"command"`
-	Revision       string    `json:"revision"`
-	State          string    `json:"state"`
-	ExitCode       int       `json:"exit_code"`
-	EvidenceID     string    `json:"evidence_id,omitempty"`
-	EvidenceDigest string    `json:"evidence_digest,omitempty"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	FinishedAt     time.Time `json:"finished_at,omitempty"`
+	ID         string    `json:"id"`
+	JobID      string    `json:"job_id"`
+	Name       string    `json:"name"`
+	Command    string    `json:"command"`
+	Revision   string    `json:"revision"`
+	State      string    `json:"state"`
+	ExitCode   int       `json:"exit_code"`
+	EvidenceID string    `json:"evidence_id,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
 type DeclaredCheck struct {
@@ -244,7 +239,6 @@ type GitHubProposal struct {
 	URL              string `json:"pr_url"`
 	ProposedRevision string `json:"proposed_revision"`
 	BodyDigest       string `json:"body_digest"`
-	Stale            bool   `json:"stale"`
 }
 
 type JobOutcomeKind string
@@ -302,11 +296,7 @@ func MessageID(jobID string, fromKind MessageFromKind, fromID string) string {
 }
 
 func AgentRunID(messageID string) string {
-	return "agent-run-" + digest(messageID+"\x00implement", 24)
-}
-
-func ReviewAgentRunID(jobID, revision, role string) string {
-	return "agent-run-" + digest(jobID+"\x00"+revision+"\x00"+role, 24)
+	return "agent-run-" + digest(messageID, 24)
 }
 
 func ReviewRequestFromID(revision, role string) string {

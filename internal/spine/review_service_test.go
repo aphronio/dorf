@@ -27,11 +27,10 @@ func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 func TestReviewAttemptKeepsItsExactRequestMessage(t *testing.T) {
 	request := Message{ID: "message-review", JobID: "job-1", Input: "review this exact revision"}
 	sandbox := Sandbox{ID: "sandbox-1", JobID: request.JobID}
-	route := Route{ID: "route-1", SandboxID: sandbox.ID}
 	run := AgentRun{ID: "agent-run-review", JobID: request.JobID, MessageID: request.ID, SandboxID: sandbox.ID, Harness: "codex"}
 
-	attempt := reviewRunAttempt(run, request, sandbox, route)
-	if attempt.AgentRun != run || attempt.Request != request || attempt.Sandbox != sandbox || attempt.Route != route {
+	attempt := reviewRunAttempt(run, request, sandbox)
+	if attempt.AgentRun != run || attempt.Request != request || attempt.Sandbox != sandbox {
 		t.Fatalf("review attempt lost durable input: %#v", attempt)
 	}
 }

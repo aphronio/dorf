@@ -270,7 +270,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages, err := store.Messages(ctx, job.ID)
-	if err != nil || len(messages) != 2 || !messages[1].Delivered || messages[1].TurnID != activeTurnID || messages[1].Intent != spine.MessageSteer {
+	if err != nil || len(messages) != 2 || messages[1].TurnID != activeTurnID || messages[1].Intent != spine.MessageSteer {
 		t.Fatalf("steer messages=%#v err=%v", messages, err)
 	}
 	next, err := store.NextDelivery(ctx, job.ID)
@@ -395,7 +395,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err != nil || len(messages) != 3 {
 		t.Fatalf("messages=%#v err=%v", messages, err)
 	}
-	if messages[1].Intent != spine.MessageSteer || messages[1].TargetTurnID != targetTurnID || messages[1].TurnID != actualTurnID || messages[2].BlockingSeq != steer.Sequence {
+	if messages[1].Intent != spine.MessageSteer || messages[1].TargetTurnID != targetTurnID || messages[1].TurnID != actualTurnID {
 		t.Fatalf("fallback projection=%#v later=%#v", messages[1], messages[2])
 	}
 	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, actualTurnID, "failed"); err != nil {
@@ -450,10 +450,42 @@ func TestAcceptedTerminalTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 				t.Fatal(err)
 			}
 			messages, err := store.Messages(ctx, job.ID)
-			if err != nil || len(messages) != 2 || messages[0].TurnOutcome != status || !messages[0].Delivered || messages[1].State != spine.AgentRunCompleted {
+			if err != nil || len(messages) != 2 || messages[0].TurnOutcome != status || messages[0].TurnID == "" || messages[1].State != spine.AgentRunCompleted {
 				t.Fatalf("preserved %s then follow=%#v err=%v", status, messages, err)
 			}
 		})
+	}
+}
+
+func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, threadID := prepareTransportIntegrationJob(t, store, "submitting-follow-recovery")
+	delivery, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || delivery == nil {
+		t.Fatalf("initial delivery=%#v err=%v", delivery, err)
+	}
+	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	later, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
+	if err != nil || !created {
+		t.Fatalf("later Follow=%#v created=%v err=%v", later, created, err)
+	}
+
+	candidate, err := store.DeliveryCandidate(ctx, job.ID)
+	if err != nil || candidate == nil || candidate.AgentRun.ID != delivery.AgentRun.ID || candidate.AgentRun.State != spine.AgentRunSubmitting {
+		t.Fatalf("submitting candidate=%#v err=%v", candidate, err)
+	}
+	retry, err := store.NextDelivery(ctx, job.ID)
+	if err != nil || retry == nil || retry.AgentRun.ID != delivery.AgentRun.ID || retry.AgentRun.State != spine.AgentRunSubmitting {
+		t.Fatalf("submitting retry=%#v err=%v", retry, err)
+	}
+	if err := store.BindAgentRun(ctx, retry.AgentRun.ID, "codex", threadID, "turn-recovered-"+job.ID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := store.DeliveryCandidate(ctx, job.ID); err != nil || next == nil || next.Message.ID != later.ID {
+		t.Fatalf("next candidate=%#v err=%v, want later Follow", next, err)
 	}
 }
 
@@ -540,7 +572,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	if err := store.RecordCheck(ctx, failed, failedEvidence, spine.CommandObservation{Command: failed.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	failed.State, failed.ExitCode, failed.EvidenceDigest = "failed", 1, failedEvidence.Digest
+	failed.State, failed.ExitCode, failed.EvidenceID = "failed", 1, failedEvidence.ID
 	checkMessage, created, err := store.AdmitCheckMessage(ctx, failed)
 	if err != nil || !created || checkMessage.FromKind != spine.MessageFromWorkflow || checkMessage.FromID != failed.ID {
 		t.Fatalf("failed Check Message=%#v created=%v err=%v", checkMessage, created, err)
@@ -608,7 +640,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				for i, role := range test.roles {
 					request := runs[i].Request
 					wantInput := policy.RolePrompt(role, facts, []string{"check"})
-					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || runs[i].Route != spine.RouteForSandbox(runs[i].Sandbox) {
+					if runs[i].Role != string(role) || runs[i].ID != spine.AgentRunID(request.ID) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
 					}
 					for prior := 0; prior < i; prior++ {
@@ -752,10 +784,6 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	cleared, err = store.Job(ctx, job.ID)
 	if err != nil || cleared.WorkflowAttention != "" || cleared.WorkflowAttentionSource != "" {
 		t.Fatalf("idempotent review feedback left stale attention: Job=%#v err=%v", cleared, err)
-	}
-	views, err := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || len(views) != 1 || views[0].FeedbackMessageID != message.ID {
-		t.Fatalf("review feedback projection=%#v err=%v", views, err)
 	}
 	messages, err := store.Messages(ctx, job.ID)
 	requestIndex := slices.IndexFunc(messages, func(candidate spine.MessageView) bool { return candidate.ID == request.ID })
@@ -1329,7 +1357,7 @@ func TestClosedAdmissionRejectsLateCheckFeedbackDeliveryAndRevisionObservation(t
 	if err := store.RecordCheck(ctx, check, evidence, spine.CommandObservation{Command: check.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	check.State, check.ExitCode, check.EvidenceDigest = "failed", 1, evidence.Digest
+	check.State, check.ExitCode, check.EvidenceID = "failed", 1, evidence.ID
 	if err := store.CloseAdmission(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}

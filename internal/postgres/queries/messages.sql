@@ -77,12 +77,10 @@ where job_id=sqlc.arg(job_id) and from_kind='workflow' and from_id=sqlc.arg(from
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
-       coalesce(ar.role,'') as role,
        coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
        coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,
-       (ar.turn_id is not null)::boolean as delivered,m.admitted_at
+       coalesce(ar.attention,'') as attention,m.admitted_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)

@@ -23,11 +23,16 @@ const (
 type Params struct {
 	JobID string `json:"job_id"`
 }
-type Result struct {
+
+// TaskResultV1 is persisted by Absurd as the stable result contract for both
+// Job and cleanup tasks.
+type TaskResultV1 struct {
 	JobID   string `json:"job_id"`
 	Outcome string `json:"outcome"`
 }
-type Wake struct {
+
+// WakeV1 is persisted by Absurd under one immutable Job-local FIFO event.
+type WakeV1 struct {
 	JobID    string `json:"job_id"`
 	Sequence int64  `json:"sequence"`
 }
@@ -47,67 +52,67 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 	if proposal.PollInterval <= 0 {
 		proposal.PollInterval = 30 * time.Second
 	}
-	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (Result, error) {
+	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
-			return Result{}, err
+			return TaskResultV1{}, err
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
 		for {
 			work, err := RunJob(ctx, service, store, proposal, params.JobID)
 			if err != nil {
-				return Result{}, err
+				return TaskResultV1{}, err
 			}
 			job, err := store.Job(ctx, params.JobID)
 			if err != nil {
-				return Result{}, err
+				return TaskResultV1{}, err
 			}
 			if work.Kind == WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
-					return Result{}, err
+					return TaskResultV1{}, err
 				}
 				if outcome != nil {
 					task := absurd.MustTaskContext(ctx)
 					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
-						return Result{}, err
+						return TaskResultV1{}, err
 					}
-					return Result{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
+					return TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
 				}
-				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
+				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
-				return Result{}, err
+				return TaskResultV1{}, err
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
 			if work.Kind == WorkObserveProposal {
 				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", job.Revision, sequence)
 				options.Timeout = proposal.PollInterval
 			}
-			wake, err := absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), options)
+			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
 				if work.Kind == WorkObserveProposal && errors.As(err, &timeout) {
 					continue
 				}
-				return Result{}, err
+				return TaskResultV1{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return Result{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+				return TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	client.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params Params) (Result, error) {
+	client.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, CleanupTaskName); err != nil {
-			return Result{}, err
+			return TaskResultV1{}, err
 		}
-		return absurd.Step(ctx, "dorf/cleanup/v1", func(stepCtx context.Context) (Result, error) {
-			return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (Result, error) {
+		return absurd.Step(ctx, "dorf/cleanup/v1", func(stepCtx context.Context) (TaskResultV1, error) {
+			return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (TaskResultV1, error) {
 				if err := service.Cleanup(workCtx, params.JobID); err != nil {
-					return Result{}, err
+					return TaskResultV1{}, err
 				}
-				return Result{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
+				return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 			})
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
@@ -176,7 +181,7 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	}
 	// Events carry no delivery truth. Re-emitting on an idempotent client retry
 	// repairs a crash after PostgreSQL admission but before this wake hint.
-	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), Wake{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), WakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same from ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
@@ -194,7 +199,7 @@ func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client
 	}
 	// Events carry no delivery truth. Re-emission is the recovery path for a
 	// crash after the Action/message transaction and before this wake hint.
-	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), Wake{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), WakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
 		return action, message, created, fmt.Errorf("setup retry message %s sequence %d was accepted, but its wake hint failed; retry the same setup identity and input: %w", message.ID, message.Sequence, err)
 	}
 	return action, message, created, nil

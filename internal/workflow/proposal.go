@@ -51,7 +51,7 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	if err != nil {
 		return ProposalObservationResultV1{}, err
 	}
-	if proposal == nil || proposal.Stale || proposal.ProposedRevision != job.Revision {
+	if proposal == nil || proposal.ProposedRevision != job.Revision {
 		return ProposalObservationResultV1{}, fmt.Errorf("Job proposal observation requires one exact current GitHub proposal")
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}

@@ -160,7 +160,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	}
 	expectedController := ReviewControllerID(run.ID, run.Sandbox.ID, run.Sandbox.OwnershipNonce)
 	request := run.Request
-	sandbox, route := run.Sandbox, run.Route
+	sandbox := run.Sandbox
 	contract := agentRunContract{
 		service:             s,
 		delivery:            Delivery{AgentRun: run.AgentRun},
@@ -169,16 +169,16 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		label:               "review",
 		bindUnsupportedTurn: false,
 		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(run, request, sandbox, route))
+			return externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(run, request, sandbox))
 		},
 		recover: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewRecover(ctx, job, reviewRunAttempt(run, request, sandbox, route))
+			return externals.ReviewRecover(ctx, job, reviewRunAttempt(run, request, sandbox))
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return externals.ReviewTurns(ctx, job, reviewRunAttempt(run, request, sandbox, route))
+			return externals.ReviewTurns(ctx, job, reviewRunAttempt(run, request, sandbox))
 		},
 		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
-			return externals.ReviewWait(ctx, job, reviewRunAttempt(run, request, sandbox, route), turnID)
+			return externals.ReviewWait(ctx, job, reviewRunAttempt(run, request, sandbox), turnID)
 		},
 		validateOwner: func(binding HarnessBinding) error {
 			return validateReviewController(expectedController, binding)
@@ -213,8 +213,8 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	return contract.execute(ctx)
 }
 
-func reviewRunAttempt(run AgentRun, request Message, sandbox Sandbox, route Route) ReviewRunView {
-	return ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox, Route: route}
+func reviewRunAttempt(run AgentRun, request Message, sandbox Sandbox) ReviewRunView {
+	return ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox}
 }
 
 func validateReviewController(expected string, binding HarnessBinding) error {

@@ -63,26 +63,15 @@ select *
 from dorf.review_run_projection
 where id=sqlc.arg(run_id) and role<>'implement';
 
--- name: GetReviewCurrentRevision :one
-select revision
-from dorf.jobs
-where id=sqlc.arg(job_id);
-
 -- name: ListReviewRuns :many
-select sqlc.embed(p),coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select sqlc.embed(p)
 from dorf.review_run_projection p
-join dorf.jobs j on j.id=p.job_id
-left join dorf.job_messages m
-  on m.job_id=p.job_id and m.from_kind='agent' and m.from_id=p.id
 where p.job_id=sqlc.arg(job_id) and p.input_revision=sqlc.arg(revision) and p.role<>'implement'
 order by p.role;
 
 -- name: ListAllReviewRuns :many
-select sqlc.embed(p),coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select sqlc.embed(p)
 from dorf.review_run_projection p
-join dorf.jobs j on j.id=p.job_id
-left join dorf.job_messages m
-  on m.job_id=p.job_id and m.from_kind='agent' and m.from_id=p.id
 where p.job_id=sqlc.arg(job_id) and p.input_revision<>'' and p.role<>'implement'
 order by p.input_revision,p.role;
 

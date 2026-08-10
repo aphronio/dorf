@@ -15,12 +15,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-const (
-	messageEnablePhrase     = "issue-41-external-sigkill-only"
-	workflowEnablePhrase    = "issue-37-external-sigkill-only"
-	publicationEnablePhrase = "issue-43-external-sigkill-only"
-	cleanupEnablePhrase     = "issue-39-external-sigkill-only"
-)
+const proofEnablePhrase = "external-sigkill-proof-only"
 
 type Barrier struct {
 	Point    string
@@ -43,18 +38,8 @@ func FromEnv() (spine.FaultBarrier, error) {
 	if !messagePoint && !workflowPoint && !publicationPoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
-	phrase := workflowEnablePhrase
-	if publicationPoint {
-		phrase = publicationEnablePhrase
-	}
-	if cleanupPoint {
-		phrase = cleanupEnablePhrase
-	}
-	if messagePoint {
-		phrase = messageEnablePhrase
-	}
-	if os.Getenv("DORF_PROOF_FAULT_BARRIER_ENABLE") != phrase {
-		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER requires the exact proof-only enable phrase %q", phrase)
+	if os.Getenv("DORF_PROOF_FAULT_BARRIER_ENABLE") != proofEnablePhrase {
+		return nil, fmt.Errorf("DORF_PROOF_FAULT_BARRIER requires the exact proof-only enable phrase %q", proofEnablePhrase)
 	}
 	var sequence int64
 	jobID := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER_JOB"))

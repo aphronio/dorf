@@ -14,23 +14,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func TestReviewControllerIdentityIsDerivedFromDurableOwnership(t *testing.T) {
-	run := spine.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-review", SandboxID: "dorf-review-owned"},
-		Sandbox:  spine.Sandbox{ID: "dorf-review-owned", OwnershipNonce: strings.Repeat("a", 64)},
-	}
-	want := spine.ReviewControllerID(run.ID, run.Sandbox.ID, run.Sandbox.OwnershipNonce)
-	if got := reviewControllerID(run); got != want {
-		t.Fatalf("review controller=%q want %q", got, want)
-	}
-}
-
-func TestHarnessIdentityIsCodex(t *testing.T) {
-	if got := (Externals{}).Harness(); got != "codex" {
-		t.Fatalf("harness=%q", got)
-	}
-}
-
 func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 	run := spine.ReviewRunView{
 		AgentRun: spine.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
@@ -61,7 +44,7 @@ func TestCodingTurnInputKeepsReviewFeedbackOpaque(t *testing.T) {
 	job := spine.Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
 	message := spine.Message{FromKind: spine.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
 
-	reviewer := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary-review"}})
+	reviewer := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary"}})
 	if reviewer != message.Input {
 		t.Fatalf("reviewer input was rewritten: %q", reviewer)
 	}
@@ -78,9 +61,11 @@ type localReviewBoundaryRunner struct {
 	implementationPath string
 	reviewerPath       string
 	metadata           map[string]string
+	calls              [][]string
 }
 
 func (r *localReviewBoundaryRunner) Run(ctx context.Context, command string, input []byte, args ...string) (incus.Result, error) {
+	r.calls = append(r.calls, append([]string{command}, args...))
 	if command != "incus" {
 		return incus.Result{}, nil
 	}
@@ -167,6 +152,11 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	runner := &localReviewBoundaryRunner{implementationName: sandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
 	sandbox.Runner = runner
 	externals := Externals{Sandbox: sandbox}
+	withoutSandbox := run
+	withoutSandbox.SandboxID = ""
+	if err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox); err == nil {
+		t.Fatal("review checkout accepted the implementation Sandbox")
+	}
 	if err := externals.PrepareReviewCheckout(context.Background(), job, run); err != nil {
 		t.Fatal(err)
 	}
@@ -181,55 +171,6 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	}
 	if _, err := os.Stat(filepath.Join(reviewerPath, "forged.txt")); !os.IsNotExist(err) {
 		t.Fatalf("implementation forged worktree crossed reviewer boundary: %v", err)
-	}
-}
-
-type reviewBoundaryRunner struct {
-	metadata map[string]string
-	calls    [][]string
-	revision string
-	tree     string
-}
-
-func (r *reviewBoundaryRunner) Run(_ context.Context, command string, _ []byte, args ...string) (incus.Result, error) {
-	r.calls = append(r.calls, append([]string{command}, args...))
-	joined := strings.Join(args, " ")
-	if strings.HasPrefix(joined, "list ") {
-		payload, _ := json.Marshal([]map[string]any{{"name": "dorf-review-owned", "config": r.metadata}})
-		return incus.Result{Stdout: string(payload)}, nil
-	}
-	if strings.Contains(joined, "dorf-review-source") {
-		return incus.Result{Stdout: "trusted-git-bundle"}, nil
-	}
-	if strings.Contains(joined, "dorf-review-checkout") || strings.Contains(joined, "dorf-review-verify") {
-		return incus.Result{Stdout: r.revision + " " + r.tree + " clean\n"}, nil
-	}
-	return incus.Result{}, nil
-}
-
-func TestPrepareReviewCheckoutUsesSeparateOwnedSandboxAndExactGitState(t *testing.T) {
-	revision, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	job := spine.Job{ID: "job-1", Revision: revision}
-	run := spine.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-1", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-owned"},
-		Sandbox:  spine.Sandbox{ID: "dorf-review-owned", JobID: job.ID, OwnershipNonce: strings.Repeat("c", 64)},
-	}
-	runner := &reviewBoundaryRunner{revision: revision, tree: tree, metadata: map[string]string{
-		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": run.Sandbox.ID, "user.dorf.agent_run": run.ID,
-		"user.dorf.revision": revision, "user.dorf.ownership_nonce": run.Sandbox.OwnershipNonce,
-	}}
-	externals := Externals{Sandbox: incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}, Runner: runner}}
-	withoutSandbox := run
-	withoutSandbox.SandboxID = ""
-	if err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox); err == nil {
-		t.Fatal("review checkout accepted the implementation Sandbox")
-	}
-	if err := externals.PrepareReviewCheckout(context.Background(), job, run); err != nil {
-		t.Fatal(err)
-	}
-	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
-	if err != nil || checkout != (spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}) {
-		t.Fatalf("review checkout=%#v err=%v", checkout, err)
 	}
 	implementationSandbox := externals.Sandbox.Name(job.ID)
 	var sourceImplementation, targetReviewer, verifyReviewer bool

@@ -200,7 +200,7 @@ func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
 	if err := store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
 		return err
 	}
-	check.State, check.ExitCode, check.EvidenceID, check.EvidenceDigest = "passed", observation.ExitCode, evidenceRecord.ID, evidenceRecord.Digest
+	check.State, check.ExitCode, check.EvidenceID = "passed", observation.ExitCode, evidenceRecord.ID
 	if observation.ExitCode != 0 {
 		check.State = "failed"
 		return s.HandleFailedCheck(ctx, job, check)

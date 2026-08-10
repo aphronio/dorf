@@ -206,7 +206,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if err != nil {
 		return err
 	}
-	if stored != nil && !stored.Stale && stored.BodyDigest != "" {
+	if stored != nil && stored.ProposedRevision == job.Revision && stored.BodyDigest != "" {
 		return nil
 	}
 	_, pullAction, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
@@ -427,7 +427,8 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 		if !ok || run.InputRevision != job.Revision {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, verification.ObservedEvidenceID, digests[verification.ObservedEvidenceID], run.FeedbackMessageID))
+		feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, run.ID)
+		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, verification.ObservedEvidenceID, digests[verification.ObservedEvidenceID], feedbackMessageID))
 	}
 	if len(readiness.ReviewEvidence) == 0 {
 		lines = append(lines, "- ReviewPolicy selected no agent review.")
@@ -436,7 +437,11 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 	if job.WorkflowAttention != "" {
 		attention = job.WorkflowAttention
 	}
-	lines = append(lines, "", "## Readiness", "", "- Status: "+readiness.Status, "- Reason: "+readiness.Reason, "- Remaining attention: "+attention, "- Inspect: `dorf inspect "+job.ID+"`")
+	status := "not ready"
+	if readiness.Ready {
+		status = "ready"
+	}
+	lines = append(lines, "", "## Readiness", "", "- Status: "+status, "- Reason: "+readiness.Reason, "- Remaining attention: "+attention, "- Inspect: `dorf inspect "+job.ID+"`")
 	return strings.Join(lines, "\n") + "\n"
 }
 

@@ -98,19 +98,6 @@ func (q *Queries) GetCheckForUpdate(ctx context.Context, id string) (GetCheckFor
 	return i, err
 }
 
-const getEvidenceDigest = `-- name: GetEvidenceDigest :one
-select digest
-from dorf.evidence
-where id=$1
-`
-
-func (q *Queries) GetEvidenceDigest(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getEvidenceDigest, id)
-	var digest string
-	err := row.Scan(&digest)
-	return digest, err
-}
-
 const getEvidenceIdentity = `-- name: GetEvidenceIdentity :one
 select job_id,digest,byte_size,media_type,producer,kind,
        coalesce(action_id,'') as action_id,coalesce(check_id,'') as check_id,
@@ -266,29 +253,26 @@ func (q *Queries) InsertRepositoryCommand(ctx context.Context, arg InsertReposit
 }
 
 const listChecks = `-- name: ListChecks :many
-select c.id,c.job_id,c.name,c.command,c.revision,c.state,
-       coalesce(c.exit_code,0)::integer as exit_code,
-       coalesce(c.evidence_id,'') as evidence_id,
-       coalesce(e.digest,'') as evidence_digest,
-       c.started_at,c.finished_at
-from dorf.checks c
-left join dorf.evidence e on e.id=c.evidence_id
-where c.job_id=$1
-order by c.started_at nulls last,c.id
+select id,job_id,name,command,revision,state,
+       coalesce(exit_code,0)::integer as exit_code,
+       coalesce(evidence_id,'') as evidence_id,
+       started_at,finished_at
+from dorf.checks
+where job_id=$1
+order by started_at nulls last,id
 `
 
 type ListChecksRow struct {
-	ID             string
-	JobID          string
-	Name           string
-	Command        string
-	Revision       string
-	State          string
-	ExitCode       int32
-	EvidenceID     string
-	EvidenceDigest string
-	StartedAt      sql.NullTime
-	FinishedAt     sql.NullTime
+	ID         string
+	JobID      string
+	Name       string
+	Command    string
+	Revision   string
+	State      string
+	ExitCode   int32
+	EvidenceID string
+	StartedAt  sql.NullTime
+	FinishedAt sql.NullTime
 }
 
 func (q *Queries) ListChecks(ctx context.Context, jobID string) ([]ListChecksRow, error) {
@@ -309,7 +293,6 @@ func (q *Queries) ListChecks(ctx context.Context, jobID string) ([]ListChecksRow
 			&i.State,
 			&i.ExitCode,
 			&i.EvidenceID,
-			&i.EvidenceDigest,
 			&i.StartedAt,
 			&i.FinishedAt,
 		); err != nil {

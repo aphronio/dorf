@@ -286,12 +286,10 @@ const listMessages = `-- name: ListMessages :many
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
-       coalesce(ar.role,'') as role,
        coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
        coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,
-       (ar.turn_id is not null)::boolean as delivered,m.admitted_at
+       coalesce(ar.attention,'') as attention,m.admitted_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
@@ -309,13 +307,11 @@ type ListMessagesRow struct {
 	SteerTargetTurnID string
 	AgentRunID        string
 	State             spine.AgentRunState
-	Role              string
 	Harness           string
 	ThreadID          string
 	TurnID            string
 	TurnOutcome       string
 	Attention         string
-	Delivered         bool
 	AdmittedAt        time.Time
 }
 
@@ -339,13 +335,11 @@ func (q *Queries) ListMessages(ctx context.Context, jobID string) ([]ListMessage
 			&i.SteerTargetTurnID,
 			&i.AgentRunID,
 			&i.State,
-			&i.Role,
 			&i.Harness,
 			&i.ThreadID,
 			&i.TurnID,
 			&i.TurnOutcome,
 			&i.Attention,
-			&i.Delivered,
 			&i.AdmittedAt,
 		); err != nil {
 			return nil, err

@@ -56,7 +56,6 @@ func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *test
 					t.Fatal(err)
 				}
 				record.Digest, record.ByteSize = blob.Digest, blob.ByteSize
-				check.EvidenceDigest = blob.Digest
 			},
 			want: "observation artifact facts",
 		},
@@ -104,25 +103,24 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	runID := ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary))
 	requestFromID := ReviewRequestFromID(revision, string(policy.RoleCriticalBoundary))
 	requestID := ReviewRequestMessageID(jobID, revision, string(policy.RoleCriticalBoundary))
+	runID := AgentRunID(requestID)
+	feedbackID := MessageID(jobID, MessageFromAgent, runID)
 	run := ReviewRunView{
-		AgentRun:          AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
-		Request:           Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
-		FeedbackMessageID: MessageID(jobID, MessageFromAgent, runID),
+		AgentRun: AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
+		Request:  Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
 	}
 	observed, err := (Service{Evidence: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongMessage := run
-	wrongMessage.FeedbackMessageID = "message-foreign"
-	wrong := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{wrongMessage}, nil, nil)
+	foreign := MessageView{Message: Message{ID: feedbackID, JobID: jobID, FromKind: MessageFromAgent, FromID: "agent-run-foreign", Sequence: 3, Input: "Foreign feedback.", Intent: MessageFollow}}
+	wrong := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run}, []MessageView{foreign}, nil)
 	if wrong.Ready || !strings.Contains(wrong.Reason, "has not returned a feedback Message") {
 		t.Fatalf("foreign feedback Message satisfied readiness: %#v", wrong)
 	}
-	feedback := MessageView{Message: Message{ID: run.FeedbackMessageID, JobID: jobID, FromKind: MessageFromAgent, FromID: runID, Sequence: 3, Input: "Consider simplifying the boundary.", Intent: MessageFollow}}
+	feedback := MessageView{Message: Message{ID: feedbackID, JobID: jobID, FromKind: MessageFromAgent, FromID: runID, Sequence: 3, Input: "Consider simplifying the boundary.", Intent: MessageFollow}}
 	implementation := AgentRun{ID: AgentRunID(feedback.ID), JobID: jobID, MessageID: feedback.ID, Role: "implement", InputRevision: revision, State: AgentRunCompleted, TurnOutcome: "completed"}
 	handled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run}, []MessageView{feedback}, []AgentRun{implementation})
 	if handled.Ready || !strings.Contains(handled.Reason, "no valid Git observation") {
@@ -173,7 +171,7 @@ func readinessFixture(t *testing.T) (evidence.Store, string, string, []DeclaredC
 		t.Fatal(err)
 	}
 	record := Evidence{ID: EvidenceID(checkID, "check-output"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: "check-output", CheckID: checkID, Revision: revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
-	check := Check{ID: checkID, JobID: jobID, Name: declared[0].Name, Command: declared[0].Command, Revision: revision, State: "passed", EvidenceID: record.ID, EvidenceDigest: record.Digest, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
+	check := Check{ID: checkID, JobID: jobID, Name: declared[0].Name, Command: declared[0].Command, Revision: revision, State: "passed", EvidenceID: record.ID, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
 	return store, jobID, revision, declared, check, record
 }
 

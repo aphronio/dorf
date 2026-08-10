@@ -114,17 +114,6 @@ func (q *Queries) GetProposal(ctx context.Context, jobID string) (DorfGithubProp
 	return i, err
 }
 
-const getProposalCurrentRevision = `-- name: GetProposalCurrentRevision :one
-select revision from dorf.jobs where id=$1
-`
-
-func (q *Queries) GetProposalCurrentRevision(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getProposalCurrentRevision, jobID)
-	var revision string
-	err := row.Scan(&revision)
-	return revision, err
-}
-
 const getProposalJobForUpdate = `-- name: GetProposalJobForUpdate :one
 select revision,admission_open,cleanup_state
 from dorf.jobs

@@ -23,11 +23,8 @@ type ReviewPlanRecord struct {
 
 type ReviewRunView struct {
 	AgentRun
-	Request           Message `json:"request"`
-	Sandbox           Sandbox `json:"sandbox"`
-	Route             Route   `json:"route"`
-	FeedbackMessageID string  `json:"feedback_message_id,omitempty"`
-	Stale             bool    `json:"stale"`
+	Request Message `json:"request"`
+	Sandbox Sandbox `json:"sandbox"`
 }
 
 type reviewObservationArtifact struct {
