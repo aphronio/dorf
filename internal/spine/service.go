@@ -502,8 +502,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		return err
 	}
 	for _, run := range runs {
-		settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
-		if !settled {
+		if !run.State.IsTerminal() {
 			if err := s.Store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
 				_ = s.Store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled AgentRun "+run.ID+": "+err.Error())
 				return err

@@ -581,7 +581,7 @@ func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) erro
 	if err != nil {
 		return err
 	}
-	if row.State == spine.AgentRunCompleted || row.State == spine.AgentRunFailed || row.State == spine.AgentRunInterrupted {
+	if row.State.IsTerminal() {
 		return nil
 	}
 	return expectOneRows(q.InterruptAgentRun(ctx, dbsql.InterruptAgentRunParams{Reason: reason, RunID: runID}))
@@ -1271,7 +1271,7 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 	if run.Harness != "" && run.Harness != harness || run.ThreadID != "" && run.ThreadID != threadID || run.TurnID != "" && run.TurnID != turnID {
 		return fmt.Errorf("AgentRun %s harness Thread/Turn binding conflicts with its durable identity", runID)
 	}
-	if run.State == spine.AgentRunCompleted || run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted {
+	if run.State.IsTerminal() {
 		if run.State != state || run.TurnOutcome != outcome || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
 			return fmt.Errorf("AgentRun %s terminal outcome conflicts with observed harness status %q", runID, status)
 		}
@@ -1435,7 +1435,7 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 		return err
 	}
 	for _, run := range runs {
-		if run.State != spine.AgentRunCompleted && run.State != spine.AgentRunFailed && run.State != spine.AgentRunInterrupted {
+		if !run.State.IsTerminal() {
 			return fmt.Errorf("cleanup cannot complete with unsettled AgentRun %s", run.ID)
 		}
 	}

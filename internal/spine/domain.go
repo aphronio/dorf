@@ -49,6 +49,10 @@ const (
 	AgentRunUncertain   AgentRunState = "uncertain"
 )
 
+func (s AgentRunState) IsTerminal() bool {
+	return s == AgentRunCompleted || s == AgentRunFailed || s == AgentRunInterrupted
+}
+
 type Job struct {
 	ID                 string       `json:"id"`
 	AdmissionKey       string       `json:"admission_key"`
