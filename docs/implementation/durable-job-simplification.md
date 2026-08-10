@@ -424,6 +424,12 @@ projections that repeat the same external fact.
 Terminal: every external lifecycle fact has one durable authority, while an interrupted Action still
 reconciles safely through its distinct Absurd Step.
 
+Lifecycle-authority proof (2026-08-10): a fresh PostgreSQL database with no Route table or copied
+Sandbox/Route state ran Job `job-d461c7a212d5543f749f` from Sandbox creation through exact-Revision
+PR #112. Both Checks passed. Closing the disposable PR recorded a rejected Outcome; immutable
+route-revoke and Sandbox-delete Actions completed cleanup, and both Incus and the Provider Gateway
+returned no exact resource. Generic Receipt removal remains the next part of this slice.
+
 ## Slice 7: Store GitHub authority once
 
 Goal: keep admitted repository authority on the Job and retain only new Proposal and Outcome facts.
