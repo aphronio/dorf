@@ -141,6 +141,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		return HarnessTurn{}, reviewBoundaryError(reason)
 	}
 	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	request := run.Request
 	projection := run.ReviewRunProjection
 	contract := agentRunContract{
 		service:             s,
@@ -150,16 +151,16 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		label:               "review",
 		bindUnsupportedTurn: false,
 		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewInitialTurn(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
+			return externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(run, request, projection))
 		},
 		recover: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			return externals.ReviewRecover(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
+			return externals.ReviewRecover(ctx, job, reviewRunAttempt(run, request, projection))
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return externals.ReviewTurns(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
+			return externals.ReviewTurns(ctx, job, reviewRunAttempt(run, request, projection))
 		},
 		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
-			return externals.ReviewWait(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, turnID)
+			return externals.ReviewWait(ctx, job, reviewRunAttempt(run, request, projection), turnID)
 		},
 		validateOwner: func(binding HarnessBinding) error {
 			return validateReviewController(expectedController, binding)
@@ -192,6 +193,10 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 		},
 	}
 	return contract.execute(ctx)
+}
+
+func reviewRunAttempt(run AgentRun, request Message, projection ReviewRunProjection) ReviewRunView {
+	return ReviewRunView{AgentRun: run, Request: request, ReviewRunProjection: projection}
 }
 
 func validateReviewController(expected string, binding HarnessBinding) error {

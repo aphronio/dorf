@@ -24,6 +24,17 @@ func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 	}
 }
 
+func TestReviewAttemptKeepsItsExactRequestMessage(t *testing.T) {
+	request := Message{ID: "message-review", JobID: "job-1", Input: "review this exact revision"}
+	projection := ReviewRunProjection{ReviewerSandboxID: "sandbox-1"}
+	run := AgentRun{ID: "agent-run-review", JobID: request.JobID, MessageID: request.ID, Harness: "codex"}
+
+	attempt := reviewRunAttempt(run, request, projection)
+	if attempt.AgentRun != run || attempt.Request != request || attempt.ReviewRunProjection != projection {
+		t.Fatalf("review attempt lost durable input: %#v", attempt)
+	}
+}
+
 func TestReviewEvidenceObservesTheAgentRunWithoutCopyingFeedback(t *testing.T) {
 	blobs := evidence.Store{Root: t.TempDir()}
 	now := time.Now().UTC().Truncate(time.Microsecond)
