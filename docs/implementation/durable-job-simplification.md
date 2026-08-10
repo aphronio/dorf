@@ -506,7 +506,7 @@ Goal: let retained product facts tell `RunJob` what comes next instead of a seco
 - [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B.
 - [x] Delete phase-transition helpers, CAS branches, fixtures, and tests as fact-derived decisions become
       authoritative.
-- [ ] Dogfood the whole implementation, check, review, proposal, Outcome, and cleanup sequence.
+- [x] Dogfood the whole implementation, check, review, proposal, Outcome, and cleanup sequence.
 
 Terminal: the main task and product inspection derive the same current work from facts in visible
 target-flow order, and no Dorf-owned phase value decides eligibility.
@@ -515,6 +515,14 @@ Guardrail: this slice does not create a generic DAG engine, configurable workflo
 step registry, persisted `next_work`, copied event-sourcing layer, or database-side workflow
 interpreter. Those would recreate the deleted authority with more machinery. The coding workflow stays
 concrete; a new operation adds its natural fact and one explicit dependency only when dogfood needs it.
+
+Dogfood proof (2026-08-10): Job `job-44939cffcbb165a20996` started at exact source Revision
+`da4e97c0d032a5802dad3748f61b8dd4ff3c42fc`, produced Revision
+`e034194bc1e74444bfbfbdd783b619f99832da29`, passed both declared Checks, ran the selected general
+reviewer in its own Sandbox and Thread, admitted its feedback as an ordinary Message, and handled that
+feedback unchanged in the implementation Thread. Dorf proposed GitHub PR #116, observed its real
+closed/not-merged state as a rejected Outcome, then revoked both Routes and deleted both Sandboxes;
+the main and cleanup Absurd tasks both completed.
 
 ## Slice 9: Make inspection and tests tell the product story
 
