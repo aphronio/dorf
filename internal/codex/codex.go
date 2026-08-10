@@ -78,18 +78,6 @@ func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace
 	return binding, err
 }
 
-func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, threadID, submissionNonce, input, model, effort string) (spine.HarnessHistory, error) {
-	ctx, cancel := a.timeoutContext(ctx)
-	defer cancel()
-	history := spine.HarnessHistory{Harness: Harness}
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
-		observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
-		history.ThreadID, history.Turns = observedThread, turns
-		return err
-	})
-	return history, err
-}
-
 func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()

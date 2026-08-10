@@ -159,13 +159,11 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spi
 }
 
 func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessHistory, error) {
-	input, err := reviewInput(run)
-	if err != nil {
-		return spine.HarnessHistory{}, err
-	}
-	history, err := e.Agent.ReadStrictReviewTurns(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
-	history.ControllerID = reviewControllerID(run)
-	return history, err
+	binding, err := e.ReviewWait(ctx, job, run, run.TurnID)
+	return spine.HarnessHistory{
+		Harness: binding.Harness, ThreadID: binding.ThreadID,
+		Turns: []spine.HarnessTurn{binding.Turn}, ControllerID: binding.ControllerID,
+	}, err
 }
 
 func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
@@ -247,7 +245,7 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	if err := e.Sandbox.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey); err != nil {
 		return spine.Receipt{}, err
 	}
-	return spine.Receipt{ExternalID: route.ID}, nil
+	return spine.Receipt{ExternalID: route.ID, Outcome: sandbox.ID}, nil
 }
 
 func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
