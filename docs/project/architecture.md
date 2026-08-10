@@ -84,9 +84,10 @@ durable task sequences explicit, named phases; it does not contain a generic use
 - A changed Revision invalidates Evidence whose claim depended on the previous Revision. It does not
   invalidate unrelated immutable facts.
 - After publication, the same Job task observes the exact pull request. An owner or collaborator
-  comment becomes an idempotent human Message and re-enters the implementation Session. Merge records
-  an accepted Outcome; close without merge records a rejected Outcome. A bounded wait keeps quiet
-  observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
+  comment becomes an idempotent human Message and re-enters the implementation Session. The GitHub
+  edge reconciles one eyes reaction and one exact-Revision completion reply without adding core state.
+  Merge records an accepted Outcome; close without merge records a rejected Outcome. A bounded wait
+  keeps quiet observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
 
 ## Deterministic effects
 

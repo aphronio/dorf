@@ -256,6 +256,56 @@ func TestIssueCommentsRetainGitHubAuthoringFacts(t *testing.T) {
 	}
 }
 
+func TestPullRequestFeedbackWritesUseExactGitHubEdgesAndPermissions(t *testing.T) {
+	var scopes []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/repos/aphronio/dorf/issues/comments/91/reactions":
+			if request.Method != http.MethodPost {
+				t.Fatalf("reaction method=%s", request.Method)
+			}
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["content"] != "eyes" {
+				t.Fatalf("reaction body=%#v err=%v", body, err)
+			}
+			// GitHub returns 200 when this user's reaction already exists. That is
+			// the retry path Dorf relies on.
+			w.WriteHeader(http.StatusOK)
+		case "/repos/aphronio/dorf/issues/39/comments":
+			if request.Method != http.MethodPost {
+				t.Fatalf("comment method=%s", request.Method)
+			}
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["body"] != "handled at the exact Revision" {
+				t.Fatalf("comment body=%#v err=%v", body, err)
+			}
+			_, _ = w.Write([]byte(`{"id":92,"author_association":"NONE","body":"handled at the exact Revision","user":{"login":"dorf[bot]","type":"Bot"}}`))
+		default:
+			t.Fatalf("unexpected feedback request %s %s", request.Method, request.URL.String())
+		}
+	}))
+	defer server.Close()
+	authority := Authority{Repository: "aphronio/dorf", InstallationID: "42"}
+	client := Client{APIURL: server.URL, HTTP: server.Client(), Mint: func(_ context.Context, got Authority, permission, level string) (string, error) {
+		if got != authority {
+			t.Fatalf("authority=%#v", got)
+		}
+		scopes = append(scopes, permission+":"+level)
+		return "ephemeral", nil
+	}}
+	if err := client.AddEyesReaction(context.Background(), authority, 91); err != nil {
+		t.Fatal(err)
+	}
+	comment, err := client.CreateIssueComment(context.Background(), authority, 39, "handled at the exact Revision")
+	if err != nil || comment.ID != 92 || comment.UserType != "Bot" {
+		t.Fatalf("comment=%#v err=%v", comment, err)
+	}
+	if got := strings.Join(scopes, ","); got != "issues:write,pull_requests:write" {
+		t.Fatalf("scopes=%s", got)
+	}
+}
+
 func TestIssueCommentsRejectInvalidObservation(t *testing.T) {
 	for name, payload := range map[string]string{
 		"empty response":   "",

@@ -884,7 +884,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   GitHub App installation ID, starting commit, branch, issue, provider, and model inputs;
   create no Job, branch, Room, route, or AFK reservation. Open the installation's GitHub settings
   page with an attention item that accurately describes the persistent repository-wide grant and
-  configured metadata-read, issues-read, contents-write, and pull-requests-write permissions.
+  configured metadata-read, issues-write, contents-write, and pull-requests-write permissions.
   Observe only when branch authority appears through that same installation, then record idempotent
   approval and rerun the complete exact admission proof against the pinned repository and
   installation identities. The attempt expires after one hour, and decline or expiry is terminal
@@ -1189,7 +1189,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   mirrored task state; operators use Absurd's public retry after resolving publication attention.
 - **Acceptance UI:** The same task observes the exact pull request. A comment from the repository
   `OWNER` or `COLLABORATOR` becomes one idempotent human Message whose `FromID` is the GitHub comment
-  identity. Merge records acceptance, close without merge records rejection, and explicit Dorf
+  identity. Dorf acknowledges it with an eyes reaction. Once the same implementation flow has handled
+  the Message and republished, Dorf posts one completion comment naming the exact Revision. GitHub's
+  idempotent reaction endpoint and a stable invisible completion marker make replay safe without a
+  new core fact. Merge records acceptance, close without merge records rejection, and explicit Dorf
   abandonment remains available. Dorf stores Messages, Proposal, and Outcome, but does not mirror a
   comment cursor or mutable pull-request state.
 - **Why:** Push, propose, wait, and continue are one product story. Giving publication its own durable

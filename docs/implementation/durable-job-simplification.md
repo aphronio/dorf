@@ -283,6 +283,7 @@ Goal: make an exact-Revision Proposal the direct successor of readiness.
       retry state. Keep one bounded exact-PR observation loop in the main task.
 - [x] Consolidate duplicate publication adoption tests around Action and Proposal invariants.
 - [x] Turn trusted owner/collaborator pull-request comments into idempotent human Messages.
+- [x] Acknowledge accepted feedback and reconcile one exact-Revision completion reply at the GitHub edge.
 - [x] Observe merge as acceptance and close without merge as rejection.
 - [x] Dogfood comment feedback and a terminal pull-request outcome through one real Dorf Job.
 

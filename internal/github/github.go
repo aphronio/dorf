@@ -102,6 +102,40 @@ func (c Client) IssueComments(ctx context.Context, authority Authority, number i
 	return comments, nil
 }
 
+// AddEyesReaction acknowledges one exact issue or pull-request comment. GitHub
+// treats adding the same reaction by the same user as a successful no-op, so a
+// caller can safely reconcile this after interruption.
+func (c Client) AddEyesReaction(ctx context.Context, authority Authority, commentID int64) error {
+	if commentID < 1 {
+		return fmt.Errorf("GitHub issue-comment ID must be positive")
+	}
+	token, err := c.mint(ctx, authority, "issues", "write")
+	if err != nil {
+		return err
+	}
+	_, err = c.request(ctx, token, http.MethodPost, "/repos/"+authority.Repository+"/issues/comments/"+strconv.FormatInt(commentID, 10)+"/reactions", map[string]string{"content": "eyes"}, nil)
+	return err
+}
+
+// CreateIssueComment adds a timeline comment to an issue or pull request.
+func (c Client) CreateIssueComment(ctx context.Context, authority Authority, number int64, body string) (Comment, error) {
+	if number < 1 {
+		return Comment{}, fmt.Errorf("GitHub issue number must be positive")
+	}
+	if strings.TrimSpace(body) == "" {
+		return Comment{}, fmt.Errorf("GitHub issue-comment body must not be empty")
+	}
+	token, err := c.mint(ctx, authority, "pull_requests", "write")
+	if err != nil {
+		return Comment{}, err
+	}
+	var payload commentPayload
+	if _, err := c.request(ctx, token, http.MethodPost, "/repos/"+authority.Repository+"/issues/"+strconv.FormatInt(number, 10)+"/comments", map[string]string{"body": body}, &payload); err != nil {
+		return Comment{}, err
+	}
+	return payload.comment()
+}
+
 type Client struct {
 	APIURL     string
 	Metadata   string

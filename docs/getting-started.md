@@ -82,7 +82,7 @@ offline machine may pass `--absurd-schema FILE`.
 
 ## 4. Prove GitHub and repository authority
 
-Configure a GitHub App with metadata-read, contents-write, and pull-requests-write authority for
+Configure a GitHub App with metadata-read, issues-write, contents-write, and pull-requests-write authority for
 the selected repository. Keep its metadata and private key at the paths shown by `dorf doctor` (or
 set `DORF_GITHUB_APP_METADATA` and `DORF_GITHUB_APP_PRIVATE_KEY`). Then run:
 

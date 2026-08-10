@@ -67,8 +67,10 @@ implementation agent decides whether to act, explain, or leave the Revision unch
 replaces the durable Job as coordinator.
 
 The pull request is the acceptance UI. A comment from the repository owner or a collaborator becomes
-an ordinary human Message to the same implementation Session. Merging the exact pull request accepts
-the Job; closing it without merging rejects the Job. Explicit abandonment remains a Dorf command.
+an ordinary human Message to the same implementation Session. Dorf acknowledges accepted feedback
+with an eyes reaction and, after the normal checks and review flow republishes, replies with the exact
+Revision that handled it. Merging the exact pull request accepts the Job; closing it without merging
+rejects the Job. Explicit abandonment remains a Dorf command.
 
 ## The deterministic and agentic boundary
 

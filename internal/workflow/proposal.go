@@ -18,6 +18,8 @@ import (
 type ProposalGitHub interface {
 	PullRequest(context.Context, githubapi.Authority, int64) (githubapi.PullRequest, error)
 	IssueComments(context.Context, githubapi.Authority, int64) ([]githubapi.Comment, error)
+	AddEyesReaction(context.Context, githubapi.Authority, int64) error
+	CreateIssueComment(context.Context, githubapi.Authority, int64, string) (githubapi.Comment, error)
 }
 
 // ProposalRuntime holds the coding proposal workflow's concrete dependencies.
@@ -83,14 +85,30 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string, po
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("load admitted Messages before observing GitHub comments: %w", err)
 	}
-	seen := admittedGitHubComments(messages)
+	admitted := admittedGitHubComments(messages)
 	for _, comment := range comments {
 		if !trustedHumanComment(comment) {
 			continue
 		}
 		fromID := fmt.Sprintf("github-comment:%d", comment.ID)
-		if seen[fromID] {
+		message, exists := admitted[fromID]
+		if exists {
+			if message.State != spine.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
+				continue
+			}
+			if err := absurdruntime.RequireClaim(ctx); err != nil {
+				return ProposalObservationResultV1{}, err
+			}
+			if _, err := r.GitHub.CreateIssueComment(ctx, authority, proposal.Number, feedbackReply(jobID, comment.ID, job.Revision)); err != nil {
+				return ProposalObservationResultV1{}, fmt.Errorf("report completed GitHub feedback comment %d: %w", comment.ID, err)
+			}
 			continue
+		}
+		if err := absurdruntime.RequireClaim(ctx); err != nil {
+			return ProposalObservationResultV1{}, err
+		}
+		if err := r.GitHub.AddEyesReaction(ctx, authority, comment.ID); err != nil {
+			return ProposalObservationResultV1{}, fmt.Errorf("acknowledge GitHub feedback comment %d: %w", comment.ID, err)
 		}
 		if err := absurdruntime.RequireClaim(ctx); err != nil {
 			return ProposalObservationResultV1{}, err
@@ -106,19 +124,36 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string, po
 		if created {
 			result.NewMessages++
 		}
-		seen[fromID] = true
 	}
 	return result, nil
 }
 
-func admittedGitHubComments(messages []spine.MessageView) map[string]bool {
-	seen := make(map[string]bool)
+func admittedGitHubComments(messages []spine.MessageView) map[string]spine.MessageView {
+	admitted := make(map[string]spine.MessageView)
 	for _, message := range messages {
 		if message.FromKind == spine.MessageFromHuman && strings.HasPrefix(message.FromID, "github-comment:") {
-			seen[message.FromID] = true
+			admitted[message.FromID] = message
 		}
 	}
-	return seen
+	return admitted
+}
+
+func feedbackReply(jobID string, commentID int64, revision string) string {
+	return fmt.Sprintf("Dorf handled this feedback in exact Revision `%s`.\n\n%s", revision, feedbackReplyMarker(jobID, commentID))
+}
+
+func feedbackReplyMarker(jobID string, commentID int64) string {
+	return fmt.Sprintf("<!-- dorf-feedback:%s:%d -->", jobID, commentID)
+}
+
+func hasFeedbackReply(comments []githubapi.Comment, jobID string, commentID int64) bool {
+	marker := feedbackReplyMarker(jobID, commentID)
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateExactProposal(proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
