@@ -1,4 +1,4 @@
-# sqlc working guide
+# sqlc Working Guide
 
 Read this before changing Dorf's PostgreSQL schema, named queries, or `postgres.Store` mappings.
 
