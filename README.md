@@ -56,6 +56,8 @@ task state, GitHub proposal/outcome facts, and cleanup state.
 
 The repository contract is Go-only:
 
+`scripts/dev/prepare.sh` installs the repository-owned development prerequisites before the checks run.
+
 ```bash
 scripts/dev/prepare.sh
 go test ./...
