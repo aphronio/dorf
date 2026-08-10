@@ -341,11 +341,19 @@ Message -> AgentRun -> Harness / Thread / Turn
       and the required read-only capability/Revision facts.
 - [x] Delete Action/AgentRun state synchronization tests and replace them with one shared harness
       submission/recovery contract.
-- [ ] Dogfood one implementation AgentRun and one selected review AgentRun whose text returns through
+- [x] Dogfood one implementation AgentRun and one selected review AgentRun whose text returns through
       Message.
 
 Terminal: implementation and review use one AgentRun durability mechanism; no second Action or prose
 artifact describes the same delivery.
+
+Live proof (2026-08-10): Job `job-c02ec75d991e1e3ccee2` recovered a temporary provider failure by
+creating a new implementation AgentRun on the same Thread. Revision `39e81363` selected a general
+reviewer on its own read-only Thread; that reviewer's text became an agent Message handled by the
+implementation Thread. The resulting Revision `6334f112` repeated Checks and selected review, then
+created exact-Revision PR #108. Closing the disposable PR recorded a rejected Outcome, revoked all
+three provider Routes, and deleted the main Sandbox plus both reviewer Sandboxes. The first live
+attempt also exposed and fixed one missing-Message projection at the reviewer adapter boundary.
 
 ## Slice 6: Unify owned resources and isolate Cleanup
 
