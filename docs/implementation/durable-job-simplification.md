@@ -398,6 +398,11 @@ Closing the disposable PR recorded a rejected Outcome; one cleanup task revoked 
 both Sandboxes, and Incus returned no instance for either exact Sandbox ID. The run also exposed and
 fixed an incomplete Route receipt and removed a second, non-convergent strict-review read path.
 
+Action-scope refinement proof (2026-08-10): Job `job-c9d27acf02fafc3c1d8d` created one Sandbox and
+recorded repository clone against that exact Sandbox through the shared Action path. Checks passed,
+exact-Revision PR #110 was proposed and closed, the rejected Outcome completed cleanup, and Incus
+returned no instance for the exact Sandbox ID.
+
 ### Slice 6A: Let Action success own external lifecycle truth
 
 Goal: after ordinary Actions have one explicit Sandbox scope and immutable success, remove stored
