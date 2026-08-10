@@ -284,7 +284,7 @@ Goal: make an exact-Revision Proposal the direct successor of readiness.
 - [x] Consolidate duplicate publication adoption tests around Action and Proposal invariants.
 - [x] Turn trusted owner/collaborator pull-request comments into idempotent human Messages.
 - [x] Observe merge as acceptance and close without merge as rejection.
-- [ ] Dogfood comment feedback and a terminal pull-request outcome through one real Dorf Job.
+- [x] Dogfood comment feedback and a terminal pull-request outcome through one real Dorf Job.
 
 Terminal: a ready Revision produces at most one exact-Revision PR Proposal and can reach an explicit
 Outcome.
