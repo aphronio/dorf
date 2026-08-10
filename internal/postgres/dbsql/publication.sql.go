@@ -33,27 +33,19 @@ func (q *Queries) BlockPublicationPhase(ctx context.Context, arg BlockPublicatio
 
 const completeProposalAction = `-- name: CompleteProposalAction :execrows
 update dorf.actions
-set state='succeeded',external_id=$1::text,external_outcome=$2::text
-where id=$3 and job_id=$4
-  and kind='github-pull-request' and scope_key=$5
+set state='succeeded'
+where id=$1 and job_id=$2
+  and kind='github-pull-request' and scope_key=$3
 `
 
 type CompleteProposalActionParams struct {
-	ExternalID       string
-	BodyDigest       string
 	ActionID         string
 	JobID            string
 	ProposedRevision string
 }
 
 func (q *Queries) CompleteProposalAction(ctx context.Context, arg CompleteProposalActionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeProposalAction,
-		arg.ExternalID,
-		arg.BodyDigest,
-		arg.ActionID,
-		arg.JobID,
-		arg.ProposedRevision,
-	)
+	result, err := q.db.ExecContext(ctx, completeProposalAction, arg.ActionID, arg.JobID, arg.ProposedRevision)
 	if err != nil {
 		return 0, err
 	}
@@ -81,17 +73,17 @@ func (q *Queries) CompletePublication(ctx context.Context, arg CompletePublicati
 
 const completeRepositoryPush = `-- name: CompleteRepositoryPush :execrows
 update dorf.actions
-set state='succeeded',external_id=$1::text,external_outcome='remote-head-exact'
-where id=$2 and kind='repository-push' and scope_key=$1
+set state='succeeded'
+where id=$1 and kind='repository-push' and scope_key=$2
 `
 
 type CompleteRepositoryPushParams struct {
-	Revision string
 	ActionID string
+	Revision string
 }
 
 func (q *Queries) CompleteRepositoryPush(ctx context.Context, arg CompleteRepositoryPushParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeRepositoryPush, arg.Revision, arg.ActionID)
+	result, err := q.db.ExecContext(ctx, completeRepositoryPush, arg.ActionID, arg.Revision)
 	if err != nil {
 		return 0, err
 	}
@@ -181,9 +173,7 @@ func (q *Queries) GetProposalCurrentRevision(ctx context.Context, jobID string) 
 }
 
 const getPublicationAction = `-- name: GetPublicationAction :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where job_id=$1 and kind=$2 and scope_key=$3
 `
@@ -195,13 +185,11 @@ type GetPublicationActionParams struct {
 }
 
 type GetPublicationActionRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	ID       string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationActionParams) (GetPublicationActionRow, error) {
@@ -212,17 +200,13 @@ func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationAc
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err
 }
 
 const getPublicationActionForUpdate = `-- name: GetPublicationActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3 and scope_key=$4
 for update
@@ -236,13 +220,11 @@ type GetPublicationActionForUpdateParams struct {
 }
 
 type GetPublicationActionForUpdateRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	ID       string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPublicationActionForUpdateParams) (GetPublicationActionForUpdateRow, error) {
@@ -258,8 +240,6 @@ func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPubl
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err
@@ -324,7 +304,7 @@ func (q *Queries) GetRepositoryPushState(ctx context.Context, arg GetRepositoryP
 
 const insertPublicationAction = `-- name: InsertPublicationAction :exec
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values($1,$2,$3,'pending',$4)
+values($1,$2,$3,'unsettled',$4)
 on conflict do nothing
 `
 

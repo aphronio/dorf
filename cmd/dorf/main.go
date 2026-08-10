@@ -599,7 +599,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
 	}
 	for _, action := range actions {
-		fmt.Fprintf(stdout, "  observed action %s: %s external=%s evidence=%s\n", action.Kind, action.State, empty(action.ExternalID), empty(action.EvidenceDigest))
+		fmt.Fprintf(stdout, "  observed action %s: %s scope=%s evidence=%s\n", action.Kind, action.State, empty(action.Scope), empty(action.EvidenceDigest))
 	}
 	for _, check := range checks {
 		scope := "historical"

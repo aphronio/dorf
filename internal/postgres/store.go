@@ -81,7 +81,6 @@ type ActionView struct {
 	ID             string            `json:"id"`
 	Kind           spine.ActionKind  `json:"kind"`
 	State          spine.ActionState `json:"state"`
-	ExternalID     string            `json:"external_id,omitempty"`
 	Scope          string            `json:"scope,omitempty"`
 	EvidenceDigest string            `json:"evidence_digest,omitempty"`
 }
@@ -455,8 +454,8 @@ func messageFromValues(id, jobID string, fromKind spine.MessageFromKind, fromID 
 	return spine.Message{ID: id, JobID: jobID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
 }
 
-func actionFromValues(id, jobID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
-	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, ExternalID: externalID, Outcome: outcome, Scope: scope}
+func actionFromValues(id, jobID string, kind spine.ActionKind, state spine.ActionState, scope string) spine.Action {
+	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope}
 }
 
 func agentRunFromValues(id, jobID, messageID string, state spine.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role string) spine.AgentRun {
@@ -499,13 +498,13 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 		if getErr != nil {
 			return spine.Action{}, err
 		}
-		return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+		return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
 	}
 	row, err := q.GetScopedActionBySandbox(ctx, dbsql.GetScopedActionBySandboxParams{JobID: sandbox.JobID, Kind: kind, SandboxID: sandboxID})
 	if err != nil {
 		return spine.Action{}, err
 	}
-	return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+	return actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
 }
 
 func (s Store) Sandbox(ctx context.Context, id string) (spine.Sandbox, error) {
@@ -579,7 +578,7 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 	if err != nil {
 		return spine.Action{}, err
 	}
-	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
+	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey)
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
@@ -617,7 +616,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositorySetup, retryID)
 	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
 	if err == nil {
-		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ExternalID, existingRow.ExternalOutcome, existingRow.ScopeKey)
+		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ScopeKey)
 		message, _, messageErr := admitMessageTx(ctx, tx, messageInput)
 		if messageErr != nil {
 			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
@@ -660,7 +659,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if !messageCreated {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q already has a message without its Action", retryID)
 	}
-	action := spine.Action{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup, State: spine.ActionPending, Scope: retryID}
+	action := spine.Action{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup, State: spine.ActionUnsettled, Scope: retryID}
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
@@ -786,7 +785,7 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		state, phase = "failed", "blocked"
 		attention = fmt.Sprintf("repository setup failed with exit %d; Evidence %s", observation.ExitCode, evidence.Digest)
 	}
-	if err := queries.FinishSetupAction(ctx, dbsql.FinishSetupActionParams{State: spine.ActionState(state), ExternalID: sql.NullString{String: evidence.Digest, Valid: true}, ExternalOutcome: sql.NullString{String: fmt.Sprintf("exit=%d", observation.ExitCode), Valid: true}, ActionID: actionID}); err != nil {
+	if err := queries.FinishSetupAction(ctx, dbsql.FinishSetupActionParams{State: spine.ActionState(state), ActionID: actionID}); err != nil {
 		return err
 	}
 	if err := expectOneRows(queries.SetWorkflowPhaseAfterSetup(ctx, dbsql.SetWorkflowPhaseAfterSetupParams{WorkflowPhase: phase, WorkflowAttention: attention, JobID: setup.JobID})); err != nil {
@@ -1050,7 +1049,7 @@ func (s Store) BlockWorkflow(ctx context.Context, jobID, reason string) error {
 	return expectOneRows(dbsql.New(s.DB).BlockWorkflow(ctx, dbsql.BlockWorkflowParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID}))
 }
 
-func (s Store) RecordActionSuccess(ctx context.Context, id string, receipt spine.Receipt) error {
+func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1062,70 +1061,40 @@ func (s Store) RecordActionSuccess(ctx context.Context, id string, receipt spine
 		return err
 	}
 	if completed.State == spine.ActionSucceeded {
-		if completed.ExternalID != receipt.ExternalID || completed.ExternalOutcome != receipt.Outcome {
-			return fmt.Errorf("Action %s success conflicts with its immutable receipt", id)
-		}
 		return tx.Commit()
 	}
 	kind, scope := completed.Kind, completed.ScopeKey
+	if scope == "" {
+		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
+	}
 	switch kind {
-	case spine.ActionSandboxCreate:
-		if scope == "" || receipt.ExternalID != scope {
-			err = fmt.Errorf("Sandbox receipt conflicts with its exact identity")
-		}
-	case spine.ActionRepositoryClone:
-		if scope == "" {
-			err = fmt.Errorf("repository clone Action has no exact Sandbox")
-		}
-	case spine.ActionRouteCreate:
-		route := spine.RouteForSandbox(spine.Sandbox{ID: scope, JobID: completed.JobID})
-		if receipt.ExternalID != route.ID || receipt.Outcome != scope {
-			err = fmt.Errorf("provider route receipt conflicts with its exact Sandbox identity")
-		}
-	case spine.ActionRouteRevoke:
-		route := spine.RouteForSandbox(spine.Sandbox{ID: scope, JobID: completed.JobID})
-		if receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != route.ID) {
-			err = fmt.Errorf("route cleanup receipt conflicts with its exact route")
-		}
-	case spine.ActionSandboxDelete:
-		if scope == "" || receipt.ExternalID != scope || receipt.Outcome != "deleted" {
-			err = fmt.Errorf("Sandbox cleanup receipt conflicts with its exact identity")
-			break
-		}
+	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate,
+		spine.ActionRouteRevoke, spine.ActionReviewCheckout, spine.ActionSandboxDelete:
+	default:
+		return fmt.Errorf("unsupported Sandbox Action %q", kind)
+	}
+	sandbox, err := queries.GetSandbox(ctx, scope)
+	if err != nil {
+		return err
+	}
+	if sandbox.JobID != completed.JobID || id != spine.ScopedActionID(completed.JobID, kind, scope) {
+		return fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	}
+	if kind == spine.ActionSandboxDelete {
 		revoked, getErr := queries.SandboxRouteRevokeSucceeded(ctx, dbsql.SandboxRouteRevokeSucceededParams{JobID: completed.JobID, SandboxID: scope})
 		if getErr != nil {
 			err = getErr
 		} else if !revoked {
 			err = fmt.Errorf("Sandbox cleanup cannot complete before its exact route revoke Action succeeds")
 		}
-	case spine.ActionReviewCheckout:
-		if scope == "" || receipt.ExternalID != scope {
-			err = fmt.Errorf("review checkout receipt conflicts with its exact Sandbox identity")
-			break
-		}
-		expected, getErr := queries.GetReviewRevisionBySandbox(ctx, scope)
-		if getErr != nil {
-			err = getErr
-			break
-		}
-		parts := strings.Fields(receipt.Outcome)
-		if len(parts) != 3 || parts[2] != "clean" || !expected.Valid || parts[0] != expected.String || !ValidRevision(parts[1]) {
-			err = fmt.Errorf("review checkout receipt conflicts with its exact Revision/tree/clean state")
-		}
 	}
 	if err != nil {
 		return err
 	}
-	if err := expectOneRows(queries.RecordActionSuccess(ctx, dbsql.RecordActionSuccessParams{
-		ExternalID: sql.NullString{String: receipt.ExternalID, Valid: true}, ExternalOutcome: receipt.Outcome, ID: id,
-	})); err != nil {
+	if err := expectOneRows(queries.RecordSandboxActionSuccess(ctx, id)); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-
-func (s Store) UncertainAction(ctx context.Context, id string) error {
-	return dbsql.New(s.DB).MarkActionUncertain(ctx, id)
 }
 
 func (s Store) NextDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
@@ -1429,7 +1398,7 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) 
 	}
 	var actions []ActionView
 	for _, row := range rows {
-		actions = append(actions, ActionView{ID: row.ID, Kind: row.Kind, State: row.State, ExternalID: row.ExternalID, Scope: row.ScopeKey, EvidenceDigest: row.EvidenceDigest})
+		actions = append(actions, ActionView{ID: row.ID, Kind: row.Kind, State: row.State, Scope: row.ScopeKey, EvidenceDigest: row.EvidenceDigest})
 	}
 	return actions, nil
 }

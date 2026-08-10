@@ -870,130 +870,51 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	return job, revision, message, implementationRun
 }
 
-func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
+func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "job-resource-ownership")
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go", "web/login.tsx"}, true, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := policy.ReviewPolicy(facts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.Facts, record.Plan = facts, plan
-	if err := store.RecordReviewPolicy(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-
-	sandboxes, err := store.Sandboxes(ctx, job.ID)
-	if err != nil || len(sandboxes) != 3 {
-		t.Fatalf("Job Sandboxes=%#v err=%v", sandboxes, err)
-	}
-	byID := make(map[string]spine.Sandbox, len(sandboxes))
-	for _, sandbox := range sandboxes {
-		byID[sandbox.ID] = sandbox
-		route := spine.RouteForSandbox(sandbox)
-		if route.SandboxID != sandbox.ID || route.ID == "" {
-			t.Fatalf("Sandbox %s derived Route=%#v", sandbox.ID, route)
-		}
-	}
-	clone, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionRepositoryClone)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cloneReceipt := spine.Receipt{ExternalID: spine.MainSandboxName(job.ID) + ":/workspace/job"}
-	if err := store.RecordActionSuccess(ctx, clone.ID, cloneReceipt); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordActionSuccess(ctx, clone.ID, cloneReceipt); err != nil {
-		t.Fatalf("identical Action success retry: %v", err)
-	}
-	if err := store.RecordActionSuccess(ctx, clone.ID, spine.Receipt{ExternalID: "different"}); err == nil {
-		t.Fatal("conflicting Action success replaced the immutable receipt")
-	}
-	runs, err := store.AgentRuns(ctx, job.ID)
-	if err != nil || len(runs) != 3 {
-		t.Fatalf("Job AgentRuns=%#v err=%v", runs, err)
-	}
-	for _, run := range runs {
-		if _, ok := byID[run.SandboxID]; !ok {
-			t.Fatalf("AgentRun %s uses unknown Sandbox %q", run.ID, run.SandboxID)
-		}
-	}
-
-	other, created, err := store.Admit(ctx, postgres.NewJob{
-		AdmissionKey: "resource-sentinel-" + fmt.Sprint(time.Now().UnixNano()),
-		Goal:         "keep another Job isolated", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), Branch: "dorf/resource-sentinel",
+	job, created, err := store.Admit(ctx, postgres.NewJob{
+		AdmissionKey: "cleanup-order-" + fmt.Sprint(time.Now().UnixNano()),
+		Goal:         "prove exact cleanup order", Repository: "https://github.com/aphronio/dorf.git",
+		Revision: strings.Repeat("a", 40), Branch: "dorf/cleanup-order",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
 	})
 	if err != nil || !created {
-		t.Fatalf("admit sentinel created=%t err=%v", created, err)
+		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
-	otherSandbox, err := store.Sandbox(ctx, spine.MainSandboxName(other.ID))
+	sandboxID := spine.MainSandboxName(job.ID)
+	remove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, spine.ActionSandboxDelete)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRoute := spine.RouteForSandbox(otherSandbox)
-
-	target := sandboxes[1]
-	targetRoute := spine.RouteForSandbox(target)
-	remove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: otherSandbox.ID, Outcome: "deleted"}); err == nil {
-		t.Fatal("another Job's Sandbox receipt was accepted")
-	}
-	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err == nil {
+	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err == nil {
 		t.Fatal("Sandbox delete succeeded before its exact Route revoke Action")
 	}
-	revoke, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionRouteRevoke)
+	stillUnsettled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, spine.ActionSandboxDelete)
+	if err != nil || stillUnsettled.ID != remove.ID || stillUnsettled.State != spine.ActionUnsettled {
+		t.Fatalf("premature Sandbox delete=%#v err=%v", stillUnsettled, err)
+	}
+
+	revoke, err := store.GetOrCreateSandboxAction(ctx, sandboxID, spine.ActionRouteRevoke)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordActionSuccess(ctx, revoke.ID, spine.Receipt{ExternalID: otherRoute.ID, Outcome: "revoked"}); err == nil {
-		t.Fatal("another Job's Route receipt was accepted")
-	}
-	if err := store.RecordActionSuccess(ctx, revoke.ID, spine.Receipt{ExternalID: targetRoute.ID, Outcome: "revoked"}); err != nil {
+	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
 		t.Fatal(err)
 	}
-	retryRevoke, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionRouteRevoke)
-	if err != nil || retryRevoke.ID != revoke.ID || retryRevoke.State != spine.ActionSucceeded {
-		t.Fatalf("Route cleanup retry=%#v err=%v", retryRevoke, err)
+	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
+		t.Fatalf("idempotent Route revoke success: %v", err)
 	}
-
-	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err != nil {
+	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
 		t.Fatal(err)
 	}
-	retryRemove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
+	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
+		t.Fatalf("idempotent Sandbox delete success: %v", err)
+	}
+	retryRemove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, spine.ActionSandboxDelete)
 	if err != nil || retryRemove.ID != remove.ID || retryRemove.State != spine.ActionSucceeded {
 		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
-	}
-
-	actions, err := store.Actions(ctx, job.ID)
-	if err != nil || slices.IndexFunc(actions, func(action postgres.ActionView) bool {
-		return action.ID == revoke.ID && action.State == spine.ActionSucceeded
-	}) < 0 || slices.IndexFunc(actions, func(action postgres.ActionView) bool {
-		return action.ID == remove.ID && action.State == spine.ActionSucceeded
-	}) < 0 {
-		t.Fatalf("target cleanup Actions=%#v err=%v", actions, err)
-	}
-	otherActions, err := store.Actions(ctx, other.ID)
-	if err != nil || slices.IndexFunc(otherActions, func(action postgres.ActionView) bool {
-		return action.Kind == spine.ActionRouteRevoke || action.Kind == spine.ActionSandboxDelete
-	}) >= 0 {
-		t.Fatalf("cross-Job cleanup Actions=%#v err=%v", otherActions, err)
 	}
 }
 
@@ -1018,17 +939,16 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 		t.Fatal(err)
 	}
 	if sandbox.State != spine.ActionSucceeded {
-		if err := store.RecordActionSuccess(ctx, sandbox.ID, spine.Receipt{ExternalID: run.Sandbox.ID}); err != nil {
+		if err := store.RecordSandboxActionSuccess(ctx, sandbox.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	tree := strings.Repeat("d", 40)
 	checkout, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if checkout.State != spine.ActionSucceeded {
-		if err := store.RecordActionSuccess(ctx, checkout.ID, spine.Receipt{ExternalID: run.Sandbox.ID, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+		if err := store.RecordSandboxActionSuccess(ctx, checkout.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1037,7 +957,7 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 		t.Fatal(err)
 	}
 	if route.State != spine.ActionSucceeded {
-		if err := store.RecordActionSuccess(ctx, route.ID, spine.Receipt{ExternalID: run.Route.ID, Outcome: run.Sandbox.ID}); err != nil {
+		if err := store.RecordSandboxActionSuccess(ctx, route.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1275,14 +1195,14 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordActionSuccess(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
+	if err := store.RecordSandboxActionSuccess(ctx, sandbox.ID); err != nil {
 		t.Fatal(err)
 	}
 	route, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordActionSuccess(ctx, route.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(route.ID), Outcome: spine.MainSandboxName(job.ID)}); err != nil {
+	if err := store.RecordSandboxActionSuccess(ctx, route.ID); err != nil {
 		t.Fatal(err)
 	}
 	taskIDs := []string{job.TaskID}
@@ -1357,26 +1277,20 @@ type integrationExternals struct {
 
 func (*integrationExternals) Harness() string { return "codex" }
 
-func (e *integrationExternals) receipt(job spine.Job, action spine.Action) (spine.Receipt, error) {
+func (e *integrationExternals) effect(kind spine.ActionKind) error {
 	e.mu.Lock()
-	e.effects = append(e.effects, action.Kind)
+	e.effects = append(e.effects, kind)
 	e.mu.Unlock()
-	return spine.Receipt{ExternalID: "integration-" + string(action.Kind) + "-" + job.ID}, nil
+	return nil
 }
-func (e *integrationExternals) SandboxCreate(_ context.Context, _ spine.Job, sandbox spine.Sandbox, action spine.Action) (spine.Receipt, error) {
-	e.mu.Lock()
-	e.effects = append(e.effects, action.Kind)
-	e.mu.Unlock()
-	return spine.Receipt{ExternalID: sandbox.ID}, nil
+func (e *integrationExternals) SandboxCreate(context.Context, spine.Job, spine.Sandbox) error {
+	return e.effect(spine.ActionSandboxCreate)
 }
-func (e *integrationExternals) RepositoryClone(_ context.Context, job spine.Job, _ spine.Sandbox, action spine.Action) (spine.Receipt, error) {
-	return e.receipt(job, action)
+func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
+	return e.effect(spine.ActionRepositoryClone)
 }
-func (e *integrationExternals) RouteCreate(_ context.Context, _ spine.Job, _ spine.Sandbox, route spine.Route, action spine.Action) (spine.Receipt, error) {
-	e.mu.Lock()
-	e.effects = append(e.effects, action.Kind)
-	e.mu.Unlock()
-	return spine.Receipt{ExternalID: route.ID, Outcome: route.SandboxID}, nil
+func (e *integrationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
+	return e.effect(spine.ActionRouteCreate)
 }
 func (e *integrationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
 	e.mu.Lock()
@@ -1422,17 +1336,11 @@ func (e *integrationExternals) AgentWait(_ context.Context, _ spine.Job, threadI
 	}
 	return spine.HarnessBinding{Harness: "codex", ThreadID: threadID, Turn: spine.HarnessTurn{ID: turnID, Status: "completed"}}, nil
 }
-func (e *integrationExternals) RouteRevoke(_ context.Context, _ spine.Job, _ spine.Sandbox, route spine.Route, action spine.Action) (spine.Receipt, error) {
-	e.mu.Lock()
-	e.effects = append(e.effects, action.Kind)
-	e.mu.Unlock()
-	return spine.Receipt{ExternalID: route.ID, Outcome: "revoked"}, nil
+func (e *integrationExternals) RouteRevoke(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
+	return e.effect(spine.ActionRouteRevoke)
 }
-func (e *integrationExternals) SandboxDelete(_ context.Context, _ spine.Job, sandbox spine.Sandbox, action spine.Action) (spine.Receipt, error) {
-	e.mu.Lock()
-	e.effects = append(e.effects, action.Kind)
-	e.mu.Unlock()
-	return spine.Receipt{ExternalID: sandbox.ID, Outcome: "deleted"}, nil
+func (e *integrationExternals) SandboxDelete(context.Context, spine.Job, spine.Sandbox) error {
+	return e.effect(spine.ActionSandboxDelete)
 }
 func (e *integrationExternals) submittedSequences() []int64 {
 	e.mu.Lock()

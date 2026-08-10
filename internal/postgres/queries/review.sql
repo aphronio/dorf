@@ -60,7 +60,7 @@ order by name;
 
 -- name: InsertReviewAction :exec
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending',sqlc.arg(scope_key))
+values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_key))
 on conflict do nothing;
 
 -- name: InsertReviewAgentRun :exec

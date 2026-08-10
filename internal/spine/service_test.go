@@ -150,9 +150,6 @@ func (s *agentRunTestStore) WithJobFence(context.Context, string, func() error) 
 func (s *agentRunTestStore) Sandbox(context.Context, string) (Sandbox, error) {
 	return Sandbox{}, errors.New("unused")
 }
-func (s *agentRunTestStore) Route(context.Context, string) (Route, error) {
-	return Route{}, errors.New("unused")
-}
 func (s *agentRunTestStore) Sandboxes(context.Context, string) ([]Sandbox, error) {
 	return nil, errors.New("unused")
 }
@@ -168,10 +165,7 @@ func (s *agentRunTestStore) InterruptAgentRun(context.Context, string, string) e
 func (s *agentRunTestStore) BeginSetup(context.Context, string) (Action, error) {
 	return Action{}, errors.New("unused")
 }
-func (s *agentRunTestStore) RecordActionSuccess(context.Context, string, Receipt) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) UncertainAction(context.Context, string) error {
+func (s *agentRunTestStore) RecordSandboxActionSuccess(context.Context, string) error {
 	return errors.New("unused")
 }
 func (s *agentRunTestStore) NextDelivery(context.Context, string) (*Delivery, error) {

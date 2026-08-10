@@ -27,20 +27,18 @@ func (e Externals) repository() repository.Manager {
 	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
 }
 
-func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
 	if sandbox.JobID != job.ID {
-		return spine.Receipt{}, fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
+		return fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
 	}
-	id, err := e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
-	return spine.Receipt{ExternalID: id}, err
+	return e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
 }
 
-func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
 	if sandbox.JobID != job.ID || sandbox.ID != e.Sandbox.Name(job.ID) {
-		return spine.Receipt{}, fmt.Errorf("repository clone requires the exact main Sandbox")
+		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
-	err := e.Sandbox.ReconcileClone(ctx, sandbox.ID, job.Repository, job.Revision, job.Branch)
-	return spine.Receipt{ExternalID: sandbox.ID + ":" + e.Sandbox.Config.Workspace}, err
+	return e.Sandbox.ReconcileClone(ctx, sandbox.ID, job.Repository, job.Revision, job.Branch)
 }
 
 func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
@@ -69,16 +67,16 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (po
 	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
 }
 
-func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) error {
 	if run.SandboxID == "" {
-		return spine.Receipt{}, fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
+		return fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
 	}
 	if run.Revision != job.Revision {
-		return spine.Receipt{}, fmt.Errorf("review checkout identity conflicts with current Revision")
+		return fmt.Errorf("review checkout identity conflicts with current Revision")
 	}
 	workspace := e.Sandbox.Config.Workspace
 	if err := e.Sandbox.AttachReviewMetadata(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	sourceScript := `set -eu
 workspace=$1; revision=$2
@@ -88,10 +86,10 @@ workspace=$1; revision=$2
 	git -C "$workspace" bundle create - HEAD`
 	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.Revision)
 	if err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	if bundle.ExitCode != 0 || bundle.Stdout == "" {
-		return spine.Receipt{}, fmt.Errorf("export admitted Git objects for review: %s", strings.TrimSpace(bundle.Stderr))
+		return fmt.Errorf("export admitted Git objects for review: %s", strings.TrimSpace(bundle.Stderr))
 	}
 	targetScript := `set -eu
 workspace=$1; revision=$2; bundle=/tmp/dorf-review.bundle
@@ -109,19 +107,17 @@ git -C "$workspace" reflog expire --expire=now --all
 git -C "$workspace" gc --prune=now
 test -z "$(git -C "$workspace" fsck --strict --unreachable)"
 head=$(git -C "$workspace" rev-parse HEAD)
-tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
 test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
-rm -f -- "$bundle"
-printf '%s %s clean\n' "$head" "$tree"`
+rm -f -- "$bundle"`
 	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.Revision)
 	if err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	if result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("prepare exact review checkout: %s", strings.TrimSpace(result.Stderr))
+		return fmt.Errorf("prepare exact review checkout: %s", strings.TrimSpace(result.Stderr))
 	}
-	return spine.Receipt{ExternalID: run.SandboxID, Outcome: strings.TrimSpace(result.Stdout)}, nil
+	return nil
 }
 
 func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewCheckoutObservation, error) {
@@ -219,35 +215,35 @@ func reviewEffort(role, implementationEffort string) string {
 	return "medium"
 }
 
-func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, expected spine.Route, action spine.Action) (spine.Receipt, error) {
+func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, expected spine.Route) error {
 	if sandbox.JobID != job.ID || expected.SandboxID != sandbox.ID || expected.ID == "" {
-		return spine.Receipt{}, fmt.Errorf("provider Route does not belong to exact Job Sandbox")
+		return fmt.Errorf("provider Route does not belong to exact Job Sandbox")
 	}
 	if err := e.Sandbox.AttestOwnership(ctx, ownershipMetadata(sandbox)); err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	baseURL, err := e.Gateway.BaseURL()
 	if err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	bridgeIPv4, err := e.Sandbox.BridgeIPv4(ctx)
 	if err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
-	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, routeConsumer(sandbox), action.ID)
+	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, routeConsumer(sandbox), expected.ID)
 	if err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
 	if route.ID != expected.ID {
-		return spine.Receipt{}, fmt.Errorf("provider Gateway returned a foreign Route identity")
+		return fmt.Errorf("provider Gateway returned a foreign Route identity")
 	}
 	if err := e.Sandbox.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey); err != nil {
-		return spine.Receipt{}, err
+		return err
 	}
-	return spine.Receipt{ExternalID: route.ID, Outcome: sandbox.ID}, nil
+	return nil
 }
 
 func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
@@ -281,32 +277,30 @@ func (e Externals) AgentWait(ctx context.Context, job spine.Job, threadID, turnI
 	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), threadID, turnID)
 }
 
-func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine.Sandbox, route spine.Route, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine.Sandbox, route spine.Route) error {
 	if sandbox.JobID != job.ID || route.SandboxID != sandbox.ID || route.ID == "" {
-		return spine.Receipt{}, fmt.Errorf("Route cleanup has no exact Job-owned identity")
+		return fmt.Errorf("Route cleanup has no exact Job-owned identity")
 	}
-	id, err := e.Gateway.RevokeExact(ctx, routeConsumer(sandbox), route.ID)
-	if err != nil {
-		return spine.Receipt{}, err
+	if err := e.Gateway.RevokeExact(ctx, routeConsumer(sandbox), route.ID); err != nil {
+		return err
 	}
 	present, presentErr := e.Sandbox.OwnedPresent(ctx, ownershipMetadata(sandbox))
 	if presentErr != nil {
-		return spine.Receipt{}, presentErr
+		return presentErr
 	}
 	if present {
 		if err := e.Sandbox.RemoveRoute(ctx, sandbox.ID); err != nil {
-			return spine.Receipt{}, err
+			return err
 		}
 	}
-	return spine.Receipt{ExternalID: id, Outcome: "revoked"}, nil
+	return nil
 }
 
-func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
 	if sandbox.JobID != job.ID || sandbox.ID == "" {
-		return spine.Receipt{}, fmt.Errorf("Sandbox cleanup has no exact Job-owned identity")
+		return fmt.Errorf("Sandbox cleanup has no exact Job-owned identity")
 	}
-	err := e.Sandbox.DeleteOwned(ctx, ownershipMetadata(sandbox))
-	return spine.Receipt{ExternalID: sandbox.ID, Outcome: "deleted"}, err
+	return e.Sandbox.DeleteOwned(ctx, ownershipMetadata(sandbox))
 }
 
 func routeConsumer(sandbox spine.Sandbox) string { return "sandbox:" + sandbox.ID }

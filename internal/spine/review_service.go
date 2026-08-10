@@ -229,7 +229,7 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 	if original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}
-	if _, err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionSandboxCreate); err != nil {
+	if err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionSandboxCreate); err != nil {
 		return err
 	}
 	checkout, err := s.Store.GetOrCreateSandboxAction(ctx, original.Sandbox.ID, ActionReviewCheckout)
@@ -237,19 +237,20 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 		return err
 	}
 	if checkout.State != ActionSucceeded {
-		receipt, err := externals.PrepareReviewCheckout(ctx, job, original, checkout)
-		if err != nil {
-			_ = s.Store.UncertainAction(ctx, checkout.ID)
+		if err := externals.PrepareReviewCheckout(ctx, job, original); err != nil {
 			return err
 		}
 		if err := s.reachWorkflow(ctx, BarrierReviewCheckoutReady, job.ID, original.ID); err != nil {
 			return err
 		}
-		if err := s.Store.RecordActionSuccess(ctx, checkout.ID, receipt); err != nil {
+		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		if err := s.Store.RecordSandboxActionSuccess(ctx, checkout.ID); err != nil {
 			return err
 		}
 	}
-	if _, err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionRouteCreate); err != nil {
+	if err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionRouteCreate); err != nil {
 		return err
 	}
 	return nil

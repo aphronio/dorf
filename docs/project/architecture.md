@@ -69,7 +69,8 @@ durable task sequences explicit, named phases; it does not contain a generic use
   repeatable operation uses a
   public Absurd Step with a stable name derived from its Action, AgentRun, Revision, or Check ID and
   a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
-  Dorf keeps only product facts and Action receipts. The spine exposes single operations to this
+  Dorf keeps only product facts and Action identity, scope, and settlement state. The spine exposes
+  single operations to this
   coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
   `workflow_phase` remains a transitional domain guard until Slice 8; no second service-layer
   coordinator or publication task interprets it. Publication is two direct main-task Steps backed by
@@ -108,16 +109,18 @@ Every code-owned external mutation receives a stable Action identity derived fro
 intended meaning, and the exact Sandbox it targets when applicable. Ordinary Sandbox creation,
 clone, route, review-checkout, and cleanup mutations all use that one Sandbox-scoped path. Setup
 retains its generation-aware path, while publication retains its exact-Revision path. Dorf records
-enough information to classify the Action as
-pending, succeeded, failed, or uncertain. On an uncertain result, recovery inspects the external
-authority before repeating the operation. Agent tool calls and commits are AgentRun work, not
+enough information to classify the Action as unsettled, succeeded, or failed. Before repeating an
+unsettled operation, recovery inspects the external authority. Agent tool calls and commits are
+AgentRun work, not
 Actions; so is submission and recovery of the harness Turn that the AgentRun itself records. Dorf
 observes the Turn and resulting Git state at the AgentRun boundary.
 
-Action success is immutable: the first reconciled result is recorded, an identical retry is a
-no-op, and a conflicting later result is rejected. An Absurd Step checkpoints execution; it does
-not replace the Action's external-settlement fact. Sandbox records retain identity and the ownership
-nonce needed for exact reconciliation; they do not mirror lifecycle state already recorded by Actions.
+Action success is immutable and an identical retry is a no-op. The adapter validates the exact
+external authority before recording success; any durable result belongs in its natural typed record,
+such as Evidence or Proposal, rather than generic Action strings. An Absurd Step checkpoints
+execution; it does not replace the Action's external-settlement fact. Sandbox records retain identity
+and the ownership nonce needed for exact reconciliation; they do not mirror lifecycle state already
+recorded by Actions.
 
 Actions apply at least to Sandbox creation and destruction, repository clone and push, scoped
 credential or provider-route creation, and pull-request publication. Agent execution has one
@@ -153,7 +156,7 @@ complete for that Revision.
   continuing.
 - **Sandbox loss:** Report the loss honestly. Replace it only when authoritative Git state and a
   resumable or intentionally fresh Thread make the resulting continuity truthful.
-- **External ambiguity:** Inspect the Action receipt and external authority; never infer success
+- **External ambiguity:** Inspect the unsettled Action and external authority; never infer success
   from a timeout and never retry blindly.
 - **Code changes:** Prefer short-lived Jobs. Make additive checkpoint-result changes when possible;
   version task or step names when meaning changes. Let old Jobs drain on old executors rather than

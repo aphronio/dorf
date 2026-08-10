@@ -72,9 +72,7 @@ create table dorf.actions (
         'repository-push','github-pull-request','review-checkout',
         'provider-route-create','provider-route-revoke','sandbox-delete'
     )),
-    state text not null check (state in ('pending','succeeded','failed','uncertain')),
-    external_id text,
-    external_outcome text,
+    state text not null check (state in ('unsettled','succeeded','failed')),
     scope_key text not null default '',
     created_at timestamptz not null default clock_timestamp()
 );

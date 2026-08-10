@@ -7,39 +7,28 @@ package dbsql
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 const finishSetupAction = `-- name: FinishSetupAction :exec
 update dorf.actions
-set state=$1,external_id=$2,
-    external_outcome=$3
-where dorf.actions.id=$4
+set state=$1
+where dorf.actions.id=$2
 `
 
 type FinishSetupActionParams struct {
-	State           spine.ActionState
-	ExternalID      sql.NullString
-	ExternalOutcome sql.NullString
-	ActionID        string
+	State    spine.ActionState
+	ActionID string
 }
 
 func (q *Queries) FinishSetupAction(ctx context.Context, arg FinishSetupActionParams) error {
-	_, err := q.db.ExecContext(ctx, finishSetupAction,
-		arg.State,
-		arg.ExternalID,
-		arg.ExternalOutcome,
-		arg.ActionID,
-	)
+	_, err := q.db.ExecContext(ctx, finishSetupAction, arg.State, arg.ActionID)
 	return err
 }
 
 const getAction = `-- name: GetAction :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3
 `
@@ -51,13 +40,11 @@ type GetActionParams struct {
 }
 
 type GetActionRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	ID       string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetActionRow, error) {
@@ -68,28 +55,23 @@ func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetAction
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err
 }
 
 const getActionCompletionForUpdate = `-- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select job_id,kind,state,scope_key
 from dorf.actions
 where id=$1
 for update
 `
 
 type GetActionCompletionForUpdateRow struct {
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (GetActionCompletionForUpdateRow, error) {
@@ -99,17 +81,13 @@ func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err
 }
 
 const getActionForUpdate = `-- name: GetActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3
 for update
@@ -122,13 +100,11 @@ type GetActionForUpdateParams struct {
 }
 
 type GetActionForUpdateRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	ID       string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdateParams) (GetActionForUpdateRow, error) {
@@ -139,8 +115,6 @@ func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdate
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err
@@ -166,18 +140,6 @@ func (q *Queries) GetActionStateForUpdate(ctx context.Context, arg GetActionStat
 	return state, err
 }
 
-const getReviewRevisionBySandbox = `-- name: GetReviewRevisionBySandbox :one
-select revision from dorf.agent_runs
-where sandbox_id=$1 and revision is not null
-`
-
-func (q *Queries) GetReviewRevisionBySandbox(ctx context.Context, sandboxID string) (sql.NullString, error) {
-	row := q.db.QueryRowContext(ctx, getReviewRevisionBySandbox, sandboxID)
-	var revision sql.NullString
-	err := row.Scan(&revision)
-	return revision, err
-}
-
 const getSetupActionForUpdate = `-- name: GetSetupActionForUpdate :one
 select a.job_id,a.kind,coalesce(j.setup_action_id,'') as setup_action_id
 from dorf.actions a
@@ -201,7 +163,7 @@ func (q *Queries) GetSetupActionForUpdate(ctx context.Context, actionID string) 
 
 const insertActionIfAbsent = `-- name: InsertActionIfAbsent :exec
 insert into dorf.actions(id,job_id,kind,state)
-values($1,$2,$3,'pending')
+values($1,$2,$3,'unsettled')
 on conflict do nothing
 `
 
@@ -218,7 +180,7 @@ func (q *Queries) InsertActionIfAbsent(ctx context.Context, arg InsertActionIfAb
 
 const insertScopedAction = `-- name: InsertScopedAction :execrows
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values($1,$2,$3,'pending',$4)
+values($1,$2,$3,'unsettled',$4)
 on conflict do nothing
 `
 
@@ -243,8 +205,7 @@ func (q *Queries) InsertScopedAction(ctx context.Context, arg InsertScopedAction
 }
 
 const listActions = `-- name: ListActions :many
-select a.id,a.kind,a.state,
-       coalesce(a.external_id,'') as external_id,a.scope_key,
+select a.id,a.kind,a.state,a.scope_key,
        coalesce(e.digest,'') as evidence_digest
 from dorf.actions a
 left join dorf.evidence e on e.action_id=a.id
@@ -256,7 +217,6 @@ type ListActionsRow struct {
 	ID             string
 	Kind           spine.ActionKind
 	State          spine.ActionState
-	ExternalID     string
 	ScopeKey       string
 	EvidenceDigest string
 }
@@ -274,7 +234,6 @@ func (q *Queries) ListActions(ctx context.Context, jobID string) ([]ListActionsR
 			&i.ID,
 			&i.Kind,
 			&i.State,
-			&i.ExternalID,
 			&i.ScopeKey,
 			&i.EvidenceDigest,
 		); err != nil {
@@ -291,32 +250,14 @@ func (q *Queries) ListActions(ctx context.Context, jobID string) ([]ListActionsR
 	return items, nil
 }
 
-const markActionUncertain = `-- name: MarkActionUncertain :exec
+const recordSandboxActionSuccess = `-- name: RecordSandboxActionSuccess :execrows
 update dorf.actions
-set state='uncertain'
+set state='succeeded'
 where id=$1 and state<>'succeeded'
 `
 
-func (q *Queries) MarkActionUncertain(ctx context.Context, actionID string) error {
-	_, err := q.db.ExecContext(ctx, markActionUncertain, actionID)
-	return err
-}
-
-const recordActionSuccess = `-- name: RecordActionSuccess :execrows
-update dorf.actions
-set state='succeeded',external_id=$1,
-    external_outcome=nullif($2::text,'')
-where id=$3 and state<>'succeeded'
-`
-
-type RecordActionSuccessParams struct {
-	ExternalID      sql.NullString
-	ExternalOutcome string
-	ID              string
-}
-
-func (q *Queries) RecordActionSuccess(ctx context.Context, arg RecordActionSuccessParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, recordActionSuccess, arg.ExternalID, arg.ExternalOutcome, arg.ID)
+func (q *Queries) RecordSandboxActionSuccess(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordSandboxActionSuccess, id)
 	if err != nil {
 		return 0, err
 	}

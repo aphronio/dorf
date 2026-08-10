@@ -25,8 +25,7 @@ func (q *Queries) GetSandbox(ctx context.Context, id string) (DorfSandbox, error
 }
 
 const getScopedActionBySandbox = `-- name: GetScopedActionBySandbox :one
-select id,job_id,kind,state,coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where job_id=$1 and kind=$2 and scope_key=$3
 `
@@ -38,13 +37,11 @@ type GetScopedActionBySandboxParams struct {
 }
 
 type GetScopedActionBySandboxRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
+	ID       string
+	JobID    string
+	Kind     spine.ActionKind
+	State    spine.ActionState
+	ScopeKey string
 }
 
 func (q *Queries) GetScopedActionBySandbox(ctx context.Context, arg GetScopedActionBySandboxParams) (GetScopedActionBySandboxRow, error) {
@@ -55,8 +52,6 @@ func (q *Queries) GetScopedActionBySandbox(ctx context.Context, arg GetScopedAct
 		&i.JobID,
 		&i.Kind,
 		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
 		&i.ScopeKey,
 	)
 	return i, err

@@ -16,8 +16,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Route struct {
@@ -54,7 +52,10 @@ func (g Gateway) BaseURL() (string, error) {
 	return origin + "/v1", nil
 }
 
-func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, actionID string) (Route, error) {
+func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, routeID string) (Route, error) {
+	if strings.TrimSpace(routeID) == "" {
+		return Route{}, fmt.Errorf("exact provider route creation requires a route ID")
+	}
 	var route Route
 	err := g.lock(func() error {
 		connection, err := g.requireConnection(connectionName)
@@ -69,8 +70,11 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 			return err
 		}
 		for _, existing := range routes {
+			if existing.ID == routeID && existing.Consumer != consumer {
+				return fmt.Errorf("provider route ID is owned by a different consumer")
+			}
 			if existing.Consumer == consumer {
-				if existing.ConnectionName != connectionName || existing.ID != RouteID(actionID) {
+				if existing.ConnectionName != connectionName || existing.ID != routeID {
 					return fmt.Errorf("provider consumer is bound to a different stable route")
 				}
 				route = existing
@@ -81,7 +85,7 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 		if err != nil {
 			return err
 		}
-		route = Route{ID: RouteID(actionID), ConnectionName: connectionName, Consumer: consumer, APIKey: key}
+		route = Route{ID: routeID, ConnectionName: connectionName, Consumer: consumer, APIKey: key}
 		routes = append(routes, route)
 		if err := g.writeRoutes(routes); err != nil {
 			return err
@@ -102,12 +106,11 @@ func (g Gateway) ReconcileCreate(ctx context.Context, connectionName, consumer, 
 // RevokeExact removes only the recorded consumer/route pair. An absent
 // consumer reconciles a prior success-before-record loss; a changed identity
 // fails closed without touching any route.
-func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID string) (string, error) {
+func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID string) error {
 	if strings.TrimSpace(consumer) == "" || strings.TrimSpace(expectedRouteID) == "" {
-		return "", fmt.Errorf("exact provider route revocation requires consumer and route ID")
+		return fmt.Errorf("exact provider route revocation requires consumer and route ID")
 	}
-	removedID := "absent"
-	err := g.lock(func() error {
+	return g.lock(func() error {
 		routes, err := g.readRoutes()
 		if err != nil {
 			return err
@@ -127,14 +130,12 @@ func (g Gateway) RevokeExact(ctx context.Context, consumer, expectedRouteID stri
 		if index < 0 {
 			return g.activate(ctx, routes)
 		}
-		removedID = expectedRouteID
 		remaining := append(routes[:index:index], routes[index+1:]...)
 		if err := g.writeRoutes(remaining); err != nil {
 			return err
 		}
 		return g.activate(ctx, remaining)
 	})
-	return removedID, err
 }
 
 func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error) {
@@ -469,11 +470,6 @@ func readJSON(path string, target any) error {
 		return err
 	}
 	return json.Unmarshal(data, target)
-}
-
-// RouteID derives the exact stable provider-route identity owned by one Action.
-func RouteID(actionID string) string {
-	return spine.ProviderRouteID(actionID)
 }
 
 func randomKey() (string, error) {

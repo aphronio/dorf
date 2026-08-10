@@ -369,7 +369,7 @@ select coalesce(
           on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
         where j.id=$1 and j.workflow_phase='setup'
           and a.kind='repository-setup' and a.scope_key<>''
-          and a.state in ('pending','uncertain')
+          and a.state='unsettled'
     ),
     (
         select min(m.sequence)

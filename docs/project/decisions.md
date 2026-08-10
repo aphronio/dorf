@@ -1016,7 +1016,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted audit correction — 2026-08-09
 - **Durable sequencing:** Use Absurd's public task, named-step, event, cancellation, and inspection
   surfaces for generic execution mechanics. Dorf retains Job and Revision facts, deterministic
-  policy, stable external Action identities, receipts, and reconciliation because those are product
+  policy, stable external Action identity, scope, settlement state, and reconciliation because those are product
   semantics or cross-system uncertainty. Production behavior and authority must not query or mutate
   Absurd's raw internal tables or mirror its checkpoints, retries, leases, task state, or recovery
   controller into Dorf-owned schema. Version-pinned white-box tests and operator diagnostics may
@@ -1106,10 +1106,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
   single spine operations in product order and gives each repeatable Action, AgentRun, Revision, and
   Check operation a stable versioned Absurd Step name plus a small typed result. Absurd owns durable
-  execution mechanics; PostgreSQL remains authoritative for Job facts and receipts.
+  execution mechanics; PostgreSQL remains authoritative for Job facts and Action settlement.
 - **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
   Each code-owned external mutation reserves and reconciles its stable Action, performs a final
-  claim check, records the receipt, and then completes its Step. Each AgentRun instead reconciles
+  claim check, records Action success, and then completes its Step. Each AgentRun instead reconciles
   its own Harness/Thread/Turn identity. `workflow_phase` is retained temporarily as a
   domain guard and review/publication handoff projection until Slice 6; the mixed service-layer
   coordinator that interpreted it has been deleted.
@@ -1285,7 +1285,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   review checkout preparation, and Sandbox deletion use one Sandbox-scoped Action path. Setup keeps
   its generation-aware operation and publication keeps its exact-Revision operations; there is no
   generic Job-Action API or polymorphic target abstraction. The first reconciled Action success is
-  immutable: an identical retry is a no-op and a conflicting result is rejected.
+  immutable and an identical retry is a no-op. Exact external-result validation belongs to the
+  adapter before that success is recorded.
 - **Why:** These ordinary mutations all change or serve one exact Sandbox. A generic Job path hid a
   redirect to the main Sandbox and created a category with only repository clone as a real member.
   Explicit Sandbox scope makes Action identity, Absurd Step identity, reconciliation, and cleanup
@@ -1306,3 +1307,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   retries and cleanup easier to read: revoke Action succeeded, then delete Action succeeded.
 - **Reconsider when:** A provider returns a non-deterministic Route identity or a lifecycle fact exists
   independently of any Dorf Action and has a concrete product consumer.
+
+## D059 — Actions retain settlement, not generic result strings
+
+- **Status:** Accepted Action-result simplification — 2026-08-10
+- **Decision:** An Action retains its stable identity, kind, scope, and settlement state: unsettled,
+  succeeded, or failed. The external adapter validates exact identity and authority before recording
+  success. Durable facts returned by an operation live in their natural typed owner: setup output in
+  Evidence, pull-request identity in Proposal, terminal disposition in Outcome, and exact Sandbox or
+  Revision targets in Action scope. Dorf does not copy those facts into generic `external_id` or
+  `external_outcome` Action strings.
+- **Why:** Generic result strings repeated facts already known from Action scope or a typed product
+  record, forced central parsing of adapter-specific formats, and made inspection look authoritative
+  in two places. Settlement plus the natural owner states the same recovery story directly.
+- **Reconsider when:** A concrete external mutation returns a stable, non-derivable fact required for
+  reconciliation that has no honest typed product owner.

@@ -31,10 +31,9 @@ const (
 type ActionState string
 
 const (
-	ActionPending   ActionState = "pending"
+	ActionUnsettled ActionState = "unsettled"
 	ActionSucceeded ActionState = "succeeded"
 	ActionFailed    ActionState = "failed"
-	ActionUncertain ActionState = "uncertain"
 )
 
 type AgentRunState string
@@ -158,13 +157,11 @@ type MessageView struct {
 }
 
 type Action struct {
-	ID         string
-	JobID      string
-	Kind       ActionKind
-	State      ActionState
-	ExternalID string
-	Outcome    string
-	Scope      string
+	ID    string
+	JobID string
+	Kind  ActionKind
+	State ActionState
+	Scope string
 }
 
 type CommandObservation struct {
@@ -220,11 +217,6 @@ type Evidence struct {
 	Revision   string    `json:"revision,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitempty"`
 	FinishedAt time.Time `json:"finished_at,omitempty"`
-}
-
-type Receipt struct {
-	ExternalID string
-	Outcome    string
 }
 
 type GitHubProposal struct {

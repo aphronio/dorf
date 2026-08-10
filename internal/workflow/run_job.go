@@ -195,8 +195,7 @@ func runSandboxAction(ctx context.Context, service spine.Service, store postgres
 		return nil
 	}
 	return runFactStep(ctx, actionStepName(action.ID), action.ID, func(workCtx context.Context) error {
-		_, err := service.ExecuteSandboxAction(workCtx, job, sandbox, action)
-		return err
+		return service.ExecuteSandboxAction(workCtx, job, sandbox, action)
 	})
 }
 

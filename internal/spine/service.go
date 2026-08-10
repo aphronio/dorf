@@ -19,8 +19,7 @@ type Store interface {
 	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	InterruptAgentRun(context.Context, string, string) error
 	BeginSetup(context.Context, string) (Action, error)
-	RecordActionSuccess(context.Context, string, Receipt) error
-	UncertainAction(context.Context, string) error
+	RecordSandboxActionSuccess(context.Context, string) error
 	NextDelivery(context.Context, string) (*Delivery, error)
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
@@ -35,17 +34,17 @@ type Store interface {
 
 type Externals interface {
 	Harness() string
-	SandboxCreate(context.Context, Job, Sandbox, Action) (Receipt, error)
-	RepositoryClone(context.Context, Job, Sandbox, Action) (Receipt, error)
-	RouteCreate(context.Context, Job, Sandbox, Route, Action) (Receipt, error)
+	SandboxCreate(context.Context, Job, Sandbox) error
+	RepositoryClone(context.Context, Job, Sandbox) error
+	RouteCreate(context.Context, Job, Sandbox, Route) error
 	AgentInitialTurn(context.Context, Job, Delivery) (HarnessBinding, error)
 	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
 	AgentTurns(context.Context, Job, string) (HarnessHistory, error)
 	AgentSubmit(context.Context, Job, Delivery) (HarnessBinding, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
 	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
-	RouteRevoke(context.Context, Job, Sandbox, Route, Action) (Receipt, error)
-	SandboxDelete(context.Context, Job, Sandbox, Action) (Receipt, error)
+	RouteRevoke(context.Context, Job, Sandbox, Route) error
+	SandboxDelete(context.Context, Job, Sandbox) error
 }
 
 type CodingStore interface {
@@ -115,7 +114,6 @@ func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error
 	store := s.Store.(CodingStore)
 	observation, declared, err := s.Repository.RepositorySetup(ctx, job, action)
 	if err != nil {
-		_ = s.Store.UncertainAction(ctx, action.ID)
 		if attentionNeeded(err) {
 			_ = store.BlockWorkflow(ctx, job.ID, err.Error())
 			return nil
@@ -135,7 +133,6 @@ func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error
 		return err
 	}
 	if err := s.requireClaim(ctx); err != nil {
-		_ = s.Store.UncertainAction(ctx, action.ID)
 		return err
 	}
 	if err := store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
@@ -515,7 +512,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 	for _, sandbox := range sandboxes {
 		for _, kind := range []ActionKind{ActionRouteRevoke, ActionSandboxDelete} {
 			detail := fmt.Sprintf("reconciling %s for Sandbox %s", kind, sandbox.ID)
-			if err := s.cleanupStep(ctx, job.ID, detail, func() error { _, err := s.reconcileSandboxAction(ctx, job, sandbox, kind); return err }); err != nil {
+			if err := s.cleanupStep(ctx, job.ID, detail, func() error { return s.reconcileSandboxAction(ctx, job, sandbox, kind) }); err != nil {
 				return fmt.Errorf("reconcile %s for Sandbox %s: %w", kind, sandbox.ID, err)
 			}
 		}
@@ -644,46 +641,44 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
 }
 
-func (s Service) reconcileSandboxAction(ctx context.Context, job Job, sandbox Sandbox, kind ActionKind) (Receipt, error) {
+func (s Service) reconcileSandboxAction(ctx context.Context, job Job, sandbox Sandbox, kind ActionKind) error {
 	action, err := s.Store.GetOrCreateSandboxAction(ctx, sandbox.ID, kind)
 	if err != nil {
-		return Receipt{}, err
+		return err
 	}
 	if action.State == ActionSucceeded {
-		return Receipt{ExternalID: action.ExternalID, Outcome: action.Outcome}, nil
+		return nil
 	}
 	return s.ExecuteSandboxAction(ctx, job, sandbox, action)
 }
 
 // ExecuteSandboxAction reconciles one external mutation against its exact
 // Sandbox. The caller uses the Action ID as the durable Absurd Step identity.
-func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) (Receipt, error) {
+func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) error {
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
-		return Receipt{}, fmt.Errorf("Sandbox Action does not belong to the exact Job and Sandbox")
+		return fmt.Errorf("Sandbox Action does not belong to the exact Job and Sandbox")
 	}
-	var receipt Receipt
 	var err error
 	switch action.Kind {
 	case ActionSandboxCreate:
-		receipt, err = s.Externals.SandboxCreate(ctx, job, sandbox, action)
+		err = s.Externals.SandboxCreate(ctx, job, sandbox)
 	case ActionRepositoryClone:
-		receipt, err = s.Externals.RepositoryClone(ctx, job, sandbox, action)
+		err = s.Externals.RepositoryClone(ctx, job, sandbox)
 	case ActionRouteCreate, ActionRouteRevoke:
 		route := RouteForSandbox(sandbox)
 		if action.Kind == ActionRouteCreate {
-			receipt, err = s.Externals.RouteCreate(ctx, job, sandbox, route, action)
+			err = s.Externals.RouteCreate(ctx, job, sandbox, route)
 		}
 		if action.Kind == ActionRouteRevoke {
-			receipt, err = s.Externals.RouteRevoke(ctx, job, sandbox, route, action)
+			err = s.Externals.RouteRevoke(ctx, job, sandbox, route)
 		}
 	case ActionSandboxDelete:
-		receipt, err = s.Externals.SandboxDelete(ctx, job, sandbox, action)
+		err = s.Externals.SandboxDelete(ctx, job, sandbox)
 	default:
-		return Receipt{}, fmt.Errorf("unsupported Sandbox Action kind %q", action.Kind)
+		return fmt.Errorf("unsupported Sandbox Action kind %q", action.Kind)
 	}
 	if err != nil {
-		_ = s.Store.UncertainAction(ctx, action.ID)
-		return Receipt{}, err
+		return err
 	}
 	point := ""
 	if action.Kind == ActionRouteRevoke {
@@ -694,15 +689,14 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	}
 	if point != "" {
 		if err := s.reachWorkflow(ctx, point, job.ID, action.ID); err != nil {
-			return Receipt{}, err
+			return err
 		}
 	}
 	if err := s.requireClaim(ctx); err != nil {
-		_ = s.Store.UncertainAction(ctx, action.ID)
-		return Receipt{}, err
+		return err
 	}
-	if err := s.Store.RecordActionSuccess(ctx, action.ID, receipt); err != nil {
-		return Receipt{}, err
+	if err := s.Store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+		return err
 	}
-	return receipt, nil
+	return nil
 }

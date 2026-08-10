@@ -302,7 +302,7 @@ func cleanupPublicationSafe(ctx context.Context, store postgres.Store, job spine
 	if err != nil {
 		return fmt.Errorf("cleanup requires publication reconciliation for the exact pull-request Action: %w", err)
 	}
-	if pull.State != spine.ActionPending {
+	if pull.State != spine.ActionUnsettled {
 		return fmt.Errorf("cleanup cannot proceed while the exact pull-request Action is %s; retry publication to reconcile and record any exposed proposal first", pull.State)
 	}
 	return nil

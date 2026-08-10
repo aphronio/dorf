@@ -71,7 +71,7 @@ func WithHeartbeat[T any](ctx context.Context, fn func(context.Context) (T, erro
 	var finalHeartbeatErr error
 	if err == nil {
 		// Close the window after the last periodic tick. The callback may have
-		// reconciled and stored a truthful stable Action receipt; this final
+		// reconciled and stored truthful stable Action success; this final
 		// check prevents a cancelled or superseded run from committing its
 		// Absurd checkpoint as successful orchestration.
 		finalHeartbeatErr = absurd.Heartbeat(ctx, HeartbeatLease)

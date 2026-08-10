@@ -13,7 +13,7 @@ and refresh writer. Each Sandbox receives only a scoped broker route and Codex c
 The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
 route configuration and keys, and the broker executable live under the configured
 `DORF_PROVIDER_GATEWAY_STATE`; they never enter a Sandbox image. Dorf retains only the exact route
-identity and Action receipt needed for reconciliation.
+identity derivation and Action settlement state needed for reconciliation.
 
 ## Security and recovery
 

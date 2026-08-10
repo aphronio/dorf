@@ -46,7 +46,7 @@ also update the decision log in the same change.
 Before starting or retrying mutation:
 
 1. inspect local Git state, the remote branch and pull request, the active issue, and recent comments;
-2. inspect the existing Dorf Job, Sandbox, Session, Absurd task, and unsettled Action receipts;
+2. inspect the existing Dorf Job, Sandbox, Session, Absurd task, and unsettled Actions;
 3. compare those facts with the relevant external authority and retained Evidence; and
 4. resume the existing owner when identity is established.
 

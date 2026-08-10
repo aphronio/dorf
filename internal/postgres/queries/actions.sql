@@ -1,6 +1,6 @@
 -- name: InsertActionIfAbsent :exec
 insert into dorf.actions(id,job_id,kind,state)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending')
+values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled')
 on conflict do nothing;
 
 -- name: ReserveSandbox :execrows
@@ -11,17 +11,13 @@ where dorf.sandboxes.job_id=excluded.job_id
   and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce;
 
 -- name: GetActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
 for update;
 
 -- name: GetAction :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind);
 
@@ -33,7 +29,7 @@ for update;
 
 -- name: InsertScopedAction :execrows
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending',sqlc.arg(scope_key))
+values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_key))
 on conflict do nothing;
 
 -- name: GetSetupActionForUpdate :one
@@ -45,27 +41,19 @@ for update of a,j;
 
 -- name: FinishSetupAction :exec
 update dorf.actions
-set state=sqlc.arg(state),external_id=sqlc.arg(external_id),
-    external_outcome=sqlc.arg(external_outcome)
+set state=sqlc.arg(state)
 where dorf.actions.id=sqlc.arg(action_id);
 
 -- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select job_id,kind,state,scope_key
 from dorf.actions
 where id=sqlc.arg(id)
 for update;
 
--- name: RecordActionSuccess :execrows
+-- name: RecordSandboxActionSuccess :execrows
 update dorf.actions
-set state='succeeded',external_id=sqlc.arg(external_id),
-    external_outcome=nullif(sqlc.arg(external_outcome)::text,'')
+set state='succeeded'
 where id=sqlc.arg(id) and state<>'succeeded';
-
--- name: MarkActionUncertain :exec
-update dorf.actions
-set state='uncertain'
-where id=sqlc.arg(action_id) and state<>'succeeded';
 
 -- name: SandboxRouteRevokeSucceeded :one
 select exists(
@@ -75,14 +63,9 @@ select exists(
 );
 
 -- name: ListActions :many
-select a.id,a.kind,a.state,
-       coalesce(a.external_id,'') as external_id,a.scope_key,
+select a.id,a.kind,a.state,a.scope_key,
        coalesce(e.digest,'') as evidence_digest
 from dorf.actions a
 left join dorf.evidence e on e.action_id=a.id
 where a.job_id=sqlc.arg(job_id)
 order by a.created_at,a.id;
-
--- name: GetReviewRevisionBySandbox :one
-select revision from dorf.agent_runs
-where sandbox_id=sqlc.arg(sandbox_id) and revision is not null;

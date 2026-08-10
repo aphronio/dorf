@@ -39,11 +39,11 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	state := gatewayState(t, server.URL)
 	gateway := Gateway{StatePath: state, Client: server.Client()}
 
-	first, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-1", "action-stable")
+	first, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-1", "route-stable")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-1", "action-stable")
+	second, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-1", "route-stable")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,10 +57,10 @@ func TestRouteReconciliationIsStableAndRevocationIsIdempotent(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("routes=%d, want 1", len(routes))
 	}
-	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-1", first.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := active[len(active)-1]; len(got) != 1 || got[0] != "guard-secret" {
@@ -81,33 +81,34 @@ func TestExactRouteRevocationRefusesChangedIdentityAndReconcilesAbsence(t *testi
 	}))
 	defer server.Close()
 	gateway := Gateway{StatePath: gatewayState(t, server.URL), Client: server.Client()}
-	route, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "action-exact")
+	route, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "route-exact")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", "route-foreign"); err == nil {
+	if _, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-foreign", route.ID); err == nil {
+		t.Fatal("foreign consumer adopted an existing route identity")
+	}
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", "route-foreign"); err == nil {
 		t.Fatal("changed exact route identity was revoked")
 	}
 	if observed, present, err := gateway.Route(context.Background(), "sandbox:job-exact"); err != nil || !present || observed.ID != route.ID {
 		t.Fatalf("route changed after fenced refusal: route=%#v present=%t err=%v", observed, present, err)
 	}
-	removed, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID)
-	if err != nil || removed != route.ID {
-		t.Fatalf("removed=%s err=%v", removed, err)
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID); err != nil {
+		t.Fatal(err)
 	}
-	removed, err = gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID)
-	if err != nil || removed != "absent" {
-		t.Fatalf("idempotent removed=%s err=%v", removed, err)
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID); err != nil {
+		t.Fatal(err)
 	}
-	rebound, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "action-rebound")
+	rebound, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-exact", "route-rebound")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rebound.ID == route.ID {
-		t.Fatal("rebound route did not receive its own stable Action identity")
+		t.Fatal("rebound route did not receive its own stable identity")
 	}
-	if _, err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", RouteID("action-exact")); err == nil {
-		t.Fatal("stable prior Action identity revoked a rebound consumer route")
+	if err := gateway.RevokeExact(context.Background(), "sandbox:job-exact", route.ID); err == nil {
+		t.Fatal("stable prior route identity revoked a rebound consumer route")
 	}
 	if observed, present, err := gateway.Route(context.Background(), "sandbox:job-exact"); err != nil || !present || observed.ID != rebound.ID {
 		t.Fatalf("rebound route changed after fenced refusal: route=%#v present=%t err=%v", observed, present, err)
@@ -166,15 +167,15 @@ func TestExactRouteRevocationReconcilesBrokerAfterActivationFailure(t *testing.T
 		return response.StatusCode == http.StatusOK
 	}
 
-	target, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-target", "action-target")
+	target, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-target", "route-target")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sentinel, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-sentinel", "action-sentinel")
+	sentinel, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-sentinel", "route-sentinel")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gateway.RevokeExact(context.Background(), target.Consumer, "route-changed"); err == nil {
+	if err := gateway.RevokeExact(context.Background(), target.Consumer, "route-changed"); err == nil {
 		t.Fatal("changed exact route identity was revoked")
 	}
 	if !accepted(target.APIKey) || !accepted(sentinel.APIKey) {
@@ -182,7 +183,7 @@ func TestExactRouteRevocationReconcilesBrokerAfterActivationFailure(t *testing.T
 	}
 
 	failActivation = true
-	if _, err := gateway.RevokeExact(context.Background(), target.Consumer, target.ID); err == nil {
+	if err := gateway.RevokeExact(context.Background(), target.Consumer, target.ID); err == nil {
 		t.Fatal("injected activation failure was not returned")
 	}
 	var routes []Route
@@ -196,9 +197,8 @@ func TestExactRouteRevocationReconcilesBrokerAfterActivationFailure(t *testing.T
 		t.Fatal("failed activation unexpectedly changed accepted keys")
 	}
 
-	removed, err := gateway.RevokeExact(context.Background(), target.Consumer, target.ID)
-	if err != nil || removed != "absent" {
-		t.Fatalf("retry removed=%q err=%v", removed, err)
+	if err := gateway.RevokeExact(context.Background(), target.Consumer, target.ID); err != nil {
+		t.Fatal(err)
 	}
 	if accepted(target.APIKey) {
 		t.Fatal("revoked route key remained active after absent-route reconciliation")
@@ -225,7 +225,7 @@ func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	if err := gateway.Check(context.Background(), "primary"); err == nil {
 		t.Fatal("provider readiness accepted unverified upstream WebSockets")
 	}
-	if _, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "action-http"); err == nil {
+	if _, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "route-http"); err == nil {
 		t.Fatal("route was admitted without verified upstream WebSockets")
 	}
 	var routes []Route
@@ -268,7 +268,7 @@ func TestAPIRoutesDoNotRequireChatGPTSubscriptionCapability(t *testing.T) {
 			}
 
 			gateway := Gateway{StatePath: state, Client: server.Client()}
-			if _, err := gateway.ReconcileCreate(context.Background(), provider, "sandbox:job-"+provider, "action-"+provider); err != nil {
+			if _, err := gateway.ReconcileCreate(context.Background(), provider, "sandbox:job-"+provider, "route-"+provider); err != nil {
 				t.Fatal(err)
 			}
 		})

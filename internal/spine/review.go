@@ -61,7 +61,7 @@ type ReviewStore interface {
 
 type ReviewExternals interface {
 	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
-	PrepareReviewCheckout(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	PrepareReviewCheckout(context.Context, Job, ReviewRunView) error
 	VerifyReviewCheckout(context.Context, Job, ReviewRunView) (ReviewCheckoutObservation, error)
 	ReviewInitialTurn(context.Context, Job, ReviewRunView) (HarnessBinding, error)
 	ReviewRecover(context.Context, Job, ReviewRunView) (HarnessBinding, error)

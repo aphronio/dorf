@@ -10,7 +10,6 @@ where s.job_id=sqlc.arg(job_id)
 order by s.id;
 
 -- name: GetScopedActionBySandbox :one
-select id,job_id,kind,state,coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(sandbox_id);

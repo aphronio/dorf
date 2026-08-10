@@ -167,12 +167,8 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	runner := &localReviewBoundaryRunner{implementationName: sandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
 	sandbox.Runner = runner
 	externals := Externals{Sandbox: sandbox}
-	receipt, err := externals.PrepareReviewCheckout(context.Background(), job, run, spine.Action{})
-	if err != nil {
+	if err := externals.PrepareReviewCheckout(context.Background(), job, run); err != nil {
 		t.Fatal(err)
-	}
-	if receipt.Outcome != revision+" "+tree+" clean" {
-		t.Fatalf("prepared checkout state=%q", receipt.Outcome)
 	}
 	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
 	wantCheckout := spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}
@@ -225,12 +221,11 @@ func TestPrepareReviewCheckoutUsesSeparateOwnedSandboxAndExactGitState(t *testin
 	externals := Externals{Sandbox: incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}, Runner: runner}}
 	withoutSandbox := run
 	withoutSandbox.SandboxID = ""
-	if _, err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox, spine.Action{}); err == nil {
+	if err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox); err == nil {
 		t.Fatal("review checkout accepted the implementation Sandbox")
 	}
-	receipt, err := externals.PrepareReviewCheckout(context.Background(), job, run, spine.Action{})
-	if err != nil || receipt.ExternalID != run.Sandbox.ID || receipt.Outcome != revision+" "+tree+" clean" {
-		t.Fatalf("review checkout receipt=%#v err=%v", receipt, err)
+	if err := externals.PrepareReviewCheckout(context.Background(), job, run); err != nil {
+		t.Fatal(err)
 	}
 	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
 	if err != nil || checkout != (spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}) {

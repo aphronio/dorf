@@ -127,16 +127,11 @@ func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *te
 	runner := &scriptedRunner{}
 	sandbox := Sandbox{Config: Config{Image: "dorf-codex", Network: "incusbr0", DiskSize: "40GiB", Workspace: "/workspace/job"}, Runner: runner, Sleep: func(_ time.Duration) {}}
 	metadata := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-sandbox-exact", OwnershipNonce: strings.Repeat("a", 64)}
-	first, err := sandbox.ReconcileOwnedCreate(context.Background(), metadata)
-	if err != nil {
+	if err := sandbox.ReconcileOwnedCreate(context.Background(), metadata); err != nil {
 		t.Fatal(err)
 	}
-	second, err := sandbox.ReconcileOwnedCreate(context.Background(), metadata)
-	if err != nil {
+	if err := sandbox.ReconcileOwnedCreate(context.Background(), metadata); err != nil {
 		t.Fatal(err)
-	}
-	if first != second {
-		t.Fatalf("Sandbox identity changed: %s != %s", first, second)
 	}
 	creates := 0
 	credentialChecks := 0

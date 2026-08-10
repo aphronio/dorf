@@ -96,38 +96,38 @@ func validateOwnership(metadata OwnershipMetadata) error {
 // ReconcileOwnedCreate creates or recovers the exact Sandbox recorded by the
 // durable core. Workflow-specific labels are attached only after ownership is
 // attested and are never part of cleanup identity.
-func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMetadata) (string, error) {
+func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMetadata) error {
 	if err := validateOwnership(metadata); err != nil {
-		return "", err
+		return err
 	}
 	info, err := s.run(ctx, nil, "info", metadata.SandboxID)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if info.ExitCode != 0 {
 		if !absent(info) {
-			return "", failure("inspect Sandbox", info)
+			return failure("inspect Sandbox", info)
 		}
 		args := []string{"init", s.Config.Image, metadata.SandboxID, "--vm", "--network", s.Config.Network, "-d", "root,size=" + s.Config.DiskSize,
 			"-c", "user.dorf.owner=sandbox", "-c", "user.dorf.job=" + metadata.JobID, "-c", "user.dorf.sandbox=" + metadata.SandboxID,
 			"-c", "user.dorf.ownership_nonce=" + metadata.OwnershipNonce}
 		created, createErr := s.run(ctx, nil, args...)
 		if createErr != nil {
-			return "", createErr
+			return createErr
 		}
 		if created.ExitCode != 0 {
-			return "", failure("create Sandbox", created)
+			return failure("create Sandbox", created)
 		}
 	}
 	if err := s.AttestOwnership(ctx, metadata); err != nil {
-		return "", err
+		return err
 	}
 	start, err := s.run(ctx, nil, "start", metadata.SandboxID)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if start.ExitCode != 0 && !strings.Contains(strings.ToLower(start.Stderr+start.Stdout), "already running") {
-		return "", failure("start Sandbox", start)
+		return failure("start Sandbox", start)
 	}
 	deadline := time.Now().Add(90 * time.Second)
 	for {
@@ -136,25 +136,25 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 			break
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("Incus guest agent did not become ready for Sandbox %s", metadata.SandboxID)
+			return fmt.Errorf("Incus guest agent did not become ready for Sandbox %s", metadata.SandboxID)
 		}
 		s.sleep(250 * time.Millisecond)
 	}
 	credentialCheck, err := s.Exec(ctx, metadata.SandboxID, nil, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml")
 	if err != nil {
-		return "", err
+		return err
 	}
 	if credentialCheck.ExitCode != 0 {
-		return "", fmt.Errorf("Sandbox is not credential-free before its scoped route")
+		return fmt.Errorf("Sandbox is not credential-free before its scoped route")
 	}
 	workspace, err := s.Exec(ctx, metadata.SandboxID, nil, "mkdir", "-p", s.Config.Workspace)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if workspace.ExitCode != 0 {
-		return "", failure("prepare Sandbox workspace", workspace)
+		return failure("prepare Sandbox workspace", workspace)
 	}
-	return metadata.SandboxID, nil
+	return nil
 }
 
 func (s Sandbox) AttestOwnership(ctx context.Context, metadata OwnershipMetadata) error {

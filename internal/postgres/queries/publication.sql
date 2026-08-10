@@ -14,21 +14,17 @@ where id=sqlc.arg(job_id) and revision=sqlc.arg(revision) and workflow_phase='re
 
 -- name: InsertPublicationAction :exec
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending',sqlc.arg(scope_key))
+values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_key))
 on conflict do nothing;
 
 -- name: GetPublicationActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key)
 for update;
 
 -- name: GetPublicationAction :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
+select id,job_id,kind,state,scope_key
 from dorf.actions
 where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key);
 
@@ -40,7 +36,7 @@ where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
 
 -- name: CompleteRepositoryPush :execrows
 update dorf.actions
-set state='succeeded',external_id=sqlc.arg(revision)::text,external_outcome='remote-head-exact'
+set state='succeeded'
 where id=sqlc.arg(action_id) and kind='repository-push' and scope_key=sqlc.arg(revision);
 
 -- name: GetProposalAuthorityJobForUpdate :one
@@ -84,7 +80,7 @@ where dorf.github_proposals.repository=excluded.repository
 
 -- name: CompleteProposalAction :execrows
 update dorf.actions
-set state='succeeded',external_id=sqlc.arg(external_id)::text,external_outcome=sqlc.arg(body_digest)::text
+set state='succeeded'
 where id=sqlc.arg(action_id) and job_id=sqlc.arg(job_id)
   and kind='github-pull-request' and scope_key=sqlc.arg(proposed_revision);
 

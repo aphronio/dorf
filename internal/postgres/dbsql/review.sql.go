@@ -379,7 +379,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, runID string) (DorfReviewRun
 
 const insertReviewAction = `-- name: InsertReviewAction :exec
 insert into dorf.actions(id,job_id,kind,state,scope_key)
-values($1,$2,$3,'pending',$4)
+values($1,$2,$3,'unsettled',$4)
 on conflict do nothing
 `
 

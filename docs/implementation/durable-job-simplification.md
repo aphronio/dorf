@@ -38,7 +38,7 @@ final HEAD as the next immutable Revision.
 - [ ] Keep the complete coding workflow runnable after every slice.
 - [ ] Delete superseded code and tests in the same slice that replaces them.
 - [ ] Do not maintain old and new workflow paths in parallel.
-- [ ] Keep PostgreSQL for product facts and external Action receipts only.
+- [ ] Keep PostgreSQL for product facts and external Action identity, scope, and settlement only.
 - [ ] Keep Absurd responsible for task eligibility, claims, checkpoints, waits, retries, and cancellation.
 - [ ] Run the portable and PostgreSQL-backed suites after every slice.
 - [ ] Do not add data compatibility work for the prototype schema.
@@ -112,7 +112,7 @@ as one concrete coding coordinator backed by named Absurd Steps.
       identity; never rely on call occurrence counters.
 - [x] Use small typed Step results that point back to authoritative Dorf facts.
 - [x] Centralize the external Action pattern: reserve stable identity, reconcile external truth,
-      perform only if missing, perform a final claim check, record the receipt, then complete the Step.
+      perform only if missing, perform a final claim check, record success, then complete the Step.
 - [x] Use the same Action executor for Sandbox, route, and other code-owned external mutations in this
       path.
 - [x] Execute repository setup and declared repository checks as concrete CommandRuns at the coding
@@ -396,7 +396,7 @@ selected general-review Sandbox through the same Job-owned resource model. Revie
 a Message to the implementation Thread, Checks passed, and exact-Revision PR #109 was proposed.
 Closing the disposable PR recorded a rejected Outcome; one cleanup task revoked both Routes, deleted
 both Sandboxes, and Incus returned no instance for either exact Sandbox ID. The run also exposed and
-fixed an incomplete Route receipt and removed a second, non-convergent strict-review read path.
+fixed incomplete Route reconciliation and removed a second, non-convergent strict-review read path.
 
 Action-scope refinement proof (2026-08-10): Job `job-c9d27acf02fafc3c1d8d` created one Sandbox and
 recorded repository clone against that exact Sandbox through the shared Action path. Checks passed,
@@ -414,12 +414,14 @@ projections that repeat the same external fact.
       duplicated lifecycle state and branches from Sandbox and Route records.
 - [x] Prove that Route identity is deterministic from its Sandbox and delete the Route row if it retains
       no independent external fact.
-- [ ] Replace generic string Receipt payloads with immutable Action success plus the natural product
+- [x] Remove generic Action result strings; retain immutable Action success plus the natural product
       record that owns each durable fact.
 - [x] Retain Sandbox identity and ownership nonce; they authorize exact external reconciliation and
       cleanup rather than duplicating Action progress.
 - [x] Delete row-shape and state-mirroring tests; retain recovery tests for immutable Action success,
       exact ownership, and retry convergence.
+- [ ] Dogfood the payload-free Action path through exact-Revision Proposal, terminal Outcome, and
+      complete Route and Sandbox cleanup.
 
 Terminal: every external lifecycle fact has one durable authority, while an interrupted Action still
 reconciles safely through its distinct Absurd Step.
@@ -428,7 +430,8 @@ Lifecycle-authority proof (2026-08-10): a fresh PostgreSQL database with no Rout
 Sandbox/Route state ran Job `job-d461c7a212d5543f749f` from Sandbox creation through exact-Revision
 PR #112. Both Checks passed. Closing the disposable PR recorded a rejected Outcome; immutable
 route-revoke and Sandbox-delete Actions completed cleanup, and both Incus and the Provider Gateway
-returned no exact resource. Generic Receipt removal remains the next part of this slice.
+returned no exact resource. This proof predates generic Action payload removal; the simplified Action
+record still needs its fresh live terminal above.
 
 ## Slice 7: Store GitHub authority once
 
@@ -461,7 +464,7 @@ Goal: let retained product facts tell `RunJob` what comes next instead of a seco
 
 - [ ] Remove `workflow_phase` from Job, PostgreSQL, SQL transitions, readiness, and inspection.
 - [ ] Derive the next operation from owned resources, Messages, AgentRuns, Revisions, Checks,
-      ReviewPlans, Proposals, Outcomes, and cleanup receipts.
+      ReviewPlans, Proposals, Outcomes, and cleanup Actions.
 - [ ] Keep explicit workflow attention as an operator-visible fact without coupling it to a phase.
 - [ ] Remove `RunDisposition`; admission closure and retained facts already describe whether the task
       should continue, wait, or finish.

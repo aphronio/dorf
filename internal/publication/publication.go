@@ -38,7 +38,7 @@ type Service struct {
 	Evidence   evidence.Store
 	Barrier    any
 	// ClaimCheck validates the current durable executor claim immediately
-	// before a locally-recorded receipt makes an external effect durable.
+	// before locally-recorded Action success makes an external effect durable.
 	ClaimCheck func(context.Context) error
 }
 
@@ -73,14 +73,12 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
-		_ = s.Store.UncertainAction(ctx, pushAction.ID)
 		return err
 	} else if !present {
 		return s.block(ctx, job, fmt.Sprintf("explicit GitHub base branch %s does not resolve in %s", job.BaseBranch, job.GitHubRepository))
 	}
 	remote, present, err := s.GitHub.RemoteHead(ctx, authority, job.Branch)
 	if err != nil {
-		_ = s.Store.UncertainAction(ctx, pushAction.ID)
 		return err
 	}
 	relation := ""
@@ -98,11 +96,9 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	if pushDecision == "push" {
 		token, err := s.GitHub.PushToken(ctx, authority)
 		if err != nil {
-			_ = s.Store.UncertainAction(ctx, pushAction.ID)
 			return err
 		}
 		if err := s.Repository.Push(ctx, job, token); err != nil {
-			_ = s.Store.UncertainAction(ctx, pushAction.ID)
 			return err
 		}
 		if err := s.reach(ctx, spine.BarrierPushAccepted, job.ID, pushAction.ID); err != nil {
@@ -110,7 +106,7 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 		}
 	}
 	if pushAction.State != spine.ActionSucceeded {
-		if err := s.recordAfterClaim(ctx, pushAction.ID, func() error {
+		if err := s.recordAfterClaim(ctx, func() error {
 			return s.Store.RecordPush(ctx, pushAction.ID, job.Revision)
 		}); err != nil {
 			return err
@@ -121,7 +117,7 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 
 // Propose reconciles and, when necessary, creates or refreshes the one exact
 // GitHub pull-request proposal for the Job Revision. Push must already have a
-// durable success receipt; PostgreSQL also enforces that ordering.
+// durable Action success; PostgreSQL also enforces that ordering.
 func (s Service) Propose(ctx context.Context, jobID, revision string) error {
 	return s.Store.WithJobFence(ctx, jobID, func() error { return s.proposeFenced(ctx, jobID, revision) })
 }
@@ -187,13 +183,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch)
 	if err != nil {
-		_ = s.Store.UncertainAction(ctx, pullAction.ID)
 		return err
-	}
-	if len(pulls) > 0 {
-		if err := s.Store.UncertainAction(ctx, pullAction.ID); err != nil {
-			return err
-		}
 	}
 	stored, err := s.Store.Proposal(ctx, job.ID)
 	if err != nil {
@@ -207,9 +197,6 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	validationProposal := stored
 	switch pullDecision {
 	case "create":
-		if err := s.Store.UncertainAction(ctx, pullAction.ID); err != nil {
-			return err
-		}
 		pull, err = s.GitHub.CreatePullRequest(ctx, authority, title, body, job.Branch, job.BaseBranch)
 		mutated = err == nil
 	case "update":
@@ -235,7 +222,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 		}
 	}
 	proposal := spine.GitHubProposal{JobID: job.ID, Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation, BaseBranch: job.BaseBranch, HeadBranch: job.Branch, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, ObservedRemoteHead: pull.HeadSHA, BodyDigest: bodyDigest}
-	return s.recordAfterClaim(ctx, pullAction.ID, func() error {
+	return s.recordAfterClaim(ctx, func() error {
 		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 	})
 }
@@ -297,15 +284,12 @@ func (s Service) requireClaim(ctx context.Context) error {
 	return s.ClaimCheck(ctx)
 }
 
-func (s Service) recordAfterClaim(ctx context.Context, actionID string, record func() error) error {
-	return claimBeforeRecord(ctx, s.requireClaim, func() error {
-		return s.Store.UncertainAction(ctx, actionID)
-	}, record)
+func (s Service) recordAfterClaim(ctx context.Context, record func() error) error {
+	return claimBeforeRecord(ctx, s.requireClaim, record)
 }
 
-func claimBeforeRecord(ctx context.Context, claimCheck func(context.Context) error, uncertain func() error, record func() error) error {
+func claimBeforeRecord(ctx context.Context, claimCheck func(context.Context) error, record func() error) error {
 	if err := claimCheck(ctx); err != nil {
-		_ = uncertain()
 		return err
 	}
 	return record()

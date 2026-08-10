@@ -75,7 +75,7 @@ func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID s
 	if err != nil {
 		return spine.Action{}, err
 	}
-	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
 }
 
 func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (spine.Action, spine.Action, error) {
@@ -85,7 +85,7 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 		if err != nil {
 			return spine.Action{}, err
 		}
-		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
 	}
 	push, err := load(spine.ActionRepositoryPush)
 	if err != nil {
@@ -138,7 +138,7 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	})); err != nil {
 		return err
 	}
-	if err := expectOneRows(queries.CompleteProposalAction(ctx, dbsql.CompleteProposalActionParams{ExternalID: strconvFormat(proposal.Number), BodyDigest: proposal.BodyDigest, ActionID: actionID, JobID: proposal.JobID, ProposedRevision: proposal.ProposedRevision})); err != nil {
+	if err := expectOneRows(queries.CompleteProposalAction(ctx, dbsql.CompleteProposalActionParams{ActionID: actionID, JobID: proposal.JobID, ProposedRevision: proposal.ProposedRevision})); err != nil {
 		return err
 	}
 	if err := expectOneRows(queries.CompletePublication(ctx, dbsql.CompletePublicationParams{JobID: proposal.JobID, Revision: proposal.ProposedRevision})); err != nil {
@@ -146,8 +146,6 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	}
 	return tx.Commit()
 }
-
-func strconvFormat(number int64) string { return fmt.Sprintf("%d", number) }
 
 func (s Store) BlockPublication(ctx context.Context, jobID, revision, reason string) error {
 	reason = strings.TrimSpace(reason)
@@ -175,11 +173,8 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 	return &proposal, nil
 }
 
-func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
-	return spine.Action{
-		ID: id, JobID: jobID, Kind: kind, State: state,
-		ExternalID: externalID, Outcome: outcome, Scope: scope,
-	}
+func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, scope string) spine.Action {
+	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope}
 }
 
 func githubProposal(row dbsql.GetProposalRow) spine.GitHubProposal {

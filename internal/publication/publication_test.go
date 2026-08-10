@@ -19,18 +19,15 @@ func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, ar
 	return f(ctx, command, input, args...)
 }
 
-func TestClaimLossMarksActionUncertainWithoutRecordingReceipt(t *testing.T) {
+func TestClaimLossDoesNotRecordActionSuccess(t *testing.T) {
 	claimLost := errors.New("claim lost")
-	recorded, uncertain := false, false
+	recorded := false
 	err := claimBeforeRecord(context.Background(), func(context.Context) error { return claimLost }, func() error {
-		uncertain = true
-		return nil
-	}, func() error {
 		recorded = true
 		return nil
 	})
-	if !errors.Is(err, claimLost) || recorded || !uncertain {
-		t.Fatalf("claim-loss receipt recorded=%v uncertain=%v err=%v", recorded, uncertain, err)
+	if !errors.Is(err, claimLost) || recorded {
+		t.Fatalf("claim-loss success recorded=%v err=%v", recorded, err)
 	}
 }
 

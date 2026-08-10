@@ -42,7 +42,7 @@ func newReconcilingFaultEffect() *reconcilingFaultEffect {
 	return &reconcilingFaultEffect{firstRun: make(chan string, 1), releaseFirst: make(chan struct{})}
 }
 
-func (e *reconcilingFaultEffect) reconcile(runID, actionID string) spine.Receipt {
+func (e *reconcilingFaultEffect) reconcile(runID string) {
 	e.mu.Lock()
 	first := !e.accepted
 	if first {
@@ -54,7 +54,6 @@ func (e *reconcilingFaultEffect) reconcile(runID, actionID string) spine.Receipt
 		e.firstRun <- runID
 		<-e.releaseFirst
 	}
-	return spine.Receipt{ExternalID: "accepted:" + actionID}
 }
 
 func (e *reconcilingFaultEffect) mutationCount() int {
@@ -87,8 +86,11 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			receipt := effect.reconcile(task.RunID(), action.ID)
-			if err := store.RecordActionSuccess(workCtx, action.ID, receipt); err != nil {
+			effect.reconcile(task.RunID())
+			if err := absurdruntime.RequireClaim(workCtx); err != nil {
+				return faultActionResultV1{}, err
+			}
+			if err := store.RecordSandboxActionSuccess(workCtx, action.ID); err != nil {
 				return faultActionResultV1{}, err
 			}
 			return faultActionResultV1{ActionID: action.ID}, nil
@@ -138,7 +140,7 @@ func newFaultClient(t *testing.T, dbStore postgres.Store, queueName string) *abs
 	return client
 }
 
-func TestAbsurdCancellationKeepsLateReconciledActionSingleAndTruthful(t *testing.T) {
+func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	_, store, defaultClient := testDatabase(t)
 	defaultClient.Close()
 	queueName := fmt.Sprintf("dorf_fault_cancel_%d", time.Now().UnixNano())
@@ -169,7 +171,7 @@ func TestAbsurdCancellationKeepsLateReconciledActionSingleAndTruthful(t *testing
 	snapshot, err := client.FetchTaskResult(context.Background(), queueName, spawned.TaskID)
 	actions, actionsErr := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
-	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != spine.ActionSucceeded || action.ExternalID != "accepted:"+action.ID || effect.mutationCount() != 1 {
+	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != spine.ActionUnsettled || effect.mutationCount() != 1 {
 		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d errors=%v/%v", snapshot, actions, effect.mutationCount(), err, actionsErr)
 	}
 }
@@ -236,7 +238,7 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	}
 	actions, err := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
-	if err != nil || !found || action.State != spine.ActionSucceeded || action.ExternalID != "accepted:"+action.ID || effect.mutationCount() != 1 {
+	if err != nil || !found || action.State != spine.ActionSucceeded || effect.mutationCount() != 1 {
 		t.Fatalf("reconciled actions=%#v mutations=%d err=%v", actions, effect.mutationCount(), err)
 	}
 }
