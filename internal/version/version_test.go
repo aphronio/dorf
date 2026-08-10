@@ -16,6 +16,9 @@ func TestVersionIsReleaseSemanticVersionCore(t *testing.T) {
 		if part == "" {
 			t.Fatalf("Version part %d is empty in %q", i+1, Version)
 		}
+		if len(part) > 1 && part[0] == '0' {
+			t.Fatalf("Version part %d = %q; multi-digit parts must start with 1-9", i+1, part)
+		}
 		for _, char := range part {
 			if char < '0' || char > '9' {
 				t.Fatalf("Version part %d = %q; want numeric characters only", i+1, part)
@@ -24,7 +27,7 @@ func TestVersionIsReleaseSemanticVersionCore(t *testing.T) {
 	}
 
 	tag := "v" + Version
-	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(tag) {
+	if !regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`).MatchString(tag) {
 		t.Fatalf("release tag = %q; want v<major>.<minor>.<patch>", tag)
 	}
 }
