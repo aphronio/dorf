@@ -906,6 +906,20 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 			t.Fatalf("Sandbox %s Route=%#v err=%v", sandbox.ID, route, routeErr)
 		}
 	}
+	clone, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionRepositoryClone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloneReceipt := spine.Receipt{ExternalID: spine.MainSandboxName(job.ID) + ":/workspace/job"}
+	if err := store.RecordActionSuccess(ctx, clone.ID, cloneReceipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordActionSuccess(ctx, clone.ID, cloneReceipt); err != nil {
+		t.Fatalf("identical Action success retry: %v", err)
+	}
+	if err := store.RecordActionSuccess(ctx, clone.ID, spine.Receipt{ExternalID: "different"}); err == nil {
+		t.Fatal("conflicting Action success replaced the immutable receipt")
+	}
 	runs, err := store.AgentRuns(ctx, job.ID)
 	if err != nil || len(runs) != 3 {
 		t.Fatalf("Job AgentRuns=%#v err=%v", runs, err)
@@ -940,32 +954,32 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoke, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
+	revoke, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionRouteRevoke)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, revoke.ID, spine.Receipt{ExternalID: otherRoute.ID, Outcome: "revoked"}); err == nil {
+	if err := store.RecordActionSuccess(ctx, revoke.ID, spine.Receipt{ExternalID: otherRoute.ID, Outcome: "revoked"}); err == nil {
 		t.Fatal("another Job's Route receipt was accepted")
 	}
-	if err := store.CompleteAction(ctx, revoke.ID, spine.Receipt{ExternalID: targetRoute.ID, Outcome: "revoked"}); err != nil {
+	if err := store.RecordActionSuccess(ctx, revoke.ID, spine.Receipt{ExternalID: targetRoute.ID, Outcome: "revoked"}); err != nil {
 		t.Fatal(err)
 	}
-	retryRevoke, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
+	retryRevoke, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionRouteRevoke)
 	if err != nil || retryRevoke.ID != revoke.ID || retryRevoke.State != spine.ActionSucceeded {
 		t.Fatalf("Route cleanup retry=%#v err=%v", retryRevoke, err)
 	}
 
-	remove, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
+	remove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, remove.ID, spine.Receipt{ExternalID: otherSandbox.ID, Outcome: "deleted"}); err == nil {
+	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: otherSandbox.ID, Outcome: "deleted"}); err == nil {
 		t.Fatal("another Job's Sandbox receipt was accepted")
 	}
-	if err := store.CompleteAction(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err != nil {
+	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
-	retryRemove, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
+	retryRemove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
 	if err != nil || retryRemove.ID != remove.ID || retryRemove.State != spine.ActionSucceeded {
 		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
 	}
@@ -998,31 +1012,31 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
-	sandbox, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionSandboxCreate)
+	sandbox, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if sandbox.State != spine.ActionSucceeded {
-		if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: run.Sandbox.ID}); err != nil {
+		if err := store.RecordActionSuccess(ctx, sandbox.ID, spine.Receipt{ExternalID: run.Sandbox.ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	tree := strings.Repeat("d", 40)
-	checkout, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
+	checkout, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if checkout.State != spine.ActionSucceeded {
-		if err := store.CompleteAction(ctx, checkout.ID, spine.Receipt{ExternalID: run.Sandbox.ID, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+		if err := store.RecordActionSuccess(ctx, checkout.ID, spine.Receipt{ExternalID: run.Sandbox.ID, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	route, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionRouteCreate)
+	route, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if route.State != spine.ActionSucceeded {
-		if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: run.Route.ID, Outcome: run.Sandbox.ID}); err != nil {
+		if err := store.RecordActionSuccess(ctx, route.ID, spine.Receipt{ExternalID: run.Route.ID, Outcome: run.Sandbox.ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1256,18 +1270,18 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("admit Job created=%v err=%v", created, err)
 	}
-	sandbox, err := store.GetOrCreateAction(ctx, job.ID, spine.ActionSandboxCreate)
+	sandbox, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
+	if err := store.RecordActionSuccess(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
 		t.Fatal(err)
 	}
-	route, err := store.GetOrCreateAction(ctx, job.ID, spine.ActionRouteCreate)
+	route, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CompleteAction(ctx, route.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(route.ID), Outcome: spine.MainSandboxName(job.ID)}); err != nil {
+	if err := store.RecordActionSuccess(ctx, route.ID, spine.Receipt{ExternalID: spine.ProviderRouteID(route.ID), Outcome: spine.MainSandboxName(job.ID)}); err != nil {
 		t.Fatal(err)
 	}
 	taskIDs := []string{job.TaskID}
@@ -1354,7 +1368,7 @@ func (e *integrationExternals) SandboxCreate(_ context.Context, _ spine.Job, san
 	e.mu.Unlock()
 	return spine.Receipt{ExternalID: sandbox.ID}, nil
 }
-func (e *integrationExternals) RepositoryClone(_ context.Context, job spine.Job, action spine.Action) (spine.Receipt, error) {
+func (e *integrationExternals) RepositoryClone(_ context.Context, job spine.Job, _ spine.Sandbox, action spine.Action) (spine.Receipt, error) {
 	return e.receipt(job, action)
 }
 func (e *integrationExternals) RouteCreate(_ context.Context, _ spine.Job, _ spine.Sandbox, route spine.Route, action spine.Action) (spine.Receipt, error) {

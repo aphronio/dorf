@@ -486,40 +486,15 @@ func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error
 	return expectOneRows(dbsql.New(s.DB).SetCleanupTaskID(ctx, dbsql.SetCleanupTaskIDParams{CleanupTaskID: sql.NullString{String: taskID, Valid: true}, JobID: jobID}))
 }
 
-func (s Store) GetOrCreateAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
-	if kind == spine.ActionSandboxCreate || kind == spine.ActionRouteCreate || kind == spine.ActionRouteRevoke || kind == spine.ActionSandboxDelete {
-		return s.GetOrCreateResourceAction(ctx, spine.MainSandboxName(jobID), kind)
-	}
-	desiredID := spine.ActionID(jobID, kind)
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: kind}); err != nil {
-		return spine.Action{}, err
-	}
-	row, err := queries.GetUnscopedActionForUpdate(ctx, dbsql.GetUnscopedActionForUpdateParams{JobID: jobID, Kind: kind})
-	if err != nil {
-		return spine.Action{}, err
-	}
-	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
-	if err := tx.Commit(); err != nil {
-		return spine.Action{}, err
-	}
-	return action, nil
-}
-
-func (s Store) GetOrCreateResourceAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
+func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
 	sandbox, err := dbsql.New(s.DB).GetSandbox(ctx, sandboxID)
 	if err != nil {
 		return spine.Action{}, err
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
 	default:
-		return spine.Action{}, fmt.Errorf("unsupported resource Action %q", kind)
+		return spine.Action{}, fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}
 	id := spine.ScopedActionID(sandbox.JobID, kind, sandboxID)
 	q := dbsql.New(s.DB)
@@ -1086,16 +1061,22 @@ func (s Store) BlockWorkflow(ctx context.Context, jobID, reason string) error {
 	return expectOneRows(dbsql.New(s.DB).BlockWorkflow(ctx, dbsql.BlockWorkflowParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID}))
 }
 
-func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Receipt) error {
+func (s Store) RecordActionSuccess(ctx context.Context, id string, receipt spine.Receipt) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	completed, err := queries.CompleteAction(ctx, dbsql.CompleteActionParams{ExternalID: sql.NullString{String: receipt.ExternalID, Valid: true}, ExternalOutcome: receipt.Outcome, ID: id})
+	completed, err := queries.GetActionCompletionForUpdate(ctx, id)
 	if err != nil {
 		return err
+	}
+	if completed.State == spine.ActionSucceeded {
+		if completed.ExternalID != receipt.ExternalID || completed.ExternalOutcome != receipt.Outcome {
+			return fmt.Errorf("Action %s success conflicts with its immutable receipt", id)
+		}
+		return tx.Commit()
 	}
 	kind, scope := completed.Kind, completed.ScopeKey
 	switch kind {
@@ -1105,6 +1086,10 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			break
 		}
 		err = expectOneRows(queries.MarkSandboxCreated(ctx, scope))
+	case spine.ActionRepositoryClone:
+		if scope == "" {
+			err = fmt.Errorf("repository clone Action has no exact Sandbox")
+		}
 	case spine.ActionRouteCreate:
 		route, getErr := queries.GetRouteBySandbox(ctx, scope)
 		if getErr != nil {
@@ -1149,6 +1134,11 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 		}
 	}
 	if err != nil {
+		return err
+	}
+	if err := expectOneRows(queries.RecordActionSuccess(ctx, dbsql.RecordActionSuccessParams{
+		ExternalID: sql.NullString{String: receipt.ExternalID, Valid: true}, ExternalOutcome: receipt.Outcome, ID: id,
+	})); err != nil {
 		return err
 	}
 	return tx.Commit()

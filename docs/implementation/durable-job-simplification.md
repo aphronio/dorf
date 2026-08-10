@@ -398,6 +398,27 @@ Closing the disposable PR recorded a rejected Outcome; one cleanup task revoked 
 both Sandboxes, and Incus returned no instance for either exact Sandbox ID. The run also exposed and
 fixed an incomplete Route receipt and removed a second, non-convergent strict-review read path.
 
+### Slice 6A: Let Action success own external lifecycle truth
+
+Goal: after ordinary Actions have one explicit Sandbox scope and immutable success, remove stored
+projections that repeat the same external fact.
+
+- [ ] Keep Actions distinct from Absurd Steps: a Step checkpoints durable execution; an Action records
+      one reconciled external mutation.
+- [ ] Make immutable Action success authoritative for Sandbox and Route lifecycle facts, then delete
+      duplicated lifecycle state and branches from Sandbox and Route records.
+- [ ] Prove that Route identity is deterministic from its Sandbox and delete the Route row if it retains
+      no independent external fact.
+- [ ] Replace generic string Receipt payloads with immutable Action success plus the natural product
+      record that owns each durable fact.
+- [ ] Retain Sandbox identity and ownership nonce; they authorize exact external reconciliation and
+      cleanup rather than duplicating Action progress.
+- [ ] Delete row-shape and state-mirroring tests; retain recovery tests for immutable Action success,
+      exact ownership, and retry convergence.
+
+Terminal: every external lifecycle fact has one durable authority, while an interrupted Action still
+reconciles safely through its distinct Absurd Step.
+
 ## Slice 7: Store GitHub authority once
 
 Goal: keep admitted repository authority on the Job and retain only new Proposal and Outcome facts.

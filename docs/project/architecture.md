@@ -103,12 +103,19 @@ durable task sequences explicit, named phases; it does not contain a generic use
 
 ## Deterministic effects
 
-Every code-owned external mutation receives a stable Action identity derived from the Job and its
-intended meaning. Dorf records enough information to classify the Action as
+Every code-owned external mutation receives a stable Action identity derived from the Job, its
+intended meaning, and the exact Sandbox it targets when applicable. Ordinary Sandbox creation,
+clone, route, review-checkout, and cleanup mutations all use that one Sandbox-scoped path. Setup
+retains its generation-aware path, while publication retains its exact-Revision path. Dorf records
+enough information to classify the Action as
 pending, succeeded, failed, or uncertain. On an uncertain result, recovery inspects the external
 authority before repeating the operation. Agent tool calls and commits are AgentRun work, not
 Actions; so is submission and recovery of the harness Turn that the AgentRun itself records. Dorf
 observes the Turn and resulting Git state at the AgentRun boundary.
+
+Action success is immutable: the first reconciled result is recorded, an identical retry is a
+no-op, and a conflicting later result is rejected. An Absurd Step checkpoints execution; it does
+not replace the Action's external-settlement fact.
 
 Actions apply at least to Sandbox creation and destruction, repository clone and push, scoped
 credential or provider-route creation, and pull-request publication. Agent execution has one

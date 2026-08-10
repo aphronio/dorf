@@ -12,33 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const completeAction = `-- name: CompleteAction :one
-update dorf.actions
-set state='succeeded',external_id=$1,
-    external_outcome=nullif($2::text,'')
-where id=$3
-returning job_id,kind,scope_key
-`
-
-type CompleteActionParams struct {
-	ExternalID      sql.NullString
-	ExternalOutcome string
-	ID              string
-}
-
-type CompleteActionRow struct {
-	JobID    string
-	Kind     spine.ActionKind
-	ScopeKey string
-}
-
-func (q *Queries) CompleteAction(ctx context.Context, arg CompleteActionParams) (CompleteActionRow, error) {
-	row := q.db.QueryRowContext(ctx, completeAction, arg.ExternalID, arg.ExternalOutcome, arg.ID)
-	var i CompleteActionRow
-	err := row.Scan(&i.JobID, &i.Kind, &i.ScopeKey)
-	return i, err
-}
-
 const finishSetupAction = `-- name: FinishSetupAction :exec
 update dorf.actions
 set state=$1,external_id=$2,
@@ -92,6 +65,37 @@ func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetAction
 	var i GetActionRow
 	err := row.Scan(
 		&i.ID,
+		&i.JobID,
+		&i.Kind,
+		&i.State,
+		&i.ExternalID,
+		&i.ExternalOutcome,
+		&i.ScopeKey,
+	)
+	return i, err
+}
+
+const getActionCompletionForUpdate = `-- name: GetActionCompletionForUpdate :one
+select job_id,kind,state,coalesce(external_id,'') as external_id,
+       coalesce(external_outcome,'') as external_outcome,scope_key
+from dorf.actions
+where id=$1
+for update
+`
+
+type GetActionCompletionForUpdateRow struct {
+	JobID           string
+	Kind            spine.ActionKind
+	State           spine.ActionState
+	ExternalID      string
+	ExternalOutcome string
+	ScopeKey        string
+}
+
+func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (GetActionCompletionForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getActionCompletionForUpdate, id)
+	var i GetActionCompletionForUpdateRow
+	err := row.Scan(
 		&i.JobID,
 		&i.Kind,
 		&i.State,
@@ -192,45 +196,6 @@ func (q *Queries) GetSetupActionForUpdate(ctx context.Context, actionID string) 
 	row := q.db.QueryRowContext(ctx, getSetupActionForUpdate, actionID)
 	var i GetSetupActionForUpdateRow
 	err := row.Scan(&i.JobID, &i.Kind, &i.SetupActionID)
-	return i, err
-}
-
-const getUnscopedActionForUpdate = `-- name: GetUnscopedActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
-from dorf.actions
-where job_id=$1 and kind=$2 and scope_key=''
-for update
-`
-
-type GetUnscopedActionForUpdateParams struct {
-	JobID string
-	Kind  spine.ActionKind
-}
-
-type GetUnscopedActionForUpdateRow struct {
-	ID              string
-	JobID           string
-	Kind            spine.ActionKind
-	State           spine.ActionState
-	ExternalID      string
-	ExternalOutcome string
-	ScopeKey        string
-}
-
-func (q *Queries) GetUnscopedActionForUpdate(ctx context.Context, arg GetUnscopedActionForUpdateParams) (GetUnscopedActionForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getUnscopedActionForUpdate, arg.JobID, arg.Kind)
-	var i GetUnscopedActionForUpdateRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ExternalID,
-		&i.ExternalOutcome,
-		&i.ScopeKey,
-	)
 	return i, err
 }
 
@@ -401,6 +366,27 @@ where s.id=$1
 
 func (q *Queries) MarkSandboxDeleted(ctx context.Context, sandboxID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markSandboxDeleted, sandboxID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordActionSuccess = `-- name: RecordActionSuccess :execrows
+update dorf.actions
+set state='succeeded',external_id=$1,
+    external_outcome=nullif($2::text,'')
+where id=$3 and state<>'succeeded'
+`
+
+type RecordActionSuccessParams struct {
+	ExternalID      sql.NullString
+	ExternalOutcome string
+	ID              string
+}
+
+func (q *Queries) RecordActionSuccess(ctx context.Context, arg RecordActionSuccessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordActionSuccess, arg.ExternalID, arg.ExternalOutcome, arg.ID)
 	if err != nil {
 		return 0, err
 	}

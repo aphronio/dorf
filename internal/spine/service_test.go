@@ -147,9 +147,6 @@ func (s *agentRunTestStore) Job(context.Context, string) (Job, error) {
 func (s *agentRunTestStore) WithJobFence(context.Context, string, func() error) error {
 	return errors.New("unused")
 }
-func (s *agentRunTestStore) GetOrCreateAction(context.Context, string, ActionKind) (Action, error) {
-	return Action{}, errors.New("unused")
-}
 func (s *agentRunTestStore) Sandbox(context.Context, string) (Sandbox, error) {
 	return Sandbox{}, errors.New("unused")
 }
@@ -162,7 +159,7 @@ func (s *agentRunTestStore) Sandboxes(context.Context, string) ([]Sandbox, error
 func (s *agentRunTestStore) AgentRuns(context.Context, string) ([]AgentRun, error) {
 	return nil, errors.New("unused")
 }
-func (s *agentRunTestStore) GetOrCreateResourceAction(context.Context, string, ActionKind) (Action, error) {
+func (s *agentRunTestStore) GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error) {
 	return Action{}, errors.New("unused")
 }
 func (s *agentRunTestStore) InterruptAgentRun(context.Context, string, string) error {
@@ -171,7 +168,7 @@ func (s *agentRunTestStore) InterruptAgentRun(context.Context, string, string) e
 func (s *agentRunTestStore) BeginSetup(context.Context, string) (Action, error) {
 	return Action{}, errors.New("unused")
 }
-func (s *agentRunTestStore) CompleteAction(context.Context, string, Receipt) error {
+func (s *agentRunTestStore) RecordActionSuccess(context.Context, string, Receipt) error {
 	return errors.New("unused")
 }
 func (s *agentRunTestStore) UncertainAction(context.Context, string) error {

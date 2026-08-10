@@ -16,14 +16,6 @@ values(sqlc.arg(id),sqlc.arg(sandbox_id),'pending')
 on conflict(sandbox_id) do update set sandbox_id=dorf.routes.sandbox_id
 where dorf.routes.id=excluded.id;
 
--- name: GetUnscopedActionForUpdate :one
-select id,job_id,kind,state,
-       coalesce(external_id,'') as external_id,
-       coalesce(external_outcome,'') as external_outcome,scope_key
-from dorf.actions
-where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=''
-for update;
-
 -- name: GetActionForUpdate :one
 select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
@@ -63,12 +55,18 @@ set state=sqlc.arg(state),external_id=sqlc.arg(external_id),
     external_outcome=sqlc.arg(external_outcome)
 where dorf.actions.id=sqlc.arg(action_id);
 
--- name: CompleteAction :one
+-- name: GetActionCompletionForUpdate :one
+select job_id,kind,state,coalesce(external_id,'') as external_id,
+       coalesce(external_outcome,'') as external_outcome,scope_key
+from dorf.actions
+where id=sqlc.arg(id)
+for update;
+
+-- name: RecordActionSuccess :execrows
 update dorf.actions
 set state='succeeded',external_id=sqlc.arg(external_id),
     external_outcome=nullif(sqlc.arg(external_outcome)::text,'')
-where id=sqlc.arg(id)
-returning job_id,kind,scope_key;
+where id=sqlc.arg(id) and state<>'succeeded';
 
 -- name: MarkActionUncertain :exec
 update dorf.actions

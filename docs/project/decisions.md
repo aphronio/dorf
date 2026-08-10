@@ -1277,3 +1277,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A concrete workflow requires resources to outlive their Job, or a Sandbox must
   be shared safely by multiple Jobs; either case would require an explicit new aggregate and custody
   rules rather than a polymorphic owner shortcut.
+
+## D057 — Ordinary external Actions target one exact Sandbox
+
+- **Status:** Accepted Action-scope simplification — 2026-08-10
+- **Decision:** Sandbox creation, repository clone, provider-route creation and revocation, exact
+  review checkout preparation, and Sandbox deletion use one Sandbox-scoped Action path. Setup keeps
+  its generation-aware operation and publication keeps its exact-Revision operations; there is no
+  generic Job-Action API or polymorphic target abstraction. The first reconciled Action success is
+  immutable: an identical retry is a no-op and a conflicting result is rejected.
+- **Why:** These ordinary mutations all change or serve one exact Sandbox. A generic Job path hid a
+  redirect to the main Sandbox and created a category with only repository clone as a real member.
+  Explicit Sandbox scope makes Action identity, Absurd Step identity, reconciliation, and cleanup
+  tell the same story while preserving the crash boundary between execution and external truth.
+- **Reconsider when:** A second ordinary external mutation genuinely targets only the Job aggregate,
+  or an external system returns a non-Sandbox identity that cannot live in its natural product fact.

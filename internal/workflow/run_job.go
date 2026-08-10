@@ -40,11 +40,11 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		if !job.AdmissionOpen {
 			return spine.RunClosed, nil
 		}
-		action, err := store.GetOrCreateAction(ctx, jobID, kind)
+		sandbox, err := store.Sandbox(ctx, spine.MainSandboxName(jobID))
 		if err != nil {
 			return spine.RunIdle, err
 		}
-		if err := runActionStep(ctx, service, job, action); err != nil {
+		if err := runSandboxAction(ctx, service, store, job, sandbox, kind); err != nil {
 			return spine.RunIdle, fmt.Errorf("reconcile %s: %w", kind, err)
 		}
 	}
@@ -76,12 +76,12 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 	if job.WorkflowPhase == "blocked" {
 		return spine.RunBlocked, nil
 	}
-	route, err := store.GetOrCreateAction(ctx, jobID, spine.ActionRouteCreate)
+	sandbox, err := store.Sandbox(ctx, spine.MainSandboxName(jobID))
 	if err != nil {
 		return spine.RunIdle, err
 	}
-	if err := runActionStep(ctx, service, job, route); err != nil {
-		return spine.RunIdle, fmt.Errorf("reconcile %s: %w", route.Kind, err)
+	if err := runSandboxAction(ctx, service, store, job, sandbox, spine.ActionRouteCreate); err != nil {
+		return spine.RunIdle, fmt.Errorf("reconcile %s: %w", spine.ActionRouteCreate, err)
 	}
 
 	for {
@@ -186,12 +186,16 @@ func runPublicationSteps(ctx context.Context, store postgres.Store, proposal Pro
 	return nil
 }
 
-func runActionStep(ctx context.Context, service spine.Service, job spine.Job, action spine.Action) error {
+func runSandboxAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, sandbox spine.Sandbox, kind spine.ActionKind) error {
+	action, err := store.GetOrCreateSandboxAction(ctx, sandbox.ID, kind)
+	if err != nil {
+		return err
+	}
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
 	return runFactStep(ctx, actionStepName(action.ID), action.ID, func(workCtx context.Context) error {
-		_, err := service.ExecuteAction(workCtx, job, action)
+		_, err := service.ExecuteSandboxAction(workCtx, job, sandbox, action)
 		return err
 	})
 }

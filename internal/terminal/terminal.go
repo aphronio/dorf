@@ -35,10 +35,12 @@ func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spi
 	return spine.Receipt{ExternalID: id}, err
 }
 
-func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {
-	name := e.Sandbox.Name(job.ID)
-	err := e.Sandbox.ReconcileClone(ctx, name, job.Repository, job.Revision, job.Branch)
-	return spine.Receipt{ExternalID: name + ":" + e.Sandbox.Config.Workspace}, err
+func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, _ spine.Action) (spine.Receipt, error) {
+	if sandbox.JobID != job.ID || sandbox.ID != e.Sandbox.Name(job.ID) {
+		return spine.Receipt{}, fmt.Errorf("repository clone requires the exact main Sandbox")
+	}
+	err := e.Sandbox.ReconcileClone(ctx, sandbox.ID, job.Repository, job.Revision, job.Branch)
+	return spine.Receipt{ExternalID: sandbox.ID + ":" + e.Sandbox.Config.Workspace}, err
 }
 
 func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {

@@ -229,21 +229,10 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 	if original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}
-	sandbox, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionSandboxCreate)
-	if err != nil {
+	if _, err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionSandboxCreate); err != nil {
 		return err
 	}
-	if sandbox.State != ActionSucceeded {
-		receipt, err := s.Externals.SandboxCreate(ctx, job, original.Sandbox, sandbox)
-		if err != nil {
-			_ = s.Store.UncertainAction(ctx, sandbox.ID)
-			return err
-		}
-		if err := s.Store.CompleteAction(ctx, sandbox.ID, receipt); err != nil {
-			return err
-		}
-	}
-	checkout, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionReviewCheckout)
+	checkout, err := s.Store.GetOrCreateSandboxAction(ctx, original.Sandbox.ID, ActionReviewCheckout)
 	if err != nil {
 		return err
 	}
@@ -256,27 +245,12 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 		if err := s.reachWorkflow(ctx, BarrierReviewCheckoutReady, job.ID, original.ID); err != nil {
 			return err
 		}
-		if err := s.Store.CompleteAction(ctx, checkout.ID, receipt); err != nil {
+		if err := s.Store.RecordActionSuccess(ctx, checkout.ID, receipt); err != nil {
 			return err
 		}
 	}
-	route, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionRouteCreate)
-	if err != nil {
+	if _, err := s.reconcileSandboxAction(ctx, job, original.Sandbox, ActionRouteCreate); err != nil {
 		return err
-	}
-	if route.State != ActionSucceeded {
-		persistedRoute, loadErr := s.Store.Route(ctx, original.Sandbox.ID)
-		if loadErr != nil {
-			return loadErr
-		}
-		receipt, err := s.Externals.RouteCreate(ctx, job, original.Sandbox, persistedRoute, route)
-		if err != nil {
-			_ = s.Store.UncertainAction(ctx, route.ID)
-			return err
-		}
-		if err := s.Store.CompleteAction(ctx, route.ID, receipt); err != nil {
-			return err
-		}
 	}
 	return nil
 }
