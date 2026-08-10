@@ -459,10 +459,16 @@ Outcome  -> kind, external observation, merge commit, observed time
 - [x] Align CLI and documentation with the live flow: merge/close is observed automatically and the
       explicit human command is for abandonment.
 - [x] Consolidate identity-copy tests into exact-Revision proposal, outcome, and concurrency stories.
-- [ ] Dogfood one exact-Revision PR through close or merge and terminal cleanup.
+- [x] Dogfood one exact-Revision PR through close or merge and terminal cleanup.
 
 Terminal: changing one admitted GitHub authority fact requires changing one row, and Proposal/Outcome
 contain no second copies to reconcile.
+
+Single-authority proof (2026-08-10): Job `job-1ac5dc1d1bc21bce80de` produced exact-Revision PR #114
+from a separate fresh PostgreSQL database. The Proposal row retained only PR identity, Revision, and
+body digest. Closing the PR was observed automatically as a rejected Outcome containing only the
+terminal GitHub observation. Cleanup revoked the exact Route and deleted the exact Sandbox; Incus and
+the Provider Gateway returned no matching resource.
 
 ## Slice 8: Delete the old program counter
 
