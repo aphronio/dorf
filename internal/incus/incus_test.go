@@ -13,6 +13,7 @@ type scriptedRunner struct {
 	inputs   [][]byte
 	existing bool
 	head     string
+	remote   string
 }
 
 type inventoryRunner struct {
@@ -92,6 +93,9 @@ func (r *scriptedRunner) Run(_ context.Context, command string, input []byte, ar
 	if strings.Contains(joined, "rev-parse HEAD") {
 		return Result{Stdout: r.head + "\n"}, nil
 	}
+	if strings.Contains(joined, "remote get-url origin") {
+		return Result{Stdout: r.remote + "\n"}, nil
+	}
 	if strings.HasPrefix(joined, "network get ") {
 		return Result{Stdout: r.head + "\n"}, nil
 	}
@@ -149,6 +153,19 @@ func TestRepositoryCloneVerifiesExactAdmittedHead(t *testing.T) {
 	sandbox.Runner = runner
 	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", "https://example.test/repo.git", revision, "dorf/proof"); err == nil || !strings.Contains(err.Error(), "does not match admitted Revision") {
 		t.Fatalf("mismatched Sandbox HEAD error = %v", err)
+	}
+}
+
+func TestRepositoryCloneRefreshesAnExistingVerifiedOrigin(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	repository := "https://example.test/repo.git"
+	runner := &scriptedRunner{existing: true, head: revision, remote: repository}
+	sandbox := Sandbox{Config: Config{Workspace: "/workspace/job"}, Runner: runner}
+	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", repository, revision, "dorf/proof"); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCall(runner.calls, "git -C /workspace/job fetch --prune origin") {
+		t.Fatal("existing verified clone was not refreshed before checkout")
 	}
 }
 

@@ -326,6 +326,13 @@ func (s Sandbox) ReconcileClone(ctx context.Context, name, repository, revision,
 		if remote.ExitCode != 0 || strings.TrimSpace(remote.Stdout) != repository {
 			return fmt.Errorf("existing Sandbox clone origin does not match admitted repository")
 		}
+		fetch, err := s.Exec(ctx, name, nil, "git", "-C", s.Config.Workspace, "fetch", "--prune", "origin")
+		if err != nil {
+			return err
+		}
+		if fetch.ExitCode != 0 {
+			return failure("refresh existing Sandbox clone", fetch)
+		}
 	}
 	checkout, err := s.Exec(ctx, name, nil, "git", "-C", s.Config.Workspace, "checkout", "-B", branch, revision)
 	if err != nil {
