@@ -486,9 +486,9 @@ func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error
 	return expectOneRows(dbsql.New(s.DB).SetCleanupTaskID(ctx, dbsql.SetCleanupTaskIDParams{CleanupTaskID: sql.NullString{String: taskID, Valid: true}, JobID: jobID}))
 }
 
-func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
+func (s Store) GetOrCreateAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
 	if kind == spine.ActionSandboxCreate || kind == spine.ActionRouteCreate || kind == spine.ActionRouteRevoke || kind == spine.ActionSandboxDelete {
-		return s.BeginResourceAction(ctx, spine.MainSandboxName(jobID), kind)
+		return s.GetOrCreateResourceAction(ctx, spine.MainSandboxName(jobID), kind)
 	}
 	desiredID := spine.ActionID(jobID, kind)
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -511,7 +511,7 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	return action, nil
 }
 
-func (s Store) BeginResourceAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
+func (s Store) GetOrCreateResourceAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
 	sandbox, err := dbsql.New(s.DB).GetSandbox(ctx, sandboxID)
 	if err != nil {
 		return spine.Action{}, err

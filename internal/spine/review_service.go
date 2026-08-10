@@ -229,7 +229,7 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 	if original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}
-	sandbox, err := s.Store.BeginResourceAction(ctx, original.Sandbox.ID, ActionSandboxCreate)
+	sandbox, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionSandboxCreate)
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,7 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 			return err
 		}
 	}
-	checkout, err := store.BeginReviewCheckout(ctx, original.ID)
+	checkout, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionReviewCheckout)
 	if err != nil {
 		return err
 	}
@@ -260,7 +260,7 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 			return err
 		}
 	}
-	route, err := s.Store.BeginResourceAction(ctx, original.Sandbox.ID, ActionRouteCreate)
+	route, err := s.Store.GetOrCreateResourceAction(ctx, original.Sandbox.ID, ActionRouteCreate)
 	if err != nil {
 		return err
 	}

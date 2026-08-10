@@ -940,7 +940,7 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoke, err := store.BeginResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
+	revoke, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -950,12 +950,12 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	if err := store.CompleteAction(ctx, revoke.ID, spine.Receipt{ExternalID: targetRoute.ID, Outcome: "revoked"}); err != nil {
 		t.Fatal(err)
 	}
-	retryRevoke, err := store.BeginResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
+	retryRevoke, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionRouteRevoke)
 	if err != nil || retryRevoke.ID != revoke.ID || retryRevoke.State != spine.ActionSucceeded {
 		t.Fatalf("Route cleanup retry=%#v err=%v", retryRevoke, err)
 	}
 
-	remove, err := store.BeginResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
+	remove, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -965,7 +965,7 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	if err := store.CompleteAction(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
-	retryRemove, err := store.BeginResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
+	retryRemove, err := store.GetOrCreateResourceAction(ctx, target.ID, spine.ActionSandboxDelete)
 	if err != nil || retryRemove.ID != remove.ID || retryRemove.State != spine.ActionSucceeded {
 		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
 	}
@@ -998,7 +998,7 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
-	sandbox, err := store.BeginResourceAction(ctx, run.Sandbox.ID, spine.ActionSandboxCreate)
+	sandbox, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1008,7 +1008,7 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 		}
 	}
 	tree := strings.Repeat("d", 40)
-	checkout, err := store.BeginReviewCheckout(ctx, run.ID)
+	checkout, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1017,7 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 			t.Fatal(err)
 		}
 	}
-	route, err := store.BeginResourceAction(ctx, run.Sandbox.ID, spine.ActionRouteCreate)
+	route, err := store.GetOrCreateResourceAction(ctx, run.Sandbox.ID, spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,14 +1256,14 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("admit Job created=%v err=%v", created, err)
 	}
-	sandbox, err := store.BeginAction(ctx, job.ID, spine.ActionSandboxCreate)
+	sandbox, err := store.GetOrCreateAction(ctx, job.ID, spine.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteAction(ctx, sandbox.ID, spine.Receipt{ExternalID: spine.MainSandboxName(job.ID)}); err != nil {
 		t.Fatal(err)
 	}
-	route, err := store.BeginAction(ctx, job.ID, spine.ActionRouteCreate)
+	route, err := store.GetOrCreateAction(ctx, job.ID, spine.ActionRouteCreate)
 	if err != nil {
 		t.Fatal(err)
 	}

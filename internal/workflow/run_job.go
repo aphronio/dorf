@@ -40,7 +40,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		if !job.AdmissionOpen {
 			return spine.RunClosed, nil
 		}
-		action, err := store.BeginAction(ctx, jobID, kind)
+		action, err := store.GetOrCreateAction(ctx, jobID, kind)
 		if err != nil {
 			return spine.RunIdle, err
 		}
@@ -76,7 +76,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 	if job.WorkflowPhase == "blocked" {
 		return spine.RunBlocked, nil
 	}
-	route, err := store.BeginAction(ctx, jobID, spine.ActionRouteCreate)
+	route, err := store.GetOrCreateAction(ctx, jobID, spine.ActionRouteCreate)
 	if err != nil {
 		return spine.RunIdle, err
 	}

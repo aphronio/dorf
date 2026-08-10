@@ -54,7 +54,6 @@ type ReviewStore interface {
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
 	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
-	BeginReviewCheckout(context.Context, string) (Action, error)
 	ReviewRun(context.Context, string) (ReviewRunView, error)
 	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
 	CompleteReviewFeedback(context.Context, string, string, string) (bool, error)

@@ -13,12 +13,12 @@ import (
 type Store interface {
 	Job(context.Context, string) (Job, error)
 	WithJobFence(context.Context, string, func() error) error
-	BeginAction(context.Context, string, ActionKind) (Action, error)
+	GetOrCreateAction(context.Context, string, ActionKind) (Action, error)
 	Sandbox(context.Context, string) (Sandbox, error)
 	Route(context.Context, string) (Route, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	AgentRuns(context.Context, string) ([]AgentRun, error)
-	BeginResourceAction(context.Context, string, ActionKind) (Action, error)
+	GetOrCreateResourceAction(context.Context, string, ActionKind) (Action, error)
 	InterruptAgentRun(context.Context, string, string) error
 	BeginSetup(context.Context, string) (Action, error)
 	CompleteAction(context.Context, string, Receipt) error
@@ -647,7 +647,7 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 }
 
 func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Receipt, error) {
-	action, err := s.Store.BeginAction(ctx, job.ID, kind)
+	action, err := s.Store.GetOrCreateAction(ctx, job.ID, kind)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -658,7 +658,7 @@ func (s Service) reconcile(ctx context.Context, job Job, kind ActionKind) (Recei
 }
 
 func (s Service) reconcileResource(ctx context.Context, job Job, sandbox Sandbox, kind ActionKind) (Receipt, error) {
-	action, err := s.Store.BeginResourceAction(ctx, sandbox.ID, kind)
+	action, err := s.Store.GetOrCreateResourceAction(ctx, sandbox.ID, kind)
 	if err != nil {
 		return Receipt{}, err
 	}

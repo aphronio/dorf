@@ -83,7 +83,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (faultActionResultV1, error) {
-			action, err := store.BeginAction(workCtx, params.JobID, spine.ActionRepositoryClone)
+			action, err := store.GetOrCreateAction(workCtx, params.JobID, spine.ActionRepositoryClone)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}

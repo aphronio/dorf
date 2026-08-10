@@ -308,14 +308,6 @@ func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewR
 	return result, nil
 }
 
-func (s Store) BeginReviewCheckout(ctx context.Context, runID string) (spine.Action, error) {
-	run, err := s.ReviewRun(ctx, runID)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	return s.BeginResourceAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
-}
-
 // RecordReviewFeedback retains one reviewer's exact prose and feeds it back to
 // the original implementation Thread as an ordinary Message. The Job row is
 // locked before allocating the Message sequence so concurrent reviewer
