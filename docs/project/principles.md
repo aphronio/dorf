@@ -43,6 +43,22 @@ review AgentRun; that Message is the run's only durable text input. Reviewer pro
 input to the implementation AgentRun path, not a policy protocol to parse. No agent can waive a
 Check, mandatory Role, capability boundary, or spend limit.
 
+## Facts before workflow status
+
+Persist the product facts that actually happened, not a second durable program counter describing
+where code believes the workflow is. The coding workflow derives one current operation from those
+facts and executes it through Absurd. Inspection derives the expected dependency chain,
+chronological history, and current work from the same source of truth.
+
+This rule exists for clarity and composition: a new Check adds a Check fact, a new reviewer adds a
+Message and AgentRun, and a new feedback source adds a Message. None should require a new phase or a
+matrix of transitions across admission, readiness, publication, and inspection.
+
+Do not turn this into a generic DAG engine, configurable workflow language, copied event log, giant
+SQL `next_work` query, or persisted derived status. Keep one concrete coding-workflow decision in Go,
+add a durable fact only when real recovery cannot be derived without it, and leave task attempts,
+claims, checkpoints, waits, and retries to Absurd.
+
 ## Disposable developer workstations
 
 Each coding Job should feel like a fresh developer workstation: isolated checkout, explicit branch,

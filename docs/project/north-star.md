@@ -102,8 +102,9 @@ establish, and deterministic mechanisms do not pretend to answer questions requi
 - **Detached by default:** watching a terminal or token stream is optional.
 - **Calm recovery:** client, controller, and task-executor loss pause progress but do not erase accepted
   input or create competing Jobs.
-- **Situation first:** inspection shows current goal, observed state, claims, Evidence, and required
-  attention before logs.
+- **Situation first:** inspection shows the complete coding dependency chain, the chronological facts
+  that occurred, current work or attention, the exact Revision and proposal, and what remains. Raw
+  harness and durable-executor mechanics stay behind their explicit diagnostic tools.
 - **Precise interruption:** humans are asked only for consequential boundary decisions or genuine
   ambiguity without a safe default.
 - **One proposal:** a coding Job owns its Sandboxes, branch, Revision line, and pull-request proposal.
@@ -123,6 +124,10 @@ L4  Clients              CLI first; other trusted clients later
 The durable core owns mechanisms and facts. The coding workflow owns coding semantics and review
 policy. Adapters translate existing tools; they do not create a second workflow. Clients invoke and
 render the same application boundary; they do not become authorities.
+
+The coding workflow has one disposable view of current work derived from durable facts. `RunJob`
+executes that view and inspection explains the same dependency chain and chronological history. No
+stored phase, client, or adapter becomes another workflow authority.
 
 Resource ownership follows lifetime: the Job owns every Sandbox created for the task; each Sandbox
 owns its scoped Provider Route; AgentRuns use a Sandbox. Cleanup walks Job → Sandboxes → Routes.

@@ -214,7 +214,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D021 — Situation-first inspection with explicit provenance
 
-- **Status:** Accepted — 2026-07-26
+- **Status:** Accepted — 2026-07-26; product-history shape refined by D061 — 2026-08-10
 - **Decision:** `inspect` defaults to a read-only Job pulse built from Dorf-owned lifecycle and
   run facts plus a fresh Room availability observation. Worker claims are a separate provenance
   channel and remain explicitly absent until a structured self-report boundary exists; Dorf
@@ -288,8 +288,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D024 — Controller-mediated Job context and validated Worker reports
 
-- **Status:** Accepted after ecosystem research and human design review — 2026-07-26; reporting
-  scope fenced by Assignment under D025 — 2026-07-27
+- **Status:** Superseded by the Go core in D047, Message/AgentRun boundary in D052, and derived product
+  history in D061 — 2026-08-10
 - **Decision:** Project approved Job context into the Room as a detached copy with no write-back path;
   never mount the external Job directory writable. Give the Worker a Room-local `dorf-report`
   command, described through harness-level runtime capability guidance that contains no task or
@@ -1102,7 +1102,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D051 — One explicit coding coordinator uses stable Absurd Steps
 
-- **Status:** Accepted workflow boundary — 2026-08-10
+- **Status:** Accepted workflow boundary — 2026-08-10; transitional phase removed by D061
 - **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
   single spine operations in product order and gives each repeatable Action, AgentRun, Revision, and
   Check operation a stable versioned Absurd Step name plus a small typed result. Absurd owns durable
@@ -1110,9 +1110,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
   Each code-owned external mutation reserves and reconciles its stable Action, performs a final
   claim check, records Action success, and then completes its Step. Each AgentRun instead reconciles
-  its own Harness/Thread/Turn identity. `workflow_phase` is retained temporarily as a
-  domain guard and review/publication handoff projection until Slice 6; the mixed service-layer
-  coordinator that interpreted it has been deleted.
+  its own Harness/Thread/Turn identity. D061 removes the transitional `workflow_phase`; the mixed
+  service-layer coordinator that interpreted it was already deleted.
 - **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
   durable runtime rather than a second Dorf-owned program counter.
 - **Reconsider when:** Review and publication are also expressed as direct product-order operations,
@@ -1337,3 +1336,39 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   publication, inspection, and terminal recovery read in the same order as the workflow.
 - **Reconsider when:** A Proposal must survive independently of its Job, one Job can own multiple live
   GitHub authorities, or a terminal external observation contains a new fact that has no current owner.
+
+## D061 — One fact-derived coding flow replaces the durable program counter
+
+- **Status:** Accepted workflow-authority and inspection decision — 2026-08-10
+- **Decision:** Dorf does not persist `workflow_phase`, `next_work`, or another derived workflow
+  status. The coding workflow has one pure `CurrentWork` decision in Go. It reads authoritative Job,
+  Message, Action, AgentRun, Revision observation, Revision, Check, ReviewPlan, Proposal, Outcome, and
+  cleanup facts in visible dependency order. `RunJob` executes that decision and recomputes it after
+  each recorded fact. Absurd alone owns task eligibility, claims, named checkpoints, sleeps, waits,
+  retries, and cancellation.
+- **Missing recovery fact:** A completed implementation Turn does not prove that Dorf inspected its
+  mutable checkout. Bind the implementation AgentRun to its input Revision, then retain the existing
+  `git-revision` Evidence for both changed and unchanged clean observations with that AgentRun as its
+  owner and observed `HEAD` as its Revision. A changed observation also creates the next immutable
+  Revision; equality records an unchanged result. This reuses one natural proof fact rather than
+  adding a Revision-observation table or stored changed/unchanged enum, and replaces the only real
+  information previously hidden in implementation/review handoff phases.
+- **Human view:** Inspection derives both the expected coding dependency chain and the chronological
+  facts that actually occurred, and marks the same `CurrentWork` used by execution. This read model is
+  disposable. Dorf does not copy product tables into an event log, and it does not copy Absurd task
+  attempts or checkpoints; `absurdctl` and Habitat remain the operational execution-history tools.
+- **Why:** One source of truth removes phase transitions and impossible phase/fact disagreements,
+  makes recovery ask only which authoritative fact is missing, and puts the deterministic flow in one
+  readable place. It also makes change local and composable: a new Check adds a Check fact, a selected
+  reviewer adds a Message and AgentRun, and another feedback source adds a Message instead of changing
+  a schema enum and transition matrix across admission, readiness, publication, inspection, and
+  tests. Reordering or extending the coding flow changes explicit dependencies rather than synchronized
+  status machinery.
+- **Constraint:** This is not permission to build a general DAG engine, configurable workflow DSL,
+  generic step registry, persisted status projection, copied event-sourcing layer, or giant SQL
+  `next_work` query. Keep the concrete coding decision small and visible in Go. Add a new durable fact
+  only for an observed product or recovery need, and keep product chronology derived from natural fact
+  timestamps.
+- **Reconsider when:** A second real workflow proves that a smaller shared decision primitive exists,
+  or measured fact reconstruction becomes a material bottleneck that cannot be addressed by ordinary
+  read projections without creating another authority.

@@ -58,30 +58,38 @@ prove each Route revoke before each Sandbox delete. There is no polymorphic owne
 ## Execution model
 
 One admitted coding request creates one Job with a complete goal and stable identity. The Job's
-durable task sequences explicit, named phases; it does not contain a generic user-programmable DAG.
+durable task sequences explicit, named operations; it does not contain a generic user-programmable
+DAG.
 
 - Admission records the complete goal before agent work begins and schedules the Job with a stable
   idempotency identity. If recording and scheduling cannot be made one transaction, recovery
   reconciles the two facts rather than assuming both happened.
-- Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. It reads the
-  product facts in order: Sandbox, clone, setup, route, AgentRun delivery, Revision observation,
-  Checks, selected review, exact-Revision push and proposal, then proposal observation. Each
+- Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. A pure,
+  coding-specific `CurrentWork` decision reads the product facts in order: Sandbox, clone, setup,
+  route, AgentRun delivery, Revision observation, Checks, selected review, exact-Revision push and
+  proposal, then proposal observation. `RunJob` executes that decision and recomputes it after each
+  recorded fact. Each
   repeatable operation uses a
   public Absurd Step with a stable name derived from its Action, AgentRun, Revision, or Check ID and
   a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
   Dorf keeps only product facts and Action identity, scope, and settlement state. The spine exposes
   single operations to this
   coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
-  `workflow_phase` remains a transitional domain guard until Slice 8; no second service-layer
-  coordinator or publication task interprets it. Publication is two direct main-task Steps backed by
-  stable Actions. Absurd's public retry resumes that task after an operator resolves attention.
+  No Dorf-owned phase or next-work value is persisted. Publication is two direct main-task Steps
+  backed by stable Actions. Absurd's public retry resumes that task after an operator resolves
+  attention.
 - Judgment executes as an AgentRun consuming an exact durable Message, with a bounded Role, input
   Revision, capability envelope, Harness, Thread, Turn, and Turn outcome. The Message is its only
   durable text input. Evidence retained for a harness observation links directly to that AgentRun.
   The Sandbox workspace and harness protocol are adapter inputs, not durable AgentRun fields.
 - Implementation AgentRuns create one or many commits when they change code. On completion, Dorf
-  validates a clean checkout. A descendant `HEAD` becomes the next exact Revision; unchanged `HEAD`
-  records that the Message was handled without a code change.
+  validates a clean checkout. The AgentRun retains its input Revision. One immutable `git-revision`
+  Evidence record linked to the eligible final implementation AgentRun retains the observed `HEAD`,
+  artifact, and bounded time. A descendant `HEAD` also becomes the next exact
+  Revision; unchanged `HEAD` records that the Message batch was handled without a code change. This
+  is the recovery fact that distinguishes a completed harness Turn from a workspace Dorf has already
+  inspected. There is no second Revision-observation table or stored changed/unchanged enum; equality
+  between input and observed Revisions already says which occurred.
 - Thread reuse is a workflow choice, not a distinct core or storage primitive. The current
   implementation flow reuses the Thread bound to a prior implementation AgentRun; current reviewers
   use isolated one-shot Threads. Another Role may later reuse a prior Thread without changing
@@ -105,6 +113,18 @@ durable task sequences explicit, named phases; it does not contain a generic use
   GitHub repository, installation, base branch, and head branch remain immutable Job authority.
   Proposal adds only pull-request identity and exact Revision; Outcome adds only the terminal external
   observation. Neither copies authority already owned by the preceding fact.
+
+The same facts produce a read-only workflow history for people. It overlays the expected dependency
+chain with chronological Message, Action, AgentRun, Revision-observation, Check, ReviewPlan,
+Proposal, Outcome, and cleanup facts, and marks the derived current work. It is not a stored event
+transcript. Product inspection does not copy Absurd attempts, claims, checkpoints, waits, or retry
+history; operators use `absurdctl` or Habitat for those mechanics.
+
+The fact-derived coordinator is deliberately not a reusable workflow framework. Do not replace the
+deleted phase with a persisted status enum, generic graph interpreter, configurable DSL,
+event-sourced copy of product tables, or one giant SQL query that hides the dependency order. The
+concrete coding flow remains visible in Go. A new operation earns a durable fact only when the real
+workflow and recovery boundary require one.
 
 ## Deterministic effects
 
