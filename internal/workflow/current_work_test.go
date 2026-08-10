@@ -273,4 +273,7 @@ func TestCurrentWorkHistoryNeverOverridesReadyFacts(t *testing.T) {
 	if got.Kind != WorkPublishProposal {
 		t.Fatalf("CurrentWork = %#v, want exact-ready publication despite older workflow history", got)
 	}
+	if !readiness.intentAt.IsZero() {
+		t.Fatalf("publication readiness intent = %s, want zero for old-Revision Action", readiness.intentAt)
+	}
 }

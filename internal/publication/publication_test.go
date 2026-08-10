@@ -9,8 +9,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aphronio/dorf/internal/evidence"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -43,6 +45,43 @@ func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T
 	retainedMessages, retainedRuns := publicationInputsAt(messages, runs, cutoff)
 	if len(retainedMessages) != 1 || retainedMessages[0].ID != "before" || len(retainedRuns) != 1 || retainedRuns[0].ID != "run-before" {
 		t.Fatalf("retained Messages=%#v AgentRuns=%#v", retainedMessages, retainedRuns)
+	}
+}
+
+func TestPublicationReadinessIgnoresConflictingHistoryAfterIntent(t *testing.T) {
+	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	job := spine.Job{ID: "job-history", Revision: "rev-1"}
+	declared := []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}
+	startedAt := cutoff.Add(-time.Minute)
+	check := spine.Check{ID: spine.CheckID(job.ID, job.Revision, "check"), JobID: job.ID, Revision: job.Revision, Name: "check", Command: declared[0].Command, State: "passed", StartedAt: startedAt, FinishedAt: startedAt}
+	blobs := evidence.Store{Root: t.TempDir()}
+	contents, err := json.Marshal(map[string]any{
+		"identity": check.ID, "revision": job.Revision, "producer": "dorf-command-observer", "command": check.Command,
+		"exit_code": 0, "started_at": startedAt, "finished_at": startedAt, "stdout": "", "stderr": "",
+		"stdout_truncated": false, "stderr_truncated": false, "redactions": []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := blobs.Put(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.EvidenceID = spine.EvidenceID(check.ID, "check-output")
+	check.EvidenceDigest = blob.Digest
+	record := spine.Evidence{ID: check.EvidenceID, CheckID: check.ID, Revision: job.Revision, Kind: "check-output", MediaType: "application/vnd.dorf.observation+json", Producer: "dorf-command-observer", Digest: blob.Digest, ByteSize: blob.ByteSize, StartedAt: startedAt, FinishedAt: startedAt}
+	plan := spine.ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
+	lateMessage := spine.MessageView{Message: spine.Message{ID: "old-revision-follow", JobID: job.ID, Intent: spine.MessageFollow, AdmittedAt: cutoff.Add(time.Second)}}
+	lateRun := spine.AgentRun{ID: "old-revision-run", JobID: job.ID, MessageID: lateMessage.ID, Role: "implement", State: spine.AgentRunPending}
+
+	unbounded := spine.AssessReviewReadiness(job, declared, []spine.Check{check}, []spine.Evidence{record}, blobs, &plan, nil, []spine.MessageView{lateMessage}, []spine.AgentRun{lateRun})
+	if unbounded.Ready {
+		t.Fatalf("conflicting historical facts unexpectedly ready: %#v", unbounded)
+	}
+	messages, runs := publicationInputsAt([]spine.MessageView{lateMessage}, []spine.AgentRun{lateRun}, cutoff)
+	got := spine.AssessReviewReadiness(job, declared, []spine.Check{check}, []spine.Evidence{record}, blobs, &plan, nil, messages, runs)
+	if !got.Ready || got.Revision != job.Revision {
+		t.Fatalf("bounded publication readiness = %#v, want exact current Revision ready", got)
 	}
 }
 
