@@ -56,3 +56,21 @@ func TestMandatoryRulesAreDeterministic(t *testing.T) {
 		t.Fatalf("mandatory plan=%#v err=%v", plan, err)
 	}
 }
+
+func TestFactsFromPathsDeduplicatesAndSortsPaths(t *testing.T) {
+	facts, err := FactsFromPaths(
+		strings.Repeat("a", 40),
+		strings.Repeat("b", 40),
+		[]string{"web/z.tsx", "README.md", "web/z.tsx", "docs/guide.md", "README.md"},
+		true,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"README.md", "docs/guide.md", "web/z.tsx"}
+	if !reflect.DeepEqual(facts.Paths, want) {
+		t.Fatalf("paths=%v want %v", facts.Paths, want)
+	}
+}
