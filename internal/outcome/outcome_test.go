@@ -30,6 +30,7 @@ func (s *outcomeStore) RecordOutcome(_ context.Context, receipt spine.JobOutcome
 	s.outcome = &receipt
 	return receipt, true, nil
 }
+func (s *outcomeStore) WithJobFence(_ context.Context, _ string, fn func() error) error { return fn() }
 
 type outcomeGitHub struct {
 	pull  githubapi.PullRequest
@@ -78,6 +79,25 @@ func TestExactGitHubAuthorityRecordsThreeDistinctOutcomes(t *testing.T) {
 				t.Fatalf("inexact outcome receipt=%#v", receipt)
 			}
 		})
+	}
+}
+
+func TestAbandonBeforeProposalRecordsNoInventedGitHubObservation(t *testing.T) {
+	store, github, service := outcomeFixture()
+	store.proposal = nil
+
+	receipt, created, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAbandoned)
+	if err != nil || !created || store.writes != 1 || github.calls != 0 {
+		t.Fatalf("receipt=%#v created=%t writes=%d calls=%d err=%v", receipt, created, store.writes, github.calls, err)
+	}
+	if receipt.ObservedState != "" || receipt.ObservedMerged || receipt.MergeCommitOID != "" {
+		t.Fatalf("pre-Proposal abandonment invented GitHub authority: %#v", receipt)
+	}
+	if _, _, err := func() (spine.JobOutcome, bool, error) {
+		store.outcome = nil
+		return service.Record(context.Background(), store.job.ID, spine.OutcomeRejected)
+	}(); err == nil || github.calls != 0 {
+		t.Fatalf("rejected outcome without Proposal reached GitHub: calls=%d err=%v", github.calls, err)
 	}
 }
 

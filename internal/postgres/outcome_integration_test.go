@@ -53,6 +53,115 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 	return job, proposal
 }
 
+func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	job, created, err := store.Admit(context.Background(), postgres.NewJob{
+		AdmissionKey: "pre-proposal-abandon-" + fmt.Sprint(time.Now().UnixNano()),
+		Goal:         "stop this coding Job", Repository: "https://github.com/aphronio/dorf.git",
+		Revision: strings.Repeat("a", 40), Branch: "dorf/pre-proposal-abandon",
+		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
+	})
+	if err != nil || !created {
+		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	receipt := spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, ObservedAt: now}
+	stored, created, err := store.RecordOutcome(context.Background(), receipt)
+	if err != nil || !created || stored.JobID != receipt.JobID || stored.Kind != receipt.Kind || !stored.ObservedAt.Equal(receipt.ObservedAt) {
+		t.Fatalf("Outcome=%#v created=%v err=%v", stored, created, err)
+	}
+	job, err = store.Job(context.Background(), job.ID)
+	if err != nil || job.AdmissionOpen {
+		t.Fatalf("terminal Job=%#v err=%v", job, err)
+	}
+	repeated := receipt
+	repeated.ObservedAt = now.Add(time.Hour)
+	got, created, err := store.RecordOutcome(context.Background(), repeated)
+	if err != nil || created || got != stored {
+		t.Fatalf("idempotent Outcome=%#v created=%v err=%v", got, created, err)
+	}
+	if _, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
+		t.Fatalf("post-abandon Message created=%v err=%v", created, err)
+	}
+	if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
+		t.Fatalf("cleanup close after abandonment: %v", err)
+	}
+}
+
+func TestPostgresPreProposalAbandonmentAndPublicationIntentSerializeToOneWinner(t *testing.T) {
+	store, job, revision := preparePublicationRaceJob(t, "abandon-race")
+	start := make(chan struct{})
+	type result struct {
+		kind string
+		err  error
+	}
+	results := make(chan result, 2)
+	go func() {
+		<-start
+		_, _, err := store.RecordOutcome(context.Background(), spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, ObservedAt: time.Now().UTC()})
+		results <- result{kind: "abandon", err: err}
+	}()
+	go func() {
+		<-start
+		_, _, _, err := store.BeginPublication(context.Background(), job.ID, revision)
+		results <- result{kind: "publication", err: err}
+	}()
+	close(start)
+
+	errorsByKind := map[string]error{}
+	for range 2 {
+		result := <-results
+		errorsByKind[result.kind] = result.err
+	}
+	outcome, outcomeErr := store.Outcome(context.Background(), job.ID)
+	_, _, actionErr := store.PublicationActions(context.Background(), job.ID, revision)
+	abandonWon := errorsByKind["abandon"] == nil
+	publicationWon := errorsByKind["publication"] == nil
+	if outcomeErr != nil || abandonWon == publicationWon || abandonWon != (outcome != nil) || publicationWon != (actionErr == nil) {
+		t.Fatalf("abandonErr=%v publicationErr=%v Outcome=%#v outcomeErr=%v actionErr=%v", errorsByKind["abandon"], errorsByKind["publication"], outcome, outcomeErr, actionErr)
+	}
+	if publicationWon && !strings.Contains(errorsByKind["abandon"].Error(), "wait for the started pull-request Action") {
+		t.Fatalf("publication winner did not expose transient reconciliation boundary: %v", errorsByKind["abandon"])
+	}
+}
+
+func TestPostgresExactProposalAbandonmentForceEndsActiveInput(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	job, proposal := preparePublishedOutcomeJob(t, store, "active-abandon")
+	message, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
+		JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "active-before-abandon",
+		Input: "continue working before the explicit stop",
+	})
+	if err != nil || !created {
+		t.Fatalf("Message=%#v created=%v err=%v", message, created, err)
+	}
+	delivery, err := store.NextDelivery(context.Background(), job.ID)
+	if err != nil || delivery == nil || delivery.Message.ID != message.ID {
+		t.Fatalf("delivery=%#v err=%v", delivery, err)
+	}
+	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, "codex", "turn-before-abandon"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(context.Background(), delivery.AgentRun.ID, "codex", delivery.AgentRun.ThreadID, "turn-active-abandon", "running"); err != nil {
+		t.Fatal(err)
+	}
+
+	receipt := spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, ObservedState: "open", ObservedAt: time.Now().UTC()}
+	stored, created, err := store.RecordOutcome(context.Background(), receipt)
+	if err != nil || !created || stored.Kind != spine.OutcomeAbandoned || stored.ObservedState != "open" {
+		t.Fatalf("Outcome=%#v created=%v err=%v", stored, created, err)
+	}
+	closed, err := store.Job(context.Background(), job.ID)
+	if err != nil || closed.AdmissionOpen {
+		t.Fatalf("closed Job=%#v err=%v", closed, err)
+	}
+	gotProposal, err := store.Proposal(context.Background(), job.ID)
+	if err != nil || gotProposal == nil || *gotProposal != proposal {
+		t.Fatalf("Proposal authority changed: %#v err=%v", gotProposal, err)
+	}
+}
+
 func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "admission-race")

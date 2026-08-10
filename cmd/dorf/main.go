@@ -540,7 +540,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if snapshot.Outcome == nil {
 		fmt.Fprintln(stdout, "  outcome: none")
 	} else {
-		fmt.Fprintf(stdout, "  outcome: %s (GitHub %s)", snapshot.Outcome.Kind, snapshot.Outcome.ObservedState)
+		fmt.Fprintf(stdout, "  outcome: %s", snapshot.Outcome.Kind)
+		if snapshot.Outcome.ObservedState != "" {
+			fmt.Fprintf(stdout, " (GitHub %s)", snapshot.Outcome.ObservedState)
+		}
 		if snapshot.Outcome.MergeCommitOID != "" {
 			fmt.Fprintf(stdout, " merge=%s", snapshot.Outcome.MergeCommitOID)
 		}
@@ -765,7 +768,11 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 		add(record.FinishedAt, "Evidence", detail)
 	}
 	if outcome != nil {
-		add(outcome.ObservedAt, "Outcome", fmt.Sprintf("%s (GitHub state=%s)", outcome.Kind, outcome.ObservedState))
+		detail := string(outcome.Kind)
+		if outcome.ObservedState != "" {
+			detail += fmt.Sprintf(" (GitHub state=%s)", outcome.ObservedState)
+		}
+		add(outcome.ObservedAt, "Outcome", detail)
 	}
 	add(job.CleanedAt, "Cleanup", "complete")
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].At.Before(entries[j].At) })

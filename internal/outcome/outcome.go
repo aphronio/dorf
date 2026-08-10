@@ -14,6 +14,7 @@ type Store interface {
 	Proposal(context.Context, string) (*spine.GitHubProposal, error)
 	Outcome(context.Context, string) (*spine.JobOutcome, error)
 	RecordOutcome(context.Context, spine.JobOutcome) (spine.JobOutcome, bool, error)
+	WithJobFence(context.Context, string, func() error) error
 }
 
 type GitHub interface {
@@ -35,6 +36,17 @@ func (s Service) WithClaimCheck(check func(context.Context) error) Service {
 }
 
 func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
+	var receipt spine.JobOutcome
+	var created bool
+	err := s.Store.WithJobFence(ctx, jobID, func() error {
+		var err error
+		receipt, created, err = s.recordFenced(ctx, jobID, requested)
+		return err
+	})
+	return receipt, created, err
+}
+
+func (s Service) recordFenced(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
 	if requested != spine.OutcomeAccepted && requested != spine.OutcomeRejected && requested != spine.OutcomeAbandoned {
 		return spine.JobOutcome{}, false, fmt.Errorf("outcome must be accepted, rejected, or abandoned")
 	}
@@ -56,7 +68,23 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	if proposal == nil || proposal.ProposedRevision != job.Revision {
+	if proposal == nil {
+		if requested != spine.OutcomeAbandoned {
+			return spine.JobOutcome{}, false, fmt.Errorf("accepted and rejected outcomes require one exact current GitHub proposal")
+		}
+		if s.claimCheck == nil {
+			return spine.JobOutcome{}, false, fmt.Errorf("outcome authority check is not configured")
+		}
+		if err := s.claimCheck(ctx); err != nil {
+			return spine.JobOutcome{}, false, err
+		}
+		now := time.Now
+		if s.Now != nil {
+			now = s.Now
+		}
+		return s.Store.RecordOutcome(ctx, spine.JobOutcome{JobID: job.ID, Kind: requested, ObservedAt: now().UTC()})
+	}
+	if proposal.ProposedRevision != job.Revision {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}

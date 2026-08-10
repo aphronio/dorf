@@ -266,5 +266,9 @@ The replacement is ready to become `main` when a clean machine can complete one 
 8. reach an explicit accepted, rejected, or abandoned outcome; and
 9. reconcile cleanup to an observable terminal.
 
+Acceptance and rejection are exact GitHub observations after Proposal. Abandonment is the human-owned
+stop boundary and may be recorded earlier without inventing a GitHub observation. If a pull-request
+Action is already ambiguous, Dorf first reconciles its exact Proposal so cleanup cannot orphan a PR.
+
 The terminal must run without Python in the critical path. Feature parity with the deleted Python
 implementation is not required.

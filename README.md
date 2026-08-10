@@ -28,13 +28,13 @@ Provider Gateway, GitHub App, and repository preparation.
 A Job changes code in a Sandbox.
 Actions and Checks do deterministic work.
 AgentRuns do judgment.
-Evidence proves claims about a Revision.
+Evidence retains observed proof.
 ```
 
-One admitted Job owns one isolated Sandbox and clone, branch, resumable implementation Session,
-selected review plan, exact proposal, explicit outcome, and observable cleanup. Client and worker
-processes may disappear; stable identities and external reconciliation prevent duplicate turns,
-Sandboxes, pushes, and pull requests.
+One admitted Job owns its implementation Sandbox and clone, branch, resumable implementation Thread,
+any selected review Sandboxes, exact proposal, explicit outcome, and observable cleanup. Client and
+worker processes may disappear; stable identities and external reconciliation prevent duplicate
+turns, Sandboxes, pushes, and pull requests.
 
 The main commands are:
 

@@ -77,7 +77,8 @@ The pull request is the acceptance UI. A comment from the repository owner or a 
 an ordinary human Message to the same implementation AgentRun path. Dorf acknowledges accepted
 feedback with an eyes reaction and, after the normal checks and review flow republishes, replies with
 the exact Revision that handled it. Merging the exact pull request accepts the Job; closing it without
-merging rejects the Job. Explicit abandonment remains a Dorf command.
+merging rejects the Job. Explicit abandonment remains a Dorf command and can stop a Job before it has
+a Proposal; cleanup then reconciles any already-admitted work and exact external resources.
 
 ## The deterministic and agentic boundary
 

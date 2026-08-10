@@ -12,8 +12,22 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+const closeAdmissionForOutcome = `-- name: CloseAdmissionForOutcome :execrows
+update dorf.jobs
+set admission_open=false
+where id=$1 and admission_open and cleanup_state='pending'
+`
+
+func (q *Queries) CloseAdmissionForOutcome(ctx context.Context, jobID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, closeAdmissionForOutcome, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getOutcome = `-- name: GetOutcome :one
-select job_id,outcome,observed_state,observed_merged,
+select job_id,outcome,coalesce(observed_state,'') as observed_state,observed_merged,
        coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
 from dorf.job_outcomes
 where job_id=$1
@@ -66,10 +80,10 @@ const insertOutcome = `-- name: InsertOutcome :one
 insert into dorf.job_outcomes(
     job_id,outcome,observed_state,observed_merged,merge_commit_oid,observed_at
 ) values(
-    $1,$2,$3,
+    $1,$2,nullif($3::text,''),
     $4,nullif($5::text,''),$6
 )
-returning job_id,outcome,observed_state,observed_merged,
+returning job_id,outcome,coalesce(observed_state,'') as observed_state,observed_merged,
           coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
 `
 
@@ -150,4 +164,18 @@ func (q *Queries) OutcomeImplementationSettled(ctx context.Context, jobID string
 	var settled bool
 	err := row.Scan(&settled)
 	return settled, err
+}
+
+const outcomePublicationIntentExists = `-- name: OutcomePublicationIntentExists :one
+select exists(
+  select 1 from dorf.actions
+  where job_id=$1 and kind='github-pull-request'
+)::boolean
+`
+
+func (q *Queries) OutcomePublicationIntentExists(ctx context.Context, jobID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, outcomePublicationIntentExists, jobID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }

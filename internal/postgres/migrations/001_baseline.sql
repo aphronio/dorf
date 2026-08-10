@@ -251,15 +251,15 @@ create table dorf.github_proposals (
 );
 
 create table dorf.job_outcomes (
-    job_id text primary key references dorf.github_proposals(job_id),
+    job_id text primary key references dorf.jobs(id),
     outcome text not null check (outcome in ('accepted','rejected','abandoned')),
-    observed_state text not null check (observed_state in ('open','closed')),
+    observed_state text check (observed_state in ('open','closed')),
     observed_merged boolean not null,
     merge_commit_oid text check (merge_commit_oid is null or merge_commit_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     observed_at timestamptz not null default clock_timestamp(),
     check (
-        (outcome='accepted' and observed_state='closed' and observed_merged and merge_commit_oid is not null) or
-        (outcome='rejected' and observed_state='closed' and not observed_merged and merge_commit_oid is null) or
+        (outcome='accepted' and observed_state is not null and observed_state='closed' and observed_merged and merge_commit_oid is not null) or
+        (outcome='rejected' and observed_state is not null and observed_state='closed' and not observed_merged and merge_commit_oid is null) or
         (outcome='abandoned' and not observed_merged and merge_commit_oid is null)
     )
 );
@@ -270,6 +270,6 @@ comment on table dorf.agent_runs is 'Harness Thread and Turn bindings plus lifec
 comment on table dorf.evidence is 'Immutable content-addressed Evidence references; bytes live in deployment-owned storage';
 comment on table dorf.sandboxes is 'Job-owned isolated workstations used by one or more AgentRuns';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
-comment on table dorf.job_outcomes is 'Immutable Job outcome bound to the retained GitHub proposal';
+comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

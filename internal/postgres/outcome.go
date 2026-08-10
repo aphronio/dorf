@@ -55,20 +55,35 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 	if !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome cannot be recorded after admission closes or cleanup begins")
 	}
-	proposalRow, err := queries.GetProposal(ctx, receipt.JobID)
-	if err != nil {
-		return spine.JobOutcome{}, false, fmt.Errorf("load exact GitHub proposal for outcome: %w", err)
-	}
-	proposal := githubProposal(proposalRow)
-	if proposal.ProposedRevision != locked.Revision {
-		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Proposal")
-	}
-	settled, err := queries.OutcomeImplementationSettled(ctx, receipt.JobID)
-	if err != nil {
-		return spine.JobOutcome{}, false, err
-	}
-	if !settled {
-		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires all admitted implementation input to be finished and observed")
+	proposalRow, proposalErr := queries.GetProposal(ctx, receipt.JobID)
+	switch {
+	case errors.Is(proposalErr, sql.ErrNoRows):
+		if receipt.Kind != spine.OutcomeAbandoned || receipt.ObservedState != "" {
+			return spine.JobOutcome{}, false, fmt.Errorf("accepted and rejected outcomes require the exact current published Proposal")
+		}
+		intent, err := queries.OutcomePublicationIntentExists(ctx, receipt.JobID)
+		if err != nil {
+			return spine.JobOutcome{}, false, err
+		}
+		if intent {
+			return spine.JobOutcome{}, false, fmt.Errorf("Job abandonment must wait for the started pull-request Action to reconcile its exact Proposal")
+		}
+	case proposalErr != nil:
+		return spine.JobOutcome{}, false, fmt.Errorf("load exact GitHub proposal for outcome: %w", proposalErr)
+	default:
+		proposal := githubProposal(proposalRow)
+		if proposal.ProposedRevision != locked.Revision || receipt.ObservedState == "" {
+			return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Proposal")
+		}
+		if receipt.Kind != spine.OutcomeAbandoned {
+			settled, err := queries.OutcomeImplementationSettled(ctx, receipt.JobID)
+			if err != nil {
+				return spine.JobOutcome{}, false, err
+			}
+			if !settled {
+				return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires all admitted implementation input to be finished and observed")
+			}
+		}
 	}
 	inserted, err := queries.InsertOutcome(ctx, dbsql.InsertOutcomeParams{
 		JobID: receipt.JobID, Outcome: receipt.Kind,
@@ -77,6 +92,9 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 	})
 	if err != nil {
 		return spine.JobOutcome{}, false, err
+	}
+	if err := expectOneRows(queries.CloseAdmissionForOutcome(ctx, receipt.JobID)); err != nil {
+		return spine.JobOutcome{}, false, fmt.Errorf("close admission for Job outcome: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.JobOutcome{}, false, err
@@ -106,7 +124,7 @@ func validateOutcomeReceipt(receipt spine.JobOutcome) error {
 			return fmt.Errorf("rejected outcome requires an exact closed, unmerged GitHub pull request")
 		}
 	case spine.OutcomeAbandoned:
-		if receipt.ObservedMerged || receipt.MergeCommitOID != "" || (receipt.ObservedState != "open" && receipt.ObservedState != "closed") {
+		if receipt.ObservedMerged || receipt.MergeCommitOID != "" || (receipt.ObservedState != "" && receipt.ObservedState != "open" && receipt.ObservedState != "closed") {
 			return fmt.Errorf("abandoned outcome refuses an already merged GitHub pull request")
 		}
 	default:

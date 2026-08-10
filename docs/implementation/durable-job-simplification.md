@@ -1,6 +1,6 @@
 # Durable Job simplification checklist
 
-Status: proposed follow-up work from Issue #94. Discuss the details of each slice before starting it.
+Status: implemented and verified from Issue #94.
 
 Baseline commit: `d2e9d07` (`refactor: adopt Absurd public durability APIs`).
 
@@ -9,6 +9,7 @@ Baseline commit: `d2e9d07` (`refactor: adopt Absurd public durability APIs`).
 ```text
 Goal
   -> durable Job
+       -> explicit abandon at any nonterminal point: abandoned Outcome
   -> provision Incus Sandbox
   -> Implementation AgentRun
        -> the agent decides when and what to commit
@@ -27,7 +28,6 @@ Goal
        -> trusted owner/collaborator comment: human Message; loop
        -> merge: accepted Outcome
        -> close without merge: rejected Outcome
-       -> explicit abandon: abandoned Outcome
   -> separate observable, retryable Cleanup
 ```
 

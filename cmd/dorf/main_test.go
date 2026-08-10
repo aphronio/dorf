@@ -45,4 +45,11 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 			t.Fatalf("human history leaked plumbing %q:\n%s", plumbing, story.String())
 		}
 	}
+	abandoned := workflowHistory(workflow.Snapshot{
+		Job:     spine.Job{AdmittedAt: base},
+		Outcome: &spine.JobOutcome{Kind: spine.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
+	})
+	if got := abandoned[len(abandoned)-1].Detail; got != "abandoned" {
+		t.Fatalf("pre-Proposal abandonment invented GitHub history: %q", got)
+	}
 }

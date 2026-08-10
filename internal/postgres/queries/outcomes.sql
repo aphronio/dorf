@@ -1,5 +1,5 @@
 -- name: GetOutcome :one
-select job_id,outcome,observed_state,observed_merged,
+select job_id,outcome,coalesce(observed_state,'') as observed_state,observed_merged,
        coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
 from dorf.job_outcomes
 where job_id=sqlc.arg(job_id);
@@ -42,12 +42,23 @@ select (
   ),false)
 )::boolean as settled;
 
+-- name: OutcomePublicationIntentExists :one
+select exists(
+  select 1 from dorf.actions
+  where job_id=sqlc.arg(job_id) and kind='github-pull-request'
+)::boolean;
+
+-- name: CloseAdmissionForOutcome :execrows
+update dorf.jobs
+set admission_open=false
+where id=sqlc.arg(job_id) and admission_open and cleanup_state='pending';
+
 -- name: InsertOutcome :one
 insert into dorf.job_outcomes(
     job_id,outcome,observed_state,observed_merged,merge_commit_oid,observed_at
 ) values(
-    sqlc.arg(job_id),sqlc.arg(outcome),sqlc.arg(observed_state),
+    sqlc.arg(job_id),sqlc.arg(outcome),nullif(sqlc.arg(observed_state)::text,''),
     sqlc.arg(observed_merged),nullif(sqlc.arg(merge_commit_oid)::text,''),sqlc.arg(observed_at)
 )
-returning job_id,outcome,observed_state,observed_merged,
+returning job_id,outcome,coalesce(observed_state,'') as observed_state,observed_merged,
           coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at;
