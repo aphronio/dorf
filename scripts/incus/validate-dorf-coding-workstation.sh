@@ -66,9 +66,9 @@ JOB_ID="$(jq -er .job_id <<<"$ADMISSION")"
 "$BINARY" worker --once
 INSPECTION="$($BINARY inspect --json "$JOB_ID")"
 jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$INSPECTION" >/dev/null
-jq -e '.claims.messages | map(select(.sequence == 1 and .harness == "codex" and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
+jq -e '.observed_facts.messages | map(select(.sequence == 1 and .harness == "codex" and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
 jq -e --arg source "$SOURCE_COMMIT" '
-  (.claims.messages | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
+  (.observed_facts.messages | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
   .job.revision == $source and
   (.observed_facts.revisions | length == 1) and
   (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and

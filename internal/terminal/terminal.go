@@ -318,4 +318,4 @@ func requireBridgeRoute(baseURL, bridgeIPv4 string) error {
 	return nil
 }
 
-var _ spine.ReviewExternals = Externals{}
+var _ spine.ServiceExternals = Externals{}

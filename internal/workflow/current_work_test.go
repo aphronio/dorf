@@ -1,68 +1,60 @@
 package workflow
 
 import (
-	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/evidence"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-type publicationReadinessStub struct {
-	assessment spine.ReadinessAssessment
-	intentAt   time.Time
-}
-
-func (s *publicationReadinessStub) AssessReadiness(_ context.Context, _, _ string, intentAt time.Time) (spine.ReadinessAssessment, error) {
-	s.intentAt = intentAt
-	return s.assessment, nil
-}
-
-func readyFacts() currentWorkFacts {
+func readyFacts() Snapshot {
 	job := spine.Job{ID: "job-1", Revision: "rev-1", AdmissionOpen: true}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	action := func(kind spine.ActionKind) spine.Action {
 		return spine.Action{ID: spine.ScopedActionID(job.ID, kind, sandbox.ID), Kind: kind, State: spine.ActionSucceeded, Scope: sandbox.ID}
 	}
-	return currentWorkFacts{
-		job:     job,
-		sandbox: sandbox,
-		actions: []spine.Action{
+	return Snapshot{
+		Job:         job,
+		MainSandbox: sandbox,
+		Sandboxes:   []spine.Sandbox{sandbox},
+		Actions: []spine.Action{
 			action(spine.ActionSandboxCreate),
 			action(spine.ActionRepositoryClone),
 			action(spine.ActionRouteCreate),
 		},
-		setup:      &spine.Action{ID: spine.ActionID(job.ID, spine.ActionRepositorySetup), State: spine.ActionSucceeded},
-		declared:   []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}},
-		checks:     []spine.Check{{ID: spine.CheckID(job.ID, job.Revision, "check"), Name: "check", Revision: job.Revision, State: "passed", EvidenceID: "e-check"}},
-		reviewPlan: &spine.ReviewPlanRecord{JobID: job.ID, Revision: job.Revision},
+		SelectedSetup:  &spine.Action{ID: spine.ActionID(job.ID, spine.ActionRepositorySetup), State: spine.ActionSucceeded},
+		DeclaredChecks: []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}},
+		Checks:         []spine.Check{{ID: spine.CheckID(job.ID, job.Revision, "check"), Name: "check", Revision: job.Revision, State: "passed", EvidenceID: "e-check"}},
+		ReviewPlans:    []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
 	}
 }
 
 func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("selected reviewer Actions precede its AgentRun and implementation feedback", func(t *testing.T) {
 		facts := readyFacts()
-		facts.reviewPlan.Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		reviewer := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-1", JobID: facts.job.ID, Role: string(policy.RoleGeneral), State: spine.AgentRunPending, SandboxID: spine.ReviewSandboxName("review-1")}}
-		reviewer.Sandbox = spine.Sandbox{ID: reviewer.SandboxID, JobID: facts.job.ID}
-		facts.reviewRuns = []spine.ReviewRunView{reviewer}
-		facts.delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
+		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
+		reviewer := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-1", JobID: facts.Job.ID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunPending, SandboxID: spine.ReviewSandboxName("review-1")}}
+		reviewer.Sandbox = spine.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID}
+		facts.ReviewRuns = []spine.ReviewRunView{reviewer}
+		facts.Delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		steps := []struct {
 			work   WorkKind
 			action spine.ActionKind
 		}{
-			{WorkCreateReviewSandbox, spine.ActionSandboxCreate},
-			{WorkCheckoutReview, spine.ActionReviewCheckout},
-			{WorkCreateReviewRoute, spine.ActionRouteCreate},
+			{WorkAction, spine.ActionSandboxCreate},
+			{WorkAction, spine.ActionReviewCheckout},
+			{WorkAction, spine.ActionRouteCreate},
 		}
 		for _, step := range steps {
 			got := decideCurrentWork(facts)
-			wantID := spine.ScopedActionID(facts.job.ID, step.action, reviewer.Sandbox.ID)
-			if got.Kind != step.work || got.FactID != wantID || got.Scope != reviewer.Sandbox.ID {
+			wantID := spine.ScopedActionID(facts.Job.ID, step.action, reviewer.Sandbox.ID)
+			if got.Kind != step.work || got.ActionKind != step.action || got.FactID != wantID || got.Scope != reviewer.Sandbox.ID {
 				t.Fatalf("CurrentWork = %#v, want %s Action %s", got, step.action, wantID)
 			}
-			facts.actions = append(facts.actions, spine.Action{ID: wantID, JobID: facts.job.ID, Kind: step.action, State: spine.ActionSucceeded, Scope: reviewer.Sandbox.ID})
+			facts.Actions = append(facts.Actions, spine.Action{ID: wantID, JobID: facts.Job.ID, Kind: step.action, State: spine.ActionSucceeded, Scope: reviewer.Sandbox.ID})
 		}
 		if got := decideCurrentWork(facts); got.Kind != WorkRunReviewer || got.FactID != reviewer.ID {
 			t.Fatalf("CurrentWork = %#v, want selected reviewer after its exact Actions", got)
@@ -71,23 +63,23 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("review feedback Message enters the ordinary implementation lane", func(t *testing.T) {
 		facts := readyFacts()
-		facts.reviewPlan.Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		requestID := spine.ReviewRequestMessageID(facts.job.ID, facts.job.Revision, string(policy.RoleGeneral))
+		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
+		requestID := spine.ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
 		reviewerID := spine.AgentRunID(requestID)
-		facts.reviewRuns = []spine.ReviewRunView{{AgentRun: spine.AgentRun{ID: reviewerID, Role: string(policy.RoleGeneral), State: spine.AgentRunCompleted}}}
-		feedback := spine.Message{ID: spine.MessageID(facts.job.ID, spine.MessageFromAgent, reviewerID), JobID: facts.job.ID, FromKind: spine.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: spine.MessageFollow}
-		facts.messages = []spine.MessageView{{Message: feedback}}
-		facts.delivery = &spine.Delivery{Message: feedback, AgentRun: spine.AgentRun{ID: spine.AgentRunID(feedback.ID), State: spine.AgentRunPending}}
-		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != facts.delivery.AgentRun.ID {
+		facts.ReviewRuns = []spine.ReviewRunView{{AgentRun: spine.AgentRun{ID: reviewerID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunCompleted}}}
+		feedback := spine.Message{ID: spine.MessageID(facts.Job.ID, spine.MessageFromAgent, reviewerID), JobID: facts.Job.ID, FromKind: spine.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: spine.MessageFollow}
+		facts.Messages = []spine.MessageView{{Message: feedback}}
+		facts.Delivery = &spine.Delivery{Message: feedback, AgentRun: spine.AgentRun{ID: spine.AgentRunID(feedback.ID), State: spine.AgentRunPending}}
+		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != facts.Delivery.AgentRun.ID {
 			t.Fatalf("CurrentWork = %#v, want ordinary feedback Message delivery", got)
 		}
 	})
 
 	t.Run("message precedes Git observation and Checks", func(t *testing.T) {
 		facts := readyFacts()
-		facts.reviewPlan = nil
-		facts.checks = nil
-		facts.delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
+		facts.ReviewPlans = nil
+		facts.Checks = nil
+		facts.Delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != "implement-2" {
 			t.Fatalf("CurrentWork = %#v, want Message delivery", got)
 		}
@@ -95,13 +87,13 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("submitting Follow is reconciled before Checks", func(t *testing.T) {
 		facts := readyFacts()
-		facts.reviewPlan = nil
-		facts.checks = nil
-		message := spine.Message{ID: "message-2", JobID: facts.job.ID, Sequence: 2, Intent: spine.MessageFollow}
-		run := spine.AgentRun{ID: spine.AgentRunID(message.ID), JobID: facts.job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunSubmitting}
-		facts.messages = []spine.MessageView{{Message: message}}
-		facts.runs = []spine.AgentRun{run}
-		facts.delivery = &spine.Delivery{Message: message, AgentRun: run}
+		facts.ReviewPlans = nil
+		facts.Checks = nil
+		message := spine.Message{ID: "message-2", JobID: facts.Job.ID, Sequence: 2, Intent: spine.MessageFollow}
+		run := spine.AgentRun{ID: spine.AgentRunID(message.ID), JobID: facts.Job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunSubmitting}
+		facts.Messages = []spine.MessageView{{Message: message}}
+		facts.AgentRuns = []spine.AgentRun{run}
+		facts.Delivery = &spine.Delivery{Message: message, AgentRun: run}
 		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != run.ID {
 			t.Fatalf("CurrentWork = %#v, want submitting Follow reconciliation", got)
 		}
@@ -109,11 +101,11 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("started publication settles before a later Message", func(t *testing.T) {
 		facts := readyFacts()
-		facts.actions = append(facts.actions,
-			spine.Action{Kind: spine.ActionRepositoryPush, State: spine.ActionUnsettled, Scope: facts.job.Revision},
-			spine.Action{Kind: spine.ActionGitHubPullRequest, State: spine.ActionUnsettled, Scope: facts.job.Revision},
+		facts.Actions = append(facts.Actions,
+			spine.Action{Kind: spine.ActionRepositoryPush, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
+			spine.Action{Kind: spine.ActionGitHubPullRequest, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
 		)
-		facts.delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
+		facts.Delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
 			t.Fatalf("CurrentWork = %#v, want started publication reconciliation", got)
 		}
@@ -121,7 +113,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("ready exact Revision observes its Proposal", func(t *testing.T) {
 		facts := readyFacts()
-		facts.proposal = &spine.GitHubProposal{JobID: facts.job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.job.Revision}
+		facts.Proposal = &spine.GitHubProposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 		if got := decideCurrentWork(facts); got.Kind != WorkObserveProposal {
 			t.Fatalf("CurrentWork = %#v, want Proposal observation", got)
 		}
@@ -133,12 +125,12 @@ func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
 	if !codingPrerequisitesComplete(facts) {
 		t.Fatal("complete infrastructure and setup were not ready for coding facts")
 	}
-	facts.setup.State = spine.ActionFailed
+	facts.SelectedSetup.State = spine.ActionFailed
 	if codingPrerequisitesComplete(facts) {
 		t.Fatal("failed setup exposed downstream coding facts")
 	}
 	facts = readyFacts()
-	facts.actions = facts.actions[1:]
+	facts.Actions = facts.Actions[1:]
 	if codingPrerequisitesComplete(facts) {
 		t.Fatal("missing Sandbox creation exposed downstream coding facts")
 	}
@@ -159,13 +151,13 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			facts := readyFacts()
-			message := spine.Message{ID: "message-1", JobID: facts.job.ID, Sequence: 1, FromKind: test.from}
-			run := spine.AgentRun{ID: "run-1", JobID: facts.job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision}
-			facts.messages = []spine.MessageView{{Message: message}}
-			facts.runs = []spine.AgentRun{run}
-			facts.evidence = []spine.Evidence{{ID: "e-git", Kind: "git-revision", AgentRunID: run.ID, Revision: facts.job.Revision}}
+			message := spine.Message{ID: "message-1", JobID: facts.Job.ID, Sequence: 1, FromKind: test.from}
+			run := spine.AgentRun{ID: "run-1", JobID: facts.Job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision}
+			facts.Messages = []spine.MessageView{{Message: message}}
+			facts.AgentRuns = []spine.AgentRun{run}
+			facts.Evidence = []spine.Evidence{{ID: "e-git", Kind: "git-revision", AgentRunID: run.ID, Revision: facts.Job.Revision}}
 			if test.proposal {
-				facts.proposal = &spine.GitHubProposal{JobID: facts.job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.job.Revision}
+				facts.Proposal = &spine.GitHubProposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 			}
 			id, _ := unchangedAttention(facts)
 			if (id != "") != test.attention {
@@ -177,20 +169,20 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 
 func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
 	facts := readyFacts()
-	facts.messages = []spine.MessageView{
+	facts.Messages = []spine.MessageView{
 		{Message: spine.Message{ID: "initial", Sequence: 1, FromKind: spine.MessageFromHuman, Intent: spine.MessageFollow}},
 		{Message: spine.Message{ID: "review-request", Sequence: 2, FromKind: spine.MessageFromWorkflow, Intent: spine.MessageFollow}},
 		{Message: spine.Message{ID: "review-feedback", Sequence: 3, FromKind: spine.MessageFromAgent, Intent: spine.MessageFollow}},
 	}
-	facts.runs = []spine.AgentRun{
+	facts.AgentRuns = []spine.AgentRun{
 		{ID: "initial-run", MessageID: "initial", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "rev-0"},
-		{ID: "review-run", MessageID: "review-request", Role: "general", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision},
-		{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision},
+		{ID: "review-run", MessageID: "review-request", Role: "general", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision},
+		{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision},
 	}
-	facts.evidence = []spine.Evidence{
-		{Kind: "git-revision", AgentRunID: "initial-run", Revision: facts.job.Revision},
-		{Kind: "review-observation", AgentRunID: "review-run", Revision: facts.job.Revision},
-		{Kind: "git-revision", AgentRunID: "feedback-run", Revision: facts.job.Revision},
+	facts.Evidence = []spine.Evidence{
+		{Kind: "git-revision", AgentRunID: "initial-run", Revision: facts.Job.Revision},
+		{Kind: "review-observation", AgentRunID: "review-run", Revision: facts.Job.Revision},
+		{Kind: "git-revision", AgentRunID: "feedback-run", Revision: facts.Job.Revision},
 	}
 	if id, detail := unchangedAttention(facts); id != "" {
 		t.Fatalf("review feedback was treated as unchanged implementation attention: %s %s", id, detail)
@@ -202,18 +194,18 @@ func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
 
 func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 	facts := readyFacts()
-	facts.messages = []spine.MessageView{
+	facts.Messages = []spine.MessageView{
 		{Message: spine.Message{ID: "message-1", Sequence: 1, Intent: spine.MessageFollow}},
 		{Message: spine.Message{ID: "message-2", Sequence: 2, Intent: spine.MessageFollow}},
 	}
-	facts.runs = []spine.AgentRun{
+	facts.AgentRuns = []spine.AgentRun{
 		{ID: "run-1", MessageID: "message-1", Role: "implement", State: spine.AgentRunCompleted},
 		{ID: "run-2", MessageID: "message-2", Role: "implement", State: spine.AgentRunCompleted},
 	}
 	if got := revisionCandidate(facts); got == nil || got.ID != "run-2" {
 		t.Fatalf("revisionCandidate = %#v, want latest batch AgentRun", got)
 	}
-	facts.evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: "run-2"}}
+	facts.Evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: "run-2"}}
 	if got := revisionCandidate(facts); got != nil {
 		t.Fatalf("revisionCandidate = %#v after latest observation; earlier batch member must not be observed again", got)
 	}
@@ -221,20 +213,20 @@ func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 
 func TestLaterSuccessfulFollowRecoversEarlierFailure(t *testing.T) {
 	facts := readyFacts()
-	facts.checks = nil
-	facts.reviewPlan = nil
-	facts.messages = []spine.MessageView{
+	facts.Checks = nil
+	facts.ReviewPlans = nil
+	facts.Messages = []spine.MessageView{
 		{Message: spine.Message{ID: "message-1", Sequence: 1, Intent: spine.MessageFollow}},
 		{Message: spine.Message{ID: "message-2", Sequence: 2, Intent: spine.MessageFollow}},
 	}
-	facts.runs = []spine.AgentRun{
+	facts.AgentRuns = []spine.AgentRun{
 		{ID: "run-1", MessageID: "message-1", Role: "implement", State: spine.AgentRunFailed},
-		{ID: "run-2", MessageID: "message-2", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision},
+		{ID: "run-2", MessageID: "message-2", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision},
 	}
 	if got := decideCurrentWork(facts); got.Kind != WorkObserveRevision || got.FactID != "run-2" {
 		t.Fatalf("CurrentWork = %#v, want successful recovery Follow observation", got)
 	}
-	facts.runs[1].State = spine.AgentRunFailed
+	facts.AgentRuns[1].State = spine.AgentRunFailed
 	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-2" {
 		t.Fatalf("CurrentWork = %#v, want latest failed Follow attention", got)
 	}
@@ -259,17 +251,17 @@ func TestLatestImplementationFollowStateCannotFallThrough(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			facts := readyFacts()
-			facts.checks = nil
-			facts.reviewPlan = nil
+			facts.Checks = nil
+			facts.ReviewPlans = nil
 			message := spine.Message{ID: "message-1", Sequence: 1, Intent: spine.MessageFollow}
-			run := spine.AgentRun{ID: "run-1", MessageID: message.ID, Role: "implement", State: test.state, InputRevision: facts.job.Revision}
-			facts.messages = []spine.MessageView{{Message: message}}
-			facts.runs = []spine.AgentRun{run}
+			run := spine.AgentRun{ID: "run-1", MessageID: message.ID, Role: "implement", State: test.state, InputRevision: facts.Job.Revision}
+			facts.Messages = []spine.MessageView{{Message: message}}
+			facts.AgentRuns = []spine.AgentRun{run}
 			wantFactID := run.ID
 			if test.observed {
-				facts.runs[0].InputRevision = "rev-0"
-				facts.evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: run.ID, Revision: facts.job.Revision}}
-				wantFactID = spine.CheckID(facts.job.ID, facts.job.Revision, "check")
+				facts.AgentRuns[0].InputRevision = "rev-0"
+				facts.Evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: run.ID, Revision: facts.Job.Revision}}
+				wantFactID = spine.CheckID(facts.Job.ID, facts.Job.Revision, "check")
 			}
 			got := decideCurrentWork(facts)
 			if got.Kind != test.want || got.FactID != wantFactID {
@@ -282,25 +274,23 @@ func TestLatestImplementationFollowStateCannotFallThrough(t *testing.T) {
 func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 	facts := readyFacts()
 	startedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	facts.actions = append(facts.actions, spine.Action{
+	facts.Actions = append(facts.Actions, spine.Action{
 		Kind:      spine.ActionGitHubPullRequest,
 		State:     spine.ActionUnsettled,
-		Scope:     facts.job.Revision,
+		Scope:     facts.Job.Revision,
 		CreatedAt: startedAt,
 	})
 	tentative := decideCurrentWork(facts)
 	if tentative.Kind != WorkPublishProposal {
 		t.Fatalf("tentative CurrentWork = %#v, want publication", tentative)
 	}
-	readiness := &publicationReadinessStub{assessment: spine.ReadinessAssessment{Reason: "Evidence digest does not match"}}
-	got, err := assessPublicationReadiness(context.Background(), readiness, facts, tentative)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Kind != WorkAttention || got.Detail != "publication lost exact-Revision readiness: Evidence digest does not match" {
+	got := facts.Project(evidence.Store{}).CurrentWork
+	if got.Kind != WorkAttention || !strings.HasPrefix(got.Detail, "publication lost exact-Revision readiness: ") {
 		t.Fatalf("CurrentWork = %#v, want publication readiness attention", got)
 	}
-	if readiness.intentAt != startedAt {
-		t.Fatalf("publication readiness intent = %s, want PR Action creation %s", readiness.intentAt, startedAt)
+	late := spine.MessageView{Message: spine.Message{ID: "late", AdmittedAt: startedAt.Add(time.Second)}}
+	messages, _ := publicationInputsAt([]spine.MessageView{late}, nil, publicationIntentAt(facts.Actions, facts.Job.Revision))
+	if len(messages) != 0 {
+		t.Fatalf("publication readiness retained a Message admitted after publication began")
 	}
 }

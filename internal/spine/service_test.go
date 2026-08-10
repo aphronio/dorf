@@ -11,7 +11,7 @@ func TestAgentRunRecoversInitialHarnessTurnWithoutResubmission(t *testing.T) {
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", State: AgentRunSubmitting, BaselineRecorded: true}}
 	submits := 0
 	contract := agentRunContract{
-		service: Service{Store: store},
+		store:   store,
 		run:     store.run,
 		harness: "codex",
 		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
@@ -38,7 +38,7 @@ func TestAgentRunRecoversInitialHarnessTurnWithoutResubmission(t *testing.T) {
 func TestAgentRunPersistsHarnessBeforeFirstSubmission(t *testing.T) {
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", State: AgentRunPending}}
 	contract := agentRunContract{
-		service: Service{Store: store},
+		store:   store,
 		run:     store.run,
 		harness: "codex",
 		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
@@ -57,8 +57,8 @@ func TestAgentRunReconcilesLostBoundSubmissionAcknowledgement(t *testing.T) {
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", ThreadID: "thread-1", State: AgentRunSubmitting, BaselineRecorded: true, BaselineTurnID: "before"}}
 	history := HarnessHistory{Harness: "codex", ThreadID: "thread-1", Turns: []HarnessTurn{{ID: "before", Status: "completed"}}}
 	contract := agentRunContract{
-		service: Service{Store: store},
-		run:     store.run,
+		store: store,
+		run:   store.run,
 		submitBound: func(context.Context, AgentRun) (HarnessBinding, error) {
 			history.Turns = append(history.Turns, HarnessTurn{ID: "turn-1", Status: "completed"})
 			return HarnessBinding{}, errors.New("response lost")
@@ -79,8 +79,8 @@ func TestAgentRunClaimLossAfterSubmissionDoesNotDurablyBind(t *testing.T) {
 	claimLost := errors.New("claim lost")
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", ThreadID: "thread-1", State: AgentRunPending}}
 	contract := agentRunContract{
-		service: Service{Store: store},
-		run:     store.run,
+		store: store,
+		run:   store.run,
 		submitBound: func(context.Context, AgentRun) (HarnessBinding, error) {
 			return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "running"}}, nil
 		},
@@ -101,7 +101,7 @@ func TestAgentRunClaimLossAfterSubmissionDoesNotDurablyBind(t *testing.T) {
 
 func TestFailedAgentRunWithoutTurnRemainsTerminal(t *testing.T) {
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", State: AgentRunFailed, Attention: "proved no submission"}}
-	turn, err := (agentRunContract{service: Service{Store: store}, run: store.run}).execute(context.Background())
+	turn, err := (agentRunContract{store: store, run: store.run}).execute(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,36 +141,6 @@ type agentRunTestStore struct {
 	run AgentRun
 }
 
-func (s *agentRunTestStore) Job(context.Context, string) (Job, error) {
-	return Job{}, errors.New("unused")
-}
-func (s *agentRunTestStore) WithJobFence(context.Context, string, func() error) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) Sandbox(context.Context, string) (Sandbox, error) {
-	return Sandbox{}, errors.New("unused")
-}
-func (s *agentRunTestStore) Sandboxes(context.Context, string) ([]Sandbox, error) {
-	return nil, errors.New("unused")
-}
-func (s *agentRunTestStore) AgentRuns(context.Context, string) ([]AgentRun, error) {
-	return nil, errors.New("unused")
-}
-func (s *agentRunTestStore) GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error) {
-	return Action{}, errors.New("unused")
-}
-func (s *agentRunTestStore) InterruptAgentRun(context.Context, string, string) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) BeginSetup(context.Context, string) (Action, error) {
-	return Action{}, errors.New("unused")
-}
-func (s *agentRunTestStore) RecordSandboxActionSuccess(context.Context, string) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) NextDelivery(context.Context, string) (*Delivery, error) {
-	return nil, errors.New("unused")
-}
 func (s *agentRunTestStore) PrepareAgentRun(_ context.Context, runID, harness, baseline string) error {
 	if s.run.ID != runID {
 		return errors.New("wrong run")
@@ -195,38 +165,12 @@ func (s *agentRunTestStore) BindAgentRun(_ context.Context, runID, harness, thre
 	}
 	return nil
 }
-func (s *agentRunTestStore) BindSteer(context.Context, string, string, string) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) FailAgentRun(_ context.Context, runID, reason string) error {
-	if s.run.ID != runID {
-		return errors.New("wrong run")
-	}
-	s.run.State, s.run.Attention = AgentRunFailed, reason
-	return nil
-}
 func (s *agentRunTestStore) UncertainAgentRun(_ context.Context, runID, reason string) error {
 	if s.run.ID != runID {
 		return errors.New("wrong run")
 	}
 	s.run.State, s.run.Attention = AgentRunUncertain, reason
 	return nil
-}
-func (s *agentRunTestStore) AgentRunAttention(_ context.Context, runID, reason string) error {
-	if s.run.ID != runID {
-		return errors.New("wrong run")
-	}
-	s.run.Attention = reason
-	return nil
-}
-func (s *agentRunTestStore) HarnessMutationDelivery(context.Context, string) (*Delivery, error) {
-	return nil, errors.New("unused")
-}
-func (s *agentRunTestStore) SetCleanupAttention(context.Context, string, string) error {
-	return errors.New("unused")
-}
-func (s *agentRunTestStore) CompleteCleanup(context.Context, string) error {
-	return errors.New("unused")
 }
 
 func requireContains(t *testing.T, value, substring string) {

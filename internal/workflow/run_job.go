@@ -30,42 +30,28 @@ func reviewPolicyStepName(job, revision string) string {
 // next operation from product facts; this loop executes it and asks again.
 // PostgreSQL never stores this disposable answer.
 func RunJob(ctx context.Context, service spine.Service, store postgres.Store, proposal ProposalRuntime, jobID string) (Work, error) {
-	if service.Repository == nil {
-		return Work{}, fmt.Errorf("coding workflow requires repository externals")
-	}
 	for {
-		work, err := CurrentWork(ctx, store, proposal.Publication, jobID)
+		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
 			return Work{}, err
 		}
+		work := snapshot.Project(service.Evidence).CurrentWork
 		if work.Kind == WorkComplete || work.Kind == WorkAttention {
 			return work, nil
 		}
 
-		job, err := store.Job(ctx, jobID)
-		if err != nil {
-			return Work{}, err
-		}
-		sandbox, err := store.Sandbox(ctx, spine.MainSandboxName(jobID))
-		if err != nil {
-			return Work{}, err
-		}
+		job := snapshot.Job
+		sandbox := snapshot.MainSandbox
 
 		switch work.Kind {
-		case WorkCreateSandbox:
-			err = runSandboxAction(ctx, service, store, job, sandbox, spine.ActionSandboxCreate)
-		case WorkCloneRepository:
-			err = runSandboxAction(ctx, service, store, job, sandbox, spine.ActionRepositoryClone)
+		case WorkAction:
+			if work.Scope == sandbox.ID {
+				err = runSandboxAction(ctx, service, store, job, sandbox, work)
+			} else {
+				err = runReviewAction(ctx, service, store, job, work)
+			}
 		case WorkSetupRepository:
 			err = runSetupStep(ctx, service, store, job, work)
-		case WorkCreateRoute:
-			err = runSandboxAction(ctx, service, store, job, sandbox, spine.ActionRouteCreate)
-		case WorkCreateReviewSandbox:
-			err = runReviewAction(ctx, service, store, job, work, spine.ActionSandboxCreate)
-		case WorkCheckoutReview:
-			err = runReviewAction(ctx, service, store, job, work, spine.ActionReviewCheckout)
-		case WorkCreateReviewRoute:
-			err = runReviewAction(ctx, service, store, job, work, spine.ActionRouteCreate)
 		case WorkRunReviewer:
 			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.RunReview(workCtx, job, work.FactID)
@@ -116,7 +102,7 @@ func runSetupStep(ctx context.Context, service spine.Service, store postgres.Sto
 	})
 }
 
-func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work, kind spine.ActionKind) error {
+func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {
 	runs, err := store.ReviewRuns(ctx, job.ID, job.Revision)
 	if err != nil {
 		return err
@@ -131,22 +117,22 @@ func runReviewAction(ctx context.Context, service spine.Service, store postgres.
 	if selected == nil {
 		return fmt.Errorf("review Action %s has no selected reviewer Sandbox %s", work.FactID, work.Scope)
 	}
-	expectedID := spine.ScopedActionID(job.ID, kind, selected.Sandbox.ID)
+	expectedID := spine.ScopedActionID(job.ID, work.ActionKind, selected.Sandbox.ID)
 	if expectedID != work.FactID {
 		return fmt.Errorf("review Action changed from %s to %s", work.FactID, expectedID)
 	}
-	action, err := store.GetOrCreateSandboxAction(ctx, selected.Sandbox.ID, kind)
+	action, err := store.GetOrCreateSandboxAction(ctx, selected.Sandbox.ID, work.ActionKind)
 	if err != nil {
 		return err
 	}
-	if action.ID != work.FactID {
-		return fmt.Errorf("selected review Action changed from %s to %s", work.FactID, action.ID)
+	if action.ID != work.FactID || action.Kind != work.ActionKind || action.Scope != work.Scope {
+		return fmt.Errorf("selected review Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
 	}
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
 	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if kind == spine.ActionReviewCheckout {
+		if work.ActionKind == spine.ActionReviewCheckout {
 			return service.ExecuteReviewCheckout(workCtx, job, selected.ID, action)
 		}
 		return service.ExecuteSandboxAction(workCtx, job, selected.Sandbox, action)
@@ -203,10 +189,20 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, sandbox spine.Sandbox, kind spine.ActionKind) error {
-	action, err := store.GetOrCreateSandboxAction(ctx, sandbox.ID, kind)
+func runSandboxAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, sandbox spine.Sandbox, work Work) error {
+	if work.Scope != sandbox.ID {
+		return fmt.Errorf("Action %s scope changed from %s to %s", work.FactID, work.Scope, sandbox.ID)
+	}
+	expectedID := spine.ScopedActionID(job.ID, work.ActionKind, work.Scope)
+	if expectedID != work.FactID {
+		return fmt.Errorf("Action changed from %s to %s", work.FactID, expectedID)
+	}
+	action, err := store.GetOrCreateSandboxAction(ctx, sandbox.ID, work.ActionKind)
 	if err != nil {
 		return err
+	}
+	if action.ID != work.FactID || action.Kind != work.ActionKind || action.Scope != work.Scope {
+		return fmt.Errorf("selected Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
 	}
 	if action.State == spine.ActionSucceeded {
 		return nil

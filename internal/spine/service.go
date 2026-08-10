@@ -12,15 +12,10 @@ import (
 
 type Store interface {
 	Job(context.Context, string) (Job, error)
-	WithJobFence(context.Context, string, func() error) error
-	Sandbox(context.Context, string) (Sandbox, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	AgentRuns(context.Context, string) ([]AgentRun, error)
-	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	InterruptAgentRun(context.Context, string, string) error
-	BeginSetup(context.Context, string) (Action, error)
 	RecordSandboxActionSuccess(context.Context, string) error
-	NextDelivery(context.Context, string) (*Delivery, error)
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	BindSteer(context.Context, string, string, string) error
@@ -29,7 +24,6 @@ type Store interface {
 	AgentRunAttention(context.Context, string, string) error
 	HarnessMutationDelivery(context.Context, string) (*Delivery, error)
 	SetCleanupAttention(context.Context, string, string) error
-	CompleteCleanup(context.Context, string) error
 }
 
 type Externals interface {
@@ -48,12 +42,8 @@ type Externals interface {
 }
 
 type CodingStore interface {
-	SelectedSetup(context.Context, string) (*Action, error)
-	DeliveryCandidate(context.Context, string) (*Delivery, error)
-	RevisionCandidate(context.Context, string, string) (AgentRun, bool, error)
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
 	RecordRevisionObservation(context.Context, string, string, RevisionObservation, Evidence) (bool, error)
-	BeginCheck(context.Context, string, string, string, string) (Check, error)
 	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
 	AdmitCheckMessage(context.Context, Check) (Message, bool, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
@@ -66,6 +56,21 @@ type RepositoryExternals interface {
 	RepositorySetup(context.Context, Job, Action) (CommandObservation, []DeclaredCheck, error)
 	RepositoryRevision(context.Context, Job) (RevisionObservation, error)
 	RepositoryCheck(context.Context, Job, Check) (CommandObservation, error)
+}
+
+// ServiceStore and ServiceExternals are the one complete construction
+// boundary for the coding service. Their embedded leaf interfaces stay small
+// so focused logic and tests can depend on only the capability they use.
+type ServiceStore interface {
+	Store
+	CodingStore
+	ReviewStore
+}
+
+type ServiceExternals interface {
+	Externals
+	RepositoryExternals
+	ReviewExternals
 }
 
 type FaultBarrier interface {
@@ -90,9 +95,26 @@ type Service struct {
 	Store      Store
 	Externals  Externals
 	Barrier    FaultBarrier
-	Repository RepositoryExternals
 	Evidence   evidence.Store
 	ClaimCheck func(context.Context) error
+
+	codingStore     CodingStore
+	reviewStore     ReviewStore
+	repository      RepositoryExternals
+	reviewExternals ReviewExternals
+}
+
+func NewService(store ServiceStore, externals ServiceExternals, records evidence.Store, barrier FaultBarrier) Service {
+	return Service{
+		Store:           store,
+		Externals:       externals,
+		Barrier:         barrier,
+		Evidence:        records,
+		codingStore:     store,
+		reviewStore:     store,
+		repository:      externals,
+		reviewExternals: externals,
+	}
 }
 
 func (s Service) requireClaim(ctx context.Context) error {
@@ -103,8 +125,8 @@ func (s Service) requireClaim(ctx context.Context) error {
 }
 
 func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error {
-	store := s.Store.(CodingStore)
-	observation, declared, err := s.Repository.RepositorySetup(ctx, job, action)
+	store := s.codingStore
+	observation, declared, err := s.repository.RepositorySetup(ctx, job, action)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, action.ID, err)
@@ -136,8 +158,8 @@ func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error
 }
 
 func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) error {
-	store := s.Store.(CodingStore)
-	observation, err := s.Repository.RepositoryRevision(ctx, job)
+	store := s.codingStore
+	observation, err := s.repository.RepositoryRevision(ctx, job)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
@@ -168,14 +190,14 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 }
 
 func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
-	store := s.Store.(CodingStore)
+	store := s.codingStore
 	if check.State == "passed" {
 		return nil
 	}
 	if check.State == "failed" {
 		return s.HandleFailedCheck(ctx, job, check)
 	}
-	observation, err := s.Repository.RepositoryCheck(ctx, job, check)
+	observation, err := s.repository.RepositoryCheck(ctx, job, check)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, check.ID, err)
@@ -209,7 +231,7 @@ func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
 }
 
 func (s Service) setWorkflowAttention(ctx context.Context, jobID, source string, cause error) error {
-	if err := s.Store.(CodingStore).SetWorkflowAttention(ctx, jobID, source, cause.Error()); err != nil {
+	if err := s.codingStore.SetWorkflowAttention(ctx, jobID, source, cause.Error()); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
@@ -221,7 +243,7 @@ func attentionNeeded(err error) bool {
 }
 
 func (s Service) HandleFailedCheck(ctx context.Context, job Job, check Check) error {
-	store := s.Store.(CodingStore)
+	store := s.codingStore
 	if _, _, err := store.AdmitCheckMessage(ctx, check); err != nil {
 		return err
 	}
@@ -281,7 +303,8 @@ func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) error 
 func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery) (bool, error) {
 	run := delivery.AgentRun
 	contract := agentRunContract{
-		service:             s,
+		store:               s.Store,
+		reachBarrier:        s.reach,
 		delivery:            delivery,
 		run:                 run,
 		harness:             s.Externals.Harness(),

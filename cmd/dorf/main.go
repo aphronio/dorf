@@ -96,7 +96,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
 		evidenceStore := evidence.Store{Root: cfg.EvidenceRoot}
-		return inspect(ctx, store, client, publication.Service{Store: store, Evidence: evidenceStore}, evidenceStore, args[1:], stdout, stderr)
+		return inspect(ctx, store, client, evidenceStore, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
@@ -137,7 +137,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, spine.Service, 
 	}
 	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}
 	store := postgres.Store{DB: db}
-	service := spine.Service{Store: store, Externals: externals, Repository: externals, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
+	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier)
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client})
@@ -472,7 +472,7 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	return err
 }
 
-func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, publicationReadiness workflow.PublicationReadiness, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
@@ -482,71 +482,16 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	if set.NArg() != 1 {
 		return fmt.Errorf("inspect requires one Job ID")
 	}
-	job, err := store.Job(ctx, set.Arg(0))
+	snapshot, err := workflow.LoadSnapshot(ctx, store, set.Arg(0))
 	if err != nil {
 		return err
 	}
-	currentWork, err := workflow.CurrentWork(ctx, store, publicationReadiness, job.ID)
-	if err != nil {
-		return err
-	}
-	actions, err := store.Actions(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	messages, err := store.Messages(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	agentRuns, err := store.AgentRuns(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	revisions, err := store.Revisions(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	checks, err := store.Checks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	evidenceRecords, err := store.Evidence(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	declared, err := store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	plans, err := store.ReviewPlans(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	reviewRuns, err := store.AllReviewRuns(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	var currentPlan *spine.ReviewPlanRecord
-	for i := range plans {
-		if plans[i].Revision == job.Revision {
-			currentPlan = &plans[i]
-		}
-	}
-	assessment := spine.AssessReviewReadiness(job, declared, checks, evidenceRecords, evidenceStore, currentPlan, reviewRuns, messages, agentRuns)
-	proposal, err := store.Proposal(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	outcome, err := store.Outcome(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	history := workflowHistory(job, messages, actions, agentRuns, revisions, checks, plans, evidenceRecords, proposal, outcome)
+	job := snapshot.Job
+	projection := snapshot.Project(evidenceStore)
+	currentWork := projection.CurrentWork
+	assessment := projection.Readiness
+	history := workflowHistory(snapshot)
 	if *jsonOutput {
-		sandboxes, err := store.Sandboxes(ctx, job.ID)
-		if err != nil {
-			return err
-		}
 		runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
 		if err != nil {
 			return err
@@ -559,13 +504,12 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 			"job":          job,
 			"current_work": currentWork,
 			"readiness":    assessment,
-			"proposal":     proposal,
-			"outcome":      outcome,
-			"claims":       map[string]any{"messages": messages},
+			"proposal":     snapshot.Proposal,
+			"outcome":      snapshot.Outcome,
 			"observed_facts": map[string]any{
-				"actions": actions, "agent_runs": agentRuns, "revisions": revisions,
-				"checks": checks, "evidence": evidenceRecords, "review_plans": plans,
-				"sandboxes": sandboxes,
+				"actions": snapshot.Actions, "agent_runs": snapshot.AgentRuns, "revisions": snapshot.Revisions,
+				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
+				"sandboxes": snapshot.Sandboxes, "messages": snapshot.Messages,
 			},
 			"absurd_run":     runEvidence,
 			"absurd_cleanup": cleanupEvidence,
@@ -584,23 +528,23 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, p
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
-	if proposal == nil {
+	if snapshot.Proposal == nil {
 		fmt.Fprintln(stdout, "  proposal: none")
 	} else {
-		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s", proposal.Number, proposal.URL, proposal.ProposedRevision)
-		if proposal.ProposedRevision != job.Revision {
+		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s", snapshot.Proposal.Number, snapshot.Proposal.URL, snapshot.Proposal.ProposedRevision)
+		if snapshot.Proposal.ProposedRevision != job.Revision {
 			fmt.Fprint(stdout, " (stale)")
 		}
 		fmt.Fprintln(stdout)
 	}
-	if outcome == nil {
+	if snapshot.Outcome == nil {
 		fmt.Fprintln(stdout, "  outcome: none")
 	} else {
-		fmt.Fprintf(stdout, "  outcome: %s (GitHub %s)", outcome.Kind, outcome.ObservedState)
-		if outcome.MergeCommitOID != "" {
-			fmt.Fprintf(stdout, " merge=%s", outcome.MergeCommitOID)
+		fmt.Fprintf(stdout, "  outcome: %s (GitHub %s)", snapshot.Outcome.Kind, snapshot.Outcome.ObservedState)
+		if snapshot.Outcome.MergeCommitOID != "" {
+			fmt.Fprintf(stdout, " merge=%s", snapshot.Outcome.MergeCommitOID)
 		}
-		fmt.Fprintf(stdout, " observed-at=%s\n", outcome.ObservedAt.Format(time.RFC3339Nano))
+		fmt.Fprintf(stdout, " observed-at=%s\n", snapshot.Outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
 	renderHistory(stdout, history)
 	return nil
@@ -746,18 +690,17 @@ type historyEntry struct {
 // workflowHistory is a disposable human projection over product facts. It
 // never decides eligibility and is never persisted; CurrentWork remains the
 // execution and inspection authority for what happens next.
-func workflowHistory(
-	job spine.Job,
-	messages []spine.MessageView,
-	actions []spine.Action,
-	agentRuns []spine.AgentRun,
-	revisions []spine.Revision,
-	checks []spine.Check,
-	plans []spine.ReviewPlanRecord,
-	records []spine.Evidence,
-	proposal *spine.GitHubProposal,
-	outcome *spine.JobOutcome,
-) []historyEntry {
+func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
+	job := snapshot.Job
+	messages := snapshot.Messages
+	actions := snapshot.Actions
+	agentRuns := snapshot.AgentRuns
+	revisions := snapshot.Revisions
+	checks := snapshot.Checks
+	plans := snapshot.ReviewPlans
+	records := snapshot.Evidence
+	proposal := snapshot.Proposal
+	outcome := snapshot.Outcome
 	entries := make([]historyEntry, 0, 1+len(messages)+2*len(actions)+2*len(agentRuns)+len(revisions)+2*len(checks)+len(plans)+len(records)+2)
 	add := func(at time.Time, kind, detail string) {
 		if !at.IsZero() {

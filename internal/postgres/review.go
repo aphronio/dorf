@@ -339,4 +339,4 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 	return message, created, nil
 }
 
-var _ spine.ReviewStore = Store{}
+var _ spine.ServiceStore = Store{}

@@ -22,15 +22,7 @@ func (e reviewBoundaryError) Error() string         { return string(e) }
 func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 
 func (s Service) PlanReview(ctx context.Context, job Job) error {
-	store, ok := s.Store.(ReviewStore)
-	if !ok {
-		return fmt.Errorf("review requires durable ReviewStore")
-	}
-	externals, ok := s.Externals.(ReviewExternals)
-	if !ok {
-		return fmt.Errorf("review requires Revision-isolated review externals")
-	}
-	coding := s.Store.(CodingStore)
+	store, externals, coding := s.reviewStore, s.reviewExternals, s.codingStore
 	declared, err := coding.DeclaredChecks(ctx, job.ID)
 	if err != nil {
 		return err
@@ -58,14 +50,7 @@ func (s Service) PlanReview(ctx context.Context, job Job) error {
 }
 
 func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
-	store, ok := s.Store.(ReviewStore)
-	if !ok {
-		return fmt.Errorf("review requires durable ReviewStore")
-	}
-	externals, ok := s.Externals.(ReviewExternals)
-	if !ok {
-		return fmt.Errorf("review requires Revision-isolated review externals")
-	}
+	store, externals := s.reviewStore, s.reviewExternals
 	run, err := store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
@@ -87,14 +72,7 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 // checkout. The workflow owns the surrounding Action Step; this operation
 // only reconciles and records that Action's external effect.
 func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action Action) error {
-	store, ok := s.Store.(ReviewStore)
-	if !ok {
-		return fmt.Errorf("review requires durable ReviewStore")
-	}
-	externals, ok := s.Externals.(ReviewExternals)
-	if !ok {
-		return fmt.Errorf("review requires Revision-isolated review externals")
-	}
+	store, externals := s.reviewStore, s.reviewExternals
 	run, err := store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
@@ -191,7 +169,8 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	request := run.Request
 	sandbox := run.Sandbox
 	contract := agentRunContract{
-		service:             s,
+		store:               s.Store,
+		reachBarrier:        s.reach,
 		delivery:            Delivery{AgentRun: run.AgentRun},
 		run:                 run.AgentRun,
 		harness:             s.Externals.Harness(),

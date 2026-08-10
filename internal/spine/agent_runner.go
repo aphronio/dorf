@@ -8,11 +8,18 @@ import (
 // agentRunContract contains only the harness operations and recovery policy
 // needed to execute one durable AgentRun. Prompt construction, workspace
 // preparation, and capability enforcement remain at the adapter boundary.
+type agentRunStore interface {
+	PrepareAgentRun(context.Context, string, string, string) error
+	BindAgentRun(context.Context, string, string, string, string, string) error
+	UncertainAgentRun(context.Context, string, string) error
+}
+
 type agentRunContract struct {
-	service  Service
-	delivery Delivery
-	run      AgentRun
-	harness  string
+	store        agentRunStore
+	reachBarrier func(context.Context, string, Delivery) error
+	delivery     Delivery
+	run          AgentRun
+	harness      string
 
 	submitNew   func(context.Context, AgentRun) (HarnessBinding, error)
 	submitBound func(context.Context, AgentRun) (HarnessBinding, error)
@@ -62,7 +69,7 @@ func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 	if run.ThreadID == "" {
 		preparedBeforeCall := run.BaselineRecorded
 		if !run.BaselineRecorded {
-			if err := c.service.Store.PrepareAgentRun(ctx, run.ID, run.Harness, ""); err != nil {
+			if err := c.store.PrepareAgentRun(ctx, run.ID, run.Harness, ""); err != nil {
 				return HarnessTurn{}, err
 			}
 			run.BaselineRecorded, run.State = true, AgentRunSubmitting
@@ -87,7 +94,7 @@ func (c agentRunContract) completedTurn(ctx context.Context, run AgentRun) (Harn
 		return HarnessTurn{}, err
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, err
 	}
 	for _, turn := range history.Turns {
@@ -111,7 +118,7 @@ func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (H
 		return c.submitAndSettle(ctx, run, c.submitNew)
 	}
 	if err := c.validateBinding(run, binding, false); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, err
 	}
 	return c.bindAndSettle(ctx, run, binding)
@@ -124,7 +131,7 @@ func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (H
 		return HarnessTurn{}, err
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, err
 	}
 	if !run.BaselineRecorded {
@@ -132,7 +139,7 @@ func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (H
 		if len(history.Turns) > 0 {
 			baseline = history.Turns[len(history.Turns)-1].ID
 		}
-		if err := c.service.Store.PrepareAgentRun(ctx, run.ID, run.Harness, baseline); err != nil {
+		if err := c.store.PrepareAgentRun(ctx, run.ID, run.Harness, baseline); err != nil {
 			return HarnessTurn{}, err
 		}
 		run.BaselineRecorded, run.BaselineTurnID, run.State = true, baseline, AgentRunSubmitting
@@ -163,7 +170,7 @@ func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, sub
 	if submit == nil {
 		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness submission operation", c.label)
 	}
-	if err := c.service.reach(ctx, BarrierBeforeSubmit, c.delivery); err != nil {
+	if err := c.reach(ctx, BarrierBeforeSubmit); err != nil {
 		return HarnessTurn{}, err
 	}
 	binding, err := submit(ctx, run)
@@ -179,10 +186,10 @@ func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, sub
 		return HarnessTurn{}, err
 	}
 	if err := c.validateBinding(run, binding, run.ThreadID != ""); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, err
 	}
-	if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
+	if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {
 		return HarnessTurn{}, err
 	}
 	return c.bindAndSettle(ctx, run, binding)
@@ -195,7 +202,7 @@ func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run Agent
 		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reason)
 	}
 	if err := c.validateHistory(run, history); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, true, err
 	}
 	reconciliation := ReconcileTurns(true, run.BaselineTurnID, "", history.Turns)
@@ -204,7 +211,7 @@ func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run Agent
 		return HarnessTurn{}, false, nil
 	case "uncertain":
 		if reconciliation.Turn.ID != "" && c.bindUnsupportedTurn {
-			if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
+			if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {
 				return HarnessTurn{}, true, err
 			}
 			binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID}
@@ -212,7 +219,7 @@ func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run Agent
 		}
 		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reconciliation.Reason)
 	default:
-		if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
+		if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {
 			return HarnessTurn{}, true, err
 		}
 		binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID}
@@ -229,7 +236,7 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 	if terminalHarness(binding.Turn.Status) || c.wait == nil || !activeHarness(binding.Turn.Status) {
 		return binding.Turn, nil
 	}
-	if err := c.service.reach(ctx, BarrierHarnessActive, c.delivery); err != nil {
+	if err := c.reach(ctx, BarrierHarnessActive); err != nil {
 		return HarnessTurn{}, err
 	}
 	waited, err := c.wait(ctx, run, binding.Turn.ID)
@@ -238,7 +245,7 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 		return HarnessTurn{}, err
 	}
 	if err := c.validateBinding(run, waited, true); err != nil {
-		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
+		_ = c.store.UncertainAgentRun(ctx, run.ID, err.Error())
 		return HarnessTurn{}, err
 	}
 	if waited.Turn.ID != binding.Turn.ID {
@@ -248,7 +255,7 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 	if err := c.beforeDurableBind(ctx); err != nil {
 		return HarnessTurn{}, err
 	}
-	if err := c.service.Store.BindAgentRun(ctx, run.ID, waited.Harness, waited.ThreadID, waited.Turn.ID, waited.Turn.Status); err != nil {
+	if err := c.store.BindAgentRun(ctx, run.ID, waited.Harness, waited.ThreadID, waited.Turn.ID, waited.Turn.Status); err != nil {
 		return HarnessTurn{}, err
 	}
 	return waited.Turn, nil
@@ -258,7 +265,7 @@ func (c agentRunContract) durableBind(ctx context.Context, run AgentRun, binding
 	if err := c.beforeDurableBind(ctx); err != nil {
 		return err
 	}
-	return c.service.Store.BindAgentRun(ctx, run.ID, binding.Harness, binding.ThreadID, binding.Turn.ID, binding.Turn.Status)
+	return c.store.BindAgentRun(ctx, run.ID, binding.Harness, binding.ThreadID, binding.Turn.ID, binding.Turn.Status)
 }
 
 func (c agentRunContract) validateBinding(run AgentRun, binding HarnessBinding, requireBoundThread bool) error {
@@ -299,8 +306,15 @@ func (c agentRunContract) recordReadError(ctx context.Context, runID string, err
 }
 
 func (c agentRunContract) markUncertain(ctx context.Context, runID, reason string) error {
-	if err := c.service.Store.UncertainAgentRun(ctx, runID, reason); err != nil {
+	if err := c.store.UncertainAgentRun(ctx, runID, reason); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s reconciliation is uncertain: %s", c.label, reason)
+}
+
+func (c agentRunContract) reach(ctx context.Context, point string) error {
+	if c.reachBarrier == nil {
+		return nil
+	}
+	return c.reachBarrier(ctx, point, c.delivery)
 }

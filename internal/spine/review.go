@@ -46,10 +46,7 @@ type ReviewCheckoutObservation struct {
 
 type ReviewStore interface {
 	Actions(context.Context, string) ([]Action, error)
-	ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error)
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
-	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
-	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
 	ReviewRun(context.Context, string) (ReviewRunView, error)
 	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
 }
