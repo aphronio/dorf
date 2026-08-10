@@ -386,10 +386,17 @@ Job
       `review_resources` projection.
 - [x] Replace duplicated cleanup choreography tests with exact-identity, partial-success, attention,
       and retry-convergence stories.
-- [ ] Dogfood terminal Outcome cleanup with at least one reviewer Sandbox present.
+- [x] Dogfood terminal Outcome cleanup with at least one reviewer Sandbox present.
 
 Terminal: cleanup can fail visibly, retry safely, and eventually prove that every exact owned resource
 is gone through one path.
+
+Live proof (2026-08-10): Job `job-5a08e1e24890e33d7ba7` used one implementation Sandbox and one
+selected general-review Sandbox through the same Job-owned resource model. Reviewer text returned as
+a Message to the implementation Thread, Checks passed, and exact-Revision PR #109 was proposed.
+Closing the disposable PR recorded a rejected Outcome; one cleanup task revoked both Routes, deleted
+both Sandboxes, and Incus returned no instance for either exact Sandbox ID. The run also exposed and
+fixed an incomplete Route receipt and removed a second, non-convergent strict-review read path.
 
 ## Slice 7: Store GitHub authority once
 
