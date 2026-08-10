@@ -398,8 +398,12 @@ func latestImplementationFollow(f currentWorkFacts) *spine.AgentRun {
 func unchangedAttention(f currentWorkFacts) (string, string) {
 	sequences := messageSequenceByID(f.messages)
 	runs := make(map[string]spine.AgentRun, len(f.runs))
+	implementationMessages := make(map[string]bool)
 	for _, run := range f.runs {
 		runs[run.ID] = run
+		if run.Role == "implement" {
+			implementationMessages[run.MessageID] = true
+		}
 	}
 	type observation struct {
 		sequence int64
@@ -428,7 +432,7 @@ func unchangedAttention(f currentWorkFacts) (string, string) {
 	}
 	exactProposal := f.proposal != nil && !f.proposal.Stale && f.proposal.ProposedRevision == f.job.Revision
 	for _, message := range f.messages {
-		if message.Sequence <= previous || message.Sequence > last.sequence {
+		if message.Sequence <= previous || message.Sequence > last.sequence || !implementationMessages[message.ID] {
 			continue
 		}
 		if message.FromKind == spine.MessageFromAgent || message.FromKind == spine.MessageFromHuman && exactProposal {

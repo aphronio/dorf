@@ -117,6 +117,31 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	}
 }
 
+func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
+	facts := readyFacts()
+	facts.messages = []spine.MessageView{
+		{Message: spine.Message{ID: "initial", Sequence: 1, FromKind: spine.MessageFromHuman, Intent: spine.MessageFollow}},
+		{Message: spine.Message{ID: "review-request", Sequence: 2, FromKind: spine.MessageFromWorkflow, Intent: spine.MessageFollow}},
+		{Message: spine.Message{ID: "review-feedback", Sequence: 3, FromKind: spine.MessageFromAgent, Intent: spine.MessageFollow}},
+	}
+	facts.runs = []spine.AgentRun{
+		{ID: "initial-run", MessageID: "initial", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "rev-0"},
+		{ID: "review-run", MessageID: "review-request", Role: "general", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision},
+		{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.job.Revision},
+	}
+	facts.evidence = []spine.Evidence{
+		{Kind: "git-revision", AgentRunID: "initial-run", Revision: facts.job.Revision},
+		{Kind: "review-observation", AgentRunID: "review-run", Revision: facts.job.Revision},
+		{Kind: "git-revision", AgentRunID: "feedback-run", Revision: facts.job.Revision},
+	}
+	if id, detail := unchangedAttention(facts); id != "" {
+		t.Fatalf("review feedback was treated as unchanged implementation attention: %s %s", id, detail)
+	}
+	if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
+		t.Fatalf("CurrentWork = %#v, want unchanged review feedback to continue to publication", got)
+	}
+}
+
 func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 	facts := readyFacts()
 	facts.messages = []spine.MessageView{
