@@ -18,7 +18,7 @@ select id,job_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(revision,'') as revision,
+       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
        coalesce(capability,'') as capability,sandbox_id,
        coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
 from dorf.agent_runs
@@ -43,9 +43,15 @@ select id,job_id,message_id,state,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role
+       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
+
+-- name: BindImplementationInputRevision :execrows
+update dorf.agent_runs
+set input_revision=coalesce(input_revision,sqlc.arg(input_revision))
+where id=sqlc.arg(run_id) and role='implement' and state='pending'
+  and (input_revision is null or input_revision=sqlc.arg(input_revision));
 
 -- name: GetAgentRunForBinding :one
 select job_id,role,state,coalesce(harness,'') as harness,
@@ -54,11 +60,6 @@ select job_id,role,state,coalesce(harness,'') as harness,
 from dorf.agent_runs
 where id=sqlc.arg(run_id)
 for update;
-
--- name: BlockAgentRunDelivery :exec
-update dorf.agent_runs
-set state='uncertain',attention=sqlc.arg(reason)
-where id=sqlc.arg(run_id) and state not in ('completed','failed','interrupted');
 
 -- name: PrepareAgentRun :execrows
 update dorf.agent_runs
@@ -131,7 +132,7 @@ set attention=sqlc.arg(reason)
 where id=sqlc.arg(run_id);
 
 -- name: GetHarnessMutationDelivery :one
-select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
+select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.admitted_at,
        m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        ar.id as agent_run_id,ar.job_id as agent_run_job_id,
        ar.message_id as agent_run_message_id,ar.state,
@@ -139,7 +140,8 @@ select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
        (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
        coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,ar.role
+       coalesce(ar.attention,'') as attention,ar.role,
+       coalesce(ar.input_revision,'') as input_revision
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertain')

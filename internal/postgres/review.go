@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,56 +17,17 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func (s Store) MarkChecksVerified(ctx context.Context, jobID, revision string, verifiedEvidenceIDs []string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetReviewJobForUpdate(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if job.Revision != revision || job.WorkflowPhase != "checking" {
-		return fmt.Errorf("Revision %s Checks cannot be finalized from phase %s at Revision %s", revision, job.WorkflowPhase, job.Revision)
-	}
-	if err := verifyEvidenceSet(ctx, queries, jobID, revision, verifiedEvidenceIDs); err != nil {
-		return err
-	}
-	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, jobID); err != nil {
-		return fmt.Errorf("automatic review planning blocked: %w", err)
-	}
-	if err := queries.InsertReviewPlan(ctx, dbsql.InsertReviewPlanParams{JobID: jobID, Revision: revision}); err != nil {
-		return err
-	}
-	if err := expectOneRows(queries.AdvanceJobToReviewPlanning(ctx, dbsql.AdvanceJobToReviewPlanningParams{JobID: jobID, Revision: revision})); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func verifyEvidenceSet(ctx context.Context, queries *dbsql.Queries, jobID, revision string, verifiedEvidenceIDs []string) error {
+func verifyReviewInputs(ctx context.Context, queries *dbsql.Queries, jobID, revision string) error {
 	ids, err := queries.ListVerifiedReviewEvidenceIDs(ctx, dbsql.ListVerifiedReviewEvidenceIDsParams{JobID: jobID, Revision: revision})
 	if err != nil {
 		return err
-	}
-	proving := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if !id.Valid || id.String == "" {
-			return fmt.Errorf("Revision %s has a passing Check without Evidence", revision)
-		}
-		proving = append(proving, id.String)
 	}
 	declared, err := queries.CountDeclaredReviewChecks(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	sort.Strings(proving)
-	verified := append([]string(nil), verifiedEvidenceIDs...)
-	sort.Strings(verified)
-	if declared == 0 || int64(len(proving)) != declared || !slices.Equal(proving, verified) {
-		return fmt.Errorf("Revision %s is not review-admissible: verified Evidence does not exactly match %d declared Checks", revision, declared)
+	if declared == 0 || int64(len(ids)) != declared {
+		return fmt.Errorf("Revision %s is not review-admissible: %d of %d declared Checks have passing Evidence", revision, len(ids), declared)
 	}
 	return nil
 }
@@ -78,7 +37,7 @@ func (s Store) ReviewPlan(ctx context.Context, jobID, revision string) (spine.Re
 	if err != nil {
 		return spine.ReviewPlanRecord{}, err
 	}
-	return reviewPlanRecord(row.JobID, row.Revision, row.State, row.Facts, row.Plan, row.PolicyDigest, row.CreatedAt, row.FinalizedAt)
+	return reviewPlanRecord(row.JobID, row.Revision, row.Facts, row.Plan, row.CreatedAt)
 }
 
 func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPlanRecord, error) {
@@ -88,7 +47,7 @@ func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPla
 	}
 	plans := make([]spine.ReviewPlanRecord, 0, len(rows))
 	for _, row := range rows {
-		plan, err := reviewPlanRecord(row.JobID, row.Revision, row.State, row.Facts, row.Plan, row.PolicyDigest, row.CreatedAt, row.FinalizedAt)
+		plan, err := reviewPlanRecord(row.JobID, row.Revision, row.Facts, row.Plan, row.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -97,28 +56,13 @@ func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPla
 	return plans, nil
 }
 
-func reviewPlanTx(ctx context.Context, queries *dbsql.Queries, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	row, err := queries.GetReviewPlanForUpdate(ctx, dbsql.GetReviewPlanForUpdateParams{JobID: jobID, Revision: revision})
-	if err != nil {
-		return spine.ReviewPlanRecord{}, err
+func reviewPlanRecord(jobID, revision, facts, plan string, recordedAt time.Time) (spine.ReviewPlanRecord, error) {
+	record := spine.ReviewPlanRecord{JobID: jobID, Revision: revision, RecordedAt: recordedAt}
+	if err := json.Unmarshal([]byte(facts), &record.Facts); err != nil {
+		return record, err
 	}
-	return reviewPlanRecord(row.JobID, row.Revision, row.State, row.Facts, row.Plan, row.PolicyDigest, row.CreatedAt, row.FinalizedAt)
-}
-
-func reviewPlanRecord(jobID, revision, state, facts, plan, digest string, createdAt time.Time, finalized sql.NullTime) (spine.ReviewPlanRecord, error) {
-	record := spine.ReviewPlanRecord{JobID: jobID, Revision: revision, State: state, PolicyDigest: digest, CreatedAt: createdAt}
-	if finalized.Valid {
-		record.FinalizedAt = finalized.Time
-	}
-	if facts != "{}" {
-		if err := json.Unmarshal([]byte(facts), &record.Facts); err != nil {
-			return record, err
-		}
-	}
-	if plan != "{}" {
-		if err := json.Unmarshal([]byte(plan), &record.Plan); err != nil {
-			return record, err
-		}
+	if err := json.Unmarshal([]byte(plan), &record.Plan); err != nil {
+		return record, err
 	}
 	return record, nil
 }
@@ -149,35 +93,37 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetReviewJobForUpdate(ctx, proposed.JobID)
+	currentRevision, err := queries.GetReviewJobForUpdate(ctx, proposed.JobID)
 	if err != nil {
 		return err
 	}
-	stored, err := reviewPlanTx(ctx, queries, proposed.JobID, proposed.Revision)
-	if err != nil {
-		return err
+	if currentRevision != proposed.Revision {
+		return fmt.Errorf("review policy conflicts with current Revision %s", currentRevision)
 	}
-	if stored.PolicyDigest != "" {
-		if stored.PolicyDigest != digest {
+	storedDigest, err := queries.GetReviewPlanDigestForUpdate(ctx, dbsql.GetReviewPlanDigestForUpdateParams{JobID: proposed.JobID, Revision: proposed.Revision})
+	if err == nil {
+		if storedDigest != digest {
 			return fmt.Errorf("mandatory review policy result changed across retry")
+		}
+		if err := clearReviewPolicyAttention(ctx, queries, proposed.JobID, proposed.Revision); err != nil {
+			return err
 		}
 		return tx.Commit()
 	}
-	if stored.State != "pending" {
-		return fmt.Errorf("review policy conflicts with its durable per-Revision state")
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
-	if job.Revision != proposed.Revision || job.WorkflowPhase != "review-planning" {
-		return fmt.Errorf("review policy conflicts with current Revision %s or workflow phase %s", job.Revision, job.WorkflowPhase)
+	if err := verifyReviewInputs(ctx, queries, proposed.JobID, proposed.Revision); err != nil {
+		return err
+	}
+	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, proposed.JobID); err != nil {
+		return fmt.Errorf("review policy blocked: %w", err)
 	}
 	factsJSON, _ := json.Marshal(proposed.Facts)
 	planJSON, _ := json.Marshal(proposed.Plan)
-	phase := "reviewing"
-	if proposed.Plan.Decision == "no-review" {
-		phase = "ready"
-	}
-	if err := queries.FinalizeReviewPlan(ctx, dbsql.FinalizeReviewPlanParams{
-		Facts: factsJSON, Plan: planJSON, PolicyDigest: digest, JobID: proposed.JobID, Revision: proposed.Revision,
-	}); err != nil {
+	if err := expectOneRows(queries.InsertReviewPlan(ctx, dbsql.InsertReviewPlanParams{
+		JobID: proposed.JobID, Revision: proposed.Revision, Facts: factsJSON, Plan: planJSON, PolicyDigest: digest,
+	})); err != nil {
 		return err
 	}
 	for _, role := range proposed.Plan.Roles {
@@ -185,12 +131,18 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 			return err
 		}
 	}
-	if err := expectOneRows(queries.AdvanceReviewPolicyPhase(ctx, dbsql.AdvanceReviewPolicyPhaseParams{
-		WorkflowPhase: phase, JobID: proposed.JobID, Revision: proposed.Revision,
-	})); err != nil {
+	if err := clearReviewPolicyAttention(ctx, queries, proposed.JobID, proposed.Revision); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func clearReviewPolicyAttention(ctx context.Context, queries *dbsql.Queries, jobID, revision string) error {
+	_, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
+		JobID:  jobID,
+		Source: sql.NullString{String: spine.ReviewPolicyAttentionSource(revision), Valid: true},
+	})
+	return err
 }
 
 func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts) (string, error) {
@@ -227,7 +179,7 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: jobID, OwnershipNonce: ownerNonce})); err != nil {
 		return "", err
 	}
-	if err := queries.InsertReviewAgentRun(ctx, dbsql.InsertReviewAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, Role: role, Revision: revision, Capability: spine.ReviewReadOnlyCapability, SandboxID: sandboxID, SubmissionNonce: submissionNonce}); err != nil {
+	if err := expectOneRows(queries.InsertReviewAgentRun(ctx, dbsql.InsertReviewAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, Role: role, InputRevision: revision, Capability: spine.ReviewReadOnlyCapability, SandboxID: sandboxID, SubmissionNonce: submissionNonce})); err != nil {
 		return "", err
 	}
 	return runID, nil
@@ -255,7 +207,7 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 			ID: row.ID, JobID: row.JobID, MessageID: row.MessageID, Harness: row.Harness, ThreadID: row.ThreadID,
 			State: spine.AgentRunState(row.State), BaselineRecorded: row.BaselineRecorded, BaselineTurnID: row.BaselineTurnID,
 			TurnID: row.TurnID, TurnOutcome: row.TurnOutcome, Attention: row.Attention, Role: row.Role,
-			Revision: row.Revision, Capability: row.Capability, SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
+			InputRevision: row.InputRevision, Capability: row.Capability, SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
 		},
 		Request: messageFromValues(row.MessageID, row.JobID, spine.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, spine.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
 		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce},
@@ -323,9 +275,8 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 		return spine.Message{}, false, err
 	}
 	if !policy.Allowed(policy.Role(run.Role)) || run.Capability != spine.ReviewReadOnlyCapability || run.State != spine.AgentRunCompleted ||
-		run.TurnID == "" || outcome.ID != run.TurnID || run.Revision != run.CurrentRevision || observed.Revision != run.Revision || observed.AgentRunID != runID ||
-		observed.ID != spine.EvidenceID(runID, "review-observation") || observed.Kind != "review-observation" || observed.ActionID != "" || observed.CheckID != "" ||
-		run.WorkflowPhase != "reviewing" && run.WorkflowPhase != "review-feedback" && run.WorkflowPhase != "ready" {
+		run.TurnID == "" || outcome.ID != run.TurnID || run.InputRevision != run.CurrentRevision || observed.Revision != run.InputRevision || observed.AgentRunID != runID ||
+		observed.ID != spine.EvidenceID(runID, "review-observation") || observed.Kind != "review-observation" || observed.ActionID != "" || observed.CheckID != "" {
 		return spine.Message{}, false, fmt.Errorf("review feedback conflicts with its completed exact-Revision reviewer AgentRun")
 	}
 	boundaryReady, err := queries.ReviewBoundaryReady(ctx, runID)
@@ -335,87 +286,62 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 	if !boundaryReady {
 		return spine.Message{}, false, fmt.Errorf("review feedback lacks an attested isolated reviewer boundary")
 	}
+
+	expectedMessage := spine.Message{ID: spine.MessageID(run.JobID, spine.MessageFromAgent, runID), JobID: run.JobID, FromKind: spine.MessageFromAgent, FromID: runID, Input: outcome.Output, Intent: spine.MessageFollow}
+	created := false
+	storedMessage, err := queries.GetReviewFeedbackMessage(ctx, dbsql.GetReviewFeedbackMessageParams{JobID: run.JobID, RunID: runID})
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return spine.Message{}, false, err
+	}
+	missing := errors.Is(err, sql.ErrNoRows)
+	if missing && (!run.AdmissionOpen || run.OutcomeExists) {
+		return spine.Message{}, false, fmt.Errorf("Job %s cannot accept new review feedback after admission closes or an Outcome is recorded", run.JobID)
+	}
 	if err := insertEvidence(ctx, tx, run.JobID, observed); err != nil {
 		return spine.Message{}, false, err
 	}
-
-	message := spine.Message{ID: spine.MessageID(run.JobID, spine.MessageFromAgent, runID), JobID: run.JobID, FromKind: spine.MessageFromAgent, FromID: runID, Input: outcome.Output, Intent: spine.MessageFollow}
-	created := false
-	storedMessage, err := queries.GetReviewFeedbackMessage(ctx, dbsql.GetReviewFeedbackMessageParams{JobID: run.JobID, RunID: runID})
-	if err == nil {
-		message = spine.Message{ID: storedMessage.ID, JobID: storedMessage.JobID, FromKind: storedMessage.FromKind,
-			FromID: storedMessage.FromID, Sequence: storedMessage.Sequence, Input: storedMessage.Input,
-			Intent: storedMessage.DeliveryIntent, TargetTurnID: storedMessage.SteerTargetTurnID}
-		if message.Input != outcome.Output || message.Intent != spine.MessageFollow {
-			return spine.Message{}, false, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", runID)
-		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return spine.Message{}, false, err
-	} else {
-		message.Sequence, err = allocateMessageSequenceTx(ctx, tx, run.JobID)
+	if missing {
+		expectedMessage.Sequence, err = allocateMessageSequenceTx(ctx, tx, run.JobID)
 		if err != nil {
 			return spine.Message{}, false, err
 		}
 		if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{
-			ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID,
-			Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent,
+			ID: expectedMessage.ID, JobID: expectedMessage.JobID, FromKind: expectedMessage.FromKind, FromID: expectedMessage.FromID,
+			Sequence: expectedMessage.Sequence, Input: expectedMessage.Input, DeliveryIntent: expectedMessage.Intent,
 		}); err != nil {
 			return spine.Message{}, false, err
 		}
-		implementationRunID := spine.AgentRunID(message.ID)
+		implementationRunID := spine.AgentRunID(expectedMessage.ID)
 		if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{
-			ID: implementationRunID, JobID: run.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(run.JobID),
+			ID: implementationRunID, JobID: run.JobID, MessageID: expectedMessage.ID, SandboxID: spine.MainSandboxName(run.JobID),
 		})); err != nil {
 			return spine.Message{}, false, err
 		}
 		created = true
-	}
-	missing, err := queries.CountMissingReviewFeedback(ctx, dbsql.CountMissingReviewFeedbackParams{JobID: run.JobID, Revision: sql.NullString{String: run.Revision, Valid: true}})
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	if missing == 0 && run.WorkflowPhase == "reviewing" {
-		if err := expectOneRows(queries.AdvanceJobToReviewFeedback(ctx, dbsql.AdvanceJobToReviewFeedbackParams{JobID: run.JobID, Revision: run.Revision})); err != nil {
+		storedMessage, err = queries.GetReviewFeedbackMessage(ctx, dbsql.GetReviewFeedbackMessageParams{JobID: run.JobID, RunID: runID})
+		if err != nil {
 			return spine.Message{}, false, err
 		}
+	}
+	message := messageFromValues(
+		storedMessage.ID, storedMessage.JobID, storedMessage.FromKind, storedMessage.FromID,
+		storedMessage.Sequence, storedMessage.Input, storedMessage.DeliveryIntent, storedMessage.SteerTargetTurnID,
+	)
+	message.AdmittedAt = storedMessage.AdmittedAt
+	if message.ID != expectedMessage.ID || message.JobID != expectedMessage.JobID || message.FromKind != expectedMessage.FromKind ||
+		message.FromID != expectedMessage.FromID || message.Input != expectedMessage.Input || message.Intent != expectedMessage.Intent || message.TargetTurnID != "" {
+		return spine.Message{}, false, fmt.Errorf("reviewer AgentRun %s is already bound to different exact feedback", runID)
+	}
+	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
+		JobID:  run.JobID,
+		Source: sql.NullString{String: runID, Valid: true},
+	}); err != nil {
+		return spine.Message{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.Message{}, false, err
 	}
 	return message, created, nil
-}
-
-// CompleteReviewFeedback accepts an unchanged clean checkout only while the
-// named implementation AgentRun is still the latest accepted Message. A later
-// Message wins the Job-row race and returns false so it can be delivered.
-func (s Store) CompleteReviewFeedback(ctx context.Context, jobID, runID, revision string) (bool, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetReviewJobForUpdate(ctx, jobID)
-	if err != nil {
-		return false, err
-	}
-	if job.Revision != revision || job.WorkflowPhase != "review-feedback" {
-		return false, fmt.Errorf("unchanged review feedback conflicts with current Revision %s or workflow phase %s", job.Revision, job.WorkflowPhase)
-	}
-	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
-	if err != nil {
-		return false, err
-	}
-	if !ready || candidate.ID != runID {
-		return false, nil
-	}
-	if err := expectOneRows(queries.AdvanceJobReviewFeedbackToReady(ctx, dbsql.AdvanceJobReviewFeedbackToReadyParams{JobID: jobID, Revision: revision})); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 var _ spine.ReviewStore = Store{}

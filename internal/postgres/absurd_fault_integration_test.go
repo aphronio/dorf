@@ -62,13 +62,13 @@ func (e *reconcilingFaultEffect) mutationCount() int {
 	return e.mutations
 }
 
-func repositoryCloneAction(actions []postgres.ActionView) (postgres.ActionView, bool) {
+func repositoryCloneAction(actions []spine.Action) (spine.Action, bool) {
 	for _, action := range actions {
 		if action.Kind == spine.ActionRepositoryClone {
 			return action, true
 		}
 	}
-	return postgres.ActionView{}, false
+	return spine.Action{}, false
 }
 
 func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskName string, effect *reconcilingFaultEffect) {

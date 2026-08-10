@@ -14,7 +14,6 @@ create table dorf.jobs (
     goal text not null check (length(trim(goal)) > 0),
     repository text not null check (length(trim(repository)) > 0),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    starting_revision text not null check (starting_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     branch text not null check (length(trim(branch)) > 0),
     github_repository text,
     github_installation_id text,
@@ -26,16 +25,16 @@ create table dorf.jobs (
     cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
     task_id text unique,
     cleanup_task_id text unique,
-    workflow_phase text not null default 'setup' check (workflow_phase in (
-        'setup','implementing','checking',
-        'review-planning','reviewing','review-feedback',
-        'ready','publishing','publication-blocked','published','blocked'
-    )),
     workflow_attention text,
+    workflow_attention_source text,
+    workflow_attention_at timestamptz,
     setup_action_id text,
     cleanup_attention text,
     admitted_at timestamptz not null default clock_timestamp(),
     cleaned_at timestamptz,
+    constraint jobs_workflow_attention_check check (
+        num_nonnulls(workflow_attention,workflow_attention_source,workflow_attention_at) in (0,3)
+    ),
     constraint jobs_github_authority_complete_check check (
         (github_repository is null and github_installation_id is null and base_branch is null) or
         (github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$' and
@@ -72,7 +71,12 @@ create table dorf.actions (
     )),
     state text not null check (state in ('unsettled','succeeded','failed')),
     scope_key text not null default '',
-    created_at timestamptz not null default clock_timestamp()
+    created_at timestamptz not null default clock_timestamp(),
+    settled_at timestamptz,
+    check (
+        (state='unsettled' and settled_at is null) or
+        (state in ('succeeded','failed') and settled_at is not null and settled_at>=created_at)
+    )
 );
 create unique index actions_one_unscoped_job_effect
     on dorf.actions(job_id,kind) where scope_key='';
@@ -99,7 +103,7 @@ create table dorf.agent_runs (
     turn_outcome text check (turn_outcome is null or turn_outcome in ('completed','interrupted','failed')),
     attention text,
     role text not null check (role in ('implement','general','browser-ui','auth-authority','performance','critical-boundary')),
-    revision text,
+    input_revision text check (input_revision is null or input_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     capability text,
     sandbox_id text not null references dorf.sandboxes(id),
     submission_nonce text unique,
@@ -116,9 +120,9 @@ create table dorf.agent_runs (
         turn_outcome is null or turn_id is not null
     ),
     constraint agent_runs_review_binding_check check (
-        (role='implement' and revision is null and capability is null and submission_nonce is null) or
+        (role='implement' and capability is null and submission_nonce is null) or
         (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
-         revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$' and capability='immutable-read-only' and
+         input_revision is not null and capability='immutable-read-only' and
          submission_nonce ~ '^[0-9a-f]{64}$')
     ),
     constraint agent_runs_timestamps_check check (
@@ -127,7 +131,8 @@ create table dorf.agent_runs (
     foreign key(job_id,message_id) references dorf.job_messages(job_id,id),
     foreign key(job_id,sandbox_id) references dorf.sandboxes(job_id,id)
 );
-create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,revision,role) where revision is not null;
+create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,input_revision,role)
+    where role<>'implement';
 
 create table dorf.revisions (
     job_id text not null references dorf.jobs(id),
@@ -183,7 +188,8 @@ create table dorf.evidence (
     finished_at timestamptz not null,
     created_at timestamptz not null default clock_timestamp(),
     check (num_nonnulls(action_id,check_id,agent_run_id)<=1),
-    check (finished_at>=started_at)
+    check (finished_at>=started_at),
+    check (kind<>'git-revision' or (agent_run_id is not null and revision is not null))
 );
 create unique index evidence_one_agent_run on dorf.evidence(agent_run_id)
     where agent_run_id is not null;
@@ -195,12 +201,10 @@ alter table dorf.checks add constraint checks_evidence_id_fkey foreign key(evide
 create table dorf.review_plans (
     job_id text not null references dorf.jobs(id),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    state text not null check (state in ('pending','final')),
-    facts jsonb,
-    plan jsonb,
-    policy_digest text check (policy_digest is null or policy_digest ~ '^[0-9a-f]{64}$'),
+    facts jsonb not null,
+    plan jsonb not null,
+    policy_digest text not null check (policy_digest ~ '^[0-9a-f]{64}$'),
     created_at timestamptz not null default clock_timestamp(),
-    finalized_at timestamptz,
     primary key(job_id,revision)
 );
 
@@ -218,7 +222,7 @@ select
     coalesce(ar.turn_outcome,'') as turn_outcome,
     coalesce(ar.attention,'') as attention,
     ar.role,
-    coalesce(ar.revision,'') as revision,
+    coalesce(ar.input_revision,'') as input_revision,
     coalesce(ar.capability,'') as capability,
     ar.started_at,
     ar.finished_at,

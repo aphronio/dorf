@@ -42,7 +42,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	post := ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	run := ReviewRunView{AgentRun: AgentRun{
-		ID: "agent-run-review", JobID: "job-1", Revision: revision, Role: "critical-boundary",
+		ID: "agent-run-review", JobID: "job-1", InputRevision: revision, Role: "critical-boundary",
 		Capability: ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
 		TurnOutcome: "completed", State: AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
@@ -62,7 +62,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	if err := json.Unmarshal(contents, &artifact); err != nil {
 		t.Fatal(err)
 	}
-	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: post}
+	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: post}
 	if artifact != want {
 		t.Fatalf("review observation = %#v, want %#v", artifact, want)
 	}

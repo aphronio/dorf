@@ -13,7 +13,8 @@ import (
 
 const completeCleanup = `-- name: CompleteCleanup :execrows
 update dorf.jobs
-set cleanup_state='complete',cleanup_attention=null,workflow_attention=null,
+set cleanup_state='complete',cleanup_attention=null,
+    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
     cleaned_at=coalesce(cleaned_at,clock_timestamp())
 where id=$1 and cleanup_state='scheduled'
 `
@@ -45,17 +46,17 @@ func (q *Queries) CountUnsettledSandboxCleanupActions(ctx context.Context, jobID
 
 const getCleanupJobForUpdate = `-- name: GetCleanupJobForUpdate :one
 select admission_open,cleanup_state,coalesce(cleanup_task_id,'') as cleanup_task_id,
-       coalesce(workflow_attention,'') as workflow_attention
+       coalesce(cleanup_attention,'') as cleanup_attention
 from dorf.jobs
 where id=$1
 for update
 `
 
 type GetCleanupJobForUpdateRow struct {
-	AdmissionOpen     bool
-	CleanupState      spine.CleanupState
-	CleanupTaskID     string
-	WorkflowAttention string
+	AdmissionOpen    bool
+	CleanupState     spine.CleanupState
+	CleanupTaskID    string
+	CleanupAttention string
 }
 
 func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (GetCleanupJobForUpdateRow, error) {
@@ -65,7 +66,7 @@ func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (Get
 		&i.AdmissionOpen,
 		&i.CleanupState,
 		&i.CleanupTaskID,
-		&i.WorkflowAttention,
+		&i.CleanupAttention,
 	)
 	return i, err
 }

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -497,11 +498,23 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
+	currentWork, err := workflow.CurrentWork(ctx, store, job.ID)
+	if err != nil {
+		return err
+	}
 	actions, err := store.Actions(ctx, job.ID)
 	if err != nil {
 		return err
 	}
 	messages, err := store.Messages(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	agentRuns, err := store.AgentRuns(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	revisions, err := store.Revisions(ctx, job.ID)
 	if err != nil {
 		return err
 	}
@@ -543,7 +556,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			currentPlan = &plans[i]
 		}
 	}
-	assessment := spine.AssessReviewReadiness(job, declared, checks, evidenceRecords, evidenceStore, currentPlan, reviewRuns)
+	assessment := spine.AssessReviewReadiness(job, declared, checks, evidenceRecords, evidenceStore, currentPlan, reviewRuns, messages, agentRuns)
 	proposal, err := store.Proposal(ctx, job.ID)
 	if err != nil {
 		return err
@@ -552,20 +565,21 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
-	runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
-	if err != nil {
-		return err
-	}
-	cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
-	if err != nil {
-		return err
-	}
-	continuation := continuationFor(job, outcome, runEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "sandboxes": resources, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
+	history := workflowHistory(job, messages, actions, agentRuns, revisions, checks, plans, evidenceRecords, proposal, outcome)
 	if *jsonOutput {
+		runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
+		if err != nil {
+			return err
+		}
+		cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
+		if err != nil {
+			return err
+		}
+		view := map[string]any{"job": job, "current_work": currentWork, "workflow_history": history, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "claims": map[string]any{"messages": messages, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "agent_runs": agentRuns, "review_agent_runs": reviewRuns, "revisions": revisions, "checks": checks, "evidence": evidenceRecords, "sandboxes": resources, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision)
+	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, assessment.Status, assessment.Reason)
+	renderWorkflow(stdout, currentWork)
 	for _, resource := range resources {
 		fmt.Fprintf(stdout, "  sandbox: %s route=%s\n", resource.Sandbox.ID, resource.Route.ID)
 	}
@@ -585,53 +599,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	} else {
 		fmt.Fprintf(stdout, "  outcome: %s state=%s merged=%t merge=%s observed-at=%s\n", outcome.Kind, outcome.ObservedState, outcome.ObservedMerged, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
-	fmt.Fprintf(stdout, "  Absurd run: %s state=%s\n", empty(runEvidence.TaskID), empty(string(runEvidence.State)))
-	if cleanupEvidence.TaskID != "" {
-		fmt.Fprintf(stdout, "  Absurd cleanup: %s state=%s\n", cleanupEvidence.TaskID, cleanupEvidence.State)
-	}
-	fmt.Fprintln(stdout, "  Absurd history: use absurdctl dump-task --task-id=<task-id>")
-	fmt.Fprintln(stdout, "  claims: agent text is carried by Message; claims do not prove readiness")
-	for _, message := range messages {
-		description := describeMessage(message, messages)
-		if !job.AdmissionOpen && message.State == spine.AgentRunPending {
-			description += "; delivery closed for cleanup before this harness turn started"
-		}
-		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
-	}
-	for _, action := range actions {
-		fmt.Fprintf(stdout, "  observed action %s: %s scope=%s evidence=%s\n", action.Kind, action.State, empty(action.Scope), empty(action.EvidenceDigest))
-	}
-	for _, check := range checks {
-		scope := "historical"
-		if check.Revision == job.Revision {
-			scope = "current"
-		}
-		fmt.Fprintf(stdout, "  observed Check %s [%s]: %s Revision=%s exit=%d evidence=%s\n", check.Name, scope, check.State, check.Revision, check.ExitCode, empty(check.EvidenceDigest))
-	}
-	for _, plan := range plans {
-		scope := "historical"
-		if plan.Revision == job.Revision {
-			scope = "current"
-		}
-		fmt.Fprintf(stdout, "  review plan [%s] Revision=%s state=%s decision=%s Roles=%v digest=%s\n", scope, plan.Revision, plan.State, plan.Plan.Decision, plan.Plan.Roles, empty(plan.PolicyDigest))
-		for _, reason := range plan.Plan.Reasons {
-			fmt.Fprintf(stdout, "    reason %s [%s]: %s\n", reason.Role, reason.Source, reason.Detail)
-		}
-	}
-	for _, run := range reviewRuns {
-		latency := time.Duration(0)
-		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
-			latency = run.FinishedAt.Sub(run.StartedAt)
-		}
-		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s harness=%s thread=%s turn=%s latency=%s sandbox=%s route=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.Harness), empty(run.ThreadID), empty(run.TurnID), latency, empty(run.Sandbox.ID), empty(run.Route.ID), run.Stale)
-	}
-	for _, record := range evidenceRecords {
-		verification := "verified"
-		if err := evidenceStore.Verify(record.Digest, record.ByteSize); err != nil {
-			verification = "INVALID: " + err.Error()
-		}
-		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Producer, empty(record.Revision), verification)
-	}
+	renderHistory(stdout, history)
 	return nil
 }
 
@@ -752,10 +720,121 @@ func openClosed(open bool) string {
 	return "closed"
 }
 
-type continuationStatus struct {
-	Mode   string `json:"mode"`
-	Actor  string `json:"actor"`
-	Detail string `json:"detail"`
+func renderWorkflow(output io.Writer, work workflow.Work) {
+	fmt.Fprintln(output, "\nWorkflow")
+	fmt.Fprintln(output, "  Sandbox → repository clone → Setup → provider Route → Message → AgentRun → Revision → Checks → ReviewPolicy")
+	fmt.Fprintln(output, "                                                        ↑                                        │")
+	fmt.Fprintln(output, "                                                        └──── feedback ← review AgentRun ←────────┤ review")
+	fmt.Fprintln(output, "                                                                                                 └ no review")
+	fmt.Fprintln(output, "  ready exact Revision → Proposal → Outcome → Cleanup")
+	fmt.Fprintf(output, "  → current: %s", work.Description())
+	if work.Detail != "" {
+		fmt.Fprintf(output, " — %s", work.Detail)
+	}
+	fmt.Fprintln(output)
+}
+
+type historyEntry struct {
+	At     time.Time `json:"at"`
+	Kind   string    `json:"kind"`
+	Detail string    `json:"detail"`
+}
+
+// workflowHistory is a disposable human projection over product facts. It
+// never decides eligibility and is never persisted; CurrentWork remains the
+// execution and inspection authority for what happens next.
+func workflowHistory(
+	job spine.Job,
+	messages []spine.MessageView,
+	actions []spine.Action,
+	agentRuns []spine.AgentRun,
+	revisions []spine.Revision,
+	checks []spine.Check,
+	plans []spine.ReviewPlanRecord,
+	records []spine.Evidence,
+	proposal *spine.GitHubProposal,
+	outcome *spine.JobOutcome,
+) []historyEntry {
+	entries := make([]historyEntry, 0, 1+len(messages)+2*len(actions)+2*len(agentRuns)+len(revisions)+2*len(checks)+len(plans)+len(records)+2)
+	add := func(at time.Time, kind, detail string) {
+		if !at.IsZero() {
+			entries = append(entries, historyEntry{At: at, Kind: kind, Detail: detail})
+		}
+	}
+	add(job.AdmittedAt, "Job", "admitted")
+	add(job.WorkflowAttentionAt, "Attention", job.WorkflowAttention)
+	for _, message := range messages {
+		from := string(message.FromKind)
+		if message.FromID != "" {
+			from += "/" + message.FromID
+		}
+		add(message.AdmittedAt, "Message", fmt.Sprintf("%d admitted from %s", message.Sequence, from))
+	}
+	for _, action := range actions {
+		scope := ""
+		if action.Scope != "" {
+			scope = " scope=" + action.Scope
+		}
+		add(action.CreatedAt, "Action", fmt.Sprintf("%s %s created%s", action.ID, action.Kind, scope))
+		add(action.SettledAt, "Action", fmt.Sprintf("%s %s %s%s", action.ID, action.Kind, action.State, scope))
+		if action.Kind == spine.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && proposal != nil && proposal.ProposedRevision == action.Scope {
+			add(action.SettledAt, "Proposal", fmt.Sprintf("#%d recorded for Revision %s", proposal.Number, proposal.ProposedRevision))
+		}
+	}
+	for _, run := range agentRuns {
+		revision := ""
+		if run.InputRevision != "" {
+			revision = " Revision=" + run.InputRevision
+		}
+		add(run.StartedAt, "AgentRun", fmt.Sprintf("%s started Role=%s Message=%s%s", run.ID, run.Role, run.MessageID, revision))
+		add(run.FinishedAt, "AgentRun", fmt.Sprintf("%s %s Role=%s%s", run.ID, run.State, run.Role, revision))
+	}
+	for _, revision := range revisions {
+		detail := fmt.Sprintf("generation %d observed Revision %s", revision.Generation, revision.OID)
+		if revision.Generation == 0 {
+			detail = "starting Revision " + revision.OID + " accepted"
+		} else if revision.ComparisonBase != "" {
+			detail += " from " + revision.ComparisonBase
+		}
+		add(revision.ObservedAt, "Revision", detail)
+	}
+	for _, check := range checks {
+		add(check.StartedAt, "Check", fmt.Sprintf("%s started for Revision %s", check.Name, check.Revision))
+		add(check.FinishedAt, "Check", fmt.Sprintf("%s %s for Revision %s (exit %d)", check.Name, check.State, check.Revision, check.ExitCode))
+	}
+	for _, plan := range plans {
+		add(plan.RecordedAt, "ReviewPolicy", fmt.Sprintf("%s for Revision %s Roles=%v", plan.Plan.Decision, plan.Revision, plan.Plan.Roles))
+	}
+	for _, record := range records {
+		owner := record.AgentRunID
+		if owner == "" {
+			owner = record.CheckID
+		}
+		if owner == "" {
+			owner = record.ActionID
+		}
+		detail := fmt.Sprintf("%s %s recorded", record.ID, record.Kind)
+		if record.Revision != "" {
+			detail += " for Revision " + record.Revision
+		}
+		if owner != "" {
+			detail += " by " + owner
+		}
+		add(record.FinishedAt, "Evidence", detail)
+	}
+	if outcome != nil {
+		add(outcome.ObservedAt, "Outcome", fmt.Sprintf("%s (GitHub state=%s)", outcome.Kind, outcome.ObservedState))
+	}
+	add(job.CleanedAt, "Cleanup", "complete")
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].At.Before(entries[j].At) })
+	return entries
+}
+
+func renderHistory(output io.Writer, entries []historyEntry) {
+	fmt.Fprintln(output, "\nHistory")
+	for _, entry := range entries {
+		fmt.Fprintf(output, "  %s  %-12s %s\n", entry.At.Format(time.RFC3339Nano), entry.Kind, entry.Detail)
+	}
 }
 
 type taskResultView struct {
@@ -779,118 +858,6 @@ func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) 
 	return taskResultView{TaskID: taskID, State: snapshot.State, Result: snapshot.Result, Failure: snapshot.Failure}, nil
 }
 
-func continuationFor(job spine.Job, outcome *spine.JobOutcome, run, cleanup taskResultView) continuationStatus {
-	if job.CleanupState == spine.CleanupComplete {
-		if outcome == nil {
-			return continuationStatus{Mode: "terminal", Actor: "none", Detail: "exact deterministic cleanup is complete and no GitHub proposal outcome was recorded"}
-		}
-		return continuationStatus{Mode: "terminal", Actor: "none", Detail: "authoritative outcome and exact deterministic cleanup are complete"}
-	}
-	if outcome != nil {
-		if job.CleanupState == spine.CleanupPending || job.CleanupTaskID == "" {
-			return continuationStatus{Mode: "attention", Actor: "outcome caller", Detail: "outcome is recorded but cleanup scheduling was interrupted; repeat the identical outcome command"}
-		}
-		if cleanup.State == "failed" || cleanup.State == "cancelled" || cleanup.State == "missing" {
-			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the deterministic cleanup task is terminal without completing exact cleanup"}
-		}
-		return continuationStatus{Mode: "automatic-cleanup", Actor: "Dorf cleanup task", Detail: "the recorded external outcome authorizes only deterministic cleanup; Dorf does not merge or infer another outcome"}
-	}
-	switch job.WorkflowPhase {
-	case "published":
-		if run.State == absurd.TaskFailed || run.State == absurd.TaskCancelled || run.State == "missing" {
-			return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the Job task stopped observing the live proposal"}
-		}
-		return continuationStatus{Mode: "external-authority", Actor: "GitHub owner", Detail: "proposal is live; trusted comments continue the Job and merge or close records its outcome"}
-	case "blocked", "publication-blocked":
-		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "durable attention must be resolved; no orchestration agent is silently advancing this Job"}
-	}
-	if job.AdmissionOpen && (run.State == "failed" || run.State == "cancelled" || run.State == "missing") {
-		return continuationStatus{Mode: "attention", Actor: "operator", Detail: "the admitted Job task is terminal before the workflow reached its authority boundary"}
-	}
-	return continuationStatus{Mode: "self-advancing", Actor: "admitted Dorf worker", Detail: "persisted Job phase and Absurd tasks continue checks, review feedback, and exact-Revision publication"}
-}
-
-func queuedState(state spine.AgentRunState) string {
-	if state == "" {
-		return "queued"
-	}
-	return string(state)
-}
-func describeMessage(message spine.MessageView, messages []spine.MessageView) string {
-	var detail string
-	switch message.State {
-	case "":
-		detail = "queued for serialized delivery"
-	case spine.AgentRunPending:
-		detail = "queued for serialized delivery"
-	case spine.AgentRunSubmitting:
-		detail = "queued; delivery reconciliation is in progress"
-	case spine.AgentRunActive:
-		if message.Intent == spine.MessageSteer && message.TurnID != message.TargetTurnID {
-			detail = "active harness turn started after the requested steer target became terminal"
-		} else {
-			detail = "active harness turn"
-		}
-	case spine.AgentRunCompleted:
-		if message.Intent == spine.MessageSteer {
-			if message.TurnID == message.TargetTurnID {
-				detail = "delivered: steer accepted by the active harness turn"
-			} else {
-				detail = "terminal: harness turn started after the requested steer target became terminal"
-			}
-		} else {
-			detail = "terminal: harness turn completed"
-		}
-	case spine.AgentRunFailed:
-		if message.TurnID == "" {
-			if strings.HasPrefix(message.Attention, "cleanup closed") {
-				detail = "cleanup closed this input after history proved no harness acceptance"
-			} else {
-				detail = "harness delivery was not accepted; the same stable input remains retryable"
-			}
-		} else {
-			detail = "terminal: harness turn failed"
-		}
-	case spine.AgentRunInterrupted:
-		detail = "terminal: harness turn was interrupted"
-	case spine.AgentRunUncertain:
-		detail = "genuinely uncertain; delivery stopped without resubmission"
-	default:
-		detail = string(message.State)
-	}
-	if message.Harness != "" {
-		detail += "; harness=" + message.Harness
-	}
-	if message.ThreadID != "" {
-		detail += "; thread=" + message.ThreadID
-	}
-	if message.TurnID != "" {
-		detail += fmt.Sprintf("; turn=%s outcome=%s", message.TurnID, empty(message.TurnOutcome))
-	}
-	if message.Intent == spine.MessageSteer && message.TargetTurnID != "" && message.TurnID != "" && message.TurnID != message.TargetTurnID {
-		detail += "; requested steer target=" + message.TargetTurnID
-	}
-	if message.Attention != "" {
-		detail += "; reason: " + message.Attention
-	}
-	if !message.Delivered && (message.State == spine.AgentRunFailed || message.State == spine.AgentRunInterrupted || message.State == spine.AgentRunUncertain) {
-		detail += "; later FIFO input is blocked"
-	}
-	if message.BlockingSeq > 0 {
-		return detail + fmt.Sprintf("; blocked by sequence %d (%s)", message.BlockingSeq, message.BlockingReason)
-	}
-	if message.State == "" || message.State == spine.AgentRunPending {
-		for _, earlier := range messages {
-			if earlier.Sequence >= message.Sequence {
-				break
-			}
-			if !earlier.Delivered || earlier.State == spine.AgentRunActive || earlier.State == spine.AgentRunUncertain {
-				return detail + fmt.Sprintf("; waiting behind sequence %d (%s)", earlier.Sequence, queuedState(earlier.State))
-			}
-		}
-	}
-	return detail
-}
 func usage(output io.Writer) error {
 	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")

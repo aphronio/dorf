@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/evidence"
@@ -64,9 +65,6 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("publication cannot mutate Git or GitHub after cleanup begins")
 	}
-	if job.WorkflowPhase != "publishing" {
-		return fmt.Errorf("Job %s publication is not active (phase %s)", job.ID, job.WorkflowPhase)
-	}
 	pushAction, _, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
 	if err != nil {
 		return err
@@ -75,7 +73,7 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
 		return err
 	} else if !present {
-		return s.block(ctx, job, fmt.Sprintf("explicit GitHub base branch %s does not resolve in %s", job.BaseBranch, job.GitHubRepository))
+		return s.block(ctx, job, pushAction, fmt.Sprintf("explicit GitHub base branch %s does not resolve in %s", job.BaseBranch, job.GitHubRepository))
 	}
 	remote, present, err := s.GitHub.RemoteHead(ctx, authority, job.Branch)
 	if err != nil {
@@ -86,12 +84,12 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 		var relationErr error
 		relation, relationErr = s.Repository.Relation(ctx, job, remote)
 		if relationErr != nil {
-			return s.block(ctx, job, relationErr.Error())
+			return s.block(ctx, job, pushAction, relationErr.Error())
 		}
 	}
 	pushDecision, decisionErr := planPush(present, remote, job.Revision, relation)
 	if decisionErr != nil {
-		return s.block(ctx, job, decisionErr.Error())
+		return s.block(ctx, job, pushAction, decisionErr.Error())
 	}
 	if pushDecision == "push" {
 		token, err := s.GitHub.PushToken(ctx, authority)
@@ -133,14 +131,16 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("publication cannot mutate GitHub after cleanup begins")
 	}
-	if job.WorkflowPhase == "published" {
-		proposal, err := s.Store.Proposal(ctx, job.ID)
-		if err == nil && proposal != nil && !proposal.Stale && proposal.BodyDigest != "" {
-			return nil
-		}
+	stored, err := s.Store.Proposal(ctx, job.ID)
+	if err != nil {
+		return err
 	}
-	if job.WorkflowPhase != "publishing" {
-		return fmt.Errorf("Job %s publication is not active (phase %s)", job.ID, job.WorkflowPhase)
+	if stored != nil && !stored.Stale && stored.BodyDigest != "" {
+		return nil
+	}
+	_, pullAction, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
+	if err != nil {
+		return err
 	}
 	declared, err := s.Store.DeclaredChecks(ctx, job.ID)
 	if err != nil {
@@ -162,36 +162,37 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if err != nil {
 		return err
 	}
+	messages, err := s.Store.Messages(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	agentRuns, err := s.Store.AgentRuns(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	messages, agentRuns = publicationInputsAt(messages, agentRuns, pullAction.CreatedAt)
 	var plan *spine.ReviewPlanRecord
 	for i := range plans {
 		if plans[i].Revision == job.Revision {
 			plan = &plans[i]
 		}
 	}
-	assessment := spine.AssessReviewReadiness(job, declared, checks, records, s.Evidence, plan, runs)
+	assessment := spine.AssessReviewReadiness(job, declared, checks, records, s.Evidence, plan, runs, messages, agentRuns)
 	if !assessment.Ready || assessment.Revision != job.Revision {
-		return s.block(ctx, job, "publication lost exact-Revision readiness: "+assessment.Reason)
+		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+assessment.Reason)
 	}
 	body := Body(job, assessment, checks, records, runs)
 	bodyDigest := BodyDigest(body)
 	title := Title(job.Goal)
-	_, pullAction, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
-	if err != nil {
-		return err
-	}
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pulls, err := s.GitHub.PullRequests(ctx, authority, owner, job.Branch)
 	if err != nil {
 		return err
 	}
-	stored, err := s.Store.Proposal(ctx, job.ID)
-	if err != nil {
-		return err
-	}
 	pullDecision, pull, err := planPull(job, pulls, stored, title, body)
 	if err != nil {
-		return s.block(ctx, job, err.Error())
+		return s.block(ctx, job, pullAction, err.Error())
 	}
 	mutated := false
 	validationProposal := stored
@@ -211,10 +212,10 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 		return err
 	}
 	if err := validatePull(job, pull, validationProposal, title); err != nil {
-		return s.block(ctx, job, err.Error())
+		return s.block(ctx, job, pullAction, err.Error())
 	}
 	if pull.Body != body {
-		return s.block(ctx, job, "GitHub pull-request response did not retain the exact projected body")
+		return s.block(ctx, job, pullAction, "GitHub pull-request response did not retain the exact projected body")
 	}
 	if mutated {
 		if err := s.reach(ctx, spine.BarrierPullRequestAccepted, job.ID, pullAction.ID); err != nil {
@@ -225,6 +226,28 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	return s.recordAfterClaim(ctx, func() error {
 		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 	})
+}
+
+// publicationInputsAt retains the readiness boundary that created the exact
+// pull-request Action. Messages admitted later remain accepted, but they do
+// not strand reconciliation of an external effect that already began.
+func publicationInputsAt(messages []spine.MessageView, runs []spine.AgentRun, startedAt time.Time) ([]spine.MessageView, []spine.AgentRun) {
+	retainedMessages := make([]spine.MessageView, 0, len(messages))
+	retainedIDs := make(map[string]struct{}, len(messages))
+	for _, message := range messages {
+		if message.AdmittedAt.After(startedAt) {
+			continue
+		}
+		retainedMessages = append(retainedMessages, message)
+		retainedIDs[message.ID] = struct{}{}
+	}
+	retainedRuns := make([]spine.AgentRun, 0, len(runs))
+	for _, run := range runs {
+		if _, ok := retainedIDs[run.MessageID]; ok {
+			retainedRuns = append(retainedRuns, run)
+		}
+	}
+	return retainedMessages, retainedRuns
 }
 
 func planPush(present bool, remote, revision, relation string) (string, error) {
@@ -260,8 +283,8 @@ func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHub
 	return "adopt", pull, nil
 }
 
-func (s Service) block(ctx context.Context, job spine.Job, reason string) error {
-	if err := s.Store.BlockPublication(ctx, job.ID, job.Revision, reason); err != nil {
+func (s Service) block(ctx context.Context, job spine.Job, action spine.Action, reason string) error {
+	if err := s.Store.BlockPublication(ctx, job.ID, job.Revision, action.ID, reason); err != nil {
 		return err
 	}
 	return &AttentionError{Reason: reason}
@@ -362,7 +385,7 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 	}
 	for _, verification := range readiness.ReviewEvidence {
 		run, ok := runsByID[verification.AgentRunID]
-		if !ok || run.Revision != job.Revision {
+		if !ok || run.InputRevision != job.Revision {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, verification.ObservedEvidenceID, digests[verification.ObservedEvidenceID], run.FeedbackMessageID))

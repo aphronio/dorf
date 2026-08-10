@@ -156,7 +156,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 
 	job := spine.Job{ID: "job-real-boundary", Revision: revision}
 	run := spine.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, Revision: revision, SandboxID: "dorf-review-real"},
+		AgentRun: spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
 		Sandbox:  spine.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
 	}
 	metadata := map[string]string{
@@ -211,7 +211,7 @@ func TestPrepareReviewCheckoutUsesSeparateOwnedSandboxAndExactGitState(t *testin
 	revision, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	job := spine.Job{ID: "job-1", Revision: revision}
 	run := spine.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-1", JobID: job.ID, Revision: revision, SandboxID: "dorf-review-owned"},
+		AgentRun: spine.AgentRun{ID: "agent-run-1", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-owned"},
 		Sandbox:  spine.Sandbox{ID: "dorf-review-owned", JobID: job.ID, OwnershipNonce: strings.Repeat("c", 64)},
 	}
 	runner := &reviewBoundaryRunner{revision: revision, tree: tree, metadata: map[string]string{

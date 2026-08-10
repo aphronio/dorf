@@ -6,7 +6,20 @@ package dbsql
 
 import (
 	"database/sql"
+	"time"
+
+	"github.com/aphronio/dorf/internal/spine"
 )
+
+type DorfAction struct {
+	ID        string
+	JobID     string
+	Kind      spine.ActionKind
+	State     spine.ActionState
+	ScopeKey  string
+	CreatedAt time.Time
+	SettledAt sql.NullTime
+}
 
 // One exact-Revision GitHub proposal projection per Job
 type DorfGithubProposal struct {
@@ -30,7 +43,7 @@ type DorfReviewRunProjection struct {
 	TurnOutcome           string
 	Attention             string
 	Role                  string
-	Revision              string
+	InputRevision         string
 	Capability            string
 	StartedAt             sql.NullTime
 	FinishedAt            sql.NullTime

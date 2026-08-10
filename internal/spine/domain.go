@@ -49,27 +49,30 @@ const (
 )
 
 type Job struct {
-	ID                 string       `json:"id"`
-	AdmissionKey       string       `json:"admission_key"`
-	Goal               string       `json:"goal"`
-	Repository         string       `json:"repository"`
-	Revision           string       `json:"revision"`
-	RevisionGeneration int          `json:"revision_generation"`
-	StartingRevision   string       `json:"starting_revision"`
-	Branch             string       `json:"branch"`
-	GitHubRepository   string       `json:"github_repository,omitempty"`
-	GitHubInstallation string       `json:"github_installation_id,omitempty"`
-	BaseBranch         string       `json:"base_branch,omitempty"`
-	ProviderConnection string       `json:"provider_connection"`
-	Model              string       `json:"model"`
-	ReasoningEffort    string       `json:"reasoning_effort"`
-	AdmissionOpen      bool         `json:"admission_open"`
-	CleanupState       CleanupState `json:"cleanup_state"`
-	TaskID             string       `json:"task_id"`
-	CleanupTaskID      string       `json:"cleanup_task_id,omitempty"`
-	WorkflowPhase      string       `json:"workflow_phase"`
-	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
-	CleanupAttention   string       `json:"cleanup_attention,omitempty"`
+	ID                      string       `json:"id"`
+	AdmissionKey            string       `json:"admission_key"`
+	Goal                    string       `json:"goal"`
+	Repository              string       `json:"repository"`
+	Revision                string       `json:"revision"`
+	RevisionGeneration      int          `json:"revision_generation"`
+	StartingRevision        string       `json:"starting_revision"`
+	Branch                  string       `json:"branch"`
+	GitHubRepository        string       `json:"github_repository,omitempty"`
+	GitHubInstallation      string       `json:"github_installation_id,omitempty"`
+	BaseBranch              string       `json:"base_branch,omitempty"`
+	ProviderConnection      string       `json:"provider_connection"`
+	Model                   string       `json:"model"`
+	ReasoningEffort         string       `json:"reasoning_effort"`
+	AdmissionOpen           bool         `json:"admission_open"`
+	CleanupState            CleanupState `json:"cleanup_state"`
+	TaskID                  string       `json:"task_id"`
+	CleanupTaskID           string       `json:"cleanup_task_id,omitempty"`
+	WorkflowAttention       string       `json:"workflow_attention,omitempty"`
+	WorkflowAttentionSource string       `json:"workflow_attention_source,omitempty"`
+	WorkflowAttentionAt     time.Time    `json:"workflow_attention_at,omitempty"`
+	CleanupAttention        string       `json:"cleanup_attention,omitempty"`
+	AdmittedAt              time.Time    `json:"admitted_at,omitempty"`
+	CleanedAt               time.Time    `json:"cleaned_at,omitempty"`
 }
 
 // Sandbox is infrastructure owned for the lifetime of a Job. AgentRuns use a
@@ -104,6 +107,7 @@ type Message struct {
 	Input        string                `json:"input"`
 	Intent       MessageDeliveryIntent `json:"intent"`
 	TargetTurnID string                `json:"target_turn_id,omitempty"`
+	AdmittedAt   time.Time             `json:"admitted_at,omitempty"`
 }
 
 type MessageDeliveryIntent string
@@ -129,12 +133,14 @@ type AgentRun struct {
 	TurnOutcome      string        `json:"turn_outcome,omitempty"`
 	Attention        string        `json:"attention,omitempty"`
 	Role             string        `json:"role"`
-	Revision         string        `json:"revision,omitempty"`
-	Capability       string        `json:"capability,omitempty"`
-	SandboxID        string        `json:"sandbox_id,omitempty"`
-	SubmissionNonce  string        `json:"-"`
-	StartedAt        time.Time     `json:"started_at,omitempty"`
-	FinishedAt       time.Time     `json:"finished_at,omitempty"`
+	// InputRevision is the accepted checkout when this delivery begins. A
+	// later git-revision Evidence records what the AgentRun left behind.
+	InputRevision   string    `json:"input_revision,omitempty"`
+	Capability      string    `json:"capability,omitempty"`
+	SandboxID       string    `json:"sandbox_id,omitempty"`
+	SubmissionNonce string    `json:"-"`
+	StartedAt       time.Time `json:"started_at,omitempty"`
+	FinishedAt      time.Time `json:"finished_at,omitempty"`
 }
 
 type Delivery struct {
@@ -157,11 +163,13 @@ type MessageView struct {
 }
 
 type Action struct {
-	ID    string
-	JobID string
-	Kind  ActionKind
-	State ActionState
-	Scope string
+	ID        string      `json:"id"`
+	JobID     string      `json:"job_id"`
+	Kind      ActionKind  `json:"kind"`
+	State     ActionState `json:"state"`
+	Scope     string      `json:"scope"`
+	CreatedAt time.Time   `json:"created_at,omitempty"`
+	SettledAt time.Time   `json:"settled_at,omitempty"`
 }
 
 type CommandObservation struct {
@@ -183,6 +191,17 @@ type RevisionObservation struct {
 	Branch         string    `json:"branch"`
 	StartedAt      time.Time `json:"started_at"`
 	FinishedAt     time.Time `json:"finished_at"`
+}
+
+type Revision struct {
+	JobID          string    `json:"job_id"`
+	OID            string    `json:"oid"`
+	ComparisonBase string    `json:"comparison_base,omitempty"`
+	Tree           string    `json:"tree,omitempty"`
+	Branch         string    `json:"branch"`
+	Generation     int       `json:"generation"`
+	EvidenceID     string    `json:"evidence_id,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
 }
 
 type Check struct {
@@ -296,6 +315,10 @@ func ReviewRequestFromID(revision, role string) string {
 
 func ReviewRequestMessageID(jobID, revision, role string) string {
 	return MessageID(jobID, MessageFromWorkflow, ReviewRequestFromID(revision, role))
+}
+
+func ReviewPolicyAttentionSource(revision string) string {
+	return "review-policy:" + revision
 }
 
 func ReviewSandboxName(runID string) string {

@@ -11,15 +11,14 @@ const (
 	ReviewReadOnlyCapability = "immutable-read-only"
 )
 
+// ReviewPlanRecord exists only after deterministic policy has made its final
+// decision for an exact Revision. There is no pending plan state.
 type ReviewPlanRecord struct {
-	JobID        string             `json:"job_id"`
-	Revision     string             `json:"revision"`
-	State        string             `json:"state"`
-	Facts        policy.ChangeFacts `json:"facts"`
-	Plan         policy.ReviewPlan  `json:"plan"`
-	PolicyDigest string             `json:"policy_digest,omitempty"`
-	CreatedAt    time.Time          `json:"created_at,omitempty"`
-	FinalizedAt  time.Time          `json:"finalized_at,omitempty"`
+	JobID      string             `json:"job_id"`
+	Revision   string             `json:"revision"`
+	Facts      policy.ChangeFacts `json:"facts"`
+	Plan       policy.ReviewPlan  `json:"plan"`
+	RecordedAt time.Time          `json:"recorded_at,omitempty"`
 }
 
 type ReviewRunView struct {
@@ -49,14 +48,12 @@ type ReviewCheckoutObservation struct {
 }
 
 type ReviewStore interface {
-	MarkChecksVerified(context.Context, string, string, []string) error
 	ReviewPlan(context.Context, string, string) (ReviewPlanRecord, error)
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
 	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
 	ReviewRun(context.Context, string) (ReviewRunView, error)
 	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
-	CompleteReviewFeedback(context.Context, string, string, string) (bool, error)
 }
 
 type ReviewExternals interface {

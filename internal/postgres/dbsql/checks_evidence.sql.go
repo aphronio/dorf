@@ -40,19 +40,6 @@ func (q *Queries) CompleteCheck(ctx context.Context, arg CompleteCheckParams) er
 	return err
 }
 
-const countDeclaredChecks = `-- name: CountDeclaredChecks :one
-select count(*)
-from dorf.repository_commands
-where job_id=$1 and name in ('check','smoke')
-`
-
-func (q *Queries) CountDeclaredChecks(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countDeclaredChecks, jobID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const getCheck = `-- name: GetCheck :one
 select id,job_id,name,command,revision,state,coalesce(exit_code,0)::integer as exit_code,
        coalesce(evidence_id,'') as evidence_id,started_at,finished_at
@@ -425,45 +412,6 @@ func (q *Queries) ListEvidence(ctx context.Context, jobID string) ([]ListEvidenc
 			return nil, err
 		}
 		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listPassingCheckEvidence = `-- name: ListPassingCheckEvidence :many
-select c.evidence_id
-from dorf.repository_commands r
-join dorf.checks c
-  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
- and c.revision=$1
-where r.job_id=$2 and r.name in ('check','smoke')
-  and c.state='passed' and c.exit_code=0
-order by r.name
-`
-
-type ListPassingCheckEvidenceParams struct {
-	Revision string
-	JobID    string
-}
-
-func (q *Queries) ListPassingCheckEvidence(ctx context.Context, arg ListPassingCheckEvidenceParams) ([]sql.NullString, error) {
-	rows, err := q.db.QueryContext(ctx, listPassingCheckEvidence, arg.Revision, arg.JobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []sql.NullString
-	for rows.Next() {
-		var evidence_id sql.NullString
-		if err := rows.Scan(&evidence_id); err != nil {
-			return nil, err
-		}
-		items = append(items, evidence_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -53,46 +54,41 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
 		for {
-			disposition, err := RunJob(ctx, service, store, proposal, params.JobID)
+			work, err := RunJob(ctx, service, store, proposal, params.JobID)
 			if err != nil {
 				return Result{}, err
-			}
-			if disposition == spine.RunClosed {
-				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			job, err := store.Job(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
-			if job.WorkflowPhase == "published" {
-				observation, err := observeProposal(ctx, proposal, job.ID, job.Revision)
+			if work.Kind == WorkComplete {
+				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
 					return Result{}, err
 				}
-				if observation.Outcome != "" {
+				if outcome != nil {
 					task := absurd.MustTaskContext(ctx)
 					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
 						return Result{}, err
 					}
-					return Result{JobID: params.JobID, Outcome: string(observation.Outcome)}, nil
+					return Result{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
 				}
-				if observation.NewMessages > 0 {
-					continue
-				}
+				return Result{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
 				return Result{}, err
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
-			if job.WorkflowPhase == "published" {
+			if work.Kind == WorkObserveProposal {
 				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", job.Revision, sequence)
 				options.Timeout = proposal.PollInterval
 			}
 			wake, err := absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if job.WorkflowPhase == "published" && errors.As(err, &timeout) {
+				if work.Kind == WorkObserveProposal && errors.As(err, &timeout) {
 					continue
 				}
 				return Result{}, err
@@ -281,9 +277,6 @@ func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.J
 }
 
 func cleanupPublicationSafe(ctx context.Context, store postgres.Store, job spine.Job) error {
-	if job.WorkflowPhase != "publishing" && job.WorkflowPhase != "publication-blocked" && job.WorkflowPhase != "published" {
-		return nil
-	}
 	proposal, err := store.Proposal(ctx, job.ID)
 	if err != nil {
 		return err
@@ -299,13 +292,17 @@ func cleanupPublicationSafe(ctx context.Context, store postgres.Store, job spine
 		return nil
 	}
 	_, pull, err := store.PublicationActions(ctx, job.ID, job.Revision)
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, postgres.ErrNotFound) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("cleanup requires publication reconciliation for the exact pull-request Action: %w", err)
 	}
-	if pull.State != spine.ActionUnsettled {
-		return fmt.Errorf("cleanup cannot proceed while the exact pull-request Action is %s; retry publication to reconcile and record any exposed proposal first", pull.State)
-	}
-	return nil
+	return unresolvedPullRequestAction(pull)
+}
+
+func unresolvedPullRequestAction(pull spine.Action) error {
+	return fmt.Errorf("cleanup cannot proceed while the exact pull-request Action exists in state %s; retry publication to reconcile and record any exposed proposal first", pull.State)
 }
 
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {

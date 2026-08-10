@@ -8,13 +8,14 @@ package dbsql
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 const advanceJobRevision = `-- name: AdvanceJobRevision :execrows
 update dorf.jobs
-set revision=$1,workflow_phase='checking',workflow_attention=null
+set revision=$1
 where id=$2 and revision=$3
 `
 
@@ -52,35 +53,19 @@ func (q *Queries) AttachMessageTask(ctx context.Context, arg AttachMessageTaskPa
 	return result.RowsAffected()
 }
 
-const blockDelivery = `-- name: BlockDelivery :exec
+const clearWorkflowAttention = `-- name: ClearWorkflowAttention :execrows
 update dorf.jobs
-set workflow_phase='blocked',workflow_attention=$1
-where id=$2
+set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+where id=$1 and workflow_attention_source=$2
 `
 
-type BlockDeliveryParams struct {
-	Reason sql.NullString
+type ClearWorkflowAttentionParams struct {
 	JobID  string
+	Source sql.NullString
 }
 
-func (q *Queries) BlockDelivery(ctx context.Context, arg BlockDeliveryParams) error {
-	_, err := q.db.ExecContext(ctx, blockDelivery, arg.Reason, arg.JobID)
-	return err
-}
-
-const blockWorkflow = `-- name: BlockWorkflow :execrows
-update dorf.jobs
-set workflow_phase='blocked',workflow_attention=$1
-where id=$2
-`
-
-type BlockWorkflowParams struct {
-	Reason sql.NullString
-	JobID  string
-}
-
-func (q *Queries) BlockWorkflow(ctx context.Context, arg BlockWorkflowParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, blockWorkflow, arg.Reason, arg.JobID)
+func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowAttentionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearWorkflowAttention, arg.JobID, arg.Source)
 	if err != nil {
 		return 0, err
 	}
@@ -89,40 +74,12 @@ func (q *Queries) BlockWorkflow(ctx context.Context, arg BlockWorkflowParams) (i
 
 const closeAdmission = `-- name: CloseAdmission :execrows
 update dorf.jobs
-set admission_open=false,workflow_attention=null
+set admission_open=false
 where id=$1
 `
 
 func (q *Queries) CloseAdmission(ctx context.Context, jobID string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, closeAdmission, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const completeUnchangedRun = `-- name: CompleteUnchangedRun :execrows
-update dorf.jobs
-set workflow_phase=case when exists (
-      select 1 from dorf.github_proposals p
-      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
-    ) then 'published' else 'blocked' end,
-    workflow_attention=case when exists (
-      select 1 from dorf.github_proposals p
-      where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
-    ) then null else $1 end
-where id=$2 and revision=$3
-  and workflow_phase='implementing'
-`
-
-type CompleteUnchangedRunParams struct {
-	Reason   sql.NullString
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) CompleteUnchangedRun(ctx context.Context, arg CompleteUnchangedRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completeUnchangedRun, arg.Reason, arg.JobID, arg.Revision)
 	if err != nil {
 		return 0, err
 	}
@@ -175,39 +132,47 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 }
 
 const getJob = `-- name: GetJob :one
-select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,j.starting_revision,j.branch,
+select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,
+       initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
        j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
-       j.workflow_phase,coalesce(j.workflow_attention,'') as workflow_attention,coalesce(j.cleanup_attention,'') as cleanup_attention
+       coalesce(j.workflow_attention,'') as workflow_attention,
+       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
+       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       j.admitted_at,j.cleaned_at
 from dorf.jobs j
 left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
+join dorf.revisions initial on initial.job_id=j.id and initial.generation=0
 where j.id=$1
 `
 
 type GetJobRow struct {
-	ID                   string
-	AdmissionKey         string
-	Goal                 string
-	Repository           string
-	Revision             string
-	RevisionGeneration   int32
-	StartingRevision     string
-	Branch               string
-	GithubRepository     string
-	GithubInstallationID string
-	BaseBranch           string
-	ProviderConnection   string
-	Model                string
-	ReasoningEffort      string
-	AdmissionOpen        bool
-	CleanupState         spine.CleanupState
-	TaskID               string
-	CleanupTaskID        string
-	WorkflowPhase        string
-	WorkflowAttention    string
-	CleanupAttention     string
+	ID                      string
+	AdmissionKey            string
+	Goal                    string
+	Repository              string
+	Revision                string
+	RevisionGeneration      int32
+	StartingRevision        string
+	Branch                  string
+	GithubRepository        string
+	GithubInstallationID    string
+	BaseBranch              string
+	ProviderConnection      string
+	Model                   string
+	ReasoningEffort         string
+	AdmissionOpen           bool
+	CleanupState            spine.CleanupState
+	TaskID                  string
+	CleanupTaskID           string
+	WorkflowAttention       string
+	WorkflowAttentionSource string
+	WorkflowAttentionAt     sql.NullTime
+	CleanupAttention        string
+	AdmittedAt              time.Time
+	CleanedAt               sql.NullTime
 }
 
 func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
@@ -232,15 +197,19 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.CleanupState,
 		&i.TaskID,
 		&i.CleanupTaskID,
-		&i.WorkflowPhase,
 		&i.WorkflowAttention,
+		&i.WorkflowAttentionSource,
+		&i.WorkflowAttentionAt,
 		&i.CleanupAttention,
+		&i.AdmittedAt,
+		&i.CleanedAt,
 	)
 	return i, err
 }
 
 const getJobAdmissionForUpdate = `-- name: GetJobAdmissionForUpdate :one
-select admission_open,workflow_phase
+select admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
 for update
@@ -248,18 +217,19 @@ for update
 
 type GetJobAdmissionForUpdateRow struct {
 	AdmissionOpen bool
-	WorkflowPhase string
+	OutcomeExists bool
 }
 
 func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (GetJobAdmissionForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getJobAdmissionForUpdate, jobID)
 	var i GetJobAdmissionForUpdateRow
-	err := row.Scan(&i.AdmissionOpen, &i.WorkflowPhase)
+	err := row.Scan(&i.AdmissionOpen, &i.OutcomeExists)
 	return i, err
 }
 
 const getRevisionJobForUpdate = `-- name: GetRevisionJobForUpdate :one
-select revision,branch,workflow_phase
+select revision,branch,admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
 for update
@@ -268,32 +238,41 @@ for update
 type GetRevisionJobForUpdateRow struct {
 	Revision      string
 	Branch        string
-	WorkflowPhase string
+	AdmissionOpen bool
+	OutcomeExists bool
 }
 
 func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (GetRevisionJobForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getRevisionJobForUpdate, jobID)
 	var i GetRevisionJobForUpdateRow
-	err := row.Scan(&i.Revision, &i.Branch, &i.WorkflowPhase)
+	err := row.Scan(
+		&i.Revision,
+		&i.Branch,
+		&i.AdmissionOpen,
+		&i.OutcomeExists,
+	)
 	return i, err
 }
 
-const getRevisionPhaseForUpdate = `-- name: GetRevisionPhaseForUpdate :one
-select revision,workflow_phase
-from dorf.jobs
-where id=$1
-for update
+const getSelectedSetupAction = `-- name: GetSelectedSetupAction :one
+select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
+from dorf.jobs j
+join dorf.actions a on a.id=j.setup_action_id and a.job_id=j.id
+where j.id=$1
 `
 
-type GetRevisionPhaseForUpdateRow struct {
-	Revision      string
-	WorkflowPhase string
-}
-
-func (q *Queries) GetRevisionPhaseForUpdate(ctx context.Context, jobID string) (GetRevisionPhaseForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getRevisionPhaseForUpdate, jobID)
-	var i GetRevisionPhaseForUpdateRow
-	err := row.Scan(&i.Revision, &i.WorkflowPhase)
+func (q *Queries) GetSelectedSetupAction(ctx context.Context, jobID string) (DorfAction, error) {
+	row := q.db.QueryRowContext(ctx, getSelectedSetupAction, jobID)
+	var i DorfAction
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Kind,
+		&i.State,
+		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
 	return i, err
 }
 
@@ -312,48 +291,35 @@ func (q *Queries) GetSetupActionIDForUpdate(ctx context.Context, jobID string) (
 }
 
 const getSetupRetryJobForUpdate = `-- name: GetSetupRetryJobForUpdate :one
-select workflow_phase,coalesce(setup_action_id,'') as setup_action_id,admission_open
+select coalesce(setup_action_id,'') as setup_action_id,admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
 for update
 `
 
 type GetSetupRetryJobForUpdateRow struct {
-	WorkflowPhase string
 	SetupActionID string
 	AdmissionOpen bool
+	OutcomeExists bool
 }
 
 func (q *Queries) GetSetupRetryJobForUpdate(ctx context.Context, jobID string) (GetSetupRetryJobForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getSetupRetryJobForUpdate, jobID)
 	var i GetSetupRetryJobForUpdateRow
-	err := row.Scan(&i.WorkflowPhase, &i.SetupActionID, &i.AdmissionOpen)
+	err := row.Scan(&i.SetupActionID, &i.AdmissionOpen, &i.OutcomeExists)
 	return i, err
-}
-
-const getWorkflowPhaseForUpdate = `-- name: GetWorkflowPhaseForUpdate :one
-select workflow_phase
-from dorf.jobs
-where id=$1
-for update
-`
-
-func (q *Queries) GetWorkflowPhaseForUpdate(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowPhaseForUpdate, jobID)
-	var workflow_phase string
-	err := row.Scan(&workflow_phase)
-	return workflow_phase, err
 }
 
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,goal,repository,revision,starting_revision,branch,
+    id,admission_key,goal,repository,revision,branch,
     provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     $1,$2,$3,$4,
-    $5,$5,$6,
+    $5,$6,
     $7,$8,
     $9,$10,
     $11,$12
@@ -443,23 +409,56 @@ func (q *Queries) InsertRevision(ctx context.Context, arg InsertRevisionParams) 
 	return err
 }
 
-const markReady = `-- name: MarkReady :execrows
-update dorf.jobs
-set workflow_phase='ready',workflow_attention=null
-where id=$1 and revision=$2 and workflow_phase='checking'
+const listRevisions = `-- name: ListRevisions :many
+select job_id,oid,coalesce(comparison_base_oid,'') as comparison_base_oid,
+       coalesce(tree_oid,'') as tree_oid,branch,generation,
+       coalesce(evidence_id,'') as evidence_id,observed_at
+from dorf.revisions
+where job_id=$1
+order by generation
 `
 
-type MarkReadyParams struct {
-	JobID    string
-	Revision string
+type ListRevisionsRow struct {
+	JobID             string
+	OID               string
+	ComparisonBaseOID string
+	TreeOID           string
+	Branch            string
+	Generation        int32
+	EvidenceID        string
+	ObservedAt        time.Time
 }
 
-func (q *Queries) MarkReady(ctx context.Context, arg MarkReadyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReady, arg.JobID, arg.Revision)
+func (q *Queries) ListRevisions(ctx context.Context, jobID string) ([]ListRevisionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRevisions, jobID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	var items []ListRevisionsRow
+	for rows.Next() {
+		var i ListRevisionsRow
+		if err := rows.Scan(
+			&i.JobID,
+			&i.OID,
+			&i.ComparisonBaseOID,
+			&i.TreeOID,
+			&i.Branch,
+			&i.Generation,
+			&i.EvidenceID,
+			&i.ObservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const nextRevisionGeneration = `-- name: NextRevisionGeneration :one
@@ -473,25 +472,6 @@ func (q *Queries) NextRevisionGeneration(ctx context.Context, jobID string) (int
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const returnFailedCheckToImplementation = `-- name: ReturnFailedCheckToImplementation :execrows
-update dorf.jobs
-set workflow_phase='implementing',workflow_attention=null
-where id=$1 and revision=$2 and workflow_phase='checking'
-`
-
-type ReturnFailedCheckToImplementationParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) ReturnFailedCheckToImplementation(ctx context.Context, arg ReturnFailedCheckToImplementationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, returnFailedCheckToImplementation, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const selectInitialSetupAction = `-- name: SelectInitialSetupAction :execrows
@@ -515,9 +495,15 @@ func (q *Queries) SelectInitialSetupAction(ctx context.Context, arg SelectInitia
 
 const selectSetupRetry = `-- name: SelectSetupRetry :execrows
 update dorf.jobs
-set setup_action_id=$1,workflow_phase='setup',workflow_attention=null
-where id=$2 and setup_action_id=$3
-  and workflow_phase='blocked'
+set setup_action_id=$1,
+    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+where dorf.jobs.id=$2 and setup_action_id=$3
+  and (workflow_attention_source is null or workflow_attention_source=$3)
+  and exists (
+      select 1 from dorf.actions a
+      where a.id=$3 and a.job_id=dorf.jobs.id
+        and a.kind='repository-setup' and a.state='failed'
+  )
 `
 
 type SelectSetupRetryParams struct {
@@ -574,21 +560,23 @@ func (q *Queries) SetCleanupTaskID(ctx context.Context, arg SetCleanupTaskIDPara
 	return result.RowsAffected()
 }
 
-const setWorkflowPhaseAfterSetup = `-- name: SetWorkflowPhaseAfterSetup :execrows
+const setWorkflowAttention = `-- name: SetWorkflowAttention :execrows
 update dorf.jobs
-set workflow_phase=$1,
-    workflow_attention=nullif($2::text,'')
-where id=$3 and workflow_phase in ('setup','blocked')
+set workflow_attention=$1,
+    workflow_attention_source=$2,
+    workflow_attention_at=clock_timestamp()
+where id=$3
+  and (workflow_attention_source is null or workflow_attention_source=$2)
 `
 
-type SetWorkflowPhaseAfterSetupParams struct {
-	WorkflowPhase     string
-	WorkflowAttention string
-	JobID             string
+type SetWorkflowAttentionParams struct {
+	Detail sql.NullString
+	Source sql.NullString
+	JobID  string
 }
 
-func (q *Queries) SetWorkflowPhaseAfterSetup(ctx context.Context, arg SetWorkflowPhaseAfterSetupParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setWorkflowPhaseAfterSetup, arg.WorkflowPhase, arg.WorkflowAttention, arg.JobID)
+func (q *Queries) SetWorkflowAttention(ctx context.Context, arg SetWorkflowAttentionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setWorkflowAttention, arg.Detail, arg.Source, arg.JobID)
 	if err != nil {
 		return 0, err
 	}

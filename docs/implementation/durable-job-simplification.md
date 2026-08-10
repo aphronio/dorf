@@ -475,36 +475,36 @@ the Provider Gateway returned no matching resource.
 
 Goal: let retained product facts tell `RunJob` what comes next instead of a second durable scheduler.
 
-- [ ] Remove `workflow_phase` from Job, PostgreSQL, SQL transitions, readiness, and inspection.
-- [ ] Bind each selected implementation AgentRun to its input Revision and retain its eligible final
+- [x] Remove `workflow_phase` from Job, PostgreSQL, SQL transitions, readiness, and inspection.
+- [x] Bind each selected implementation AgentRun to its input Revision and retain its eligible final
       `git-revision` Evidence for changed and unchanged clean observations. Evidence Revision equal to
       the input means unchanged; a different descendant also creates the next Revision. Do not add a
       second observation table or result enum for facts already carried by AgentRun and Evidence.
-- [ ] Derive one non-durable, coding-specific `CurrentWork` in ordinary Go from owned resources,
+- [x] Derive one non-durable, coding-specific `CurrentWork` in ordinary Go from owned resources,
       Messages, AgentRuns, Revision observations, Revisions, Checks, ReviewPlans, Proposals, Outcomes,
       and cleanup Actions. Keep its dependency order visible; do not hide it in one giant SQL query.
-- [ ] Make `RunJob` execute `CurrentWork` and recompute it after each recorded fact. Inspection uses
+- [x] Make `RunJob` execute `CurrentWork` and recompute it after each recorded fact. Inspection uses
       the same current-work decision rather than independently interpreting progress.
-- [ ] Keep explicit workflow attention as an operator-visible fact without coupling it to a phase or
+- [x] Keep explicit workflow attention as an operator-visible fact without coupling it to a phase or
       making it another general program counter. The exact failed, unsettled, or unchanged fact still
       explains what can safely resume.
-- [ ] Remove `RunDisposition`; admission closure and retained facts already describe whether the task
+- [x] Remove `RunDisposition`; admission closure and retained facts already describe whether the task
       should continue, wait, or finish.
-- [ ] Drive setup retry from the selected failed setup Action and explicit operator Message rather than
+- [x] Drive setup retry from the selected failed setup Action and explicit operator Message rather than
       a blocked phase.
-- [ ] Derive the starting Revision from Revision generation zero instead of storing a second copy on
+- [x] Derive the starting Revision from Revision generation zero instead of storing a second copy on
       Job.
-- [ ] Store only final ReviewPlans. Delete the pending ReviewPlan and separate Checks-verified handoff;
+- [x] Store only final ReviewPlans. Delete the pending ReviewPlan and separate Checks-verified handoff;
       passing exact-Revision Checks and Evidence directly admit deterministic ReviewPolicy.
-- [ ] Keep transactional guards local to the fact being recorded: current Revision, latest accepted
+- [x] Keep transactional guards local to the fact being recorded: current Revision, latest accepted
       AgentRun, exact Evidence set, selected ReviewPlan, current Proposal, and absence of newer input.
       Do not replace the phase with another status matrix.
-- [ ] Ensure natural product facts retain the timestamps needed to derive honest chronology, including
+- [x] Ensure natural product facts retain the timestamps needed to derive honest chronology, including
       Action settlement and Revision observation, without adding a copied event-log table.
-- [ ] Retain only the main and cleanup Absurd task handles while public cancellation and inspection
+- [x] Retain only the main and cleanup Absurd task handles while public cancellation and inspection
       require them; do not mirror task state.
 - [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B.
-- [ ] Delete phase-transition helpers, CAS branches, fixtures, and tests as fact-derived decisions become
+- [x] Delete phase-transition helpers, CAS branches, fixtures, and tests as fact-derived decisions become
       authoritative.
 - [ ] Dogfood the whole implementation, check, review, proposal, Outcome, and cleanup sequence.
 
@@ -520,15 +520,15 @@ concrete; a new operation adds its natural fact and one explicit dependency only
 
 Goal: finish with a small human surface and tests that protect promises rather than choreography.
 
-- [ ] Make default `inspect` overlay the complete expected coding dependency chain with chronological
+- [x] Make default `inspect` overlay the complete expected coding dependency chain with chronological
       product facts, mark current work or attention, and show the exact Revision, Proposal/Outcome,
       and cleanup. Repeated Revisions should make implementation/check/review loops obvious.
-- [ ] Derive `WorkflowHistory` from natural Message, Action, AgentRun, Revision-observation, Check,
+- [x] Derive `WorkflowHistory` from natural Message, Action, AgentRun, Revision-observation, Check,
       ReviewPlan, Proposal, Outcome, attention, and cleanup timestamps. Do not store a parallel event
       transcript or use it as recovery authority.
-- [ ] Keep deep machine facts under `inspect --json`; use `absurdctl` for task runs, attempts,
+- [x] Keep deep machine facts under `inspect --json`; use `absurdctl` for task runs, attempts,
       checkpoints, waits, and leases.
-- [ ] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
+- [x] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
       output.
 - [ ] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
       Proposal/Outcome, and exact cleanup/retry.

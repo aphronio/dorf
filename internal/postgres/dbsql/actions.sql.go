@@ -7,14 +7,17 @@ package dbsql
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const finishSetupAction = `-- name: FinishSetupAction :exec
+const finishSetupAction = `-- name: FinishSetupAction :execrows
 update dorf.actions
-set state=$1
+set state=$1,settled_at=coalesce(settled_at,clock_timestamp())
 where dorf.actions.id=$2
+  and (state='unsettled' or state=$1)
 `
 
 type FinishSetupActionParams struct {
@@ -22,13 +25,16 @@ type FinishSetupActionParams struct {
 	ActionID string
 }
 
-func (q *Queries) FinishSetupAction(ctx context.Context, arg FinishSetupActionParams) error {
-	_, err := q.db.ExecContext(ctx, finishSetupAction, arg.State, arg.ActionID)
-	return err
+func (q *Queries) FinishSetupAction(ctx context.Context, arg FinishSetupActionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishSetupAction, arg.State, arg.ActionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getAction = `-- name: GetAction :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3
 `
@@ -39,39 +45,35 @@ type GetActionParams struct {
 	Kind  spine.ActionKind
 }
 
-type GetActionRow struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
-}
-
-func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetActionRow, error) {
+func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getAction, arg.ID, arg.JobID, arg.Kind)
-	var i GetActionRow
+	var i DorfAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
 
 const getActionCompletionForUpdate = `-- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,scope_key
+select job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1
 for update
 `
 
 type GetActionCompletionForUpdateRow struct {
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
+	JobID     string
+	Kind      spine.ActionKind
+	State     spine.ActionState
+	ScopeKey  string
+	CreatedAt time.Time
+	SettledAt sql.NullTime
 }
 
 func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (GetActionCompletionForUpdateRow, error) {
@@ -82,12 +84,14 @@ func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
 
 const getActionForUpdate = `-- name: GetActionForUpdate :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3
 for update
@@ -99,23 +103,17 @@ type GetActionForUpdateParams struct {
 	Kind  spine.ActionKind
 }
 
-type GetActionForUpdateRow struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
-}
-
-func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdateParams) (GetActionForUpdateRow, error) {
+func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdateParams) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getActionForUpdate, arg.ID, arg.JobID, arg.Kind)
-	var i GetActionForUpdateRow
+	var i DorfAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
@@ -205,37 +203,29 @@ func (q *Queries) InsertScopedAction(ctx context.Context, arg InsertScopedAction
 }
 
 const listActions = `-- name: ListActions :many
-select a.id,a.kind,a.state,a.scope_key,
-       coalesce(e.digest,'') as evidence_digest
+select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
 from dorf.actions a
-left join dorf.evidence e on e.action_id=a.id
 where a.job_id=$1
 order by a.created_at,a.id
 `
 
-type ListActionsRow struct {
-	ID             string
-	Kind           spine.ActionKind
-	State          spine.ActionState
-	ScopeKey       string
-	EvidenceDigest string
-}
-
-func (q *Queries) ListActions(ctx context.Context, jobID string) ([]ListActionsRow, error) {
+func (q *Queries) ListActions(ctx context.Context, jobID string) ([]DorfAction, error) {
 	rows, err := q.db.QueryContext(ctx, listActions, jobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListActionsRow
+	var items []DorfAction
 	for rows.Next() {
-		var i ListActionsRow
+		var i DorfAction
 		if err := rows.Scan(
 			&i.ID,
+			&i.JobID,
 			&i.Kind,
 			&i.State,
 			&i.ScopeKey,
-			&i.EvidenceDigest,
+			&i.CreatedAt,
+			&i.SettledAt,
 		); err != nil {
 			return nil, err
 		}
@@ -252,7 +242,7 @@ func (q *Queries) ListActions(ctx context.Context, jobID string) ([]ListActionsR
 
 const recordSandboxActionSuccess = `-- name: RecordSandboxActionSuccess :execrows
 update dorf.actions
-set state='succeeded'
+set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
 where id=$1 and state<>'succeeded'
 `
 

@@ -26,22 +26,35 @@ func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 func (s Service) PlanReview(ctx context.Context, job Job) error {
 	store, ok := s.Store.(ReviewStore)
 	if !ok {
-		return fmt.Errorf("review phase requires durable ReviewStore")
+		return fmt.Errorf("review requires durable ReviewStore")
 	}
 	externals, ok := s.Externals.(ReviewExternals)
 	if !ok {
-		return fmt.Errorf("review phase requires Revision-isolated review externals")
+		return fmt.Errorf("review requires Revision-isolated review externals")
 	}
-	if job.WorkflowPhase != "review-planning" {
-		return fmt.Errorf("cannot plan review from phase %q", job.WorkflowPhase)
+	coding := s.Store.(CodingStore)
+	declared, err := coding.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	checks, err := coding.Checks(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	records, err := coding.Evidence(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.Evidence); err != nil {
+		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("Revision %s Evidence verification failed: %w", job.Revision, err))
 	}
 	facts, err := externals.RepositoryChangeFacts(ctx, job)
 	if err != nil {
-		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, "deterministic ChangeFacts failed: "+err.Error())
+		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("deterministic ChangeFacts failed: %w", err))
 	}
 	plan, err := policy.ReviewPolicy(facts)
 	if err != nil {
-		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, "mandatory ReviewPolicy rejected input: "+err.Error())
+		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("mandatory ReviewPolicy rejected input: %w", err))
 	}
 	return store.RecordReviewPolicy(ctx, ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, Facts: facts, Plan: plan})
 }
@@ -49,25 +62,25 @@ func (s Service) PlanReview(ctx context.Context, job Job) error {
 func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 	store, ok := s.Store.(ReviewStore)
 	if !ok {
-		return fmt.Errorf("review phase requires durable ReviewStore")
+		return fmt.Errorf("review requires durable ReviewStore")
 	}
 	externals, ok := s.Externals.(ReviewExternals)
 	if !ok {
-		return fmt.Errorf("review phase requires Revision-isolated review externals")
+		return fmt.Errorf("review requires Revision-isolated review externals")
 	}
 	run, err := store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
 	}
-	if job.WorkflowPhase != "reviewing" || run.JobID != job.ID || run.Revision != job.Revision {
-		return fmt.Errorf("review AgentRun %s does not belong to the current reviewing Revision", runID)
+	if run.JobID != job.ID || run.InputRevision != job.Revision {
+		return fmt.Errorf("review AgentRun %s does not belong to the current Revision", runID)
 	}
 	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, fmt.Sprintf("selected review Role %s is %s: %s", run.Role, run.State, run.Attention))
+		return s.setWorkflowAttention(ctx, job.ID, run.ID, fmt.Errorf("selected review Role %s is %s: %s", run.Role, run.State, run.Attention))
 	}
 	_, err = s.executeAndRecordReview(ctx, job, run, store, externals)
 	if err != nil && attentionNeeded(err) {
-		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, err.Error())
+		return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
 	}
 	return err
 }
@@ -111,7 +124,7 @@ func (s Service) verifyReviewCheckout(ctx context.Context, job Job, run ReviewRu
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
 		return ReviewCheckoutObservation{}, reviewBoundaryError(reason)
 	}
-	if checkout.Revision != run.Revision || !fullGitObjectID(checkout.Tree) {
+	if checkout.Revision != run.InputRevision || !fullGitObjectID(checkout.Tree) {
 		reason := "review checkout is not the exact Revision with a full tree identity"
 		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
 		return ReviewCheckoutObservation{}, reviewBoundaryError(reason)
@@ -128,8 +141,8 @@ func fullGitObjectID(value string) bool {
 }
 
 func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView, externals ReviewExternals, store ReviewStore) (HarnessTurn, error) {
-	expectedFromID := ReviewRequestFromID(original.Revision, original.Role)
-	expectedMessageID := ReviewRequestMessageID(job.ID, original.Revision, original.Role)
+	expectedFromID := ReviewRequestFromID(original.InputRevision, original.Role)
+	expectedMessageID := ReviewRequestMessageID(job.ID, original.InputRevision, original.Role)
 	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
 		reason := "review AgentRun request Message, Sandbox ownership, or exact submission contract is invalid"
 		_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
@@ -263,7 +276,7 @@ func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObserv
 		return Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
 	}
 	artifact, err := json.Marshal(reviewObservationArtifact{
-		AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
+		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: checkout,
 	})
 	if err != nil {
@@ -273,5 +286,5 @@ func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObserv
 	if err != nil {
 		return Evidence{}, err
 	}
-	return Evidence{ID: EvidenceID(run.ID, "review-observation"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation", AgentRunID: run.ID, Revision: run.Revision, StartedAt: started, FinishedAt: finished}, nil
+	return Evidence{ID: EvidenceID(run.ID, "review-observation"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation", AgentRunID: run.ID, Revision: run.InputRevision, StartedAt: started, FinishedAt: finished}, nil
 }

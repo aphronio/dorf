@@ -55,7 +55,7 @@ func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action sp
 	return observation, checks, err
 }
 
-func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job) (spine.RevisionObservation, []byte, error) {
+func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job) (spine.RevisionObservation, error) {
 	return e.repository().ObserveRevision(ctx, e.Sandbox.Name(job.ID), job.Branch, job.Revision)
 }
 
@@ -71,7 +71,7 @@ func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run
 	if run.SandboxID == "" {
 		return fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
 	}
-	if run.Revision != job.Revision {
+	if run.InputRevision != job.Revision {
 		return fmt.Errorf("review checkout identity conflicts with current Revision")
 	}
 	workspace := e.Sandbox.Config.Workspace
@@ -84,7 +84,7 @@ workspace=$1; revision=$2
 	test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 	git -C "$workspace" cat-file -e "$revision^{commit}"
 	git -C "$workspace" bundle create - HEAD`
-	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.Revision)
+	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.InputRevision)
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ head=$(git -C "$workspace" rev-parse HEAD)
 test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"`
-	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.InputRevision)
 	if err != nil {
 		return err
 	}
@@ -135,12 +135,12 @@ test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 printf '%s %s clean\n' "$head" "$tree"`
 	workspace := e.Sandbox.Config.Workspace
-	result, err := e.Sandbox.Exec(ctx, run.SandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.SandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.InputRevision)
 	if err != nil || result.ExitCode != 0 {
 		return spine.ReviewCheckoutObservation{}, fmt.Errorf("verify exact review checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
 	fields := strings.Fields(result.Stdout)
-	if len(fields) != 3 || fields[0] != run.Revision || fields[2] != "clean" {
+	if len(fields) != 3 || fields[0] != run.InputRevision || fields[2] != "clean" {
 		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review checkout returned malformed verification")
 	}
 	return spine.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
@@ -201,7 +201,7 @@ func reviewInput(run spine.ReviewRunView) (string, error) {
 }
 
 func reviewMetadata(job spine.Job, run spine.ReviewRunView) incus.ReviewMetadata {
-	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.Revision, OwnershipNonce: run.Sandbox.OwnershipNonce}
+	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
 }
 
 func ownershipMetadata(sandbox spine.Sandbox) incus.OwnershipMetadata {

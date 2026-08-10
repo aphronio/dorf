@@ -65,21 +65,6 @@ set state=sqlc.arg(state),exit_code=sqlc.arg(exit_code),
     finished_at=sqlc.arg(finished_at)
 where id=sqlc.arg(id);
 
--- name: ListPassingCheckEvidence :many
-select c.evidence_id
-from dorf.repository_commands r
-join dorf.checks c
-  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
- and c.revision=sqlc.arg(revision)
-where r.job_id=sqlc.arg(job_id) and r.name in ('check','smoke')
-  and c.state='passed' and c.exit_code=0
-order by r.name;
-
--- name: CountDeclaredChecks :one
-select count(*)
-from dorf.repository_commands
-where job_id=sqlc.arg(job_id) and name in ('check','smoke');
-
 -- name: ListChecks :many
 select c.id,c.job_id,c.name,c.command,c.revision,c.state,
        coalesce(c.exit_code,0)::integer as exit_code,

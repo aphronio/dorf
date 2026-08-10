@@ -1114,9 +1114,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   service-layer coordinator that interpreted it was already deleted.
 - **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
   durable runtime rather than a second Dorf-owned program counter.
-- **Reconsider when:** Review and publication are also expressed as direct product-order operations,
-  or a real dogfood workflow shows that a stable Step identity or boundary cannot represent recovery
-  truthfully.
+- **Reconsider when:** D061 absorbed the original trigger after review and publication became direct
+  fact-ordered operations. Reconsider this remaining boundary only when real dogfood shows that a stable
+  Step identity or local fact guard cannot represent recovery truthfully.
 
 ## D052 — Feedback is a Message to the implementation AgentRun path
 

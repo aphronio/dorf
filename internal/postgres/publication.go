@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
@@ -32,24 +33,30 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	if err := githubapi.ValidateAuthority(locked.Repository, locked.GithubRepository, locked.GithubInstallationID, locked.BaseBranch, locked.Branch); err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication authority unresolved: %w", err)
 	}
-	switch locked.WorkflowPhase {
-	case "ready":
-		if err := expectOneRows(queries.StartPublicationIntent(ctx, dbsql.StartPublicationIntentParams{JobID: jobID, Revision: revision})); err != nil {
+	intentStarted := false
+	for _, kind := range []spine.ActionKind{spine.ActionRepositoryPush, spine.ActionGitHubPullRequest} {
+		_, actionErr := queries.GetPublicationAction(ctx, dbsql.GetPublicationActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
+		if actionErr == nil {
+			intentStarted = true
+			continue
+		}
+		if !errors.Is(actionErr, sql.ErrNoRows) {
+			return spine.Job{}, spine.Action{}, spine.Action{}, actionErr
+		}
+	}
+	if !intentStarted {
+		unsettled, err := queries.CountUnsettledInputs(ctx, jobID)
+		if err != nil {
 			return spine.Job{}, spine.Action{}, spine.Action{}, err
 		}
-	case "publishing":
-	case "published":
-		proposal, proposalErr := queries.GetProposal(ctx, jobID)
-		if proposalErr == nil && proposal.ProposedRevision == revision {
-		} else {
-			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("published Job is not stale at a later exact ready Revision")
+		latest, err := queries.GetLatestFollowRun(ctx, jobID)
+		if err != nil || unsettled != 0 || latest.State != spine.AgentRunCompleted || latest.Role != "implement" || !latest.Observed {
+			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}
-	case "publication-blocked":
-		if err := expectOneRows(queries.ResumePublicationPhase(ctx, dbsql.ResumePublicationPhaseParams{JobID: jobID, Revision: revision})); err != nil {
-			return spine.Job{}, spine.Action{}, spine.Action{}, err
+		observed, err := queries.GetEvidenceIdentity(ctx, spine.EvidenceID(latest.ID, "git-revision"))
+		if err != nil || observed.JobID != jobID || observed.Kind != "git-revision" || observed.AgentRunID != latest.ID || observed.Revision != revision {
+			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}
-	default:
-		return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", locked.WorkflowPhase)
 	}
 	push, err := beginPublicationAction(ctx, queries, jobID, spine.ActionRepositoryPush, revision)
 	if err != nil {
@@ -75,7 +82,7 @@ func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID s
 	if err != nil {
 		return spine.Action{}, err
 	}
-	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
+	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
 }
 
 func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (spine.Action, spine.Action, error) {
@@ -85,7 +92,7 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 		if err != nil {
 			return spine.Action{}, err
 		}
-		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey), nil
+		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
 	}
 	push, err := load(spine.ActionRepositoryPush)
 	if err != nil {
@@ -96,7 +103,19 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 }
 
 func (s Store) RecordPush(ctx context.Context, actionID, revision string) error {
-	return expectOneRows(dbsql.New(s.DB).CompleteRepositoryPush(ctx, dbsql.CompleteRepositoryPushParams{Revision: revision, ActionID: actionID}))
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(s.DB).WithTx(tx)
+	if err := expectOneRows(queries.CompleteRepositoryPush(ctx, dbsql.CompleteRepositoryPushParams{Revision: revision, ActionID: actionID})); err != nil {
+		return err
+	}
+	if err := queries.ClearPublicationAttentionForAction(ctx, dbsql.ClearPublicationAttentionForActionParams{Revision: revision, ActionID: sql.NullString{String: actionID, Valid: true}}); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spine.GitHubProposal) error {
@@ -113,7 +132,7 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	if err != nil {
 		return err
 	}
-	if locked.WorkflowPhase != "publishing" || locked.Revision != proposal.ProposedRevision {
+	if locked.Revision != proposal.ProposedRevision || !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("Proposal conflicts with the exact current Job Revision")
 	}
 	pushState, err := queries.GetRepositoryPushState(ctx, dbsql.GetRepositoryPushStateParams{JobID: proposal.JobID, Revision: locked.Revision})
@@ -139,18 +158,18 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	if err := expectOneRows(queries.CompleteProposalAction(ctx, dbsql.CompleteProposalActionParams{ActionID: actionID, JobID: proposal.JobID, ProposedRevision: proposal.ProposedRevision})); err != nil {
 		return err
 	}
-	if err := expectOneRows(queries.CompletePublication(ctx, dbsql.CompletePublicationParams{JobID: proposal.JobID, Revision: proposal.ProposedRevision})); err != nil {
+	if err := queries.ClearPublicationAttention(ctx, dbsql.ClearPublicationAttentionParams{JobID: proposal.JobID, Revision: proposal.ProposedRevision, ActionID: sql.NullString{String: actionID, Valid: true}}); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s Store) BlockPublication(ctx context.Context, jobID, revision, reason string) error {
+func (s Store) BlockPublication(ctx context.Context, jobID, revision, actionID, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "GitHub publication needs operator attention"
 	}
-	return expectOneRows(dbsql.New(s.DB).BlockPublicationPhase(ctx, dbsql.BlockPublicationPhaseParams{Reason: reason, JobID: jobID, Revision: revision}))
+	return expectOneRows(dbsql.New(s.DB).SetPublicationAttention(ctx, dbsql.SetPublicationAttentionParams{Reason: reason, ActionID: actionID, JobID: jobID, Revision: revision}))
 }
 
 func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposal, error) {
@@ -171,8 +190,12 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 	return &proposal, nil
 }
 
-func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, scope string) spine.Action {
-	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope}
+func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) spine.Action {
+	action := spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope, CreatedAt: createdAt}
+	if settledAt.Valid {
+		action.SettledAt = settledAt.Time
+	}
+	return action
 }
 
 func githubProposal(row dbsql.DorfGithubProposal) spine.GitHubProposal {

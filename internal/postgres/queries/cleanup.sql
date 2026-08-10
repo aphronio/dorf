@@ -1,6 +1,6 @@
 -- name: GetCleanupJobForUpdate :one
 select admission_open,cleanup_state,coalesce(cleanup_task_id,'') as cleanup_task_id,
-       coalesce(workflow_attention,'') as workflow_attention
+       coalesce(cleanup_attention,'') as cleanup_attention
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
@@ -16,6 +16,7 @@ where s.job_id=sqlc.arg(job_id)
 
 -- name: CompleteCleanup :execrows
 update dorf.jobs
-set cleanup_state='complete',cleanup_attention=null,workflow_attention=null,
+set cleanup_state='complete',cleanup_attention=null,
+    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null,
     cleaned_at=coalesce(cleaned_at,clock_timestamp())
 where id=sqlc.arg(job_id) and cleanup_state='scheduled';

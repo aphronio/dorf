@@ -47,13 +47,13 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 	}
 	if err == nil {
 		existing := jobOutcome(existingRow.JobID, existingRow.Outcome, existingRow.ObservedState, existingRow.ObservedMerged, existingRow.MergeCommitOID, existingRow.ObservedAt)
-		if existing.Kind != receipt.Kind {
-			return spine.JobOutcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", receipt.JobID, existing.Kind, receipt.Kind)
+		if existing.Kind != receipt.Kind || existing.ObservedState != receipt.ObservedState || existing.ObservedMerged != receipt.ObservedMerged || existing.MergeCommitOID != receipt.MergeCommitOID {
+			return spine.JobOutcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome authority; refusing contradictory retry", receipt.JobID, existing.Kind)
 		}
 		return existing, false, nil
 	}
-	if locked.WorkflowPhase != "published" {
-		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Revision")
+	if !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
+		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome cannot be recorded after admission closes or cleanup begins")
 	}
 	proposalRow, err := queries.GetProposal(ctx, receipt.JobID)
 	if err != nil {
@@ -63,15 +63,19 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 	if proposal.ProposedRevision != locked.Revision {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Proposal")
 	}
+	settled, err := queries.OutcomeImplementationSettled(ctx, receipt.JobID)
+	if err != nil {
+		return spine.JobOutcome{}, false, err
+	}
+	if !settled {
+		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires all admitted implementation input to be finished and observed")
+	}
 	inserted, err := queries.InsertOutcome(ctx, dbsql.InsertOutcomeParams{
 		JobID: receipt.JobID, Outcome: receipt.Kind,
 		ObservedState: receipt.ObservedState, ObservedMerged: receipt.ObservedMerged,
 		MergeCommitOID: receipt.MergeCommitOID, ObservedAt: receipt.ObservedAt,
 	})
 	if err != nil {
-		return spine.JobOutcome{}, false, err
-	}
-	if err := expectOneRows(queries.ClearOutcomeAttention(ctx, dbsql.ClearOutcomeAttentionParams{JobID: receipt.JobID, Revision: locked.Revision})); err != nil {
 		return spine.JobOutcome{}, false, err
 	}
 	if err := tx.Commit(); err != nil {

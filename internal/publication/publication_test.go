@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -28,6 +29,20 @@ func TestClaimLossDoesNotRecordActionSuccess(t *testing.T) {
 	})
 	if !errors.Is(err, claimLost) || recorded {
 		t.Fatalf("claim-loss success recorded=%v err=%v", recorded, err)
+	}
+}
+
+func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
+	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	messages := []spine.MessageView{
+		{Message: spine.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}},
+		{Message: spine.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}},
+	}
+	runs := []spine.AgentRun{{ID: "run-before", MessageID: "before"}, {ID: "run-after", MessageID: "after"}}
+
+	retainedMessages, retainedRuns := publicationInputsAt(messages, runs, cutoff)
+	if len(retainedMessages) != 1 || retainedMessages[0].ID != "before" || len(retainedRuns) != 1 || retainedRuns[0].ID != "run-before" {
+		t.Fatalf("retained Messages=%#v AgentRuns=%#v", retainedMessages, retainedRuns)
 	}
 }
 
@@ -135,15 +150,15 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	observedID := spine.EvidenceID(runID, "review-observation")
 	runs := []spine.ReviewRunView{{
 		AgentRun: spine.AgentRun{
-			ID:        runID,
-			MessageID: requestID,
-			Role:      role,
-			Revision:  revision,
+			ID:            runID,
+			MessageID:     requestID,
+			Role:          role,
+			InputRevision: revision,
 		},
 		Request:           spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
 		FeedbackMessageID: "message-review-feedback",
 	}, {
-		AgentRun:          spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", Revision: revision},
+		AgentRun:          spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
 		Request:           spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
 		FeedbackMessageID: "message-unselected",
 	}}

@@ -7,6 +7,7 @@ package dbsql
 
 import (
 	"context"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -57,7 +58,7 @@ func (q *Queries) GetActiveImplementationTurn(ctx context.Context, jobID string)
 
 const getCheckMessage = `-- name: GetCheckMessage :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=$1 and from_kind='workflow' and from_id=$2
 `
@@ -76,6 +77,7 @@ type GetCheckMessageRow struct {
 	Input             string
 	DeliveryIntent    spine.MessageDeliveryIntent
 	SteerTargetTurnID string
+	AdmittedAt        time.Time
 }
 
 func (q *Queries) GetCheckMessage(ctx context.Context, arg GetCheckMessageParams) (GetCheckMessageRow, error) {
@@ -90,6 +92,7 @@ func (q *Queries) GetCheckMessage(ctx context.Context, arg GetCheckMessageParams
 		&i.Input,
 		&i.DeliveryIntent,
 		&i.SteerTargetTurnID,
+		&i.AdmittedAt,
 	)
 	return i, err
 }
@@ -142,7 +145,11 @@ func (q *Queries) GetInitialMessage(ctx context.Context, arg GetInitialMessagePa
 }
 
 const getLatestFollowRun = `-- name: GetLatestFollowRun :one
-select ar.id,ar.job_id,ar.state,ar.role
+select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
+       exists (
+           select 1 from dorf.evidence e
+           where e.agent_run_id=ar.id and e.kind='git-revision'
+       ) as observed
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1 and m.delivery_intent='follow' and ar.role='implement'
@@ -151,10 +158,12 @@ limit 1
 `
 
 type GetLatestFollowRunRow struct {
-	ID    string
-	JobID string
-	State spine.AgentRunState
-	Role  string
+	ID            string
+	JobID         string
+	State         spine.AgentRunState
+	Role          string
+	InputRevision string
+	Observed      bool
 }
 
 func (q *Queries) GetLatestFollowRun(ctx context.Context, jobID string) (GetLatestFollowRunRow, error) {
@@ -165,13 +174,15 @@ func (q *Queries) GetLatestFollowRun(ctx context.Context, jobID string) (GetLate
 		&i.JobID,
 		&i.State,
 		&i.Role,
+		&i.InputRevision,
+		&i.Observed,
 	)
 	return i, err
 }
 
 const getMessageBySender = `-- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=$1 and from_kind=$2
   and from_id=$3
@@ -192,6 +203,7 @@ type GetMessageBySenderRow struct {
 	Input             string
 	DeliveryIntent    spine.MessageDeliveryIntent
 	SteerTargetTurnID string
+	AdmittedAt        time.Time
 }
 
 func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySenderParams) (GetMessageBySenderRow, error) {
@@ -206,6 +218,7 @@ func (q *Queries) GetMessageBySender(ctx context.Context, arg GetMessageBySender
 		&i.Input,
 		&i.DeliveryIntent,
 		&i.SteerTargetTurnID,
+		&i.AdmittedAt,
 	)
 	return i, err
 }
@@ -278,7 +291,7 @@ select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,
-       (ar.turn_id is not null)::boolean as delivered
+       (ar.turn_id is not null)::boolean as delivered,m.admitted_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
@@ -303,6 +316,7 @@ type ListMessagesRow struct {
 	TurnOutcome       string
 	Attention         string
 	Delivered         bool
+	AdmittedAt        time.Time
 }
 
 func (q *Queries) ListMessages(ctx context.Context, jobID string) ([]ListMessagesRow, error) {
@@ -332,6 +346,7 @@ func (q *Queries) ListMessages(ctx context.Context, jobID string) ([]ListMessage
 			&i.TurnOutcome,
 			&i.Attention,
 			&i.Delivered,
+			&i.AdmittedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -367,7 +382,7 @@ select coalesce(
         join dorf.actions a on a.id=j.setup_action_id
         join dorf.job_messages m
           on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
-        where j.id=$1 and j.workflow_phase='setup'
+        where j.id=$1 and j.setup_action_id=a.id
           and a.kind='repository-setup' and a.scope_key<>''
           and a.state='unsettled'
     ),
@@ -395,19 +410,4 @@ func (q *Queries) NextWakeSequence(ctx context.Context, jobID string) (int64, er
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const reopenPublishedForFollow = `-- name: ReopenPublishedForFollow :execrows
-update dorf.jobs
-set workflow_phase='implementing',workflow_attention=null
-where id=$1 and workflow_phase='published'
-  and not exists (select 1 from dorf.job_outcomes where job_id=dorf.jobs.id)
-`
-
-func (q *Queries) ReopenPublishedForFollow(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reopenPublishedForFollow, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }

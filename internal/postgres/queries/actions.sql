@@ -11,13 +11,13 @@ where dorf.sandboxes.job_id=excluded.job_id
   and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce;
 
 -- name: GetActionForUpdate :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
 for update;
 
 -- name: GetAction :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind);
 
@@ -39,20 +39,21 @@ join dorf.jobs j on j.id=a.job_id
 where a.id=sqlc.arg(action_id)
 for update of a,j;
 
--- name: FinishSetupAction :exec
+-- name: FinishSetupAction :execrows
 update dorf.actions
-set state=sqlc.arg(state)
-where dorf.actions.id=sqlc.arg(action_id);
+set state=sqlc.arg(state),settled_at=coalesce(settled_at,clock_timestamp())
+where dorf.actions.id=sqlc.arg(action_id)
+  and (state='unsettled' or state=sqlc.arg(state));
 
 -- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,scope_key
+select job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=sqlc.arg(id)
 for update;
 
 -- name: RecordSandboxActionSuccess :execrows
 update dorf.actions
-set state='succeeded'
+set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
 where id=sqlc.arg(id) and state<>'succeeded';
 
 -- name: SandboxRouteRevokeSucceeded :one
@@ -63,9 +64,7 @@ select exists(
 );
 
 -- name: ListActions :many
-select a.id,a.kind,a.state,a.scope_key,
-       coalesce(e.digest,'') as evidence_digest
+select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
 from dorf.actions a
-left join dorf.evidence e on e.action_id=a.id
 where a.job_id=sqlc.arg(job_id)
 order by a.created_at,a.id;

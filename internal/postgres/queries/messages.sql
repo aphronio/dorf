@@ -10,7 +10,7 @@ where job_id=sqlc.arg(job_id) and from_kind='human' and from_id=sqlc.arg(from_id
 
 -- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=sqlc.arg(job_id) and from_kind=sqlc.arg(from_kind)
   and from_id=sqlc.arg(from_id);
@@ -39,12 +39,6 @@ values(
     nullif(sqlc.arg(steer_target_turn_id)::text,'')
 );
 
--- name: ReopenPublishedForFollow :execrows
-update dorf.jobs
-set workflow_phase='implementing',workflow_attention=null
-where id=sqlc.arg(job_id) and workflow_phase='published'
-  and not exists (select 1 from dorf.job_outcomes where job_id=dorf.jobs.id);
-
 -- name: GetFirstUnsettledInput :one
 select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as attention
 from dorf.job_messages m
@@ -62,7 +56,11 @@ where m.job_id=sqlc.arg(job_id)
   and ar.role='implement' and ar.state not in ('completed','failed','interrupted');
 
 -- name: GetLatestFollowRun :one
-select ar.id,ar.job_id,ar.state,ar.role
+select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_revision,
+       exists (
+           select 1 from dorf.evidence e
+           where e.agent_run_id=ar.id and e.kind='git-revision'
+       ) as observed
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id) and m.delivery_intent='follow' and ar.role='implement'
@@ -71,7 +69,7 @@ limit 1;
 
 -- name: GetCheckMessage :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
-       coalesce(steer_target_turn_id,'') as steer_target_turn_id
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
 from dorf.job_messages
 where job_id=sqlc.arg(job_id) and from_kind='workflow' and from_id=sqlc.arg(from_id);
 
@@ -84,7 +82,7 @@ select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,
-       (ar.turn_id is not null)::boolean as delivered
+       (ar.turn_id is not null)::boolean as delivered,m.admitted_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)
@@ -98,7 +96,7 @@ select coalesce(
         join dorf.actions a on a.id=j.setup_action_id
         join dorf.job_messages m
           on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
-        where j.id=sqlc.arg(job_id) and j.workflow_phase='setup'
+        where j.id=sqlc.arg(job_id) and j.setup_action_id=a.id
           and a.kind='repository-setup' and a.scope_key<>''
           and a.state='unsettled'
     ),

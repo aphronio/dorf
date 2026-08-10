@@ -141,41 +141,9 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 	return results, firstErr
 }
 
-func AssessReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store) ReadinessAssessment {
+func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, messages []MessageView, agentRuns []AgentRun) ReadinessAssessment {
 	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
 	assessment := ReadinessAssessment{Status: "not_ready", Revision: job.Revision, Evidence: verified}
-	if job.WorkflowPhase == "blocked" {
-		assessment.Status = "blocked"
-		assessment.Reason = "deterministic workflow attention must be resolved"
-		if job.WorkflowAttention != "" {
-			assessment.Reason = job.WorkflowAttention
-		}
-		return assessment
-	}
-	if err != nil {
-		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
-		return assessment
-	}
-	if !readinessPreserved(job.WorkflowPhase) {
-		assessment.Reason = "deterministic setup, Revision observation, or Checks are incomplete"
-		return assessment
-	}
-	assessment.Status, assessment.Ready = "ready", true
-	assessment.Reason = "every declared Check has independently verified observed Evidence for the exact current Revision"
-	return assessment
-}
-
-func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, runs []ReviewRunView) ReadinessAssessment {
-	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
-	assessment := ReadinessAssessment{Status: "not_ready", Revision: job.Revision, Evidence: verified}
-	if job.WorkflowPhase == "blocked" {
-		assessment.Status = "blocked"
-		assessment.Reason = job.WorkflowAttention
-		if assessment.Reason == "" {
-			assessment.Reason = "deterministic workflow attention must be resolved"
-		}
-		return assessment
-	}
 	if err != nil {
 		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
 		return assessment
@@ -185,14 +153,18 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
 		return assessment
 	}
-	if plan.State != "final" || plan.Plan.Decision != "no-review" && plan.Plan.Decision != "selected" {
+	if plan.Plan.Decision != "no-review" && plan.Plan.Decision != "selected" {
 		assessment.Status, assessment.Ready = "not_ready", false
-		assessment.Reason = "persisted review plan is not final"
+		assessment.Reason = "persisted review plan has no final decision"
 		return assessment
 	}
-	byRole := make(map[string]ReviewRunView, len(runs))
-	for _, run := range runs {
-		if run.JobID == job.ID && run.Revision == job.Revision {
+	if (plan.Plan.Decision == "no-review" && len(plan.Plan.Roles) != 0) || (plan.Plan.Decision == "selected" && len(plan.Plan.Roles) == 0) {
+		assessment.Reason = "persisted review decision and selected Roles disagree"
+		return assessment
+	}
+	byRole := make(map[string]ReviewRunView, len(reviews))
+	for _, run := range reviews {
+		if run.JobID == job.ID && run.InputRevision == job.Revision {
 			byRole[run.Role] = run
 		}
 	}
@@ -206,6 +178,8 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		}
 		return true
 	}
+	type feedbackOwner struct{ messageID, reviewerID string }
+	feedback := make([]feedbackOwner, 0, len(plan.Plan.Roles))
 	for _, role := range plan.Plan.Roles {
 		run, ok := byRole[string(role)]
 		expectedRunID := ReviewAgentRunID(job.ID, job.Revision, string(role))
@@ -220,11 +194,54 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 		if !verifyRun(run) {
 			return assessment
 		}
+		feedback = append(feedback, feedbackOwner{messageID: run.FeedbackMessageID, reviewerID: run.ID})
 	}
-	if !readinessPreserved(job.WorkflowPhase) {
-		assessment.Status, assessment.Ready = "not_ready", false
-		assessment.Reason = "review planning, selected AgentRuns, or same-thread feedback handling is incomplete"
-		return assessment
+
+	messageByID := make(map[string]MessageView, len(messages))
+	for _, message := range messages {
+		messageByID[message.ID] = message
+	}
+	runByMessage := make(map[string]AgentRun, len(agentRuns))
+	for _, run := range agentRuns {
+		runByMessage[run.MessageID] = run
+	}
+	for _, item := range feedback {
+		message, ok := messageByID[item.messageID]
+		implementation, runOK := runByMessage[item.messageID]
+		if !ok || message.FromKind != MessageFromAgent || message.FromID != item.reviewerID || !runOK || implementation.JobID != job.ID || implementation.Role != "implement" || implementation.InputRevision != job.Revision || implementation.State != AgentRunCompleted || implementation.TurnOutcome != "completed" {
+			assessment.Reason = fmt.Sprintf("review feedback Message %s has not been handled by a completed implementation AgentRun", item.messageID)
+			return assessment
+		}
+	}
+
+	var latestFollow AgentRun
+	var latestSequence int64
+	for _, run := range agentRuns {
+		if run.JobID != job.ID || run.Role != "implement" {
+			continue
+		}
+		if run.State != AgentRunCompleted && run.State != AgentRunFailed && run.State != AgentRunInterrupted {
+			assessment.Reason = fmt.Sprintf("implementation AgentRun %s is not terminal", run.ID)
+			return assessment
+		}
+		message, ok := messageByID[run.MessageID]
+		if !ok {
+			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no retained input Message", run.ID)
+			return assessment
+		}
+		if message.Intent == MessageFollow && (latestFollow.ID == "" || message.Sequence > latestSequence) {
+			latestFollow, latestSequence = run, message.Sequence
+		}
+	}
+	if latestFollow.ID != "" {
+		if latestFollow.State != AgentRunCompleted || latestFollow.TurnOutcome != "completed" || latestFollow.InputRevision == "" {
+			assessment.Reason = fmt.Sprintf("latest implementation Follow AgentRun %s has not completed successfully", latestFollow.ID)
+			return assessment
+		}
+		if err := verifyGitRevisionObservation(job, latestFollow, records, blobs); err != nil {
+			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no valid Git observation: %v", latestFollow.ID, err)
+			return assessment
+		}
 	}
 	assessment.Status, assessment.Ready = "ready", true
 	if plan.Plan.Decision == "no-review" {
@@ -235,24 +252,49 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	return assessment
 }
 
-func readinessPreserved(phase string) bool {
-	switch phase {
-	case "ready", "publishing", "publication-blocked", "published":
-		return true
-	default:
-		return false
+func verifyGitRevisionObservation(job Job, run AgentRun, records []Evidence, blobs evidence.Store) error {
+	expectedID := EvidenceID(run.ID, "git-revision")
+	var observed Evidence
+	for _, record := range records {
+		if record.ID == expectedID {
+			observed = record
+			break
+		}
 	}
+	if observed.ID == "" || observed.AgentRunID != run.ID || observed.ActionID != "" || observed.CheckID != "" || observed.Revision != job.Revision || observed.Kind != "git-revision" || observed.Producer != commandEvidenceProducer || observed.MediaType != "application/vnd.dorf.observation+json" {
+		return fmt.Errorf("Evidence metadata does not match the AgentRun and exact Revision")
+	}
+	if observed.StartedAt.IsZero() || observed.FinishedAt.Before(observed.StartedAt) {
+		return fmt.Errorf("Evidence has no bounded Git observation timing")
+	}
+	contents, err := blobs.ReadVerified(observed.Digest, observed.ByteSize)
+	if err != nil {
+		return fmt.Errorf("immutable Evidence blob is unavailable or invalid: %w", err)
+	}
+	var artifact RevisionObservation
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&artifact); err != nil {
+		return fmt.Errorf("observation artifact is invalid: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("observation artifact has trailing content")
+	}
+	if artifact.ComparisonBase != run.InputRevision || artifact.Revision != job.Revision || artifact.Branch != job.Branch || !fullGitObjectID(artifact.Tree) || !artifact.StartedAt.Equal(observed.StartedAt) || !artifact.FinishedAt.Equal(observed.FinishedAt) {
+		return fmt.Errorf("observation artifact does not match its AgentRun, branch, timing, and exact Revision")
+	}
+	return nil
 }
 
 func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs evidence.Store) ReviewEvidenceVerification {
 	expectedEvidenceID := EvidenceID(run.ID, "review-observation")
-	result := ReviewEvidenceVerification{AgentRunID: run.ID, Role: run.Role, Revision: run.Revision, ObservedEvidenceID: expectedEvidenceID}
+	result := ReviewEvidenceVerification{AgentRunID: run.ID, Role: run.Role, Revision: run.InputRevision, ObservedEvidenceID: expectedEvidenceID}
 	fail := func(format string, args ...any) {
 		if result.Error == "" {
 			result.Error = fmt.Sprintf(format, args...)
 		}
 	}
-	if run.State != AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.Revision == "" || run.Capability != ReviewReadOnlyCapability {
+	if run.State != AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
 		fail("terminal harness binding, exact Revision, or least-capability envelope is incomplete")
 	}
 	recordsByID := make(map[string]Evidence, len(records))
@@ -263,7 +305,7 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 	if !observedOK {
 		fail("observed Evidence metadata is missing or has the wrong stable identity")
 	}
-	if observed.ActionID != "" || observed.CheckID != "" || observed.AgentRunID != run.ID || observed.Revision != run.Revision || observed.Producer != reviewEvidenceProducer || observed.Kind != "review-observation" || observed.MediaType != "application/vnd.dorf.observation+json" || !observed.StartedAt.Equal(run.StartedAt) || !observed.FinishedAt.Equal(run.FinishedAt) {
+	if observed.ActionID != "" || observed.CheckID != "" || observed.AgentRunID != run.ID || observed.Revision != run.InputRevision || observed.Producer != reviewEvidenceProducer || observed.Kind != "review-observation" || observed.MediaType != "application/vnd.dorf.observation+json" || !observed.StartedAt.Equal(run.StartedAt) || !observed.FinishedAt.Equal(run.FinishedAt) {
 		fail("observed Evidence does not match its AgentRun, Revision, producer, or bounded timing")
 	}
 	observedBytes, err := blobs.ReadVerified(observed.Digest, observed.ByteSize)
@@ -279,11 +321,11 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 			fail("observed artifact has trailing content")
 		}
 		expected := reviewObservationArtifact{
-			AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
+			AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 			Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
 			Checkout: artifact.Checkout,
 		}
-		if artifact.Checkout.Revision != run.Revision || !fullGitObjectID(artifact.Checkout.Tree) {
+		if artifact.Checkout.Revision != run.InputRevision || !fullGitObjectID(artifact.Checkout.Tree) {
 			fail("observed artifact has no exact Revision checkout identity")
 		}
 		if artifact != expected {

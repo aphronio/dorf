@@ -25,7 +25,7 @@ func (q *Queries) GetSandbox(ctx context.Context, id string) (DorfSandbox, error
 }
 
 const getScopedActionBySandbox = `-- name: GetScopedActionBySandbox :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where job_id=$1 and kind=$2 and scope_key=$3
 `
@@ -36,23 +36,17 @@ type GetScopedActionBySandboxParams struct {
 	SandboxID string
 }
 
-type GetScopedActionBySandboxRow struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
-}
-
-func (q *Queries) GetScopedActionBySandbox(ctx context.Context, arg GetScopedActionBySandboxParams) (GetScopedActionBySandboxRow, error) {
+func (q *Queries) GetScopedActionBySandbox(ctx context.Context, arg GetScopedActionBySandboxParams) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getScopedActionBySandbox, arg.JobID, arg.Kind, arg.SandboxID)
-	var i GetScopedActionBySandboxRow
+	var i DorfAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }

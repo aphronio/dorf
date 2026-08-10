@@ -9,26 +9,27 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/postgres"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string) (spine.Job, spine.GitHubProposal) {
 	t.Helper()
 	ctx := context.Background()
-	revision := strings.Repeat("a", 40)
-	input := postgres.NewJob{
-		AdmissionKey: "outcome-" + label + fmt.Sprintf("-%d", time.Now().UnixNano()),
-		Goal:         "record one exact Job outcome", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: revision, Branch: "dorf/outcome-" + label,
-		ProviderConnection: "primary",
-		Model:              "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
-		GitHubInstallation: "42", BaseBranch: "greenfield",
+	job, revision, _ := prepareReviewIntegrationJob(t, store, "outcome-"+label+fmt.Sprintf("-%d", time.Now().UnixNano()))
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/outcome.md"}, true, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	job, created, err := store.Admit(ctx, input)
-	if err != nil || !created {
-		t.Fatalf("admit created=%t err=%v", created, err)
+	plan, err := policy.ReviewPolicy(facts)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready' where id=$1`, job.ID); err != nil {
+	if err := store.RecordReviewPolicy(ctx, spine.ReviewPlanRecord{
+		JobID: job.ID, Revision: revision,
+		Facts: facts,
+		Plan:  plan,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	job, push, pull, err := store.BeginPublication(ctx, job.ID, revision)
@@ -45,40 +46,62 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 	if err := store.RecordProposal(ctx, pull.ID, proposal); err != nil {
 		t.Fatal(err)
 	}
-	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.WorkflowPhase != "published" {
-		t.Fatalf("published Job=%#v err=%v", job, err)
+	stored, err := store.Proposal(ctx, job.ID)
+	if err != nil || stored == nil || stored.Stale || stored.ProposedRevision != revision {
+		t.Fatalf("current Proposal=%#v err=%v", stored, err)
 	}
 	return job, proposal
 }
 
-func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testing.T) {
+func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, _ := preparePublishedOutcomeJob(t, store, "follow-unchanged")
-	message, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
-		JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "github-comment-1",
-		Input: "Please explain the tradeoff without changing code.", Intent: spine.MessageFollow,
-	})
-	if err != nil || !created {
-		t.Fatalf("admit published follow=%#v created=%t err=%v", message, created, err)
-	}
+	job, proposal := preparePublishedOutcomeJob(t, store, "admission-race")
 	merge := spine.JobOutcome{
 		JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed",
 		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: time.Now().UTC(),
 	}
-	if _, _, err := store.RecordOutcome(context.Background(), merge); err == nil {
-		t.Fatal("recorded an Outcome while proposal feedback was still being handled")
+	type result struct {
+		kind    string
+		created bool
+		err     error
 	}
-	if _, err := store.DB.ExecContext(context.Background(), `update dorf.agent_runs set state='completed',harness='codex',thread_id='thread-completed',turn_id='turn-completed',turn_outcome='completed' where job_id=$1`, job.ID); err != nil {
-		t.Fatal(err)
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
+			JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "github-comment-race",
+			Input: "Please explain the tradeoff without changing code.", Intent: spine.MessageFollow,
+		})
+		results <- result{kind: "message", created: created, err: err}
+	}()
+	go func() {
+		defer wg.Done()
+		_, created, err := store.RecordOutcome(context.Background(), merge)
+		results <- result{kind: "outcome", created: created, err: err}
+	}()
+	wg.Wait()
+	close(results)
+
+	winner := ""
+	for result := range results {
+		if result.err == nil && result.created {
+			if winner != "" {
+				t.Fatalf("both admission and outcome succeeded; second=%s", result.kind)
+			}
+			winner = result.kind
+		} else if result.err == nil {
+			t.Fatalf("%s returned neither a creation nor a conflict", result.kind)
+		}
 	}
-	completed, err := store.CompleteUnchangedRun(context.Background(), job.ID, spine.AgentRunID(message.ID), job.Revision, "no code change")
-	if err != nil || !completed {
-		t.Fatalf("complete unchanged=%t err=%v", completed, err)
+	storedOutcome, err := store.Outcome(context.Background(), job.ID)
+	storedProposal, proposalErr := store.Proposal(context.Background(), job.ID)
+	if err != nil || proposalErr != nil || winner == "" || storedProposal == nil || storedProposal.ProposedRevision != proposal.ProposedRevision {
+		t.Fatalf("winner=%q Outcome=%#v Proposal=%#v err=%v proposalErr=%v", winner, storedOutcome, storedProposal, err, proposalErr)
 	}
-	stored, err := store.Job(context.Background(), job.ID)
-	if err != nil || stored.WorkflowPhase != "published" || stored.WorkflowAttention != "" {
-		t.Fatalf("stored=%#v err=%v", stored, err)
+	if winner == "outcome" && storedOutcome == nil || winner == "message" && storedOutcome != nil {
+		t.Fatalf("winner=%q Outcome=%#v", winner, storedOutcome)
 	}
 }
 
@@ -100,9 +123,14 @@ func TestPostgresOutcomeFirstWriteWinsAndLeavesProposalAuthorityUntouched(t *tes
 	if err != nil || created || got != stored {
 		t.Fatalf("repeat=%#v created=%t err=%v", got, created, err)
 	}
+	contradictory := receipt
+	contradictory.MergeCommitOID = strings.Repeat("c", 40)
+	if _, _, err := store.RecordOutcome(context.Background(), contradictory); err == nil || !strings.Contains(err.Error(), "immutable accepted outcome authority") {
+		t.Fatalf("contradictory same-kind authority error=%v", err)
+	}
 	conflict := receipt
 	conflict.Kind, conflict.ObservedMerged, conflict.MergeCommitOID = spine.OutcomeRejected, false, ""
-	if _, _, err := store.RecordOutcome(context.Background(), conflict); err == nil || !strings.Contains(err.Error(), "immutable accepted") {
+	if _, _, err := store.RecordOutcome(context.Background(), conflict); err == nil || !strings.Contains(err.Error(), "immutable accepted outcome authority") {
 		t.Fatalf("conflicting outcome error=%v", err)
 	}
 	proposalAfter, err := store.Proposal(context.Background(), job.ID)

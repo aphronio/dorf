@@ -506,15 +506,12 @@ func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label st
 	return job, threadID
 }
 
-func TestRevisionChecksAndWorkflowMessage(t *testing.T) {
-	_, store, client := testDatabase(t)
+func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns(t *testing.T) {
+	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	key := fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano())
-	start := strings.Repeat("1", 40)
-	first := strings.Repeat("2", 40)
-	second := strings.Repeat("3", 40)
-	input := postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-evidence", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, input)
+	start, changed := strings.Repeat("1", 40), strings.Repeat("2", 40)
+	input := postgres.NewJob{AdmissionKey: fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-evidence", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
+	job, created, err := store.Admit(ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -523,83 +520,46 @@ func TestRevisionChecksAndWorkflowMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setupEvidence := integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "a")
-	if err := store.RecordSetup(ctx, setup.ID, setupEvidence, spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
+	if err := store.RecordSetup(ctx, setup.ID, integrationEvidence(setup.ID, "repository-setup", setup.ID, "", start, "a"), spine.CommandObservation{Command: "prepare", StartedAt: now, FinishedAt: now}, []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}}); err != nil {
 		t.Fatal(err)
 	}
 	threadID := "thread-" + job.ID
-	implementationRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-implementation-"+job.ID)
-	firstCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, start)
-	if err != nil || !ready || firstCandidate.ID != implementationRun.ID {
-		t.Fatalf("first Revision candidate=%#v ready=%v err=%v", firstCandidate, ready, err)
+	changedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-changed-"+job.ID)
+	changedEvidence := integrationEvidence(changedRun.ID, "git-revision", "", "", changed, "b")
+	changedEvidence.AgentRunID = changedRun.ID
+	changedObservation := spine.RevisionObservation{ComparisonBase: start, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, changedRun.ID, changedObservation, changedEvidence); err != nil || !recorded {
+		t.Fatalf("changed Revision observation recorded=%v err=%v", recorded, err)
 	}
-	firstRevisionEvidence := integrationEvidence(firstCandidate.ID, "git-revision", "", "", first, "b")
-	if recorded, err := store.RecordRevision(ctx, job.ID, firstCandidate.ID, spine.RevisionObservation{ComparisonBase: start, Revision: first, Tree: strings.Repeat("4", 40), Branch: input.Branch}, firstRevisionEvidence); err != nil || !recorded {
-		t.Fatalf("first Revision recorded=%v err=%v", recorded, err)
-	}
-	failed, err := store.BeginCheck(ctx, job.ID, first, "check", "go test ./...")
+
+	failed, err := store.BeginCheck(ctx, job.ID, changed, "check", "go test ./...")
 	if err != nil {
 		t.Fatal(err)
 	}
-	failedEvidence := integrationEvidence(failed.ID, "check-output", "", failed.ID, first, "c")
+	failedEvidence := integrationEvidence(failed.ID, "check-output", "", failed.ID, changed, "c")
 	if err := store.RecordCheck(ctx, failed, failedEvidence, spine.CommandObservation{Command: failed.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	failed.State, failed.ExitCode, failed.EvidenceDigest = "failed", 1, failedEvidence.Digest
 	checkMessage, created, err := store.AdmitCheckMessage(ctx, failed)
-	if err != nil || !created || checkMessage.Sequence != 2 || checkMessage.FromKind != "workflow" || checkMessage.FromID != failed.ID || checkMessage.ID != spine.MessageID(job.ID, "workflow", failed.ID) {
+	if err != nil || !created || checkMessage.FromKind != spine.MessageFromWorkflow || checkMessage.FromID != failed.ID {
 		t.Fatalf("failed Check Message=%#v created=%v err=%v", checkMessage, created, err)
 	}
-	repeated, created, err := store.AdmitCheckMessage(ctx, failed)
-	if err != nil || created || repeated != checkMessage {
-		t.Fatalf("repeated failed Check Message=%#v created=%v err=%v", repeated, created, err)
+	unchangedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-unchanged-"+job.ID)
+	unchangedEvidence := integrationEvidence(unchangedRun.ID, "git-revision", "", "", changed, "d")
+	unchangedEvidence.AgentRunID = unchangedRun.ID
+	unchangedObservation := spine.RevisionObservation{ComparisonBase: changed, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, unchangedRun.ID, unchangedObservation, unchangedEvidence); err != nil || !recorded {
+		t.Fatalf("unchanged Revision observation recorded=%v err=%v", recorded, err)
 	}
-	delivery, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || delivery == nil || delivery.Message != checkMessage || delivery.AgentRun.MessageID != checkMessage.ID || delivery.AgentRun.Role != "implement" || delivery.AgentRun.ID != spine.AgentRunID(checkMessage.ID) {
-		t.Fatalf("failed Check implementation delivery=%#v err=%v", delivery, err)
-	}
-	handlingRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-check-feedback-"+job.ID)
-	job, err = store.Job(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondCandidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
-	if err != nil || !ready || secondCandidate.ID != handlingRun.ID {
-		t.Fatalf("second Revision candidate=%#v ready=%v err=%v", secondCandidate, ready, err)
-	}
-	secondRevisionEvidence := integrationEvidence(secondCandidate.ID, "git-revision", "", "", second, "d")
-	if recorded, err := store.RecordRevision(ctx, job.ID, secondCandidate.ID, spine.RevisionObservation{ComparisonBase: first, Revision: second, Tree: strings.Repeat("5", 40), Branch: input.Branch}, secondRevisionEvidence); err != nil || !recorded {
-		t.Fatalf("second Revision recorded=%v err=%v", recorded, err)
-	}
-	passing, err := store.BeginCheck(ctx, job.ID, second, "check", "go test ./...")
-	if err != nil {
-		t.Fatal(err)
-	}
-	passingEvidence := integrationEvidence(passing.ID, "check-output", "", passing.ID, second, "e")
-	if err := store.RecordCheck(ctx, passing, passingEvidence, spine.CommandObservation{Command: passing.Command, StartedAt: now, FinishedAt: now}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkReady(ctx, job.ID, second, nil); err == nil || !strings.Contains(err.Error(), "verified Evidence") {
-		t.Fatalf("row-only readiness error=%v", err)
-	}
-	if err := store.MarkReady(ctx, job.ID, second, []string{passingEvidence.ID}); err != nil {
-		t.Fatal(err)
-	}
-	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.WorkflowPhase != "ready" || job.Revision != second || job.StartingRevision != start {
-		t.Fatalf("ready job=%#v err=%v", job, err)
-	}
-	checks, err := store.Checks(ctx, job.ID)
-	byRevision := map[string]spine.Check{}
-	for _, check := range checks {
-		byRevision[check.Revision] = check
-	}
-	if err != nil || len(checks) != 2 || byRevision[first].State != "failed" || byRevision[second].State != "passed" {
-		t.Fatalf("historical/current Checks=%#v err=%v", checks, err)
-	}
-	records, err := store.Evidence(ctx, job.ID)
-	if err != nil || len(records) != 5 {
-		t.Fatalf("Evidence=%#v err=%v", records, err)
+	stored, err := store.Job(ctx, job.ID)
+	records, evidenceErr := store.Evidence(ctx, job.ID)
+	if err != nil || evidenceErr != nil || stored.Revision != changed || changedRun.InputRevision != start || unchangedRun.InputRevision != changed || !slices.ContainsFunc(records, func(record spine.Evidence) bool {
+		return record.ID == changedEvidence.ID && record.AgentRunID == changedRun.ID && record.Revision == changed
+	}) || !slices.ContainsFunc(records, func(record spine.Evidence) bool {
+		return record.ID == unchangedEvidence.ID && record.AgentRunID == unchangedRun.ID && record.Revision == changed
+	}) {
+		t.Fatalf("stored Job=%#v changedRun=%#v unchangedRun=%#v Evidence=%#v err=%v evidenceErr=%v", stored, changedRun, unchangedRun, records, err, evidenceErr)
 	}
 }
 
@@ -610,26 +570,14 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 		name  string
 		paths []string
 		roles []policy.Role
-		phase string
 	}{
-		{name: "explicit no review", paths: []string{"docs/review.md"}, phase: "ready"},
-		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, roles: []policy.Role{policy.RoleAuthAuthority}, phase: "reviewing"},
-		{name: "multiple mandatory roles", paths: []string{"internal/auth/session.go", "web/login.tsx"}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleBrowserUI}, phase: "reviewing"},
+		{name: "explicit no review", paths: []string{"docs/review.md"}},
+		{name: "mandatory selected role", paths: []string{"internal/auth/session.go"}, roles: []policy.Role{policy.RoleAuthAuthority}},
+		{name: "multiple mandatory roles", paths: []string{"internal/auth/session.go", "web/login.tsx"}, roles: []policy.Role{policy.RoleAuthAuthority, policy.RoleBrowserUI}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			job, revision, verifiedID := prepareReviewIntegrationJob(t, store, test.name)
-			if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-				t.Fatal(err)
-			}
-			waiting, err := store.Job(ctx, job.ID)
-			if err != nil || waiting.WorkflowPhase != "review-planning" {
-				t.Fatalf("post-Checks automatic planning Job=%#v err=%v", waiting, err)
-			}
-			record, err := store.ReviewPlan(ctx, job.ID, revision)
-			if err != nil || record.State != "pending" {
-				t.Fatalf("automatic pending policy input=%#v err=%v", record, err)
-			}
-			facts, err := policy.FactsFromPaths(job.StartingRevision, revision, test.paths, true, false)
+			job, revision, _ := prepareReviewIntegrationJob(t, store, test.name)
+			facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, test.paths, true, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -637,19 +585,15 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record.Facts, record.Plan = facts, plan
+			record := spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
 			if err := store.RecordReviewPolicy(ctx, record); err != nil {
 				t.Fatal(err)
 			}
 			if err := store.RecordReviewPolicy(ctx, record); err != nil {
 				t.Fatalf("idempotent policy retry: %v", err)
 			}
-			updated, err := store.Job(ctx, job.ID)
-			if err != nil || updated.WorkflowPhase != test.phase {
-				t.Fatalf("updated Job=%#v err=%v", updated, err)
-			}
 			persisted, err := store.ReviewPlan(ctx, job.ID, revision)
-			if err != nil || persisted.State != "final" || persisted.PolicyDigest == "" || persisted.Plan.Decision != plan.Decision {
+			if err != nil || persisted.RecordedAt.IsZero() || persisted.Facts.Revision != revision || persisted.Plan.Decision != plan.Decision {
 				t.Fatalf("persisted plan=%#v err=%v", persisted, err)
 			}
 			runs, err := store.ReviewRuns(ctx, job.ID, revision)
@@ -664,7 +608,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				for i, role := range test.roles {
 					request := runs[i].Request
 					wantInput := policy.RolePrompt(role, facts, []string{"check"})
-					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || runs[i].Route != spine.RouteForSandbox(runs[i].Sandbox) {
+					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || runs[i].Route != spine.RouteForSandbox(runs[i].Sandbox) {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
 					}
 					for prior := 0; prior < i; prior++ {
@@ -691,125 +635,23 @@ func TestReviewerFeedbackBecomesIdempotentObservedImplementationMessage(t *testi
 	if message.FromKind != "agent" || message.FromID == "" || message.ID != spine.MessageID(job.ID, "agent", message.FromID) || implementationRun.MessageID != message.ID || implementationRun.Role != "implement" || implementationRun.ID != spine.AgentRunID(message.ID) {
 		t.Fatalf("review feedback Message=%#v implementation AgentRun=%#v", message, implementationRun)
 	}
-	if completed, err := store.CompleteReviewFeedback(ctx, job.ID, implementationRun.ID, revision); err != nil || !completed {
-		t.Fatalf("unchanged review feedback completion=%t err=%v", completed, err)
+	evidence := integrationEvidence(implementationRun.ID, "git-revision", "", "", revision, "9")
+	evidence.AgentRunID = implementationRun.ID
+	observation := spine.RevisionObservation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, implementationRun.ID, observation, evidence); err != nil || !recorded {
+		t.Fatalf("unchanged review feedback observation recorded=%t err=%v", recorded, err)
 	}
-	ready, err := store.Job(ctx, job.ID)
-	if err != nil || ready.WorkflowPhase != "ready" || ready.Revision != revision {
-		t.Fatalf("unchanged review feedback Job=%#v err=%v", ready, err)
+	stored, err := store.Job(ctx, job.ID)
+	if err != nil || stored.Revision != revision {
+		t.Fatalf("unchanged review feedback Job=%#v err=%v", stored, err)
 	}
 }
 
-func TestReviewRequestMessagesStayOutsideImplementationFIFOAndRevisionBoundary(t *testing.T) {
+func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, "review-request-implementation-fifo")
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, _ := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
-	plan, _ := policy.ReviewPolicy(facts)
-	record.Facts, record.Plan = facts, plan
-	if err := store.RecordReviewPolicy(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	runs, err := store.ReviewRuns(ctx, job.ID, revision)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("review runs=%#v err=%v", runs, err)
-	}
-	reviewerRun := runs[0]
-	messages, err := store.Messages(ctx, job.ID)
-	reviewIndex := slices.IndexFunc(messages, func(candidate spine.MessageView) bool { return candidate.ID == reviewerRun.Request.ID })
-	if err != nil || reviewIndex < 0 || messages[reviewIndex].BlockingSeq != 0 || messages[reviewIndex].BlockingReason != "" {
-		t.Fatalf("review request corrupted implementation FIFO projection messages=%#v err=%v", messages, err)
-	}
-	prepareReviewBoundaryIntegration(t, store, reviewerRun)
-	reviewerRun, err = store.ReviewRun(ctx, reviewerRun.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	feedbackTurn := spine.HarnessTurn{ID: reviewerRun.TurnID, Status: "completed", Output: "review feedback after earlier human input"}
-	observed := integrationEvidence(reviewerRun.ID, "review-observation", "", "", revision, "8")
-	observed.AgentRunID, observed.Producer = reviewerRun.ID, "dorf-agent-review"
-	observed.StartedAt, observed.FinishedAt = reviewerRun.StartedAt, reviewerRun.FinishedAt
-	feedback, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, feedbackTurn, observed)
-	if err != nil || !created || feedback.Sequence <= reviewerRun.Request.Sequence {
-		t.Fatalf("feedback Message=%#v review request=%#v created=%t err=%v", feedback, reviewerRun.Request, created, err)
-	}
-	messages, err = store.Messages(ctx, job.ID)
-	feedbackIndex := slices.IndexFunc(messages, func(candidate spine.MessageView) bool { return candidate.ID == feedback.ID })
-	if err != nil || feedbackIndex < 0 || messages[feedbackIndex].BlockingSeq != 0 || messages[feedbackIndex].BlockingReason != "" {
-		t.Fatalf("feedback FIFO projection messages=%#v err=%v", messages, err)
-	}
-
-	first, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || first == nil || first.Message.ID != feedback.ID || first.AgentRun.Role != "implement" {
-		t.Fatalf("first implementation FIFO delivery=%#v err=%v", first, err)
-	}
-	threadID := "thread-" + job.ID
-	if err := store.PrepareAgentRun(ctx, first.AgentRun.ID, "codex", first.AgentRun.BaselineTurnID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, "turn-review-feedback-"+job.ID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, revision)
-	if err != nil || !ready || candidate.ID != first.AgentRun.ID || candidate.Role != "implement" {
-		t.Fatalf("latest implementation Revision candidate=%#v ready=%t err=%v", candidate, ready, err)
-	}
-}
-
-func TestCompleteReviewFeedbackDefersToLaterMessageAndChangedRevision(t *testing.T) {
-	t.Run("later Message wins readiness race", func(t *testing.T) {
-		_, store, _ := testDatabase(t)
-		ctx := context.Background()
-		job, revision, _, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-late-message")
-		late, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-clarification", Input: "also account for this accepted clarification"})
-		if err != nil || !created || late.Sequence <= 2 {
-			t.Fatalf("late Message=%#v created=%t err=%v", late, created, err)
-		}
-		if completed, err := store.CompleteReviewFeedback(ctx, job.ID, implementationRun.ID, revision); err != nil || completed {
-			t.Fatalf("late Message readiness race completion=%t err=%v", completed, err)
-		}
-		delivery, err := store.NextDelivery(ctx, job.ID)
-		if err != nil || delivery == nil || delivery.Message.ID != late.ID || delivery.AgentRun.Role != "implement" {
-			t.Fatalf("late Message delivery=%#v err=%v", delivery, err)
-		}
-	})
-
-	t.Run("implementation change reenters checks", func(t *testing.T) {
-		_, store, _ := testDatabase(t)
-		ctx := context.Background()
-		job, revision, _, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-changed-revision")
-		newRevision := strings.Repeat("d", 40)
-		evidence := integrationEvidence(implementationRun.ID, "git-revision", "", "", newRevision, "9")
-		recorded, err := store.RecordRevision(ctx, job.ID, implementationRun.ID, spine.RevisionObservation{ComparisonBase: revision, Revision: newRevision, Tree: strings.Repeat("e", 40), Branch: job.Branch}, evidence)
-		if err != nil || !recorded {
-			t.Fatalf("review feedback Revision recorded=%t err=%v", recorded, err)
-		}
-		checking, err := store.Job(ctx, job.ID)
-		if err != nil || checking.Revision != newRevision || checking.WorkflowPhase != "checking" {
-			t.Fatalf("changed review feedback Job=%#v err=%v", checking, err)
-		}
-	})
-}
-
-func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, spine.Message, spine.AgentRun) {
-	t.Helper()
-	ctx := context.Background()
-	job, revision, verifiedID := prepareReviewIntegrationJob(t, store, suffix)
-	if err := store.MarkChecksVerified(ctx, job.ID, revision, []string{verifiedID}); err != nil {
-		t.Fatal(err)
-	}
-	record, err := store.ReviewPlan(ctx, job.ID, revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, err := policy.FactsFromPaths(job.StartingRevision, revision, []string{"internal/auth/session.go"}, true, false)
+	job, revision, _ := prepareReviewIntegrationJob(t, store, "review-feedback-closed-admission")
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"internal/auth/session.go", "web/login.tsx"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -817,7 +659,55 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	if err != nil {
 		t.Fatal(err)
 	}
-	record.Facts, record.Plan = facts, plan
+	if err := store.RecordReviewPolicy(ctx, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ReviewRuns(ctx, job.ID, revision)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("review runs=%#v err=%v", runs, err)
+	}
+	feedback := func(run spine.ReviewRunView, digestByte string) (spine.HarnessTurn, spine.Evidence) {
+		prepareReviewBoundaryIntegration(t, store, run)
+		refreshed, err := store.ReviewRun(ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observed := integrationEvidence(refreshed.ID, "review-observation", "", "", revision, digestByte)
+		observed.AgentRunID, observed.Producer = refreshed.ID, "dorf-agent-review"
+		observed.StartedAt, observed.FinishedAt = refreshed.StartedAt, refreshed.FinishedAt
+		return spine.HarnessTurn{ID: refreshed.TurnID, Status: "completed", Output: "bounded feedback from " + refreshed.Role}, observed
+	}
+	firstOutcome, firstEvidence := feedback(runs[0], "6")
+	first, created, err := store.RecordReviewFeedback(ctx, runs[0].ID, firstOutcome, firstEvidence)
+	if err != nil || !created {
+		t.Fatalf("first review feedback=%#v created=%t err=%v", first, created, err)
+	}
+	secondOutcome, secondEvidence := feedback(runs[1], "5")
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	replayed, created, err := store.RecordReviewFeedback(ctx, runs[0].ID, firstOutcome, firstEvidence)
+	if err != nil || created || replayed != first {
+		t.Fatalf("closed-Job feedback replay=%#v created=%t err=%v", replayed, created, err)
+	}
+	if _, _, err := store.RecordReviewFeedback(ctx, runs[1].ID, secondOutcome, secondEvidence); err == nil || !strings.Contains(err.Error(), "cannot accept new review feedback") {
+		t.Fatalf("new feedback after closure error=%v", err)
+	}
+}
+
+func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, spine.Message, spine.AgentRun) {
+	t.Helper()
+	ctx := context.Background()
+	job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"internal/auth/session.go"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -841,13 +731,27 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	observed.Producer = "dorf-agent-review"
 	observed.StartedAt, observed.FinishedAt = reviewerRun.StartedAt, reviewerRun.FinishedAt
 	outcome := spine.HarnessTurn{ID: "turn-" + reviewerRun.ID, Status: "completed", Output: feedback}
+	if err := store.SetWorkflowAttention(ctx, job.ID, reviewerRun.ID, "review feedback is not yet durable"); err != nil {
+		t.Fatal(err)
+	}
 	message, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, outcome, observed)
-	if err != nil || !created || message.Input != feedback || message.FromKind != "agent" || message.FromID != reviewerRun.ID {
+	if err != nil || !created || message.Input != feedback || message.FromKind != "agent" || message.FromID != reviewerRun.ID || message.AdmittedAt.IsZero() {
 		t.Fatalf("review feedback Message=%#v created=%t err=%v", message, created, err)
+	}
+	cleared, err := store.Job(ctx, job.ID)
+	if err != nil || cleared.WorkflowAttention != "" || cleared.WorkflowAttentionSource != "" {
+		t.Fatalf("durable review feedback left stale attention: Job=%#v err=%v", cleared, err)
+	}
+	if err := store.SetWorkflowAttention(ctx, job.ID, reviewerRun.ID, "review feedback replay is not yet reconciled"); err != nil {
+		t.Fatal(err)
 	}
 	repeated, created, err := store.RecordReviewFeedback(ctx, reviewerRun.ID, outcome, observed)
 	if err != nil || created || repeated != message {
 		t.Fatalf("idempotent review feedback Message=%#v created=%t err=%v", repeated, created, err)
+	}
+	cleared, err = store.Job(ctx, job.ID)
+	if err != nil || cleared.WorkflowAttention != "" || cleared.WorkflowAttentionSource != "" {
+		t.Fatalf("idempotent review feedback left stale attention: Job=%#v err=%v", cleared, err)
 	}
 	views, err := store.ReviewRuns(ctx, job.ID, revision)
 	if err != nil || len(views) != 1 || views[0].FeedbackMessageID != message.ID {
@@ -985,7 +889,8 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
 	}
 	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", revision, "2")
-	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}, evidence); err != nil || !recorded {
+	evidence.AgentRunID = candidate.ID
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, candidate.ID, spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, evidence); err != nil || !recorded {
 		t.Fatalf("Revision recorded=%v err=%v", recorded, err)
 	}
 	check, err := store.BeginCheck(ctx, job.ID, revision, "check", "go test ./...")
@@ -1036,7 +941,8 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 	for _, action := range actions {
 		invalidActionPresent = invalidActionPresent || action.ID == invalidActionID
 	}
-	if err != nil || actionsErr != nil || job.WorkflowPhase != "blocked" || invalidActionPresent {
+	selected, selectedErr := store.SelectedSetup(ctx, job.ID)
+	if err != nil || actionsErr != nil || selectedErr != nil || selected == nil || selected.ID != failed.ID || selected.State != spine.ActionFailed || job.WorkflowAttentionSource != failed.ID || invalidActionPresent {
 		t.Fatalf("invalid retry mutated Job=%#v Actions=%#v err=%v actionsErr=%v", job, actions, err, actionsErr)
 	}
 
@@ -1081,8 +987,9 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 		t.Fatal(err)
 	}
 	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.WorkflowPhase != "implementing" {
-		t.Fatalf("recovered Job=%#v err=%v", job, err)
+	selected, selectedErr = store.SelectedSetup(ctx, job.ID)
+	if err != nil || selectedErr != nil || selected == nil || selected.ID != secondRetry.ID || selected.State != spine.ActionSucceeded || job.WorkflowAttention != "" || job.WorkflowAttentionSource != "" {
+		t.Fatalf("recovered Job=%#v selected setup=%#v err=%v selectedErr=%v", job, selected, err, selectedErr)
 	}
 	records, err := store.Evidence(ctx, job.ID)
 	if err != nil || len(records) != 3 || records[0].ID != failedEvidence.ID || records[1].ID != retryFailedEvidence.ID || records[2].ID != passedEvidence.ID {
@@ -1136,13 +1043,14 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if err != nil || !ready || candidate.ID != includedRun.ID {
 		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
 	}
-	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: job.Branch}
+	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
 	evidence := integrationEvidence(candidate.ID, "git-revision", "", "", revision, "a")
+	evidence.AgentRunID = candidate.ID
 	afterCandidate, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
 	if err != nil || !created {
 		t.Fatalf("late post-candidate admission=%#v created=%v err=%v", afterCandidate, created, err)
 	}
-	if recorded, err := store.RecordRevision(ctx, job.ID, candidate.ID, observation, evidence); err != nil || recorded {
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, candidate.ID, observation, evidence); err != nil || recorded {
 		t.Fatalf("Revision observation skipped late accepted input: recorded=%v err=%v", recorded, err)
 	}
 	finalRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-after-candidate-"+job.ID)
@@ -1151,11 +1059,9 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 		t.Fatalf("final Revision candidate=%#v ready=%v err=%v", finalCandidate, ready, err)
 	}
 	finalEvidence := integrationEvidence(finalCandidate.ID, "git-revision", "", "", revision, "b")
-	if recorded, err := store.RecordRevision(ctx, job.ID, finalCandidate.ID, observation, finalEvidence); err != nil || !recorded {
+	finalEvidence.AgentRunID = finalCandidate.ID
+	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, finalCandidate.ID, observation, finalEvidence); err != nil || !recorded {
 		t.Fatalf("final Revision observation recorded=%v err=%v", recorded, err)
-	}
-	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-after-observation", Input: "must not run"}); err == nil {
-		t.Fatalf("post-observation admission error=%v", err)
 	}
 	retry, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
 	if err != nil || created || retry != late {
@@ -1406,5 +1312,91 @@ func TestPostgresJobFenceSerializesOverlappingClaims(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestClosedAdmissionRejectsLateCheckFeedbackDeliveryAndRevisionObservation(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	job, _ := prepareTransportIntegrationJob(t, store, "closed-check-feedback")
+	check, err := store.BeginCheck(ctx, job.ID, job.Revision, "check", "go test ./focused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := integrationEvidence(check.ID, "check-output", "", check.ID, job.Revision, "1")
+	if err := store.RecordCheck(ctx, check, evidence, spine.CommandObservation{Command: check.Command, ExitCode: 1, StartedAt: now, FinishedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	check.State, check.ExitCode, check.EvidenceDigest = "failed", 1, evidence.Digest
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := store.AdmitCheckMessage(ctx, check); err == nil || created {
+		t.Fatalf("closed admission accepted failed-Check feedback: created=%t err=%v", created, err)
+	}
+	if delivery, err := store.NextDelivery(ctx, job.ID); err != nil || delivery != nil {
+		t.Fatalf("closed admission selected harness delivery: delivery=%#v err=%v", delivery, err)
+	}
+	messages, err := store.Messages(ctx, job.ID)
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("closed admission retained unexpected Message: messages=%#v err=%v", messages, err)
+	}
+
+	observedJob, threadID := prepareTransportIntegrationJob(t, store, "closed-revision-observation")
+	run := completeNextIntegrationRun(t, store, observedJob.ID, threadID, "turn-closed-observation")
+	observation := spine.RevisionObservation{
+		ComparisonBase: observedJob.Revision, Revision: strings.Repeat("9", 40), Tree: strings.Repeat("8", 40),
+		Branch: observedJob.Branch, StartedAt: now, FinishedAt: now,
+	}
+	observedEvidence := integrationEvidence(run.ID, "git-revision", "", "", observation.Revision, "2")
+	observedEvidence.AgentRunID = run.ID
+	if err := store.CloseAdmission(ctx, observedJob.ID); err != nil {
+		t.Fatal(err)
+	}
+	if recorded, err := store.RecordRevisionObservation(ctx, observedJob.ID, run.ID, observation, observedEvidence); err != nil || recorded {
+		t.Fatalf("closed admission recorded new Revision observation: recorded=%t err=%v", recorded, err)
+	}
+}
+
+func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, _ := prepareTransportIntegrationJob(t, store, "cleanup-attention")
+	if err := store.SetWorkflowAttention(ctx, job.ID, "operator:test", "explanatory only"); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.AgentRuns(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range runs {
+		if err := store.InterruptAgentRun(ctx, run.ID, "cleanup"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sandboxID := spine.MainSandboxName(job.ID)
+	for _, kind := range []spine.ActionKind{spine.ActionRouteRevoke, spine.ActionSandboxDelete} {
+		action, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.CloseAdmission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCleanupTaskID(ctx, job.ID, "cleanup-task-"+job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.Job(ctx, job.ID)
+	if err != nil || cleaned.CleanupState != spine.CleanupComplete || cleaned.WorkflowAttention != "" || cleaned.WorkflowAttentionSource != "" || !cleaned.WorkflowAttentionAt.IsZero() {
+		t.Fatalf("cleanup terminal retained explanatory attention: job=%#v err=%v", cleaned, err)
 	}
 }

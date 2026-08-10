@@ -113,7 +113,7 @@ func TestObserveRevisionFromRealGitCheckout(t *testing.T) {
 				}
 			}
 
-			observation, artifact, err := testManager(repo).ObserveRevision(context.Background(), "sandbox", "dorf/proof", base)
+			observation, err := testManager(repo).ObserveRevision(context.Background(), "sandbox", "dorf/proof", base)
 			if tt.dirty {
 				if err == nil || !strings.Contains(err.Error(), "checkout is dirty") {
 					t.Fatalf("dirty observation error=%v", err)
@@ -127,9 +127,6 @@ func TestObserveRevisionFromRealGitCheckout(t *testing.T) {
 			tree := gitOutput(t, repo, "show", "-s", "--format=%T", "HEAD")
 			if observation.ComparisonBase != base || observation.Revision != head || observation.Tree != tree || observation.Branch != "dorf/proof" || observation.StartedAt.IsZero() || observation.FinishedAt.Before(observation.StartedAt) {
 				t.Fatalf("observation=%#v", observation)
-			}
-			if !bytes.Contains(artifact, []byte(head)) || !bytes.Contains(artifact, []byte(base)) {
-				t.Fatalf("artifact=%s", artifact)
 			}
 		})
 	}

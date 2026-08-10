@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -309,32 +308,31 @@ func (m Manager) receiptFile(ctx context.Context, sandboxName, identity, name st
 	return result.Stdout, nil
 }
 
-func (m Manager) ObserveRevision(ctx context.Context, sandboxName, branch, comparisonBase string) (spine.RevisionObservation, []byte, error) {
+func (m Manager) ObserveRevision(ctx context.Context, sandboxName, branch, comparisonBase string) (spine.RevisionObservation, error) {
 	if !fullOID(comparisonBase) {
-		return spine.RevisionObservation{}, nil, fmt.Errorf("comparison base must be a full immutable Git Revision")
+		return spine.RevisionObservation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
 	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
 	if err != nil {
-		return spine.RevisionObservation{}, nil, err
+		return spine.RevisionObservation{}, err
 	}
 	if result.ExitCode != 0 {
-		return spine.RevisionObservation{}, nil, &AttentionError{Reason: fmt.Sprintf("observe Git Revision needs attention: %s", strings.TrimSpace(result.Stderr))}
+		return spine.RevisionObservation{}, &AttentionError{Reason: fmt.Sprintf("observe Git Revision needs attention: %s", strings.TrimSpace(result.Stderr))}
 	}
 	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
 	if len(lines) != 6 {
-		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation is incomplete"}
+		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation is incomplete"}
 	}
 	startedNS, startErr := strconv.ParseInt(lines[4], 10, 64)
 	finishedNS, finishErr := strconv.ParseInt(lines[5], 10, 64)
 	if startErr != nil || finishErr != nil || finishedNS < startedNS {
-		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation has invalid bounded timing"}
+		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation has invalid bounded timing"}
 	}
 	observation := spine.RevisionObservation{ComparisonBase: lines[0], Revision: lines[1], Tree: lines[2], Branch: lines[3], StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC()}
 	if observation.ComparisonBase != comparisonBase || observation.Branch != branch || !fullOID(observation.Revision) || !fullOID(observation.Tree) {
-		return spine.RevisionObservation{}, nil, &AttentionError{Reason: "Git Revision observation conflicts with admitted branch or comparison base"}
+		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation conflicts with admitted branch or comparison base"}
 	}
-	encoded, err := json.Marshal(observation)
-	return observation, encoded, err
+	return observation, nil
 }
 
 func (m Manager) validateGit(ctx context.Context, sandboxName, revision string) error {

@@ -8,6 +8,7 @@ package dbsql
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -71,6 +72,26 @@ func (q *Queries) BindHarnessTurn(ctx context.Context, arg BindHarnessTurnParams
 	return result.RowsAffected()
 }
 
+const bindImplementationInputRevision = `-- name: BindImplementationInputRevision :execrows
+update dorf.agent_runs
+set input_revision=coalesce(input_revision,$1)
+where id=$2 and role='implement' and state='pending'
+  and (input_revision is null or input_revision=$1)
+`
+
+type BindImplementationInputRevisionParams struct {
+	InputRevision sql.NullString
+	RunID         string
+}
+
+func (q *Queries) BindImplementationInputRevision(ctx context.Context, arg BindImplementationInputRevisionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindImplementationInputRevision, arg.InputRevision, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bindSteer = `-- name: BindSteer :one
 update dorf.agent_runs
 set turn_id=coalesce(turn_id,$1),state='completed',
@@ -93,22 +114,6 @@ func (q *Queries) BindSteer(ctx context.Context, arg BindSteerParams) (string, e
 	var turn_outcome string
 	err := row.Scan(&turn_outcome)
 	return turn_outcome, err
-}
-
-const blockAgentRunDelivery = `-- name: BlockAgentRunDelivery :exec
-update dorf.agent_runs
-set state='uncertain',attention=$1
-where id=$2 and state not in ('completed','failed','interrupted')
-`
-
-type BlockAgentRunDeliveryParams struct {
-	Reason sql.NullString
-	RunID  string
-}
-
-func (q *Queries) BlockAgentRunDelivery(ctx context.Context, arg BlockAgentRunDeliveryParams) error {
-	_, err := q.db.ExecContext(ctx, blockAgentRunDelivery, arg.Reason, arg.RunID)
-	return err
 }
 
 const countImplementationHarnessMutations = `-- name: CountImplementationHarnessMutations :one
@@ -153,7 +158,7 @@ select id,job_id,message_id,state,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role
+       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision
 from dorf.agent_runs
 where message_id=$1::text
 `
@@ -171,6 +176,7 @@ type GetAgentRunByMessageRow struct {
 	TurnOutcome      string
 	Attention        string
 	Role             string
+	InputRevision    string
 }
 
 func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (GetAgentRunByMessageRow, error) {
@@ -189,6 +195,7 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 		&i.TurnOutcome,
 		&i.Attention,
 		&i.Role,
+		&i.InputRevision,
 	)
 	return i, err
 }
@@ -248,7 +255,7 @@ func (q *Queries) GetAgentRunPreparation(ctx context.Context, runID string) (Get
 }
 
 const getHarnessMutationDelivery = `-- name: GetHarnessMutationDelivery :one
-select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
+select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.admitted_at,
        m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        ar.id as agent_run_id,ar.job_id as agent_run_job_id,
        ar.message_id as agent_run_message_id,ar.state,
@@ -256,7 +263,8 @@ select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
        (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
        coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,ar.role
+       coalesce(ar.attention,'') as attention,ar.role,
+       coalesce(ar.input_revision,'') as input_revision
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
@@ -272,6 +280,7 @@ type GetHarnessMutationDeliveryRow struct {
 	FromID            string
 	Sequence          int64
 	Input             string
+	AdmittedAt        time.Time
 	DeliveryIntent    spine.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AgentRunID        string
@@ -286,6 +295,7 @@ type GetHarnessMutationDeliveryRow struct {
 	TurnOutcome       string
 	Attention         string
 	Role              string
+	InputRevision     string
 }
 
 func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) (GetHarnessMutationDeliveryRow, error) {
@@ -298,6 +308,7 @@ func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) 
 		&i.FromID,
 		&i.Sequence,
 		&i.Input,
+		&i.AdmittedAt,
 		&i.DeliveryIntent,
 		&i.SteerTargetTurnID,
 		&i.AgentRunID,
@@ -312,6 +323,7 @@ func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) 
 		&i.TurnOutcome,
 		&i.Attention,
 		&i.Role,
+		&i.InputRevision,
 	)
 	return i, err
 }
@@ -411,7 +423,7 @@ select id,job_id,message_id,state,
        coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(revision,'') as revision,
+       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
        coalesce(capability,'') as capability,sandbox_id,
        coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
 from dorf.agent_runs
@@ -431,7 +443,7 @@ type ListJobAgentRunsRow struct {
 	TurnOutcome     string
 	Attention       string
 	Role            string
-	Revision        string
+	InputRevision   string
 	Capability      string
 	SandboxID       string
 	SubmissionNonce string
@@ -460,7 +472,7 @@ func (q *Queries) ListJobAgentRuns(ctx context.Context, jobID string) ([]ListJob
 			&i.TurnOutcome,
 			&i.Attention,
 			&i.Role,
-			&i.Revision,
+			&i.InputRevision,
 			&i.Capability,
 			&i.SandboxID,
 			&i.SubmissionNonce,

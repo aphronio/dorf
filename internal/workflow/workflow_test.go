@@ -1,6 +1,11 @@
 package workflow
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/aphronio/dorf/internal/spine"
+)
 
 func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	if WakeEvent("job-a", 2) != WakeEvent("job-a", 2) {
@@ -26,7 +31,6 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 		{"Revision", revisionStepName("run-1"), "dorf/revision/v1/run-1"},
 		{"Check", checkStepName("check-1"), "dorf/check/v1/check-1"},
 		{"ReviewPolicy", reviewPolicyStepName("job-1", "revision-1"), "dorf/review-policy/v1/job-1/revision-1"},
-		{"verification", verifyStepName("job-1", "revision-1"), "dorf/checks-verified/v1/job-1/revision-1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -34,5 +38,12 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 				t.Fatalf("Step name %q, want %q", test.got, test.want)
 			}
 		})
+	}
+}
+
+func TestCleanupRejectsUnsettledPullRequestAction(t *testing.T) {
+	err := unresolvedPullRequestAction(spine.Action{State: spine.ActionUnsettled})
+	if err == nil || !strings.Contains(err.Error(), "reconcile") {
+		t.Fatalf("unsettled pull-request Action cleanup error = %v", err)
 	}
 }

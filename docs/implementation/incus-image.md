@@ -36,8 +36,7 @@ not execute a mutable network installer.
    repository, and requires the repository's declared preparation Action to succeed;
 5. completes one real AgentRun through the Codex app-server Harness and a scoped Provider Route, with an explicit
    no-modification goal, and requires the exact starting Revision to remain current with the
-   AgentRun-specific `completed without a new committed Revision` blocked outcome and Revision
-   generation zero;
+   exact unchanged `git-revision` Evidence owned by that AgentRun and Revision generation zero;
 6. records the image fingerprint, Harness/Thread/Turn identity, timings, and terminal state in a
    redacted local evidence directory;
 7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
@@ -48,9 +47,12 @@ not execute a mutable network installer.
 This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. Before
 cleanup, the validator requires no repository-commit Action: implementation commits belong to the
 AgentRun, and that Action kind no longer exists. The expected unchanged tree leaves the starting
-Revision current at generation zero and blocks after the completed AgentRun, before any Checks,
-review AgentRuns, or proposal. Retained evidence labels Checks, review, and publication as not run
-or claimed. A different blocked Job cannot satisfy the proof. The separate final cutover dogfood
+Revision current at generation zero and records the unchanged observation after the completed
+AgentRun, before any Checks, review AgentRuns, or proposal. Inspection derives that the Message was
+handled without a committed change from the Evidence; it does not require a stored workflow phase
+or attention. Retained evidence
+labels Checks, review, and publication as not run or claimed. Evidence must name the exact AgentRun
+and source Revision, so another Job's attention cannot satisfy the proof. The separate final cutover dogfood
 owns exact-Revision Checks and Evidence, selected review, repair, publication, outcome, and cleanup.
 
 Run that proof manually with an already connected Provider Gateway name:

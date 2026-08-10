@@ -12,25 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const clearOutcomeAttention = `-- name: ClearOutcomeAttention :execrows
-update dorf.jobs
-set workflow_attention=null
-where id=$1 and revision=$2 and workflow_phase='published'
-`
-
-type ClearOutcomeAttentionParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) ClearOutcomeAttention(ctx context.Context, arg ClearOutcomeAttentionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearOutcomeAttention, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getOutcome = `-- name: GetOutcome :one
 select job_id,outcome,observed_state,observed_merged,
        coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
@@ -62,7 +43,7 @@ func (q *Queries) GetOutcome(ctx context.Context, jobID string) (GetOutcomeRow, 
 }
 
 const getOutcomeJobForUpdate = `-- name: GetOutcomeJobForUpdate :one
-select revision,workflow_phase
+select revision,admission_open,cleanup_state
 from dorf.jobs
 where id=$1
 for update
@@ -70,13 +51,14 @@ for update
 
 type GetOutcomeJobForUpdateRow struct {
 	Revision      string
-	WorkflowPhase string
+	AdmissionOpen bool
+	CleanupState  spine.CleanupState
 }
 
 func (q *Queries) GetOutcomeJobForUpdate(ctx context.Context, jobID string) (GetOutcomeJobForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getOutcomeJobForUpdate, jobID)
 	var i GetOutcomeJobForUpdateRow
-	err := row.Scan(&i.Revision, &i.WorkflowPhase)
+	err := row.Scan(&i.Revision, &i.AdmissionOpen, &i.CleanupState)
 	return i, err
 }
 
@@ -128,4 +110,33 @@ func (q *Queries) InsertOutcome(ctx context.Context, arg InsertOutcomeParams) (I
 		&i.ObservedAt,
 	)
 	return i, err
+}
+
+const outcomeImplementationSettled = `-- name: OutcomeImplementationSettled :one
+select (
+  not exists (
+    select 1 from dorf.agent_runs ar
+    where ar.job_id=$1 and ar.role='implement'
+      and ar.state not in ('completed','failed','interrupted')
+  )
+  and coalesce((
+    select ar.state='completed' and exists (
+      select 1 from dorf.evidence e
+      where e.agent_run_id=ar.id and e.kind='git-revision' and e.revision=j.revision
+    )
+    from dorf.agent_runs ar
+    join dorf.job_messages m on m.id=ar.message_id
+    join dorf.jobs j on j.id=ar.job_id
+    where ar.job_id=$1 and ar.role='implement' and m.delivery_intent='follow'
+    order by m.sequence desc
+    limit 1
+  ),false)
+)::boolean as settled
+`
+
+func (q *Queries) OutcomeImplementationSettled(ctx context.Context, jobID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, outcomeImplementationSettled, jobID)
+	var settled bool
+	err := row.Scan(&settled)
+	return settled, err
 }

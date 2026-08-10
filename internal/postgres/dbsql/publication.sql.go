@@ -7,35 +7,57 @@ package dbsql
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const blockPublicationPhase = `-- name: BlockPublicationPhase :execrows
+const clearPublicationAttention = `-- name: ClearPublicationAttention :exec
 update dorf.jobs
-set workflow_phase='publication-blocked',workflow_attention=$1::text
-where id=$2 and revision=$3 and workflow_phase='publishing'
+set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+where id=$1 and revision=$2
+  and workflow_attention_source=$3
 `
 
-type BlockPublicationPhaseParams struct {
-	Reason   string
+type ClearPublicationAttentionParams struct {
 	JobID    string
 	Revision string
+	ActionID sql.NullString
 }
 
-func (q *Queries) BlockPublicationPhase(ctx context.Context, arg BlockPublicationPhaseParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, blockPublicationPhase, arg.Reason, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+func (q *Queries) ClearPublicationAttention(ctx context.Context, arg ClearPublicationAttentionParams) error {
+	_, err := q.db.ExecContext(ctx, clearPublicationAttention, arg.JobID, arg.Revision, arg.ActionID)
+	return err
+}
+
+const clearPublicationAttentionForAction = `-- name: ClearPublicationAttentionForAction :exec
+update dorf.jobs j
+set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+where j.revision=$1
+  and j.workflow_attention_source=$2
+  and exists (
+    select 1 from dorf.actions a
+    where a.id=$2 and a.job_id=j.id
+      and a.scope_key=$1
+  )
+`
+
+type ClearPublicationAttentionForActionParams struct {
+	Revision string
+	ActionID sql.NullString
+}
+
+func (q *Queries) ClearPublicationAttentionForAction(ctx context.Context, arg ClearPublicationAttentionForActionParams) error {
+	_, err := q.db.ExecContext(ctx, clearPublicationAttentionForAction, arg.Revision, arg.ActionID)
+	return err
 }
 
 const completeProposalAction = `-- name: CompleteProposalAction :execrows
 update dorf.actions
-set state='succeeded'
+set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
 where id=$1 and job_id=$2
   and kind='github-pull-request' and scope_key=$3
+  and state in ('unsettled','succeeded')
 `
 
 type CompleteProposalActionParams struct {
@@ -52,29 +74,11 @@ func (q *Queries) CompleteProposalAction(ctx context.Context, arg CompletePropos
 	return result.RowsAffected()
 }
 
-const completePublication = `-- name: CompletePublication :execrows
-update dorf.jobs
-set workflow_phase='published',workflow_attention=null
-where id=$1 and revision=$2 and workflow_phase='publishing'
-`
-
-type CompletePublicationParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) CompletePublication(ctx context.Context, arg CompletePublicationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, completePublication, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completeRepositoryPush = `-- name: CompleteRepositoryPush :execrows
 update dorf.actions
-set state='succeeded'
+set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
 where id=$1 and kind='repository-push' and scope_key=$2
+  and state in ('unsettled','succeeded')
 `
 
 type CompleteRepositoryPushParams struct {
@@ -122,7 +126,7 @@ func (q *Queries) GetProposalCurrentRevision(ctx context.Context, jobID string) 
 }
 
 const getProposalJobForUpdate = `-- name: GetProposalJobForUpdate :one
-select revision,workflow_phase
+select revision,admission_open,cleanup_state
 from dorf.jobs
 where id=$1
 for update
@@ -130,18 +134,19 @@ for update
 
 type GetProposalJobForUpdateRow struct {
 	Revision      string
-	WorkflowPhase string
+	AdmissionOpen bool
+	CleanupState  spine.CleanupState
 }
 
 func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (GetProposalJobForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getProposalJobForUpdate, jobID)
 	var i GetProposalJobForUpdateRow
-	err := row.Scan(&i.Revision, &i.WorkflowPhase)
+	err := row.Scan(&i.Revision, &i.AdmissionOpen, &i.CleanupState)
 	return i, err
 }
 
 const getPublicationAction = `-- name: GetPublicationAction :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where job_id=$1 and kind=$2 and scope_key=$3
 `
@@ -152,29 +157,23 @@ type GetPublicationActionParams struct {
 	ScopeKey string
 }
 
-type GetPublicationActionRow struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
-}
-
-func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationActionParams) (GetPublicationActionRow, error) {
+func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationActionParams) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getPublicationAction, arg.JobID, arg.Kind, arg.ScopeKey)
-	var i GetPublicationActionRow
+	var i DorfAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
 
 const getPublicationActionForUpdate = `-- name: GetPublicationActionForUpdate :one
-select id,job_id,kind,state,scope_key
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3 and scope_key=$4
 for update
@@ -187,34 +186,28 @@ type GetPublicationActionForUpdateParams struct {
 	ScopeKey string
 }
 
-type GetPublicationActionForUpdateRow struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	State    spine.ActionState
-	ScopeKey string
-}
-
-func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPublicationActionForUpdateParams) (GetPublicationActionForUpdateRow, error) {
+func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPublicationActionForUpdateParams) (DorfAction, error) {
 	row := q.db.QueryRowContext(ctx, getPublicationActionForUpdate,
 		arg.ID,
 		arg.JobID,
 		arg.Kind,
 		arg.ScopeKey,
 	)
-	var i GetPublicationActionForUpdateRow
+	var i DorfAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
 		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
 
 const getPublicationJobForUpdate = `-- name: GetPublicationJobForUpdate :one
-select revision,workflow_phase,coalesce(github_repository,'') as github_repository,
+select revision,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch,branch,repository,
        admission_open,cleanup_state
@@ -225,7 +218,6 @@ for update
 
 type GetPublicationJobForUpdateRow struct {
 	Revision             string
-	WorkflowPhase        string
 	GithubRepository     string
 	GithubInstallationID string
 	BaseBranch           string
@@ -240,7 +232,6 @@ func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) 
 	var i GetPublicationJobForUpdateRow
 	err := row.Scan(
 		&i.Revision,
-		&i.WorkflowPhase,
 		&i.GithubRepository,
 		&i.GithubInstallationID,
 		&i.BaseBranch,
@@ -293,39 +284,35 @@ func (q *Queries) InsertPublicationAction(ctx context.Context, arg InsertPublica
 	return err
 }
 
-const resumePublicationPhase = `-- name: ResumePublicationPhase :execrows
+const setPublicationAttention = `-- name: SetPublicationAttention :execrows
 update dorf.jobs
-set workflow_phase='publishing',workflow_attention=null
-where id=$1 and revision=$2
-  and workflow_phase='publication-blocked'
+set workflow_attention=$1::text,
+    workflow_attention_source=$2::text,
+    workflow_attention_at=clock_timestamp()
+where dorf.jobs.id=$3 and dorf.jobs.revision=$4
+  and dorf.jobs.admission_open and dorf.jobs.cleanup_state='pending'
+  and exists (
+    select 1 from dorf.actions a
+    where a.id=$2 and a.job_id=dorf.jobs.id
+      and a.scope_key=$4
+      and a.kind in ('repository-push','github-pull-request')
+  )
 `
 
-type ResumePublicationPhaseParams struct {
+type SetPublicationAttentionParams struct {
+	Reason   string
+	ActionID string
 	JobID    string
 	Revision string
 }
 
-func (q *Queries) ResumePublicationPhase(ctx context.Context, arg ResumePublicationPhaseParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, resumePublicationPhase, arg.JobID, arg.Revision)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const startPublicationIntent = `-- name: StartPublicationIntent :execrows
-update dorf.jobs
-set workflow_phase='publishing',workflow_attention=null
-where id=$1 and revision=$2 and workflow_phase='ready'
-`
-
-type StartPublicationIntentParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) StartPublicationIntent(ctx context.Context, arg StartPublicationIntentParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, startPublicationIntent, arg.JobID, arg.Revision)
+func (q *Queries) SetPublicationAttention(ctx context.Context, arg SetPublicationAttentionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setPublicationAttention,
+		arg.Reason,
+		arg.ActionID,
+		arg.JobID,
+		arg.Revision,
+	)
 	if err != nil {
 		return 0, err
 	}
