@@ -73,4 +73,7 @@ func TestFactsFromPathsDeduplicatesAndSortsPaths(t *testing.T) {
 	if !reflect.DeepEqual(facts.Paths, want) {
 		t.Fatalf("paths=%v want %v", facts.Paths, want)
 	}
+	if !facts.BrowserUI || facts.DocumentationOnly || facts.Unknown {
+		t.Fatalf("classification=%#v", facts)
+	}
 }
