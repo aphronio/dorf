@@ -672,6 +672,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   own model routes. Connecting through either surface reaches one backing authority, so upstream
   subscription or API credentials are never copied into clients or Sandboxes. CLIProxyAPI is the first
   concrete daemon backend; D035 is the first validated ChatGPT-to-Codex route.
+- **Location authority:** Deployment configuration resolves one Gateway data directory using
+  `XDG_DATA_HOME` (falling back to `~/.local/share`) or an explicit operator override. Provider setup,
+  doctor, admission, and task executors use that same adapter. Admission checks the named connection
+  before creating a durable Job; the Job stores only the connection name, never a host path.
 - **Local and remote posture:** The current broker has one concrete bind address. Host-only use may
   bind loopback; Codex Sandbox composition binds the selected private Incus bridge address so both the
   host and attached Sandboxes can reach it, never a wildcard or LAN address. An interface-scoped

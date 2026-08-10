@@ -71,10 +71,13 @@ concrete Go binary and the only retained helper service in Dorf's model path. Do
 verified x86_64 Linux release, binds it to the private Incus bridge, and launches its device login:
 
 ```bash
-export DORF_PROVIDER_GATEWAY_STATE="$HOME/.local/state/dorf/provider-gateway"
 dorf provider connect chatgpt --name personal-chatgpt
 dorf setup --provider personal-chatgpt
 ```
+
+Dorf keeps this deployment-owned provider data under the XDG data directory by default
+(`$XDG_DATA_HOME/dorf/provider-gateway`, or `~/.local/share/dorf/provider-gateway`). An operator may
+override that location with `DORF_PROVIDER_GATEWAY_STATE`; it is never stored in a Job.
 
 `setup` downloads the immutable Absurd 0.5.0 schema only for first initialization, verifies its
 hard-coded SHA-256, applies the embedded Dorf schema, and runs bounded direct checks. A prepared

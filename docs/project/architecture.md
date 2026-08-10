@@ -138,6 +138,10 @@ and agent services run on infrastructure controlled by the owner. The ordinary p
 hosted durability account or API key. Setup must make PostgreSQL prerequisites and diagnostics
 explicit rather than hiding Docker or a cloud dependency.
 
+Deployment configuration owns the Provider Gateway storage location. Setup, doctor, admission, and
+task executors resolve the same location; a durable Job retains only the selected Provider Connection
+name and never a host filesystem locator.
+
 A small hosted deployment uses the same Job and executor protocol with a managed or self-operated
 PostgreSQL service and private executor connectivity. Multi-tenant authentication, quotas, billing,
 and untrusted extension hosting are separate product requirements and are not implied by choosing

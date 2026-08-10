@@ -222,6 +222,9 @@ func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	defer server.Close()
 	gateway := Gateway{StatePath: gatewayState(t, server.URL), Client: server.Client()}
 
+	if err := gateway.Check(context.Background(), "primary"); err == nil {
+		t.Fatal("provider readiness accepted unverified upstream WebSockets")
+	}
 	if _, err := gateway.ReconcileCreate(context.Background(), "primary", "sandbox:job-http", "action-http"); err == nil {
 		t.Fatal("route was admitted without verified upstream WebSockets")
 	}

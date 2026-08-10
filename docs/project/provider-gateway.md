@@ -10,9 +10,10 @@ broker, binds it to the selected private Incus bridge rather than wildcard/LAN, 
 device login, and records protected connection metadata. The broker is the sole upstream credential
 and refresh writer. Each Sandbox receives only a scoped broker route and Codex configuration.
 
-The Go Job path creates, observes, and revokes routes directly. Provider connection state, route
-state, keys, and the broker executable live under the configured
-`DORF_PROVIDER_GATEWAY_STATE`; they are not PostgreSQL facts and never enter a Sandbox image.
+The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
+route configuration and keys, and the broker executable live under the configured
+`DORF_PROVIDER_GATEWAY_STATE`; they never enter a Sandbox image. Dorf retains only the exact route
+identity and Action receipt needed for reconciliation.
 
 ## Security and recovery
 

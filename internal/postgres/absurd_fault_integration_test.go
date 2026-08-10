@@ -103,18 +103,17 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 func admitFaultJob(t *testing.T, store postgres.Store, suffix string) spine.Job {
 	t.Helper()
 	job, created, err := store.Admit(context.Background(), postgres.NewJob{
-		AdmissionKey:         "absurd-fault-" + suffix,
-		Goal:                 "prove late work cannot duplicate one logical external effect",
-		Repository:           "https://github.com/aphronio/dorf.git",
-		Revision:             "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
-		Branch:               "dorf/absurd-fault-" + suffix,
-		GitHubRepository:     "aphronio/dorf",
-		GitHubInstallation:   "42",
-		BaseBranch:           "greenfield",
-		ProviderConnection:   "primary",
-		ProviderGatewayState: "/tmp/dorf-provider-gateway-test",
-		Model:                "gpt-5.6-sol",
-		ReasoningEffort:      "high",
+		AdmissionKey:       "absurd-fault-" + suffix,
+		Goal:               "prove late work cannot duplicate one logical external effect",
+		Repository:         "https://github.com/aphronio/dorf.git",
+		Revision:           "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
+		Branch:             "dorf/absurd-fault-" + suffix,
+		GitHubRepository:   "aphronio/dorf",
+		GitHubInstallation: "42",
+		BaseBranch:         "greenfield",
+		ProviderConnection: "primary",
+		Model:              "gpt-5.6-sol",
+		ReasoningEffort:    "high",
 	})
 	if err != nil || !created {
 		t.Fatalf("admit fault Job=%#v created=%v err=%v", job, created, err)

@@ -20,7 +20,6 @@ create table dorf.jobs (
     github_installation_id text,
     base_branch text,
     provider_connection text not null check (length(trim(provider_connection)) > 0),
-    provider_gateway_state text,
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
     admission_open boolean not null default true,
@@ -43,12 +42,7 @@ create table dorf.jobs (
          github_installation_id ~ '^[1-9][0-9]*$' and length(base_branch) > 0 and base_branch <> branch)
     ),
     constraint jobs_github_authority_identity_key
-        unique(id,github_repository,github_installation_id,base_branch,branch),
-    constraint jobs_provider_gateway_state_absolute_check check (
-        provider_gateway_state is null or
-        (provider_gateway_state like '/%' and provider_gateway_state=btrim(provider_gateway_state) and
-         provider_gateway_state !~ E'[\\n\\r]')
-    )
+        unique(id,github_repository,github_installation_id,base_branch,branch)
 );
 
 create table dorf.job_messages (

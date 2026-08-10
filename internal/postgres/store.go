@@ -7,7 +7,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -57,18 +56,17 @@ func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
 }
 
 type NewJob struct {
-	AdmissionKey         string
-	Goal                 string
-	Repository           string
-	Revision             string
-	Branch               string
-	ProviderConnection   string
-	ProviderGatewayState string
-	Model                string
-	ReasoningEffort      string
-	GitHubRepository     string
-	GitHubInstallation   string
-	BaseBranch           string
+	AdmissionKey       string
+	Goal               string
+	Repository         string
+	Revision           string
+	Branch             string
+	ProviderConnection string
+	Model              string
+	ReasoningEffort    string
+	GitHubRepository   string
+	GitHubInstallation string
+	BaseBranch         string
 }
 
 type NewMessage struct {
@@ -178,14 +176,13 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.Revision = strings.TrimSpace(input.Revision)
 	input.Branch = strings.TrimSpace(input.Branch)
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
-	input.ProviderGatewayState = filepath.Clean(strings.TrimSpace(input.ProviderGatewayState))
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
 	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
-	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || !filepath.IsAbs(input.ProviderGatewayState) {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, resolved absolute Provider Gateway state, model, canonical GitHub repository, installation, and explicit base branch")
+	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, model, canonical GitHub repository, installation, and explicit base branch")
 	}
 	if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
 		return spine.Job{}, false, err
@@ -206,8 +203,7 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	rows, err := queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
 		ID: id, AdmissionKey: input.AdmissionKey, Goal: input.Goal, Repository: input.Repository,
 		Revision: input.Revision, Branch: input.Branch, ProviderConnection: input.ProviderConnection,
-		ProviderGatewayState: sql.NullString{String: input.ProviderGatewayState, Valid: true}, Model: input.Model,
-		ReasoningEffort: input.ReasoningEffort, GithubRepository: sql.NullString{String: input.GitHubRepository, Valid: true},
+		Model: input.Model, ReasoningEffort: input.ReasoningEffort, GithubRepository: sql.NullString{String: input.GitHubRepository, Valid: true},
 		GithubInstallationID: sql.NullString{String: input.GitHubInstallation, Valid: true}, BaseBranch: sql.NullString{String: input.BaseBranch, Valid: true},
 	})
 	if err != nil {
@@ -220,7 +216,7 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	stored := NewJob{
 		AdmissionKey: storedRow.AdmissionKey, Goal: storedRow.Goal, Repository: storedRow.Repository,
 		Revision: storedRow.Revision, Branch: storedRow.Branch, ProviderConnection: storedRow.ProviderConnection,
-		ProviderGatewayState: storedRow.ProviderGatewayState, Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
+		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 		GitHubRepository: storedRow.GithubRepository, GitHubInstallation: storedRow.GithubInstallationID, BaseBranch: storedRow.BaseBranch,
 	}
 	if storedRow.ID != id || stored != input {
@@ -409,8 +405,8 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Goal: row.Goal, Repository: row.Repository,
 		Revision: row.Revision, RevisionGeneration: int(row.RevisionGeneration), StartingRevision: row.StartingRevision, Branch: row.Branch,
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
-		ProviderConnection: row.ProviderConnection, ProviderGatewayState: row.ProviderGatewayState,
-		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
+		ProviderConnection: row.ProviderConnection,
+		Model:              row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
 		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, SandboxID: row.SandboxID, SandboxState: row.SandboxState,
 		RouteID: row.RouteID, RouteState: row.RouteState, SessionID: row.SessionID, WorkflowPhase: row.WorkflowPhase,
 		WorkflowAttention: row.WorkflowAttention, CleanupAttention: row.CleanupAttention,

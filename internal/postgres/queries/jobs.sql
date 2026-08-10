@@ -2,7 +2,7 @@
 select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,j.starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
-       j.provider_connection,coalesce(j.provider_gateway_state,'') as provider_gateway_state,j.model,j.reasoning_effort,j.admission_open,
+       j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(sb.incus_name,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
        coalesce(r.route_id,'') as route_id,coalesce(r.state,'') as route_state,coalesce(se.native_session_id,'') as session_id,
@@ -38,13 +38,13 @@ where id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,goal,repository,revision,starting_revision,branch,
-    provider_connection,provider_gateway_state,model,reasoning_effort,
+    provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(goal),sqlc.arg(repository),
     sqlc.arg(revision),sqlc.arg(revision),sqlc.arg(branch),
-    sqlc.arg(provider_connection),sqlc.arg(provider_gateway_state),sqlc.arg(model),
+    sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort),sqlc.arg(github_repository),
     sqlc.arg(github_installation_id),sqlc.arg(base_branch)
 )
@@ -52,7 +52,6 @@ on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
 select id,admission_key,goal,repository,revision,branch,provider_connection,
-       coalesce(provider_gateway_state,'') as provider_gateway_state,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch

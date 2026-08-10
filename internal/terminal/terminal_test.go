@@ -15,18 +15,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func TestJobRecordedGatewayLocatorOverridesRestartedControllerDefault(t *testing.T) {
-	recorded := filepath.Join(t.TempDir(), "non-default-gateway")
-	externals := Externals{Gateway: gateway.Gateway{StatePath: "/controller/restarted/default"}}
-	resolved, err := externals.gateway(spine.Job{ID: "job-exact", ProviderGatewayState: recorded})
-	if err != nil || resolved.StatePath != recorded {
-		t.Fatalf("resolved=%#v err=%v", resolved, err)
-	}
-	if _, err := externals.gateway(spine.Job{ID: "legacy-without-locator"}); err == nil || !strings.Contains(err.Error(), "recorded absolute") {
-		t.Fatalf("missing locator error=%v", err)
-	}
-}
-
 func TestReviewerRouteCleanupRecoversExactIDFromStableCreateAction(t *testing.T) {
 	job := spine.Job{ID: "job-exact"}
 	run := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-run-exact", JobID: job.ID}}

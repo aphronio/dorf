@@ -133,7 +133,6 @@ func (q *Queries) CompleteUnchangedRun(ctx context.Context, arg CompleteUnchange
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
 select id,admission_key,goal,repository,revision,branch,provider_connection,
-       coalesce(provider_gateway_state,'') as provider_gateway_state,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch
@@ -150,7 +149,6 @@ type GetAdmittedJobForUpdateRow struct {
 	Revision             string
 	Branch               string
 	ProviderConnection   string
-	ProviderGatewayState string
 	Model                string
 	ReasoningEffort      string
 	GithubRepository     string
@@ -169,7 +167,6 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.Revision,
 		&i.Branch,
 		&i.ProviderConnection,
-		&i.ProviderGatewayState,
 		&i.Model,
 		&i.ReasoningEffort,
 		&i.GithubRepository,
@@ -183,7 +180,7 @@ const getJob = `-- name: GetJob :one
 select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0)::integer as revision_generation,j.starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
-       j.provider_connection,coalesce(j.provider_gateway_state,'') as provider_gateway_state,j.model,j.reasoning_effort,j.admission_open,
+       j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(sb.incus_name,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
        coalesce(r.route_id,'') as route_id,coalesce(r.state,'') as route_state,coalesce(se.native_session_id,'') as session_id,
@@ -209,7 +206,6 @@ type GetJobRow struct {
 	GithubInstallationID string
 	BaseBranch           string
 	ProviderConnection   string
-	ProviderGatewayState string
 	Model                string
 	ReasoningEffort      string
 	AdmissionOpen        bool
@@ -242,7 +238,6 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.GithubInstallationID,
 		&i.BaseBranch,
 		&i.ProviderConnection,
-		&i.ProviderGatewayState,
 		&i.Model,
 		&i.ReasoningEffort,
 		&i.AdmissionOpen,
@@ -370,15 +365,15 @@ func (q *Queries) GetWorkflowPhaseForUpdate(ctx context.Context, jobID string) (
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,goal,repository,revision,starting_revision,branch,
-    provider_connection,provider_gateway_state,model,reasoning_effort,
+    provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     $1,$2,$3,$4,
     $5,$5,$6,
-    $7,$8,$9,
-    $10,$11,
-    $12,$13
+    $7,$8,
+    $9,$10,
+    $11,$12
 )
 on conflict(admission_key) do nothing
 `
@@ -391,7 +386,6 @@ type InsertAdmittedJobParams struct {
 	Revision             string
 	Branch               string
 	ProviderConnection   string
-	ProviderGatewayState sql.NullString
 	Model                string
 	ReasoningEffort      string
 	GithubRepository     sql.NullString
@@ -408,7 +402,6 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.Revision,
 		arg.Branch,
 		arg.ProviderConnection,
-		arg.ProviderGatewayState,
 		arg.Model,
 		arg.ReasoningEffort,
 		arg.GithubRepository,

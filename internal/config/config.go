@@ -39,7 +39,7 @@ func Load() (Config, error) {
 		IncusImage:       value("DORF_INCUS_IMAGE", "dorf-codex"),
 		IncusNetwork:     value("DORF_INCUS_NETWORK", "incusbr0"),
 		IncusDiskSize:    value("DORF_INCUS_DISK_SIZE", "40GiB"),
-		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(home, ".local", "state", "dorf", "provider-gateway")),
+		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
 		Workspace:        "/workspace/job",
 		AppServerPort:    4500,
 		TurnTimeout:      45 * time.Minute,
@@ -78,6 +78,13 @@ func configHome(home string) string {
 		return configured
 	}
 	return filepath.Join(home, ".config")
+}
+
+func dataHome(home string) string {
+	if configured := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); configured != "" {
+		return configured
+	}
+	return filepath.Join(home, ".local", "share")
 }
 
 func value(name, fallback string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
@@ -28,6 +29,10 @@ type Result struct {
 type Wake struct {
 	JobID    string `json:"job_id"`
 	Sequence int64  `json:"sequence"`
+}
+
+type ProviderChecker interface {
+	Check(context.Context, string) error
 }
 
 func WakeEvent(jobID string, sequence int64) string {
@@ -125,7 +130,25 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 	return result, nil
 }
 
-func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewJob) (spine.Job, bool, error) {
+func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, input postgres.NewJob) (spine.Job, bool, error) {
+	key := strings.TrimSpace(input.AdmissionKey)
+	if key != "" {
+		_, err := store.Job(ctx, spine.JobID(key))
+		switch {
+		case err == nil:
+			// An idempotent retry validates the original input below without
+			// depending on the Gateway still being available.
+		case errors.Is(err, postgres.ErrNotFound):
+			if providers == nil {
+				return spine.Job{}, false, fmt.Errorf("provider readiness is not configured")
+			}
+			if err := providers.Check(ctx, strings.TrimSpace(input.ProviderConnection)); err != nil {
+				return spine.Job{}, false, fmt.Errorf("Provider Connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
+			}
+		default:
+			return spine.Job{}, false, err
+		}
+	}
 	job, created, err := store.Admit(ctx, input)
 	if err != nil {
 		return spine.Job{}, false, err

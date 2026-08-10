@@ -171,7 +171,11 @@ func (g Gateway) Route(ctx context.Context, consumer string) (Route, bool, error
 }
 
 func (g Gateway) Check(ctx context.Context, connectionName string) error {
-	if _, err := g.requireConnection(connectionName); err != nil {
+	connection, err := g.requireConnection(connectionName)
+	if err != nil {
+		return err
+	}
+	if err := g.validateTransport(ctx, connection); err != nil {
 		return err
 	}
 	auth, err := g.readAuthority()

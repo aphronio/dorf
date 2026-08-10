@@ -52,33 +52,32 @@ const (
 )
 
 type Job struct {
-	ID                   string       `json:"id"`
-	AdmissionKey         string       `json:"admission_key"`
-	Goal                 string       `json:"goal"`
-	Repository           string       `json:"repository"`
-	Revision             string       `json:"revision"`
-	RevisionGeneration   int          `json:"revision_generation"`
-	StartingRevision     string       `json:"starting_revision"`
-	Branch               string       `json:"branch"`
-	GitHubRepository     string       `json:"github_repository,omitempty"`
-	GitHubInstallation   string       `json:"github_installation_id,omitempty"`
-	BaseBranch           string       `json:"base_branch,omitempty"`
-	ProviderConnection   string       `json:"provider_connection"`
-	ProviderGatewayState string       `json:"provider_gateway_state,omitempty"`
-	Model                string       `json:"model"`
-	ReasoningEffort      string       `json:"reasoning_effort"`
-	AdmissionOpen        bool         `json:"admission_open"`
-	CleanupState         CleanupState `json:"cleanup_state"`
-	TaskID               string       `json:"task_id"`
-	CleanupTaskID        string       `json:"cleanup_task_id,omitempty"`
-	SandboxID            string       `json:"sandbox_id,omitempty"`
-	SandboxState         string       `json:"sandbox_state,omitempty"`
-	RouteID              string       `json:"route_id,omitempty"`
-	RouteState           string       `json:"route_state,omitempty"`
-	SessionID            string       `json:"session_id,omitempty"`
-	WorkflowPhase        string       `json:"workflow_phase"`
-	WorkflowAttention    string       `json:"workflow_attention,omitempty"`
-	CleanupAttention     string       `json:"cleanup_attention,omitempty"`
+	ID                 string       `json:"id"`
+	AdmissionKey       string       `json:"admission_key"`
+	Goal               string       `json:"goal"`
+	Repository         string       `json:"repository"`
+	Revision           string       `json:"revision"`
+	RevisionGeneration int          `json:"revision_generation"`
+	StartingRevision   string       `json:"starting_revision"`
+	Branch             string       `json:"branch"`
+	GitHubRepository   string       `json:"github_repository,omitempty"`
+	GitHubInstallation string       `json:"github_installation_id,omitempty"`
+	BaseBranch         string       `json:"base_branch,omitempty"`
+	ProviderConnection string       `json:"provider_connection"`
+	Model              string       `json:"model"`
+	ReasoningEffort    string       `json:"reasoning_effort"`
+	AdmissionOpen      bool         `json:"admission_open"`
+	CleanupState       CleanupState `json:"cleanup_state"`
+	TaskID             string       `json:"task_id"`
+	CleanupTaskID      string       `json:"cleanup_task_id,omitempty"`
+	SandboxID          string       `json:"sandbox_id,omitempty"`
+	SandboxState       string       `json:"sandbox_state,omitempty"`
+	RouteID            string       `json:"route_id,omitempty"`
+	RouteState         string       `json:"route_state,omitempty"`
+	SessionID          string       `json:"session_id,omitempty"`
+	WorkflowPhase      string       `json:"workflow_phase"`
+	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
+	CleanupAttention   string       `json:"cleanup_attention,omitempty"`
 }
 
 type MessageFromKind string

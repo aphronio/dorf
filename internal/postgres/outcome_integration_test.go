@@ -20,8 +20,8 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 		AdmissionKey: "outcome-" + label + fmt.Sprintf("-%d", time.Now().UnixNano()),
 		Goal:         "record one exact Job outcome", Repository: "https://github.com/aphronio/dorf.git",
 		Revision: revision, Branch: "dorf/outcome-" + label,
-		ProviderConnection: "primary", ProviderGatewayState: "/tmp/non-default-dorf-gateway-" + label,
-		Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
+		ProviderConnection: "primary",
+		Model:              "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
 		GitHubInstallation: "42", BaseBranch: "greenfield",
 	}
 	job, created, err := store.Admit(ctx, input)
@@ -48,7 +48,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 		t.Fatal(err)
 	}
 	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.WorkflowPhase != "published" || job.ProviderGatewayState != input.ProviderGatewayState {
+	if err != nil || job.WorkflowPhase != "published" {
 		t.Fatalf("published Job=%#v err=%v", job, err)
 	}
 	return job, proposal

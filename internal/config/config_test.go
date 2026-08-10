@@ -50,3 +50,16 @@ func TestLoadResolvesProviderGatewayStateToAbsoluteLocator(t *testing.T) {
 		t.Fatalf("gateway locator=%q want=%q", cfg.GatewayStatePath, want)
 	}
 }
+
+func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
+	dataHome := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dataHome)
+	t.Setenv("DORF_PROVIDER_GATEWAY_STATE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(dataHome, "dorf", "provider-gateway"); cfg.GatewayStatePath != want {
+		t.Fatalf("gateway state=%q want=%q", cfg.GatewayStatePath, want)
+	}
+}

@@ -291,6 +291,21 @@ Goal: make an exact-Revision Proposal the direct successor of readiness.
 Terminal: a ready Revision produces at most one exact-Revision PR Proposal and can reach an explicit
 Outcome.
 
+### Slice 4B: Keep Gateway deployment state out of the Job
+
+Goal: make one deployment configuration the obvious Provider Gateway authority.
+
+- [x] Restore the established XDG data-directory default used by provider setup.
+- [x] Use the same configured Gateway adapter for setup, doctor, admission, route creation, and cleanup.
+- [x] Check the selected Provider Connection before creating a durable Job.
+- [x] Retain only the Provider Connection name in Job data.
+- [x] Delete the Gateway filesystem locator from the domain, baseline schema, SQL projections, inspect
+      output, runtime overrides, and tests.
+- [ ] Remove the temporary local compatibility symlink and dogfood a small Job without a path override.
+
+Terminal: a fresh default installation connects and runs a Job through one Gateway location, while no
+host filesystem path is stored in or exposed by the Job.
+
 ## Slice 5: Isolate Cleanup
 
 Goal: leave Cleanup as the only independently scheduled, observable lifecycle task.
