@@ -72,20 +72,6 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 	return result.RowsAffected()
 }
 
-const closeAdmission = `-- name: CloseAdmission :execrows
-update dorf.jobs
-set admission_open=false
-where id=$1
-`
-
-func (q *Queries) CloseAdmission(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, closeAdmission, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
 select id,admission_key,goal,repository,revision,branch,provider_connection,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,

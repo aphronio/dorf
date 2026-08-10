@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -62,10 +61,6 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			if err != nil {
 				return TaskResultV1{}, err
 			}
-			job, err := store.Job(ctx, params.JobID)
-			if err != nil {
-				return TaskResultV1{}, err
-			}
 			if work.Kind == WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
@@ -86,7 +81,7 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
 			if work.Kind == WorkObserveProposal {
-				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", job.Revision, sequence)
+				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
 				options.Timeout = proposal.PollInterval
 			}
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
@@ -238,9 +233,6 @@ func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if err != nil {
 			return err
 		}
-		if err := cleanupPublicationSafe(ctx, store, current); err != nil {
-			return err
-		}
 		// Recheck the binding under the Job fence before cleanup becomes eligible.
 		if err := cancelAttachedTasks(ctx, client, current, skipTaskID); err != nil {
 			return err
@@ -275,35 +267,6 @@ func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.J
 		}
 	}
 	return nil
-}
-
-func cleanupPublicationSafe(ctx context.Context, store postgres.Store, job spine.Job) error {
-	proposal, err := store.Proposal(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if proposal != nil {
-		outcome, err := store.Outcome(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		if outcome == nil {
-			return fmt.Errorf("cleanup cannot cancel or remove a stored GitHub proposal without a recorded accepted, rejected, or explicitly abandoned outcome")
-		}
-		return nil
-	}
-	_, pull, err := store.PublicationActions(ctx, job.ID, job.Revision)
-	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, postgres.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("cleanup requires publication reconciliation for the exact pull-request Action: %w", err)
-	}
-	return unresolvedPullRequestAction(pull)
-}
-
-func unresolvedPullRequestAction(pull spine.Action) error {
-	return fmt.Errorf("cleanup cannot proceed while the exact pull-request Action exists in state %s; retry publication to reconcile and record any exposed proposal first", pull.State)
 }
 
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {

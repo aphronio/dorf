@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,26 @@ func TestLostClaimCannotRecordReviewFeedback(t *testing.T) {
 	service := Service{claimCheck: func(context.Context) error { return claimLost }}
 	if _, _, err := service.recordReviewFeedback(context.Background(), "run-1", HarnessTurn{}, Evidence{}); !errors.Is(err, claimLost) {
 		t.Fatalf("record review feedback error = %v", err)
+	}
+}
+
+func TestReviewRunsRejectsBrokenFactRelationships(t *testing.T) {
+	request := Message{ID: "message-review", JobID: "job-1"}
+	run := AgentRun{
+		ID: "run-review", JobID: request.JobID, MessageID: request.ID,
+		Role: "general", InputRevision: "revision-1", Capability: ReviewReadOnlyCapability,
+		SandboxID: "sandbox-review",
+	}
+	if _, err := ReviewRuns([]Delivery{{Message: request, AgentRun: run}}, nil); err == nil || !strings.Contains(err.Error(), "Job-owned Sandbox") {
+		t.Fatalf("missing reviewer Sandbox error = %v", err)
+	}
+	foreign := Sandbox{ID: run.SandboxID, JobID: "job-2"}
+	if _, err := ReviewRuns([]Delivery{{Message: request, AgentRun: run}}, []Sandbox{foreign}); err == nil || !strings.Contains(err.Error(), "Job-owned Sandbox") {
+		t.Fatalf("foreign reviewer Sandbox error = %v", err)
+	}
+	run.MessageID = "another-message"
+	if _, err := ReviewRuns([]Delivery{{Message: request, AgentRun: run}}, []Sandbox{{ID: run.SandboxID, JobID: run.JobID}}); err == nil || !strings.Contains(err.Error(), "input Message relationship") {
+		t.Fatalf("mismatched review request error = %v", err)
 	}
 }
 
@@ -38,17 +59,6 @@ func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 	var boundary reviewBoundaryError
 	if !errors.As(err, &boundary) {
 		t.Fatalf("foreign controller error type = %T", err)
-	}
-}
-
-func TestReviewAttemptKeepsItsExactRequestMessage(t *testing.T) {
-	request := Message{ID: "message-review", JobID: "job-1", Input: "review this exact revision"}
-	sandbox := Sandbox{ID: "sandbox-1", JobID: request.JobID}
-	run := AgentRun{ID: "agent-run-review", JobID: request.JobID, MessageID: request.ID, SandboxID: sandbox.ID, Harness: "codex"}
-
-	attempt := reviewRunAttempt(run, request, sandbox)
-	if attempt.AgentRun != run || attempt.Request != request || attempt.Sandbox != sandbox {
-		t.Fatalf("review attempt lost durable input: %#v", attempt)
 	}
 }
 
@@ -81,8 +91,5 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: post}
 	if artifact != want {
 		t.Fatalf("review observation = %#v, want %#v", artifact, want)
-	}
-	if string(contents) == "No material issue found" {
-		t.Fatal("review feedback belongs in Message, not observed Evidence")
 	}
 }

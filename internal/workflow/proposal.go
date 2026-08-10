@@ -80,19 +80,19 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("observe comments on exact GitHub pull request #%d: %w", proposal.Number, err)
 	}
-	messages, err := r.Store.Messages(ctx, jobID)
+	deliveries, err := r.Store.Deliveries(ctx, jobID)
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("load admitted Messages before observing GitHub comments: %w", err)
 	}
-	admitted := admittedGitHubComments(messages)
+	admitted := admittedGitHubComments(deliveries)
 	for _, comment := range comments {
 		if !trustedHumanComment(comment) {
 			continue
 		}
 		fromID := fmt.Sprintf("github-comment:%d", comment.ID)
-		message, exists := admitted[fromID]
+		delivery, exists := admitted[fromID]
 		if exists {
-			if message.State != spine.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
+			if delivery.AgentRun.State != spine.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
 				continue
 			}
 			if err := absurdruntime.RequireClaim(ctx); err != nil {
@@ -127,11 +127,12 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	return result, nil
 }
 
-func admittedGitHubComments(messages []spine.MessageView) map[string]spine.MessageView {
-	admitted := make(map[string]spine.MessageView)
-	for _, message := range messages {
+func admittedGitHubComments(deliveries []spine.Delivery) map[string]spine.Delivery {
+	admitted := make(map[string]spine.Delivery)
+	for _, delivery := range deliveries {
+		message := delivery.Message
 		if message.FromKind == spine.MessageFromHuman && strings.HasPrefix(message.FromID, "github-comment:") {
-			admitted[message.FromID] = message
+			admitted[message.FromID] = delivery
 		}
 	}
 	return admitted

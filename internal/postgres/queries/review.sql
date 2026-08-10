@@ -1,6 +1,10 @@
 -- name: GetReviewJobForUpdate :one
-select revision,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
+select dorf.jobs.revision,dorf.jobs.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists,
+       coalesce((
+         select rp.policy_digest from dorf.review_plans rp
+         where rp.job_id=dorf.jobs.id and rp.revision=sqlc.arg(policy_revision)
+       ),'') as policy_digest
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
@@ -17,24 +21,11 @@ left join dorf.evidence e
 where r.job_id=sqlc.arg(job_id) and r.name in ('check','smoke')
 order by r.name;
 
--- name: GetReviewPlan :one
-select job_id,revision,facts::text as facts,plan::text as plan,
-       policy_digest,created_at
-from dorf.review_plans
-where job_id=sqlc.arg(job_id) and revision=sqlc.arg(revision);
-
 -- name: ListReviewPlans :many
-select job_id,revision,facts::text as facts,plan::text as plan,
-       policy_digest,created_at
+select job_id,revision,facts::text as facts,plan::text as plan,created_at
 from dorf.review_plans
 where job_id=sqlc.arg(job_id)
 order by created_at;
-
--- name: GetReviewPlanDigestForUpdate :one
-select policy_digest
-from dorf.review_plans
-where job_id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
-for update;
 
 -- name: InsertReviewPlan :execrows
 insert into dorf.review_plans(job_id,revision,facts,plan,policy_digest)
@@ -52,20 +43,6 @@ on conflict do nothing;
 select *
 from dorf.review_run_projection
 where id=sqlc.arg(run_id) and role<>'implement';
-
--- name: ListAllReviewRuns :many
-select sqlc.embed(p)
-from dorf.review_run_projection p
-where p.job_id=sqlc.arg(job_id) and p.input_revision<>'' and p.role<>'implement'
-order by p.input_revision,p.role;
-
--- name: InterruptAgentRun :execrows
-update dorf.agent_runs
-set state='interrupted',
-    turn_outcome=case when turn_id is null then null else 'interrupted' end,
-    attention=sqlc.arg(reason)::text,
-    finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
-where id=sqlc.arg(run_id) and state in ('pending','submitting','active','uncertain');
 
 -- name: GetReviewFeedbackRunForUpdate :one
 select ar.job_id,coalesce(ar.input_revision,'') as input_revision,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,

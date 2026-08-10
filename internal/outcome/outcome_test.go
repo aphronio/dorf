@@ -144,22 +144,22 @@ func TestOutcomeSameRequestIsIdempotentAndConflictAvoidsGitHub(t *testing.T) {
 	}
 }
 
-func TestOutcomeRequiresClaimImmediatelyBeforeWrite(t *testing.T) {
-	store, github, service := outcomeFixture()
-	github.pull.State, github.pull.Merged, github.pull.MergeCommitOID = "closed", true, strings.Repeat("b", 40)
-	service = service.WithClaimCheck(func(context.Context) error { return errors.New("claim lost") })
+func TestOutcomeRequiresAuthorityCheckBeforeWrite(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		check func(context.Context) error
+	}{
+		{name: "missing"},
+		{name: "claim lost", check: func(context.Context) error { return errors.New("claim lost") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, github, service := outcomeFixture()
+			github.pull.State, github.pull.Merged, github.pull.MergeCommitOID = "closed", true, strings.Repeat("b", 40)
+			service.claimCheck = test.check
 
-	if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAccepted); err == nil || store.writes != 0 {
-		t.Fatalf("lost claim wrote outcome: writes=%d err=%v", store.writes, err)
-	}
-}
-
-func TestOutcomeRefusesWriteWithoutAuthorityCheck(t *testing.T) {
-	store, github, service := outcomeFixture()
-	github.pull.State = "open"
-	service.claimCheck = nil
-
-	if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAbandoned); err == nil || store.writes != 0 {
-		t.Fatalf("missing authority check wrote outcome: writes=%d err=%v", store.writes, err)
+			if _, _, err := service.Record(context.Background(), store.job.ID, spine.OutcomeAccepted); err == nil || store.writes != 0 {
+				t.Fatalf("unauthorized outcome write: writes=%d err=%v", store.writes, err)
+			}
+		})
 	}
 }

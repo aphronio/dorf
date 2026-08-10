@@ -134,67 +134,6 @@ func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (Ge
 	return i, err
 }
 
-const getPublicationAction = `-- name: GetPublicationAction :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where job_id=$1 and kind=$2 and scope_key=$3
-`
-
-type GetPublicationActionParams struct {
-	JobID    string
-	Kind     spine.ActionKind
-	ScopeKey string
-}
-
-func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationActionParams) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getPublicationAction, arg.JobID, arg.Kind, arg.ScopeKey)
-	var i DorfAction
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ScopeKey,
-		&i.CreatedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
-const getPublicationActionForUpdate = `-- name: GetPublicationActionForUpdate :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=$1 and job_id=$2 and kind=$3 and scope_key=$4
-for update
-`
-
-type GetPublicationActionForUpdateParams struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	ScopeKey string
-}
-
-func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPublicationActionForUpdateParams) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getPublicationActionForUpdate,
-		arg.ID,
-		arg.JobID,
-		arg.Kind,
-		arg.ScopeKey,
-	)
-	var i DorfAction
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ScopeKey,
-		&i.CreatedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
 const getPublicationJobForUpdate = `-- name: GetPublicationJobForUpdate :one
 select revision,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
@@ -230,47 +169,6 @@ func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) 
 		&i.CleanupState,
 	)
 	return i, err
-}
-
-const getRepositoryPushState = `-- name: GetRepositoryPushState :one
-select state
-from dorf.actions
-where job_id=$1 and kind='repository-push' and scope_key=$2
-`
-
-type GetRepositoryPushStateParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) GetRepositoryPushState(ctx context.Context, arg GetRepositoryPushStateParams) (spine.ActionState, error) {
-	row := q.db.QueryRowContext(ctx, getRepositoryPushState, arg.JobID, arg.Revision)
-	var state spine.ActionState
-	err := row.Scan(&state)
-	return state, err
-}
-
-const insertPublicationAction = `-- name: InsertPublicationAction :exec
-insert into dorf.actions(id,job_id,kind,state,scope_key)
-values($1,$2,$3,'unsettled',$4)
-on conflict do nothing
-`
-
-type InsertPublicationActionParams struct {
-	ID       string
-	JobID    string
-	Kind     spine.ActionKind
-	ScopeKey string
-}
-
-func (q *Queries) InsertPublicationAction(ctx context.Context, arg InsertPublicationActionParams) error {
-	_, err := q.db.ExecContext(ctx, insertPublicationAction,
-		arg.ID,
-		arg.JobID,
-		arg.Kind,
-		arg.ScopeKey,
-	)
-	return err
 }
 
 const setPublicationAttention = `-- name: SetPublicationAttention :execrows

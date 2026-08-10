@@ -94,14 +94,12 @@ type Snapshot struct {
 	Actions        []spine.Action
 	SelectedSetup  *spine.Action
 	Delivery       *spine.Delivery
-	Messages       []spine.MessageView
-	AgentRuns      []spine.AgentRun
+	Deliveries     []spine.Delivery
 	Revisions      []spine.Revision
 	DeclaredChecks []spine.DeclaredCheck
 	Checks         []spine.Check
 	Evidence       []spine.Evidence
 	ReviewPlans    []spine.ReviewPlanRecord
-	ReviewRuns     []spine.ReviewRunView
 	Proposal       *spine.GitHubProposal
 	Outcome        *spine.JobOutcome
 }
@@ -116,18 +114,22 @@ type Projection struct {
 // Project derives readiness and the one next coding operation once. Once
 // publication starts, its admitted input boundary is retained so a later
 // accepted Message cannot strand reconciliation.
-func (s Snapshot) Project(evidenceStore evidence.Store) Projection {
-	messages, runs := publicationInputsAt(s.Messages, s.AgentRuns, publicationIntentAt(s.Actions, s.Job.Revision))
+func (s Snapshot) Project(evidenceStore evidence.Store) (Projection, error) {
+	deliveries := spine.PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
+	reviewRuns, err := s.currentReviewRuns()
+	if err != nil {
+		return Projection{}, err
+	}
 	readiness := spine.AssessReviewReadiness(
 		s.Job, s.DeclaredChecks, s.Checks, s.Evidence, evidenceStore,
-		s.currentReviewPlan(), s.currentReviewRuns(), messages, runs,
+		s.currentReviewPlan(), reviewRuns, deliveries,
 	)
-	work := decideCurrentWork(s)
+	work := decideCurrentWorkWithReviewRuns(s, reviewRuns)
 	if work.Kind == WorkPublishProposal && !readiness.Ready {
 		work.Kind = WorkAttention
 		work.Detail = "publication lost exact-Revision readiness: " + readiness.Reason
 	}
-	return Projection{CurrentWork: work, Readiness: readiness}
+	return Projection{CurrentWork: work, Readiness: readiness}, nil
 }
 
 func publicationIntentAt(actions []spine.Action, revision string) time.Time {
@@ -169,11 +171,7 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Messages, err = store.Messages(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.AgentRuns, err = store.AgentRuns(ctx, jobID)
+	snapshot.Deliveries, err = store.Deliveries(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -186,10 +184,6 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 		return snapshot, err
 	}
 	snapshot.ReviewPlans, err = store.ReviewPlans(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.ReviewRuns, err = store.AllReviewRuns(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -230,33 +224,18 @@ func (s Snapshot) currentReviewPlan() *spine.ReviewPlanRecord {
 	return nil
 }
 
-func (s Snapshot) currentReviewRuns() []spine.ReviewRunView {
-	runs := make([]spine.ReviewRunView, 0, len(s.ReviewRuns))
-	for _, run := range s.ReviewRuns {
+func (s Snapshot) currentReviewRuns() ([]spine.ReviewRunView, error) {
+	all, err := spine.ReviewRuns(s.Deliveries, s.Sandboxes)
+	if err != nil {
+		return nil, err
+	}
+	runs := make([]spine.ReviewRunView, 0, len(all))
+	for _, run := range all {
 		if run.InputRevision == s.Job.Revision {
 			runs = append(runs, run)
 		}
 	}
-	return runs
-}
-
-func publicationInputsAt(messages []spine.MessageView, runs []spine.AgentRun, startedAt time.Time) ([]spine.MessageView, []spine.AgentRun) {
-	retainedMessages := make([]spine.MessageView, 0, len(messages))
-	retainedIDs := make(map[string]struct{}, len(messages))
-	for _, message := range messages {
-		if !startedAt.IsZero() && message.AdmittedAt.After(startedAt) {
-			continue
-		}
-		retainedMessages = append(retainedMessages, message)
-		retainedIDs[message.ID] = struct{}{}
-	}
-	retainedRuns := make([]spine.AgentRun, 0, len(runs))
-	for _, run := range runs {
-		if _, ok := retainedIDs[run.MessageID]; ok {
-			retainedRuns = append(retainedRuns, run)
-		}
-	}
-	return retainedMessages, retainedRuns
+	return runs, nil
 }
 
 func codingPrerequisitesComplete(f Snapshot) bool {
@@ -270,6 +249,14 @@ func codingPrerequisitesComplete(f Snapshot) bool {
 // Its order is the dependency chain; do not replace it with a generic graph,
 // registry, persisted projection, or database-side workflow interpreter.
 func decideCurrentWork(f Snapshot) Work {
+	reviewRuns, err := f.currentReviewRuns()
+	if err != nil {
+		return Work{Kind: WorkAttention, Revision: f.Job.Revision, FactID: f.Job.Revision, Detail: err.Error()}
+	}
+	return decideCurrentWorkWithReviewRuns(f, reviewRuns)
+}
+
+func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunView) Work {
 	work := func(kind WorkKind, factID, detail string) Work {
 		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
 	}
@@ -317,7 +304,6 @@ func decideCurrentWork(f Snapshot) Work {
 	// Once ReviewPolicy selected exact reviewers, complete their independent
 	// AgentRuns before consuming the feedback Messages they produce.
 	plan := f.currentReviewPlan()
-	reviewRuns := f.currentReviewRuns()
 	if plan != nil {
 		byRole := make(map[string]spine.ReviewRunView, len(reviewRuns))
 		for _, run := range reviewRuns {
@@ -328,7 +314,7 @@ func decideCurrentWork(f Snapshot) Work {
 			if !ok {
 				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no AgentRun", role))
 			}
-			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
+			if reviewFeedbackReturned(f.Deliveries, f.Job.ID, run.ID) {
 				continue
 			}
 			if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted || run.State == spine.AgentRunUncertain {
@@ -359,23 +345,24 @@ func decideCurrentWork(f Snapshot) Work {
 		}
 		return work(WorkDeliverMessage, run.ID, fmt.Sprintf("Message %d", f.Delivery.Message.Sequence))
 	}
-	if latest := latestImplementationInput(f); latest != nil && latest.State != spine.AgentRunCompleted {
+	latestInput, latestTurnStart := latestImplementationRuns(f)
+	if latestInput != nil && latestInput.State != spine.AgentRunCompleted {
 		// A failed steer may have no Turn identity when its terminal-target
 		// fallback failed before binding. It is still the latest accepted input
 		// and must not be skipped in favor of an older observed Turn.
-		return work(WorkAttention, latest.ID, attentionDetail(f.Job, latest.ID, agentRunAttention(*latest)))
+		return work(WorkAttention, latestInput.ID, attentionDetail(f.Job, latestInput.ID, agentRunAttention(*latestInput)))
 	}
-	if latest := latestImplementationTurnStart(f); latest != nil && latest.State != spine.AgentRunCompleted {
+	if latestTurnStart != nil && latestTurnStart.State != spine.AgentRunCompleted {
 		// Pending and active Runs normally appear as DeliveryCandidate. If any
 		// nonterminal Run does not, there is no safe delivery operation to
 		// execute from these facts. In particular, a submitting Run must be
 		// reconciled rather than letting Checks race its harness submission.
-		return work(WorkAttention, latest.ID, attentionDetail(f.Job, latest.ID, agentRunAttention(*latest)))
+		return work(WorkAttention, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, agentRunAttention(*latestTurnStart)))
 	}
 
 	// A completed implementation Turn is not a Git fact. Its immutable
 	// git-revision Evidence is the recovery boundary, even when HEAD is unchanged.
-	if candidate := revisionCandidate(f); candidate != nil {
+	if candidate := revisionCandidate(f, latestTurnStart); candidate != nil {
 		if candidate.InputRevision != f.Job.Revision {
 			return work(WorkAttention, candidate.ID, fmt.Sprintf("AgentRun input Revision %s does not match current Revision %s", candidate.InputRevision, f.Job.Revision))
 		}
@@ -422,9 +409,10 @@ func decideCurrentWork(f Snapshot) Work {
 	return work(WorkPublishProposal, f.Job.Revision, "")
 }
 
-func reviewFeedbackReturned(messages []spine.MessageView, jobID, runID string) bool {
+func reviewFeedbackReturned(deliveries []spine.Delivery, jobID, runID string) bool {
 	expectedID := spine.MessageID(jobID, spine.MessageFromAgent, runID)
-	for _, message := range messages {
+	for _, delivery := range deliveries {
+		message := delivery.Message
 		if message.ID == expectedID && message.JobID == jobID && message.FromKind == spine.MessageFromAgent && message.FromID == runID && message.Intent == spine.MessageFollow {
 			return true
 		}
@@ -475,60 +463,37 @@ func agentRunAttention(run spine.AgentRun) string {
 	return fmt.Sprintf("AgentRun %s is %s", run.ID, run.State)
 }
 
-func messageSequenceByID(messages []spine.MessageView) map[string]int64 {
-	sequences := make(map[string]int64, len(messages))
-	for _, message := range messages {
-		sequences[message.ID] = message.Sequence
-	}
-	return sequences
-}
-
-func revisionCandidate(f Snapshot) *spine.AgentRun {
+func revisionCandidate(f Snapshot, latestTurnStart *spine.AgentRun) *spine.AgentRun {
 	observed := make(map[string]bool)
 	for _, record := range f.Evidence {
 		if record.Kind == "git-revision" {
 			observed[record.AgentRunID] = true
 		}
 	}
-	latest := latestImplementationTurnStart(f)
-	if latest == nil || latest.State != spine.AgentRunCompleted || observed[latest.ID] {
+	if latestTurnStart == nil || latestTurnStart.State != spine.AgentRunCompleted || observed[latestTurnStart.ID] {
 		return nil
 	}
-	return latest
+	return latestTurnStart
 }
 
-func latestImplementationInput(f Snapshot) *spine.AgentRun {
-	messages := make(map[string]spine.MessageView, len(f.Messages))
-	for _, message := range f.Messages {
-		messages[message.ID] = message
-	}
-	var latest *spine.AgentRun
-	var latestSequence int64
-	for i := range f.AgentRuns {
-		run := &f.AgentRuns[i]
-		message, ok := messages[run.MessageID]
-		if run.Role == "implement" && ok && message.Sequence >= latestSequence {
-			latest, latestSequence = run, message.Sequence
+func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *spine.AgentRun) {
+	var latestInputSequence int64
+	var latestTurnStartSequence int64
+	for i := range f.Deliveries {
+		delivery := &f.Deliveries[i]
+		run := &delivery.AgentRun
+		message := delivery.Message
+		if run.Role != "implement" || message.ID != run.MessageID {
+			continue
+		}
+		if latestInput == nil || message.Sequence >= latestInputSequence {
+			latestInput, latestInputSequence = run, message.Sequence
+		}
+		if spine.StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
+			latestTurnStart, latestTurnStartSequence = run, message.Sequence
 		}
 	}
-	return latest
-}
-
-func latestImplementationTurnStart(f Snapshot) *spine.AgentRun {
-	messages := make(map[string]spine.MessageView, len(f.Messages))
-	for _, message := range f.Messages {
-		messages[message.ID] = message
-	}
-	var latest *spine.AgentRun
-	var latestSequence int64
-	for i := range f.AgentRuns {
-		run := &f.AgentRuns[i]
-		message, ok := messages[run.MessageID]
-		if run.Role == "implement" && ok && spine.StartsImplementationTurn(message.Message, *run) && message.Sequence >= latestSequence {
-			latest, latestSequence = run, message.Sequence
-		}
-	}
-	return latest
+	return latestInput, latestTurnStart
 }
 
 // unchangedAttention distinguishes an intentionally adjudicated review or
@@ -536,10 +501,12 @@ func latestImplementationTurnStart(f Snapshot) *spine.AgentRun {
 // that returned without fixing anything. Equality is already carried by the
 // AgentRun input Revision and its git-revision Evidence.
 func unchangedAttention(f Snapshot) (string, string) {
-	sequences := messageSequenceByID(f.Messages)
-	runs := make(map[string]spine.AgentRun, len(f.AgentRuns))
+	sequences := make(map[string]int64, len(f.Deliveries))
+	runs := make(map[string]spine.AgentRun, len(f.Deliveries))
 	implementationMessages := make(map[string]bool)
-	for _, run := range f.AgentRuns {
+	for _, delivery := range f.Deliveries {
+		run := delivery.AgentRun
+		sequences[delivery.Message.ID] = delivery.Message.Sequence
 		runs[run.ID] = run
 		if run.Role == "implement" {
 			implementationMessages[run.MessageID] = true
@@ -571,7 +538,8 @@ func unchangedAttention(f Snapshot) (string, string) {
 		previous = observations[len(observations)-2].sequence
 	}
 	exactProposal := f.Proposal != nil && f.Proposal.ProposedRevision == f.Job.Revision
-	for _, message := range f.Messages {
+	for _, delivery := range f.Deliveries {
+		message := delivery.Message
 		if message.Sequence <= previous || message.Sequence > last.sequence || !implementationMessages[message.ID] {
 			continue
 		}

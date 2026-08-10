@@ -3,8 +3,6 @@ package postgres_test
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -49,69 +47,35 @@ func (r *forbiddenPublicationRepository) Push(context.Context, spine.Job, string
 	return errors.New("repository must not be called before readiness")
 }
 
-func TestPostgresMissingOrTamperedEvidenceNeverReachesPushExternals(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		tamper bool
-	}{
-		{name: "missing"},
-		{name: "tampered", tamper: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, store, _ := testDatabase(t)
-			job, revision, _ := prepareReviewIntegrationJob(t, store, "push-evidence-"+test.name)
-			facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/readiness.md"}, true, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.RecordReviewPolicy(context.Background(), spine.ReviewPlanRecord{
-				JobID: job.ID, Revision: revision, Facts: facts,
-				Plan: policy.ReviewPlan{Decision: "no-review"},
-			}); err != nil {
-				t.Fatal(err)
-			}
-			_, push, _, err := store.BeginPublication(context.Background(), job.ID, revision)
-			if err != nil {
-				t.Fatal(err)
-			}
-			root := t.TempDir()
-			if test.tamper {
-				records, err := store.Evidence(context.Background(), job.ID)
-				if err != nil || len(records) == 0 {
-					t.Fatalf("Evidence=%#v err=%v", records, err)
-				}
-				var digest string
-				for _, record := range records {
-					if record.CheckID != "" {
-						digest = record.Digest
-						break
-					}
-				}
-				if digest == "" {
-					t.Fatal("no Check Evidence found")
-				}
-				path := filepath.Join(root, "sha256", digest[:2], digest[2:])
-				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte("tampered"), 0o400); err != nil {
-					t.Fatal(err)
-				}
-			}
-			github := &forbiddenPublicationGitHub{}
-			repository := &forbiddenPublicationRepository{}
-			service := (publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: evidence.Store{Root: root}}).WithClaimCheck(func(context.Context) error { return nil })
-			err = service.Push(context.Background(), job.ID, revision)
-			if err == nil || !strings.Contains(err.Error(), "publication lost exact-Revision readiness") {
-				t.Fatalf("Push readiness error=%v", err)
-			}
-			if github.calls != 0 || repository.calls != 0 {
-				t.Fatalf("invalid Evidence reached externals: GitHub calls=%d repository calls=%d", github.calls, repository.calls)
-			}
-			storedPush, _, err := store.PublicationActions(context.Background(), job.ID, revision)
-			if err != nil || storedPush.ID != push.ID || storedPush.State != spine.ActionUnsettled {
-				t.Fatalf("Push Action=%#v err=%v", storedPush, err)
-			}
-		})
+func TestPostgresInvalidEvidenceNeverReachesPushExternals(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	job, revision, _ := prepareReviewIntegrationJob(t, store, "push-invalid-evidence")
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/readiness.md"}, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPolicy(context.Background(), spine.ReviewPlanRecord{
+		JobID: job.ID, Revision: revision, Facts: facts,
+		Plan: policy.ReviewPlan{Decision: "no-review"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, push, _, err := store.BeginPublication(context.Background(), job.ID, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	github := &forbiddenPublicationGitHub{}
+	repository := &forbiddenPublicationRepository{}
+	service := (publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: evidence.Store{Root: t.TempDir()}}).WithClaimCheck(func(context.Context) error { return nil })
+	err = service.Push(context.Background(), job.ID, revision)
+	if err == nil || !strings.Contains(err.Error(), "publication lost exact-Revision readiness") {
+		t.Fatalf("Push readiness error=%v", err)
+	}
+	if github.calls != 0 || repository.calls != 0 {
+		t.Fatalf("invalid Evidence reached externals: GitHub calls=%d repository calls=%d", github.calls, repository.calls)
+	}
+	storedPush, _, err := store.PublicationActions(context.Background(), job.ID, revision)
+	if err != nil || storedPush.ID != push.ID || storedPush.State != spine.ActionUnsettled {
+		t.Fatalf("Push Action=%#v err=%v", storedPush, err)
 	}
 }

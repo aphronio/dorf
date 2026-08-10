@@ -147,17 +147,6 @@ type Delivery struct {
 	AgentRun AgentRun `json:"agent_run"`
 }
 
-type MessageView struct {
-	Message
-	AgentRunID  string        `json:"agent_run_id,omitempty"`
-	State       AgentRunState `json:"state,omitempty"`
-	Harness     string        `json:"harness,omitempty"`
-	ThreadID    string        `json:"thread_id,omitempty"`
-	TurnID      string        `json:"turn_id,omitempty"`
-	TurnOutcome string        `json:"turn_outcome,omitempty"`
-	Attention   string        `json:"attention,omitempty"`
-}
-
 type Action struct {
 	ID        string      `json:"id"`
 	JobID     string      `json:"job_id"`

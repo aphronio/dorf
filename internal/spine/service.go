@@ -13,7 +13,7 @@ import (
 type Store interface {
 	Job(context.Context, string) (Job, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
-	AgentRuns(context.Context, string) ([]AgentRun, error)
+	Deliveries(context.Context, string) ([]Delivery, error)
 	InterruptAgentRun(context.Context, string, string) error
 	RecordSandboxActionSuccess(context.Context, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
@@ -43,7 +43,7 @@ type Externals interface {
 
 type CodingStore interface {
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
-	RecordRevisionObservation(context.Context, string, string, RevisionObservation, Evidence) (bool, error)
+	RecordRevisionObservation(context.Context, string, string, RevisionObservation, Evidence) error
 	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
 	AdmitCheckMessage(context.Context, Check) (Message, bool, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
@@ -204,8 +204,7 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	_, err = s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
-	return err
+	return s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
 }
 
 func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
@@ -466,12 +465,13 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandb
 	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
 		return Job{}, nil, err
 	}
-	runs, err := s.store.AgentRuns(ctx, job.ID)
+	deliveries, err := s.store.Deliveries(ctx, job.ID)
 	if err != nil {
 		_ = s.store.SetCleanupAttention(ctx, job.ID, "enumerating unsettled AgentRuns: "+err.Error())
 		return Job{}, nil, err
 	}
-	for _, run := range runs {
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
 		settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
 		if !settled {
 			if err := s.store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
@@ -496,13 +496,6 @@ func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func(
 		return err
 	}
 	return nil
-}
-
-func emptyCleanupIdentity(value string) string {
-	if value == "" {
-		return "<not-recorded>"
-	}
-	return value
 }
 
 func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {

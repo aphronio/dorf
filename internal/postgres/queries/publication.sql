@@ -7,22 +7,6 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
--- name: InsertPublicationAction :exec
-insert into dorf.actions(id,job_id,kind,state,scope_key)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_key))
-on conflict do nothing;
-
--- name: GetPublicationActionForUpdate :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key)
-for update;
-
--- name: GetPublicationAction :one
-select id,job_id,kind,state,scope_key,created_at,settled_at
-from dorf.actions
-where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key);
-
 -- name: CompleteRepositoryPush :execrows
 update dorf.actions
 set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
@@ -34,11 +18,6 @@ select revision,admission_open,cleanup_state
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
-
--- name: GetRepositoryPushState :one
-select state
-from dorf.actions
-where job_id=sqlc.arg(job_id) and kind='repository-push' and scope_key=sqlc.arg(revision);
 
 -- GetProposal is the one proposal projection shared by publication and outcome code.
 -- name: GetProposal :one

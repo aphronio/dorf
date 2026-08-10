@@ -35,21 +35,20 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		if err != nil {
 			return Work{}, err
 		}
-		work := snapshot.Project(service.EvidenceStore()).CurrentWork
+		projection, err := snapshot.Project(service.EvidenceStore())
+		if err != nil {
+			return Work{}, err
+		}
+		work := projection.CurrentWork
 		if work.Kind == WorkComplete || work.Kind == WorkAttention {
 			return work, nil
 		}
 
 		job := snapshot.Job
-		sandbox := snapshot.MainSandbox
 
 		switch work.Kind {
 		case WorkAction:
-			if work.Scope == sandbox.ID {
-				err = runSandboxAction(ctx, service, store, job, sandbox, work)
-			} else {
-				err = runReviewAction(ctx, service, store, job, snapshot.currentReviewRuns(), work)
-			}
+			err = runSandboxAction(ctx, service, store, job, snapshot, work)
 		case WorkSetupRepository:
 			err = runSetupStep(ctx, service, store, job, work)
 		case WorkRunReviewer:
@@ -59,7 +58,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		case WorkDeliverMessage:
 			err = runDeliveryStep(ctx, service, store, job, work)
 		case WorkObserveRevision:
-			err = runRevisionStep(ctx, service, store, job, work)
+			err = runRevisionStep(ctx, service, job, snapshot, work)
 		case WorkRunChecks:
 			err = runCheckStep(ctx, service, store, job, work)
 		case WorkChooseReview:
@@ -102,39 +101,6 @@ func runSetupStep(ctx context.Context, service spine.Service, store postgres.Sto
 	})
 }
 
-func runReviewAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, runs []spine.ReviewRunView, work Work) error {
-	var selected *spine.ReviewRunView
-	for i := range runs {
-		if runs[i].Sandbox.ID == work.Scope {
-			selected = &runs[i]
-			break
-		}
-	}
-	if selected == nil {
-		return fmt.Errorf("review Action %s has no selected reviewer Sandbox %s", work.FactID, work.Scope)
-	}
-	expectedID := spine.ScopedActionID(job.ID, work.ActionKind, selected.Sandbox.ID)
-	if expectedID != work.FactID {
-		return fmt.Errorf("review Action changed from %s to %s", work.FactID, expectedID)
-	}
-	action, err := store.GetOrCreateSandboxAction(ctx, selected.Sandbox.ID, work.ActionKind)
-	if err != nil {
-		return err
-	}
-	if action.ID != work.FactID || action.Kind != work.ActionKind || action.Scope != work.Scope {
-		return fmt.Errorf("selected review Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
-	}
-	if action.State == spine.ActionSucceeded {
-		return nil
-	}
-	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == spine.ActionReviewCheckout {
-			return service.ExecuteReviewCheckout(workCtx, job, selected.ID, action)
-		}
-		return service.ExecuteSandboxAction(workCtx, job, selected.Sandbox, action)
-	})
-}
-
 func runDeliveryStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {
 	delivery, err := store.NextDelivery(ctx, job.ID)
 	if err != nil {
@@ -151,19 +117,19 @@ func runDeliveryStep(ctx context.Context, service spine.Service, store postgres.
 	})
 }
 
-func runRevisionStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {
-	run, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
-	if err != nil {
-		return err
+func runRevisionStep(ctx context.Context, service spine.Service, job spine.Job, snapshot Snapshot, work Work) error {
+	var run *spine.AgentRun
+	for i := range snapshot.Deliveries {
+		if snapshot.Deliveries[i].AgentRun.ID == work.FactID {
+			run = &snapshot.Deliveries[i].AgentRun
+			break
+		}
 	}
-	if !ready {
-		return nil
-	}
-	if run.ID != work.FactID {
-		return fmt.Errorf("Revision observation candidate changed from AgentRun %s to %s", work.FactID, run.ID)
+	if run == nil || run.JobID != job.ID || run.Role != "implement" || run.InputRevision != job.Revision {
+		return fmt.Errorf("Revision observation has no exact current implementation AgentRun %s", work.FactID)
 	}
 	return runFactStep(ctx, revisionStepName(run.ID), run.ID, func(workCtx context.Context) error {
-		return service.ObserveRevision(workCtx, job, run)
+		return service.ObserveRevision(workCtx, job, *run)
 	})
 }
 
@@ -185,10 +151,36 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, sandbox spine.Sandbox, work Work) error {
-	if work.Scope != sandbox.ID {
-		return fmt.Errorf("Action %s scope changed from %s to %s", work.FactID, work.Scope, sandbox.ID)
+func runSandboxAction(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, snapshot Snapshot, work Work) error {
+	var sandbox *spine.Sandbox
+	for i := range snapshot.Sandboxes {
+		if snapshot.Sandboxes[i].ID == work.Scope {
+			sandbox = &snapshot.Sandboxes[i]
+			break
+		}
 	}
+	if sandbox == nil || sandbox.JobID != job.ID {
+		return fmt.Errorf("Action %s has no exact Job-owned Sandbox %s", work.FactID, work.Scope)
+	}
+
+	var reviewer *spine.ReviewRunView
+	if sandbox.ID != snapshot.MainSandbox.ID {
+		reviewRuns, err := snapshot.currentReviewRuns()
+		if err != nil {
+			return err
+		}
+		for i := range reviewRuns {
+			run := &reviewRuns[i]
+			if run.InputRevision == job.Revision && run.Sandbox.ID == sandbox.ID {
+				reviewer = run
+				break
+			}
+		}
+		if reviewer == nil {
+			return fmt.Errorf("review Action %s has no selected reviewer Sandbox %s", work.FactID, work.Scope)
+		}
+	}
+
 	expectedID := spine.ScopedActionID(job.ID, work.ActionKind, work.Scope)
 	if expectedID != work.FactID {
 		return fmt.Errorf("Action changed from %s to %s", work.FactID, expectedID)
@@ -197,14 +189,20 @@ func runSandboxAction(ctx context.Context, service spine.Service, store postgres
 	if err != nil {
 		return err
 	}
-	if action.ID != work.FactID || action.Kind != work.ActionKind || action.Scope != work.Scope {
+	if action.ID != work.FactID || action.JobID != job.ID || action.Kind != work.ActionKind || action.Scope != work.Scope {
 		return fmt.Errorf("selected Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
 	}
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
 	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		return service.ExecuteSandboxAction(workCtx, job, sandbox, action)
+		if work.ActionKind == spine.ActionReviewCheckout {
+			if reviewer == nil {
+				return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", action.ID)
+			}
+			return service.ExecuteReviewCheckout(workCtx, job, reviewer.ID, action)
+		}
+		return service.ExecuteSandboxAction(workCtx, job, *sandbox, action)
 	})
 }
 

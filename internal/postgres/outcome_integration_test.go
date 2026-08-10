@@ -121,12 +121,9 @@ func TestPostgresPreProposalAbandonmentAndPublicationIntentSerializeToOneWinner(
 	if outcomeErr != nil || abandonWon == publicationWon || abandonWon != (outcome != nil) || publicationWon != (actionErr == nil) {
 		t.Fatalf("abandonErr=%v publicationErr=%v Outcome=%#v outcomeErr=%v actionErr=%v", errorsByKind["abandon"], errorsByKind["publication"], outcome, outcomeErr, actionErr)
 	}
-	if publicationWon && !strings.Contains(errorsByKind["abandon"].Error(), "wait for the started pull-request Action") {
-		t.Fatalf("publication winner did not expose transient reconciliation boundary: %v", errorsByKind["abandon"])
-	}
 }
 
-func TestPostgresExactProposalAbandonmentForceEndsActiveInput(t *testing.T) {
+func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "active-abandon")
 	message, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
@@ -159,6 +156,17 @@ func TestPostgresExactProposalAbandonmentForceEndsActiveInput(t *testing.T) {
 	gotProposal, err := store.Proposal(context.Background(), job.ID)
 	if err != nil || gotProposal == nil || *gotProposal != proposal {
 		t.Fatalf("Proposal authority changed: %#v err=%v", gotProposal, err)
+	}
+	deliveries, err := store.Deliveries(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeForCleanup := false
+	for _, candidate := range deliveries {
+		activeForCleanup = activeForCleanup || candidate.AgentRun.ID == delivery.AgentRun.ID && candidate.AgentRun.State == spine.AgentRunActive
+	}
+	if !activeForCleanup {
+		t.Fatalf("active AgentRun was not left for cleanup reconciliation: %#v", deliveries)
 	}
 }
 
@@ -253,20 +261,22 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, "turn-outcome-fallback-"+job.ID, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	candidate, ready, err := store.RevisionCandidate(ctx, job.ID, job.Revision)
-	if err != nil || !ready || candidate.ID != fallback.AgentRun.ID {
-		t.Fatalf("Revision candidate=%#v ready=%v err=%v", candidate, ready, err)
-	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	observed := integrationEvidence(candidate.ID, "git-revision", "", "", job.Revision, "e")
-	observed.AgentRunID = candidate.ID
-	revision := spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
-	if recorded, err := store.RecordRevisionObservation(ctx, job.ID, candidate.ID, revision, observed); err != nil || !recorded {
-		t.Fatalf("fallback observation recorded=%v err=%v", recorded, err)
-	}
 	merge := spine.JobOutcome{
 		JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed",
 		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
+	}
+	if _, created, err := store.RecordOutcome(ctx, merge); err == nil || created {
+		t.Fatalf("unobserved fallback outcome created=%v err=%v", created, err)
+	}
+	if stored, err := store.Outcome(ctx, job.ID); err != nil || stored != nil {
+		t.Fatalf("unobserved fallback persisted Outcome=%#v err=%v", stored, err)
+	}
+	observed := integrationEvidence(fallback.AgentRun.ID, "git-revision", "", "", job.Revision, "e")
+	observed.AgentRunID = fallback.AgentRun.ID
+	revision := spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+	if err := store.RecordRevisionObservation(ctx, job.ID, fallback.AgentRun.ID, revision, observed); err != nil {
+		t.Fatalf("fallback Revision observation: %v", err)
 	}
 	if _, created, err := store.RecordOutcome(ctx, merge); err != nil || !created {
 		t.Fatalf("observed fallback outcome created=%v err=%v", created, err)

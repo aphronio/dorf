@@ -21,11 +21,10 @@ select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind);
 
--- name: GetActionStateForUpdate :one
-select state
+-- name: GetScopedAction :one
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
-where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
-for update;
+where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=sqlc.arg(scope_key);
 
 -- name: InsertScopedAction :execrows
 insert into dorf.actions(id,job_id,kind,state,scope_key)
@@ -45,8 +44,8 @@ set state=sqlc.arg(state),settled_at=coalesce(settled_at,clock_timestamp())
 where dorf.actions.id=sqlc.arg(action_id)
   and (state='unsettled' or state=sqlc.arg(state));
 
--- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,scope_key,created_at,settled_at
+-- name: GetActionByIDForUpdate :one
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=sqlc.arg(id)
 for update;
@@ -55,13 +54,6 @@ for update;
 update dorf.actions
 set state='succeeded',settled_at=coalesce(settled_at,clock_timestamp())
 where id=sqlc.arg(id) and state<>'succeeded';
-
--- name: SandboxRouteRevokeSucceeded :one
-select exists(
-    select 1 from dorf.actions
-    where job_id=sqlc.arg(job_id) and kind='provider-route-revoke'
-      and scope_key=sqlc.arg(sandbox_id) and state='succeeded'
-);
 
 -- name: ListActions :many
 select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at

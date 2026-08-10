@@ -7,6 +7,7 @@ package dbsql
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
@@ -76,30 +77,6 @@ func (q *Queries) GetFirstUnsettledInput(ctx context.Context, jobID string) (Get
 	row := q.db.QueryRowContext(ctx, getFirstUnsettledInput, jobID)
 	var i GetFirstUnsettledInputRow
 	err := row.Scan(&i.Sequence, &i.State, &i.Attention)
-	return i, err
-}
-
-const getInitialMessage = `-- name: GetInitialMessage :one
-select id,sequence,input
-from dorf.job_messages
-where job_id=$1 and from_kind='human' and from_id=$2
-`
-
-type GetInitialMessageParams struct {
-	JobID  string
-	FromID string
-}
-
-type GetInitialMessageRow struct {
-	ID       string
-	Sequence int64
-	Input    string
-}
-
-func (q *Queries) GetInitialMessage(ctx context.Context, arg GetInitialMessageParams) (GetInitialMessageRow, error) {
-	row := q.db.QueryRowContext(ctx, getInitialMessage, arg.JobID, arg.FromID)
-	var i GetInitialMessageRow
-	err := row.Scan(&i.ID, &i.Sequence, &i.Input)
 	return i, err
 }
 
@@ -265,65 +242,95 @@ func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) er
 	return err
 }
 
-const listMessages = `-- name: ListMessages :many
-select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
+const listDeliveries = `-- name: ListDeliveries :many
+select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
-       coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
+       m.admitted_at,
+       (ar.id is not null)::boolean as agent_run_present,
+       coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
+       coalesce(ar.message_id,'') as agent_run_message_id,coalesce(ar.state,'') as state,
        coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
-       coalesce(ar.turn_id,'') as turn_id,
+       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,m.admitted_at
+       coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
+       coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
+       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
 order by m.sequence
 `
 
-type ListMessagesRow struct {
-	ID                string
-	JobID             string
+type ListDeliveriesRow struct {
+	MessageID         string
+	MessageJobID      string
 	FromKind          spine.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
 	DeliveryIntent    spine.MessageDeliveryIntent
 	SteerTargetTurnID string
+	AdmittedAt        time.Time
+	AgentRunPresent   bool
 	AgentRunID        string
+	AgentRunJobID     string
+	AgentRunMessageID string
 	State             spine.AgentRunState
 	Harness           string
 	ThreadID          string
+	BaselineRecorded  bool
+	BaselineTurnID    string
 	TurnID            string
 	TurnOutcome       string
 	Attention         string
-	AdmittedAt        time.Time
+	Role              string
+	InputRevision     string
+	Capability        string
+	SandboxID         string
+	SubmissionNonce   string
+	StartedAt         sql.NullTime
+	FinishedAt        sql.NullTime
 }
 
-func (q *Queries) ListMessages(ctx context.Context, jobID string) ([]ListMessagesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listMessages, jobID)
+func (q *Queries) ListDeliveries(ctx context.Context, jobID string) ([]ListDeliveriesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDeliveries, jobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListMessagesRow
+	var items []ListDeliveriesRow
 	for rows.Next() {
-		var i ListMessagesRow
+		var i ListDeliveriesRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
+			&i.MessageID,
+			&i.MessageJobID,
 			&i.FromKind,
 			&i.FromID,
 			&i.Sequence,
 			&i.Input,
 			&i.DeliveryIntent,
 			&i.SteerTargetTurnID,
+			&i.AdmittedAt,
+			&i.AgentRunPresent,
 			&i.AgentRunID,
+			&i.AgentRunJobID,
+			&i.AgentRunMessageID,
 			&i.State,
 			&i.Harness,
 			&i.ThreadID,
+			&i.BaselineRecorded,
+			&i.BaselineTurnID,
 			&i.TurnID,
 			&i.TurnOutcome,
 			&i.Attention,
-			&i.AdmittedAt,
+			&i.Role,
+			&i.InputRevision,
+			&i.Capability,
+			&i.SandboxID,
+			&i.SubmissionNonce,
+			&i.StartedAt,
+			&i.FinishedAt,
 		); err != nil {
 			return nil, err
 		}

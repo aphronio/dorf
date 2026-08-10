@@ -62,78 +62,39 @@ func (q *Queries) GetReviewFeedbackRunForUpdate(ctx context.Context, runID strin
 }
 
 const getReviewJobForUpdate = `-- name: GetReviewJobForUpdate :one
-select revision,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
+select dorf.jobs.revision,dorf.jobs.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists,
+       coalesce((
+         select rp.policy_digest from dorf.review_plans rp
+         where rp.job_id=dorf.jobs.id and rp.revision=$1
+       ),'') as policy_digest
 from dorf.jobs
-where id=$1
+where id=$2
 for update
 `
+
+type GetReviewJobForUpdateParams struct {
+	PolicyRevision string
+	JobID          string
+}
 
 type GetReviewJobForUpdateRow struct {
 	Revision      string
 	AdmissionOpen bool
 	OutcomeExists bool
+	PolicyDigest  interface{}
 }
 
-func (q *Queries) GetReviewJobForUpdate(ctx context.Context, jobID string) (GetReviewJobForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewJobForUpdate, jobID)
+func (q *Queries) GetReviewJobForUpdate(ctx context.Context, arg GetReviewJobForUpdateParams) (GetReviewJobForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getReviewJobForUpdate, arg.PolicyRevision, arg.JobID)
 	var i GetReviewJobForUpdateRow
-	err := row.Scan(&i.Revision, &i.AdmissionOpen, &i.OutcomeExists)
-	return i, err
-}
-
-const getReviewPlan = `-- name: GetReviewPlan :one
-select job_id,revision,facts::text as facts,plan::text as plan,
-       policy_digest,created_at
-from dorf.review_plans
-where job_id=$1 and revision=$2
-`
-
-type GetReviewPlanParams struct {
-	JobID    string
-	Revision string
-}
-
-type GetReviewPlanRow struct {
-	JobID        string
-	Revision     string
-	Facts        string
-	Plan         string
-	PolicyDigest string
-	CreatedAt    time.Time
-}
-
-func (q *Queries) GetReviewPlan(ctx context.Context, arg GetReviewPlanParams) (GetReviewPlanRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewPlan, arg.JobID, arg.Revision)
-	var i GetReviewPlanRow
 	err := row.Scan(
-		&i.JobID,
 		&i.Revision,
-		&i.Facts,
-		&i.Plan,
+		&i.AdmissionOpen,
+		&i.OutcomeExists,
 		&i.PolicyDigest,
-		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const getReviewPlanDigestForUpdate = `-- name: GetReviewPlanDigestForUpdate :one
-select policy_digest
-from dorf.review_plans
-where job_id=$1 and revision=$2
-for update
-`
-
-type GetReviewPlanDigestForUpdateParams struct {
-	JobID    string
-	Revision string
-}
-
-func (q *Queries) GetReviewPlanDigestForUpdate(ctx context.Context, arg GetReviewPlanDigestForUpdateParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getReviewPlanDigestForUpdate, arg.JobID, arg.Revision)
-	var policy_digest string
-	err := row.Scan(&policy_digest)
-	return policy_digest, err
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
@@ -240,89 +201,6 @@ func (q *Queries) InsertReviewPlan(ctx context.Context, arg InsertReviewPlanPara
 	return result.RowsAffected()
 }
 
-const interruptAgentRun = `-- name: InterruptAgentRun :execrows
-update dorf.agent_runs
-set state='interrupted',
-    turn_outcome=case when turn_id is null then null else 'interrupted' end,
-    attention=$1::text,
-    finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
-where id=$2 and state in ('pending','submitting','active','uncertain')
-`
-
-type InterruptAgentRunParams struct {
-	Reason string
-	RunID  string
-}
-
-func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, interruptAgentRun, arg.Reason, arg.RunID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const listAllReviewRuns = `-- name: ListAllReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce
-from dorf.review_run_projection p
-where p.job_id=$1 and p.input_revision<>'' and p.role<>'implement'
-order by p.input_revision,p.role
-`
-
-type ListAllReviewRunsRow struct {
-	DorfReviewRunProjection DorfReviewRunProjection
-}
-
-func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAllReviewRunsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAllReviewRuns, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListAllReviewRunsRow
-	for rows.Next() {
-		var i ListAllReviewRunsRow
-		if err := rows.Scan(
-			&i.DorfReviewRunProjection.ID,
-			&i.DorfReviewRunProjection.JobID,
-			&i.DorfReviewRunProjection.MessageID,
-			&i.DorfReviewRunProjection.State,
-			&i.DorfReviewRunProjection.Harness,
-			&i.DorfReviewRunProjection.ThreadID,
-			&i.DorfReviewRunProjection.BaselineRecorded,
-			&i.DorfReviewRunProjection.BaselineTurnID,
-			&i.DorfReviewRunProjection.TurnID,
-			&i.DorfReviewRunProjection.TurnOutcome,
-			&i.DorfReviewRunProjection.Attention,
-			&i.DorfReviewRunProjection.Role,
-			&i.DorfReviewRunProjection.InputRevision,
-			&i.DorfReviewRunProjection.Capability,
-			&i.DorfReviewRunProjection.StartedAt,
-			&i.DorfReviewRunProjection.FinishedAt,
-			&i.DorfReviewRunProjection.RequestFromKind,
-			&i.DorfReviewRunProjection.RequestFromID,
-			&i.DorfReviewRunProjection.RequestSequence,
-			&i.DorfReviewRunProjection.RequestInput,
-			&i.DorfReviewRunProjection.RequestDeliveryIntent,
-			&i.DorfReviewRunProjection.RequestTargetTurnID,
-			&i.DorfReviewRunProjection.RequestAdmittedAt,
-			&i.DorfReviewRunProjection.SandboxID,
-			&i.DorfReviewRunProjection.OwnershipNonce,
-			&i.DorfReviewRunProjection.SubmissionNonce,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listReviewCheckInputs = `-- name: ListReviewCheckInputs :many
 select r.name,coalesce(e.id,'') as evidence_id
 from dorf.repository_commands r
@@ -370,20 +248,18 @@ func (q *Queries) ListReviewCheckInputs(ctx context.Context, arg ListReviewCheck
 }
 
 const listReviewPlans = `-- name: ListReviewPlans :many
-select job_id,revision,facts::text as facts,plan::text as plan,
-       policy_digest,created_at
+select job_id,revision,facts::text as facts,plan::text as plan,created_at
 from dorf.review_plans
 where job_id=$1
 order by created_at
 `
 
 type ListReviewPlansRow struct {
-	JobID        string
-	Revision     string
-	Facts        string
-	Plan         string
-	PolicyDigest string
-	CreatedAt    time.Time
+	JobID     string
+	Revision  string
+	Facts     string
+	Plan      string
+	CreatedAt time.Time
 }
 
 func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListReviewPlansRow, error) {
@@ -400,7 +276,6 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 			&i.Revision,
 			&i.Facts,
 			&i.Plan,
-			&i.PolicyDigest,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

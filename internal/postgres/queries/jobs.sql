@@ -85,11 +85,6 @@ set task_id=coalesce(task_id,sqlc.arg(task_id))
 where id=sqlc.arg(job_id) and admission_open
   and (task_id is null or task_id=sqlc.arg(task_id));
 
--- name: CloseAdmission :execrows
-update dorf.jobs
-set admission_open=false
-where id=sqlc.arg(job_id);
-
 -- name: SetCleanupTaskID :execrows
 update dorf.jobs
 set cleanup_task_id=coalesce(cleanup_task_id,sqlc.arg(cleanup_task_id)),

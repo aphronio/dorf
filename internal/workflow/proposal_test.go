@@ -43,7 +43,7 @@ func TestOnlyRepositoryAuthoritiesSupplyHumanFeedback(t *testing.T) {
 }
 
 func TestAdmittedGitHubCommentRemainsImmutableAfterEdit(t *testing.T) {
-	admitted := admittedGitHubComments([]spine.MessageView{{Message: spine.Message{
+	admitted := admittedGitHubComments([]spine.Delivery{{Message: spine.Message{
 		FromKind: spine.MessageFromHuman,
 		FromID:   "github-comment:42",
 		Input:    "first admitted text",

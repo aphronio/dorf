@@ -13,19 +13,6 @@ left join lateral (
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
--- name: ListJobAgentRuns :many
-select id,job_id,message_id,state,
-       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
-       (baseline_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(baseline_turn_id,'') as baseline_turn_id,
-       coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(capability,'') as capability,sandbox_id,
-       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
-from dorf.agent_runs
-where job_id=sqlc.arg(job_id)
-order by id;
-
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
@@ -121,6 +108,14 @@ set state='failed',
     attention=sqlc.arg(reason),
     finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
 where id=sqlc.arg(run_id) and state not in ('completed','interrupted');
+
+-- name: InterruptAgentRun :execrows
+update dorf.agent_runs
+set state='interrupted',
+    turn_outcome=case when turn_id is null then null else 'interrupted' end,
+    attention=sqlc.arg(reason)::text,
+    finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
+where id=sqlc.arg(run_id) and state in ('pending','submitting','active','uncertain');
 
 -- name: MarkAgentRunUncertain :execrows
 update dorf.agent_runs

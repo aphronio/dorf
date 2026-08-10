@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
@@ -35,8 +34,11 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	}
 	intentStarted := false
 	for _, kind := range []spine.ActionKind{spine.ActionRepositoryPush, spine.ActionGitHubPullRequest} {
-		_, actionErr := queries.GetPublicationAction(ctx, dbsql.GetPublicationActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
+		row, actionErr := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
 		if actionErr == nil {
+			if _, exactErr := exactScopedAction(row, jobID, kind, revision); exactErr != nil {
+				return spine.Job{}, spine.Action{}, spine.Action{}, exactErr
+			}
 			intentStarted = true
 			continue
 		}
@@ -79,24 +81,24 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 
 func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {
 	id := spine.ScopedActionID(jobID, kind, revision)
-	if err := queries.InsertPublicationAction(ctx, dbsql.InsertPublicationActionParams{ID: id, JobID: jobID, Kind: kind, ScopeKey: revision}); err != nil {
+	if _, err := queries.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: id, JobID: jobID, Kind: kind, ScopeKey: revision}); err != nil {
 		return spine.Action{}, err
 	}
-	row, err := queries.GetPublicationActionForUpdate(ctx, dbsql.GetPublicationActionForUpdateParams{ID: id, JobID: jobID, Kind: kind, ScopeKey: revision})
+	row, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: id, JobID: jobID, Kind: kind})
 	if err != nil {
 		return spine.Action{}, err
 	}
-	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
+	return exactScopedAction(row, jobID, kind, revision)
 }
 
 func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (spine.Action, spine.Action, error) {
 	queries := dbsql.New(s.DB)
 	load := func(kind spine.ActionKind) (spine.Action, error) {
-		row, err := queries.GetPublicationAction(ctx, dbsql.GetPublicationActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
+		row, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
 		if err != nil {
 			return spine.Action{}, err
 		}
-		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt), nil
+		return exactScopedAction(row, jobID, kind, revision)
 	}
 	push, err := load(spine.ActionRepositoryPush)
 	if err != nil {
@@ -139,8 +141,12 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	if locked.Revision != proposal.ProposedRevision || !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("Proposal conflicts with the exact current Job Revision")
 	}
-	pushState, err := queries.GetRepositoryPushState(ctx, dbsql.GetRepositoryPushStateParams{JobID: proposal.JobID, Revision: locked.Revision})
-	if err != nil || pushState != "succeeded" {
+	pushRow, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: proposal.JobID, Kind: spine.ActionRepositoryPush, ScopeKey: locked.Revision})
+	if err != nil {
+		return fmt.Errorf("proposal cannot be recorded before exact repository push success")
+	}
+	push, err := exactScopedAction(pushRow, proposal.JobID, spine.ActionRepositoryPush, locked.Revision)
+	if err != nil || push.State != spine.ActionSucceeded {
 		return fmt.Errorf("proposal cannot be recorded before exact repository push success")
 	}
 	existingRow, err := queries.GetProposal(ctx, proposal.JobID)
@@ -187,14 +193,6 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 	}
 	proposal := githubProposal(row)
 	return &proposal, nil
-}
-
-func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, scope string, createdAt time.Time, settledAt sql.NullTime) spine.Action {
-	action := spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope, CreatedAt: createdAt}
-	if settledAt.Valid {
-		action.SettledAt = settledAt.Time
-	}
-	return action
 }
 
 func githubProposal(row dbsql.DorfGithubProposal) spine.GitHubProposal {

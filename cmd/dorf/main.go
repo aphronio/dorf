@@ -487,11 +487,20 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		return err
 	}
 	job := snapshot.Job
-	projection := snapshot.Project(evidenceStore)
+	projection, err := snapshot.Project(evidenceStore)
+	if err != nil {
+		return err
+	}
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
 	history := workflowHistory(snapshot)
 	if *jsonOutput {
+		messages := make([]spine.Message, 0, len(snapshot.Deliveries))
+		agentRuns := make([]spine.AgentRun, 0, len(snapshot.Deliveries))
+		for _, delivery := range snapshot.Deliveries {
+			messages = append(messages, delivery.Message)
+			agentRuns = append(agentRuns, delivery.AgentRun)
+		}
 		runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
 		if err != nil {
 			return err
@@ -507,9 +516,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			"proposal":     snapshot.Proposal,
 			"outcome":      snapshot.Outcome,
 			"observed_facts": map[string]any{
-				"actions": snapshot.Actions, "agent_runs": snapshot.AgentRuns, "revisions": snapshot.Revisions,
+				"actions": snapshot.Actions, "agent_runs": agentRuns, "revisions": snapshot.Revisions,
 				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
-				"sandboxes": snapshot.Sandboxes, "messages": snapshot.Messages,
+				"sandboxes": snapshot.Sandboxes, "messages": messages,
 			},
 			"absurd_run":     runEvidence,
 			"absurd_cleanup": cleanupEvidence,
@@ -584,11 +593,10 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore ev
 	if err != nil {
 		return err
 	}
-	verified, err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore)
-	if err != nil {
+	if err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
 		return fmt.Errorf("current Revision %s readiness Evidence: %w", job.Revision, err)
 	}
-	fmt.Fprintf(stdout, "Revision %s: %d proving Evidence artifacts independently verified against Check rows\n", job.Revision, len(verified))
+	fmt.Fprintf(stdout, "Revision %s: proving Evidence artifacts independently verified against Check rows\n", job.Revision)
 	return nil
 }
 
@@ -698,16 +706,15 @@ type historyEntry struct {
 // execution and inspection authority for what happens next.
 func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 	job := snapshot.Job
-	messages := snapshot.Messages
+	deliveries := snapshot.Deliveries
 	actions := snapshot.Actions
-	agentRuns := snapshot.AgentRuns
 	revisions := snapshot.Revisions
 	checks := snapshot.Checks
 	plans := snapshot.ReviewPlans
 	records := snapshot.Evidence
 	proposal := snapshot.Proposal
 	outcome := snapshot.Outcome
-	entries := make([]historyEntry, 0, 1+len(messages)+2*len(actions)+2*len(agentRuns)+len(revisions)+2*len(checks)+len(plans)+len(records)+2)
+	entries := make([]historyEntry, 0, 1+3*len(deliveries)+2*len(actions)+len(revisions)+2*len(checks)+len(plans)+len(records)+2)
 	add := func(at time.Time, kind, detail string) {
 		if !at.IsZero() {
 			entries = append(entries, historyEntry{At: at, Kind: kind, Detail: detail})
@@ -715,9 +722,8 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 	}
 	add(job.AdmittedAt, "Job", "admitted")
 	add(job.WorkflowAttentionAt, "Attention", job.WorkflowAttention)
-	messageSequences := make(map[string]int64, len(messages))
-	for _, message := range messages {
-		messageSequences[message.ID] = message.Sequence
+	for _, delivery := range deliveries {
+		message := delivery.Message
 		add(message.AdmittedAt, "Message", fmt.Sprintf("%d admitted from %s", message.Sequence, message.FromKind))
 	}
 	for _, action := range actions {
@@ -727,7 +733,8 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 			add(action.SettledAt, "Proposal", fmt.Sprintf("#%d recorded for Revision %s", proposal.Number, proposal.ProposedRevision))
 		}
 	}
-	for _, run := range agentRuns {
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
 		role := run.Role
 		if role == "implement" {
 			role = "implementation"
@@ -735,8 +742,8 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 			role += " review"
 		}
 		input := ""
-		if sequence := messageSequences[run.MessageID]; sequence > 0 {
-			input = fmt.Sprintf(" for Message %d", sequence)
+		if delivery.Message.Sequence > 0 {
+			input = fmt.Sprintf(" for Message %d", delivery.Message.Sequence)
 		}
 		if run.InputRevision != "" {
 			input += " at Revision " + run.InputRevision

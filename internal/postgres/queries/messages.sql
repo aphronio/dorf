@@ -3,11 +3,6 @@ insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
 values(sqlc.arg(id),sqlc.arg(job_id),'human',sqlc.arg(from_id),1,sqlc.arg(input))
 on conflict(job_id,from_kind,from_id) do nothing;
 
--- name: GetInitialMessage :one
-select id,sequence,input
-from dorf.job_messages
-where job_id=sqlc.arg(job_id) and from_kind='human' and from_id=sqlc.arg(from_id);
-
 -- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
@@ -78,14 +73,20 @@ where m.job_id=sqlc.arg(job_id) and ar.role='implement'
 order by m.sequence desc
 limit 1;
 
--- name: ListMessages :many
-select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
+-- name: ListDeliveries :many
+select m.id as message_id,m.job_id as message_job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
-       coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
+       m.admitted_at,
+       (ar.id is not null)::boolean as agent_run_present,
+       coalesce(ar.id,'') as agent_run_id,coalesce(ar.job_id,'') as agent_run_job_id,
+       coalesce(ar.message_id,'') as agent_run_message_id,coalesce(ar.state,'') as state,
        coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
-       coalesce(ar.turn_id,'') as turn_id,
+       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,m.admitted_at
+       coalesce(ar.attention,'') as attention,coalesce(ar.role,'') as role,coalesce(ar.input_revision,'') as input_revision,
+       coalesce(ar.capability,'') as capability,coalesce(ar.sandbox_id,'') as sandbox_id,
+       coalesce(ar.submission_nonce,'') as submission_nonce,ar.started_at,ar.finished_at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)

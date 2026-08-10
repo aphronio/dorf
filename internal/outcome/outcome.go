@@ -68,55 +68,46 @@ func (s Service) recordFenced(ctx context.Context, jobID string, requested spine
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}
+	receipt := spine.JobOutcome{JobID: job.ID, Kind: requested}
 	if proposal == nil {
 		if requested != spine.OutcomeAbandoned {
 			return spine.JobOutcome{}, false, fmt.Errorf("accepted and rejected outcomes require one exact current GitHub proposal")
 		}
-		if s.claimCheck == nil {
-			return spine.JobOutcome{}, false, fmt.Errorf("outcome authority check is not configured")
+	} else {
+		if proposal.ProposedRevision != job.Revision {
+			return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
 		}
-		if err := s.claimCheck(ctx); err != nil {
-			return spine.JobOutcome{}, false, err
+		authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
+		pull, err := s.GitHub.PullRequest(ctx, authority, proposal.Number)
+		if err != nil {
+			return spine.JobOutcome{}, false, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
 		}
-		now := time.Now
-		if s.Now != nil {
-			now = s.Now
+		if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
+			return spine.JobOutcome{}, false, fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
 		}
-		return s.Store.RecordOutcome(ctx, spine.JobOutcome{JobID: job.ID, Kind: requested, ObservedAt: now().UTC()})
-	}
-	if proposal.ProposedRevision != job.Revision {
-		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
-	}
-	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
-	pull, err := s.GitHub.PullRequest(ctx, authority, proposal.Number)
-	if err != nil {
-		return spine.JobOutcome{}, false, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
-	}
-	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
-		return spine.JobOutcome{}, false, fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
-	}
-	switch requested {
-	case spine.OutcomeAccepted:
-		if pull.State != "closed" || !pull.Merged || pull.MergeCommitOID == "" {
-			return spine.JobOutcome{}, false, fmt.Errorf("accepted outcome requires exact pull request #%d to report merged", pull.Number)
+		switch requested {
+		case spine.OutcomeAccepted:
+			if pull.State != "closed" || !pull.Merged || pull.MergeCommitOID == "" {
+				return spine.JobOutcome{}, false, fmt.Errorf("accepted outcome requires exact pull request #%d to report merged", pull.Number)
+			}
+		case spine.OutcomeRejected:
+			if pull.State != "closed" || pull.Merged {
+				return spine.JobOutcome{}, false, fmt.Errorf("rejected outcome requires exact pull request #%d to report closed and unmerged", pull.Number)
+			}
+		case spine.OutcomeAbandoned:
+			if pull.Merged {
+				return spine.JobOutcome{}, false, fmt.Errorf("abandoned outcome refuses exact pull request #%d because it is already merged", pull.Number)
+			}
 		}
-	case spine.OutcomeRejected:
-		if pull.State != "closed" || pull.Merged {
-			return spine.JobOutcome{}, false, fmt.Errorf("rejected outcome requires exact pull request #%d to report closed and unmerged", pull.Number)
-		}
-	case spine.OutcomeAbandoned:
-		if pull.Merged {
-			return spine.JobOutcome{}, false, fmt.Errorf("abandoned outcome refuses exact pull request #%d because it is already merged", pull.Number)
-		}
+		receipt.ObservedState = pull.State
+		receipt.ObservedMerged = pull.Merged
+		receipt.MergeCommitOID = pull.MergeCommitOID
 	}
 	now := time.Now
 	if s.Now != nil {
 		now = s.Now
 	}
-	receipt := spine.JobOutcome{
-		JobID: job.ID, Kind: requested, ObservedState: pull.State, ObservedMerged: pull.Merged,
-		MergeCommitOID: pull.MergeCommitOID, ObservedAt: now().UTC(),
-	}
+	receipt.ObservedAt = now().UTC()
 	if s.claimCheck == nil {
 		return spine.JobOutcome{}, false, fmt.Errorf("outcome authority check is not configured")
 	}

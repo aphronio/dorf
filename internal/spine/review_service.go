@@ -34,7 +34,7 @@ func (s Service) PlanReview(ctx context.Context, job Job) error {
 	if err != nil {
 		return err
 	}
-	if _, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.evidence); err != nil {
+	if err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.evidence); err != nil {
 		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("Revision %s Evidence verification failed: %w", job.Revision, err))
 	}
 	facts, err := s.externals.RepositoryChangeFacts(ctx, job)

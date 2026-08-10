@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -62,21 +61,5 @@ func TestPostgresCleanupAndPublicationSerializeToOneWinner(t *testing.T) {
 	_, _, publicationActionsErr := store.PublicationActions(context.Background(), job.ID, revision)
 	if cleanupWon == publicationWon || cleanupWon == stored.AdmissionOpen || publicationWon != (publicationActionsErr == nil) {
 		t.Fatalf("cleanupErr=%v publicationErr=%v publicationActionsErr=%v Job=%#v", errorsByKind["cleanup"], errorsByKind["publication"], publicationActionsErr, stored)
-	}
-}
-
-func TestPostgresRecordedAbandonmentAllowsCleanupAdmissionClose(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	job, _ := preparePublishedOutcomeJob(t, store, "cleanup-abandoned")
-	_, created, err := store.RecordOutcome(context.Background(), spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, ObservedState: "open", ObservedAt: time.Now().UTC()})
-	if err != nil || !created {
-		t.Fatalf("abandonment created=%v err=%v", created, err)
-	}
-	if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	closed, err := store.Job(context.Background(), job.ID)
-	if err != nil || closed.AdmissionOpen {
-		t.Fatalf("closed Job=%#v err=%v", closed, err)
 	}
 }

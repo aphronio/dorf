@@ -32,7 +32,7 @@ Evidence retains observed proof.
 ```
 
 One admitted Job owns its implementation Sandbox and clone, branch, resumable implementation Thread,
-any selected review Sandboxes, any exact proposal, explicit outcome, and observable cleanup. Client and
+any selected review Sandboxes, an exact Proposal when published, explicit Outcome, and observable cleanup. Client and
 worker processes may disappear; stable identities and external reconciliation prevent duplicate
 turns, Sandboxes, pushes, and pull requests.
 

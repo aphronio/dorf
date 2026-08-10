@@ -16,6 +16,7 @@ import (
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -60,23 +61,8 @@ type readinessView struct {
 	Assessment spine.ReadinessAssessment
 	Checks     []spine.Check
 	Evidence   []spine.Evidence
+	Plan       *spine.ReviewPlanRecord
 	ReviewRuns []spine.ReviewRunView
-}
-
-// AssessReadiness is the single publication-readiness projection shared by
-// workflow decisions and external-effect reconciliation. intentAt is zero
-// before publication starts; once Actions exist it preserves their admitted
-// input boundary so a later accepted Message cannot strand reconciliation.
-func (s Service) AssessReadiness(ctx context.Context, jobID, revision string, intentAt time.Time) (spine.ReadinessAssessment, error) {
-	job, err := s.Store.Job(ctx, jobID)
-	if err != nil {
-		return spine.ReadinessAssessment{}, err
-	}
-	if job.Revision != revision {
-		return spine.ReadinessAssessment{}, fmt.Errorf("publication readiness Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
-	}
-	view, err := s.readiness(ctx, job, intentAt)
-	return view.Assessment, err
 }
 
 func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Time) (readinessView, error) {
@@ -97,38 +83,28 @@ func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Tim
 	if err != nil {
 		return view, err
 	}
-	allReviewRuns, err := s.Store.AllReviewRuns(ctx, job.ID)
+	sandboxes, err := s.Store.Sandboxes(ctx, job.ID)
 	if err != nil {
 		return view, err
 	}
-	view.ReviewRuns = reviewRunsAtRevision(allReviewRuns, job.ID, job.Revision)
-	messages, err := s.Store.Messages(ctx, job.ID)
+	deliveries, err := s.Store.Deliveries(ctx, job.ID)
 	if err != nil {
 		return view, err
 	}
-	agentRuns, err := s.Store.AgentRuns(ctx, job.ID)
+	view.ReviewRuns, err = spine.ReviewRuns(deliveries, sandboxes)
 	if err != nil {
 		return view, err
 	}
-	messages, agentRuns = publicationInputsAt(messages, agentRuns, intentAt)
+	deliveries = spine.PublicationDeliveries(deliveries, intentAt)
 	var plan *spine.ReviewPlanRecord
 	for i := range plans {
 		if plans[i].Revision == job.Revision {
 			plan = &plans[i]
 		}
 	}
-	view.Assessment = spine.AssessReviewReadiness(job, declared, view.Checks, view.Evidence, s.Evidence, plan, view.ReviewRuns, messages, agentRuns)
+	view.Plan = plan
+	view.Assessment = spine.AssessReviewReadiness(job, declared, view.Checks, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
 	return view, nil
-}
-
-func reviewRunsAtRevision(runs []spine.ReviewRunView, jobID, revision string) []spine.ReviewRunView {
-	exact := make([]spine.ReviewRunView, 0, len(runs))
-	for _, run := range runs {
-		if run.JobID == jobID && run.InputRevision == revision {
-			exact = append(exact, run)
-		}
-	}
-	return exact
 }
 
 // Push reconciles and, when necessary, pushes the Job's exact Revision. It
@@ -153,12 +129,12 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	if err != nil {
 		return err
 	}
-	readiness, err := s.AssessReadiness(ctx, job.ID, job.Revision, pushAction.CreatedAt)
+	readiness, err := s.readiness(ctx, job, pushAction.CreatedAt)
 	if err != nil {
 		return err
 	}
-	if !readiness.Ready || readiness.Revision != job.Revision {
-		return s.block(ctx, job, pushAction, "publication lost exact-Revision readiness: "+readiness.Reason)
+	if !readiness.Assessment.Ready || readiness.Assessment.Revision != job.Revision {
+		return s.block(ctx, job, pushAction, "publication lost exact-Revision readiness: "+readiness.Assessment.Reason)
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
@@ -240,7 +216,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if !readiness.Assessment.Ready || readiness.Assessment.Revision != job.Revision {
 		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+readiness.Assessment.Reason)
 	}
-	body := Body(job, readiness.Assessment, readiness.Checks, readiness.Evidence, readiness.ReviewRuns)
+	body := Body(job, readiness.Assessment, readiness.Checks, readiness.Evidence, readiness.Plan, readiness.ReviewRuns)
 	bodyDigest := BodyDigest(body)
 	title := Title(job.Goal)
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
@@ -285,28 +261,6 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	return s.recordAfterClaim(ctx, func() error {
 		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 	})
-}
-
-// publicationInputsAt retains the readiness boundary that created the exact
-// pull-request Action. Messages admitted later remain accepted, but they do
-// not strand reconciliation of an external effect that already began.
-func publicationInputsAt(messages []spine.MessageView, runs []spine.AgentRun, startedAt time.Time) ([]spine.MessageView, []spine.AgentRun) {
-	retainedMessages := make([]spine.MessageView, 0, len(messages))
-	retainedIDs := make(map[string]struct{}, len(messages))
-	for _, message := range messages {
-		if !startedAt.IsZero() && message.AdmittedAt.After(startedAt) {
-			continue
-		}
-		retainedMessages = append(retainedMessages, message)
-		retainedIDs[message.ID] = struct{}{}
-	}
-	retainedRuns := make([]spine.AgentRun, 0, len(runs))
-	for _, run := range runs {
-		if _, ok := retainedIDs[run.MessageID]; ok {
-			retainedRuns = append(retainedRuns, run)
-		}
-	}
-	return retainedMessages, retainedRuns
 }
 
 func planPush(present bool, remote, revision, relation string) (string, error) {
@@ -420,7 +374,7 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Check, evidence []spine.Evidence, runs []spine.ReviewRunView) string {
+func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Check, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
@@ -438,19 +392,26 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 		lines = append(lines, fmt.Sprintf("- %s: %s (Evidence `%s`, sha256 `%s`)", check.Name, check.State, check.EvidenceID, digests[check.EvidenceID]))
 	}
 	lines = append(lines, "", "## Selected review", "")
-	runsByID := make(map[string]spine.ReviewRunView, len(runs))
+	runsByRole := make(map[string]spine.ReviewRunView, len(runs))
 	for _, run := range runs {
-		runsByID[run.ID] = run
+		if run.JobID == job.ID && run.InputRevision == job.Revision {
+			runsByRole[run.Role] = run
+		}
 	}
-	for _, verification := range readiness.ReviewEvidence {
-		run, ok := runsByID[verification.AgentRunID]
-		if !ok || run.InputRevision != job.Revision {
+	var selectedRoles []policy.Role
+	if plan != nil && plan.JobID == job.ID && plan.Revision == job.Revision {
+		selectedRoles = plan.Plan.Roles
+	}
+	for _, role := range selectedRoles {
+		run, ok := runsByRole[string(role)]
+		if !ok {
 			continue
 		}
+		observedEvidenceID := spine.EvidenceID(run.ID, "review-observation")
 		feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, run.ID)
-		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, verification.ObservedEvidenceID, digests[verification.ObservedEvidenceID], feedbackMessageID))
+		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, observedEvidenceID, digests[observedEvidenceID], feedbackMessageID))
 	}
-	if len(readiness.ReviewEvidence) == 0 {
+	if len(selectedRoles) == 0 {
 		lines = append(lines, "- ReviewPolicy selected no agent review.")
 	}
 	attention := "none"

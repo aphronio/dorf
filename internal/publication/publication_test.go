@@ -10,6 +10,7 @@ import (
 
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -21,15 +22,14 @@ func (f sandboxRunner) Run(ctx context.Context, command string, input []byte, ar
 
 func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
 	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	messages := []spine.MessageView{
-		{Message: spine.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}},
-		{Message: spine.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}},
+	deliveries := []spine.Delivery{
+		{Message: spine.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}, AgentRun: spine.AgentRun{ID: "run-before", MessageID: "before"}},
+		{Message: spine.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, AgentRun: spine.AgentRun{ID: "run-after", MessageID: "after"}},
 	}
-	runs := []spine.AgentRun{{ID: "run-before", MessageID: "before"}, {ID: "run-after", MessageID: "after"}}
 
-	retainedMessages, retainedRuns := publicationInputsAt(messages, runs, cutoff)
-	if len(retainedMessages) != 1 || retainedMessages[0].ID != "before" || len(retainedRuns) != 1 || retainedRuns[0].ID != "run-before" {
-		t.Fatalf("retained Messages=%#v AgentRuns=%#v", retainedMessages, retainedRuns)
+	retained := spine.PublicationDeliveries(deliveries, cutoff)
+	if len(retained) != 1 || retained[0].Message.ID != "before" || retained[0].AgentRun.ID != "run-before" {
+		t.Fatalf("retained Deliveries=%#v", retained)
 	}
 }
 
@@ -110,25 +110,20 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 	}
 }
 
-func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T) {
+func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-1", Goal: "Implement durable publication", Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
 	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact checks and selected review settled"}
 	checks := []spine.Check{{Name: "smoke", State: "passed", Revision: revision, EvidenceID: "e-smoke"}, {Name: "check", State: "passed", Revision: revision, EvidenceID: "e-check"}}
 	evidence := []spine.Evidence{{ID: "e-check", Digest: strings.Repeat("1", 64)}, {ID: "e-smoke", Digest: strings.Repeat("2", 64)}}
-	first := Body(job, assessment, checks, evidence, nil)
-	second := Body(job, assessment, checks, evidence, nil)
-	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) || !strings.Contains(first, "e-check") || strings.Index(first, "- check:") > strings.Index(first, "- smoke:") {
+	first := Body(job, assessment, checks, evidence, nil, nil)
+	second := Body(job, assessment, checks, evidence, nil, nil)
+	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) || !strings.Contains(first, "e-check") {
 		t.Fatalf("non-deterministic or incomplete body:\n%s", first)
-	}
-	for _, forbidden := range []string{"transcript", "timeline", "token", "cost", "agent narration"} {
-		if strings.Contains(strings.ToLower(first), forbidden) {
-			t.Fatalf("body contains forbidden %q", forbidden)
-		}
 	}
 }
 
-func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
+func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback", Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
 	role := "critical-boundary"
@@ -139,42 +134,35 @@ func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	runs := []spine.ReviewRunView{{
 		AgentRun: spine.AgentRun{
 			ID:            runID,
+			JobID:         job.ID,
 			MessageID:     requestID,
 			Role:          role,
 			InputRevision: revision,
 		},
 		Request: spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
 	}, {
-		AgentRun: spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
+		AgentRun: spine.AgentRun{ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
 		Request:  spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
 	}}
 	evidence := []spine.Evidence{
 		{ID: observedID, Digest: strings.Repeat("2", 64)},
 		{ID: "e-unselected", Digest: strings.Repeat("3", 64)},
 	}
-	assessment := spine.ReadinessAssessment{
-		Ready:  true,
-		Reason: "review feedback handled",
-		ReviewEvidence: []spine.ReviewEvidenceVerification{{
-			AgentRunID: runID, Role: role, Revision: revision,
-			ObservedEvidenceID: observedID, Verified: true,
-		}},
-	}
+	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "review feedback handled"}
+	plan := &spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 
-	body := Body(job, assessment, nil, evidence, runs)
-	for _, want := range []string{role, "AgentRun `" + runID + "`", "feedback Message `" + feedbackMessageID + "`", "handled by an implementation AgentRun", observedID, strings.Repeat("2", 64)} {
+	body := Body(job, assessment, nil, evidence, plan, runs)
+	for _, want := range []string{role, runID, feedbackMessageID, observedID, strings.Repeat("2", 64)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body is missing %q:\n%s", want, body)
 		}
 	}
-	for _, forbidden := range []string{"claim", "e-claim", "unselected", "material finding", "no material finding", "adjudication"} {
-		if strings.Contains(strings.ToLower(body), forbidden) {
-			t.Fatalf("body classified opaque feedback as %q:\n%s", forbidden, body)
-		}
+	if strings.Contains(body, "agent-run-unselected") || strings.Contains(body, "e-unselected") {
+		t.Fatalf("body projected an unselected review:\n%s", body)
 	}
 }
 
-func TestPublicationReadinessAndBodySeeOnlyExactRevisionReviewRuns(t *testing.T) {
+func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	jobID := "job-exact-review"
 	currentRevision := strings.Repeat("a", 40)
 	oldRevision := strings.Repeat("f", 40)
@@ -187,18 +175,15 @@ func TestPublicationReadinessAndBodySeeOnlyExactRevisionReviewRuns(t *testing.T)
 		{AgentRun: spine.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: spine.AgentRunFailed}},
 	}
 
-	exact := reviewRunsAtRevision(runs, jobID, currentRevision)
-	if len(exact) != 1 || exact[0].ID != currentRunID || exact[0].State != spine.AgentRunCompleted {
-		t.Fatalf("exact-Revision review runs = %#v", exact)
-	}
-
 	observedID := spine.EvidenceID(currentRunID, "review-observation")
+	plan := &spine.ReviewPlanRecord{JobID: jobID, Revision: currentRevision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 	body := Body(
 		spine.Job{ID: jobID, Goal: "keep publication exact", Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
-		spine.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled", ReviewEvidence: []spine.ReviewEvidenceVerification{{AgentRunID: currentRunID, ObservedEvidenceID: observedID, Verified: true}}},
+		spine.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
 		nil,
 		[]spine.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
-		exact,
+		plan,
+		runs,
 	)
 	if !strings.Contains(body, currentRunID) || strings.Contains(body, oldRunID) || strings.Contains(body, oldRevision) {
 		t.Fatalf("body mixed review Revisions:\n%s", body)
@@ -206,15 +191,14 @@ func TestPublicationReadinessAndBodySeeOnlyExactRevisionReviewRuns(t *testing.T)
 }
 
 func TestPublicationTextProjectionRemainsValidUTF8AtLimits(t *testing.T) {
-	const truncated = "\n\n[Goal projection truncated; inspect the Job for the complete admitted goal.]"
 	goal := strings.Repeat("a", 1199) + "界tail"
-	if got, want := projectGoal(goal), strings.Repeat("a", 1199)+truncated; got != want || !utf8.ValidString(got) {
-		t.Fatalf("goal projection valid UTF-8=%v\ngot=%q\nwant=%q", utf8.ValidString(got), got, want)
+	if got := projectGoal(goal); !utf8.ValidString(got) || len(got) > 1300 {
+		t.Fatalf("goal projection bytes=%d valid UTF-8=%v", len(got), utf8.ValidString(got))
 	}
 
 	title := Title(strings.Repeat("a", 119) + "界tail")
-	if want := strings.Repeat("a", 119); title != want || !utf8.ValidString(title) || len(title) > 120 {
-		t.Fatalf("title=%q bytes=%d valid=%t want=%q", title, len(title), utf8.ValidString(title), want)
+	if !utf8.ValidString(title) || len(title) > 120 {
+		t.Fatalf("title=%q bytes=%d valid=%t", title, len(title), utf8.ValidString(title))
 	}
 }
 

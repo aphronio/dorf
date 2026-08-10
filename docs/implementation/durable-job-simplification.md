@@ -1,6 +1,6 @@
 # Durable Job simplification checklist
 
-Status: implemented and verified from Issue #94.
+Status: implemented and verified.
 
 Baseline commit: `d2e9d07` (`refactor: adopt Absurd public durability APIs`).
 
@@ -554,7 +554,7 @@ Goal: finish with a small human surface and tests that protect promises rather t
 - [x] Make default `inspect` overlay the complete expected coding dependency chain with chronological
       product facts, mark current work or attention, and show the exact Revision, Proposal/Outcome,
       and cleanup. Repeated Revisions should make implementation/check/review loops obvious.
-- [x] Derive `WorkflowHistory` from natural Message, Action, AgentRun, Revision, `git-revision`
+- [x] Derive inspection history from natural Message, Action, AgentRun, Revision, `git-revision`
       Evidence, Check, ReviewPlan, Proposal, Outcome, attention, and cleanup timestamps. Do not store
       a parallel event transcript or use it as recovery authority.
 - [x] Keep deep product facts and attached task correlation/results under `inspect --json`; use
@@ -568,28 +568,34 @@ Goal: finish with a small human surface and tests that protect promises rather t
 - [x] Remove copied read-model fields when their source facts are already present in the Snapshot.
 - [x] Load one concrete inspection Snapshot for CurrentWork, readiness, history, and JSON instead of
       querying the same facts twice; do not turn it into a generic graph framework.
-- [x] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
-      Proposal/Outcome, and exact cleanup/retry.
+- [x] Keep scenario-oriented PostgreSQL-backed stories for Message/Thread, Check feedback, review
+      feedback, Proposal/Outcome, and exact cleanup/retry. Keep each concurrency, claim-loss,
+      recovery, and mutation-boundary proof even when its setup resembles another layer's proof.
 - [x] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
       fault tests.
-- [x] Delete obsolete workflow-choreography, copied-state, duplicated status-matrix, raw-row, and
-      brittle inspect-prose tests. Retain focused pure helper and formatting tests when they protect
-      an external contract.
+- [x] Delete obsolete workflow-choreography, copied-state, duplicated status-matrix, and brittle
+      inspect-prose tests. Retain narrow corruption injection and semantic rendering assertions, plus
+      focused pure helper and formatting tests when they protect an external contract.
 - [x] Audit earlier replacements and remove their matched obsolete tests; retain distinct concurrency,
-      recovery, and adapter-authority proofs.
+      recovery, mutation-boundary, and adapter-authority proofs.
 - [x] Correct all setup and lifecycle examples to match automatic PR Outcome observation and cleanup.
-- [x] Report final production/test/schema LOC and name any remaining complexity centers.
+- [x] Report final authored production/test/schema LOC and name any remaining complexity centers.
 
-Terminal: a user can understand a Job without reading implementation state, and the focused test
-suite protects the same story and external contracts shown by the workflow.
+Terminal: execution and inspection derive the same explicit product-order decision from one
+Snapshot/Projection; no duplicate durable workflow status, historical Message/AgentRun projection,
+or runtime capability selection remains. Tests protect distinct product, concurrency, recovery,
+mutation, and external-authority invariants through their narrowest useful boundary. LOC is an
+accounting signal, never the acceptance criterion.
 
 ## Issue #94 closure gate
 
 - [x] The real Job sequence, not only an outer cycle, uses stable typed Absurd Steps.
 - [x] Checkpoint names and result shapes are treated as versioned persisted contracts.
-- [x] Production external effects use stable Dorf Actions and reconcile external truth.
+- [x] Every code-owned external mutation uses a stable Dorf Action and reconciles external truth;
+      agent delivery is AgentRun-owned and separately reconciled.
 - [x] Every accepted Message has one immutable wake identity while PostgreSQL remains its authority.
-- [x] Production uses only public Absurd spawn, result, cancel, retry, heartbeat, and event APIs.
+- [x] Production uses only the public Absurd SDK for task registration/execution, Steps,
+      spawn/result/cancel/retry, heartbeat, and events.
 - [x] Production never reads or mutates raw Absurd task tables.
 - [x] The production external-Action path performs a final claim check before recording success.
 - [x] Claim-expiry and cancellation tests exercise that actual production path.
@@ -622,9 +628,10 @@ Checks, selected no review, proposed PR #123, recorded rejection, and cleaned it
 Sandbox. Job `job-c7f6919ff693e3c0d045` produced Revision
 `d7bc86c92227b8c051082d868850d2aff905c6da`, ran the selected general reviewer in a dedicated
 read-only Sandbox, returned feedback as an implementation Message, proposed PR #125, recorded
-rejection, and cleaned both Sandboxes and Routes. Their Absurd histories contain singular
-`dorf/action/v1/<ActionID>` Steps with `ActionStepResultV1`, alongside typed AgentRun, Revision, Check,
-and ReviewPolicy Steps; normal Dorf inspection shows only the shared fact-derived product history.
+rejection, and cleaned both Sandboxes and Routes. Their Absurd histories contain stable
+`dorf/action/v1/<ActionID>` checkpoint identities with `ActionStepResultV1`, alongside typed AgentRun,
+Revision, Check, and ReviewPolicy Steps; default human Dorf inspection shows only the shared
+fact-derived product history.
 
 Terminal-target steer recovery was also exercised through public boundaries. On Job
 `job-fcd3196fec2b366c0957`, a steer targeting Turn
@@ -633,7 +640,7 @@ Terminal-target steer recovery was also exercised through public boundaries. On 
 Revision `91585c3b52d41a407a5a8356212649972b09f6ec` before either Check began. Dorf then proposed PR
 #126, observed rejection, and completed exact cleanup with no Route or Sandbox left behind.
 
-Final commit `f51b6d9` was dogfooded at the manual stop boundary. Public `dorf abandon` recorded Job
+Implementation commit `f51b6d9` was dogfooded at the manual stop boundary. Public `dorf abandon` recorded Job
 `job-a2e6043bb7696c7107f8` before any worker or Proposal, with no invented GitHub observation, closed
 admission, and cancelled the pending main task. Inspection showed `Complete — abandoned`, Proposal
 `null`, no Actions, and only the initial Message; the deterministically expected Route and Sandbox and
@@ -641,13 +648,26 @@ the Job branch's PR list were all empty. Fresh-PostgreSQL tests separately exerc
 an active AgentRun and its serialization against publication intent; live worker execution for that
 variant was not authorized, so the retained evidence does not claim it occurred live.
 
-From baseline `d2e9d07` to final implementation commit `f51b6d9`, handwritten production Go changed
-from 12,371 to 12,298 lines (-73), tests from 8,818 to 6,946 (-1,872), and the baseline schema from
-343 to 275 lines (-68). Slice 9 itself started at `51bbf51`: handwritten production Go grew from
-12,017 to 12,298 (+281) and tests from 6,278 to 6,946 (+668) because hidden multi-Action coordination,
-claim-loss boundaries, and concurrency recovery became explicit and directly proved. Over the same
-slice generated sqlc Go fell from 3,711 to 3,530 (-181), named query SQL from 916 to 899 (-17), and
-the schema stayed at 275 lines. The remaining complexity centers are concrete external authorities:
-Codex app-server delivery/recovery, PostgreSQL concurrency and atomicity, reviewer capability isolation,
-and GitHub/provider reconciliation. Snapshot/Projection and exact Action Steps are the simplifying
-boundaries, not new workflow frameworks.
+Final terminal accounting separates authored code from generated code. From baseline `d2e9d07` to
+this converged worktree, handwritten production Go changed from 12,371 to 12,117 lines (-254), tests
+from 8,818 to 6,894 (-1,924), and the baseline schema from 343 to 275 lines (-68). The baseline
+predated sqlc: current named query SQL is 833 lines, so total authored production Go plus query SQL is
+12,950 versus 12,371 (+579); generated sqlc Go is another 3,189 lines and is reported separately.
+
+Slice 9 started at `51bbf51`. It now changes handwritten production Go from 12,017 to 12,117 (+100)
+and named query SQL from 916 to 833 (-83), so authored production is nearly flat at +17 lines.
+Generated sqlc Go falls from 3,711 to 3,189 (-522); tests rise from 6,278 to 6,894 (+616); the schema
+stays at 275. The reopened maintainability pass itself removed 247 authored production lines
+(181 Go and 66 query SQL), 341 generated lines, and 52 test lines from the previously dogfooded
+implementation while adding loud relationship-corruption and transactional replay proofs. Across
+production, query, generated, and test files that pass is 951 additions and 1,591 deletions, net
+-640 physical lines. The expanded truthful documentation adds 20 net lines, making the complete
+worktree 998 additions and 1,618 deletions, net -620.
+
+The remaining complexity centers are concrete external authorities: Codex app-server
+delivery/recovery, PostgreSQL concurrency and atomicity, reviewer capability isolation, and
+GitHub/provider reconciliation. Snapshot/Projection, one Message+AgentRun Delivery read, and exact
+Action Steps are the simplifying boundaries, not generic workflow frameworks. The test increase in
+Slice 9 is accepted because it directly proves newly exposed concurrency, claim-loss, abandonment,
+publication, cleanup, and terminal-target steer boundaries; low-value copied-field and prose
+assertions were removed instead of weakening those proofs.

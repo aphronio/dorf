@@ -36,14 +36,6 @@ func reviewCheckInputs(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	return names, nil
 }
 
-func (s Store) ReviewPlan(ctx context.Context, jobID, revision string) (spine.ReviewPlanRecord, error) {
-	row, err := dbsql.New(s.DB).GetReviewPlan(ctx, dbsql.GetReviewPlanParams{JobID: jobID, Revision: revision})
-	if err != nil {
-		return spine.ReviewPlanRecord{}, err
-	}
-	return reviewPlanRecord(row.JobID, row.Revision, row.Facts, row.Plan, row.CreatedAt)
-}
-
 func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPlanRecord, error) {
 	rows, err := dbsql.New(s.DB).ListReviewPlans(ctx, jobID)
 	if err != nil {
@@ -97,25 +89,21 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	job, err := queries.GetReviewJobForUpdate(ctx, proposed.JobID)
+	job, err := queries.GetReviewJobForUpdate(ctx, dbsql.GetReviewJobForUpdateParams{JobID: proposed.JobID, PolicyRevision: proposed.Revision})
 	if err != nil {
 		return err
 	}
 	if job.Revision != proposed.Revision {
 		return fmt.Errorf("review policy conflicts with current Revision %s", job.Revision)
 	}
-	storedDigest, err := queries.GetReviewPlanDigestForUpdate(ctx, dbsql.GetReviewPlanDigestForUpdateParams{JobID: proposed.JobID, Revision: proposed.Revision})
-	if err == nil {
-		if storedDigest != digest {
+	if job.PolicyDigest != "" {
+		if job.PolicyDigest != digest {
 			return fmt.Errorf("mandatory review policy result changed across retry")
 		}
 		if err := clearReviewPolicyAttention(ctx, queries, proposed.JobID, proposed.Revision); err != nil {
 			return err
 		}
 		return tx.Commit()
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
 	}
 	if !job.AdmissionOpen || job.OutcomeExists {
 		return fmt.Errorf("Job %s cannot record a new review policy after admission closes or an Outcome is recorded", proposed.JobID)
@@ -228,18 +216,6 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 		view.FinishedAt = row.FinishedAt.Time
 	}
 	return view
-}
-
-func (s Store) AllReviewRuns(ctx context.Context, jobID string) ([]spine.ReviewRunView, error) {
-	rows, err := dbsql.New(s.DB).ListAllReviewRuns(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]spine.ReviewRunView, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, reviewRunView(row.DorfReviewRunProjection))
-	}
-	return result, nil
 }
 
 // RecordReviewFeedback retains one reviewer's exact prose and feeds it back to

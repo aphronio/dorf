@@ -7,8 +7,6 @@ package dbsql
 
 import (
 	"context"
-	"database/sql"
-	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -60,26 +58,18 @@ func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (DorfActio
 	return i, err
 }
 
-const getActionCompletionForUpdate = `-- name: GetActionCompletionForUpdate :one
-select job_id,kind,state,scope_key,created_at,settled_at
+const getActionByIDForUpdate = `-- name: GetActionByIDForUpdate :one
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
 where id=$1
 for update
 `
 
-type GetActionCompletionForUpdateRow struct {
-	JobID     string
-	Kind      spine.ActionKind
-	State     spine.ActionState
-	ScopeKey  string
-	CreatedAt time.Time
-	SettledAt sql.NullTime
-}
-
-func (q *Queries) GetActionCompletionForUpdate(ctx context.Context, id string) (GetActionCompletionForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getActionCompletionForUpdate, id)
-	var i GetActionCompletionForUpdateRow
+func (q *Queries) GetActionByIDForUpdate(ctx context.Context, id string) (DorfAction, error) {
+	row := q.db.QueryRowContext(ctx, getActionByIDForUpdate, id)
+	var i DorfAction
 	err := row.Scan(
+		&i.ID,
 		&i.JobID,
 		&i.Kind,
 		&i.State,
@@ -118,24 +108,31 @@ func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdate
 	return i, err
 }
 
-const getActionStateForUpdate = `-- name: GetActionStateForUpdate :one
-select state
+const getScopedAction = `-- name: GetScopedAction :one
+select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
-where id=$1 and job_id=$2 and kind=$3
-for update
+where job_id=$1 and kind=$2 and scope_key=$3
 `
 
-type GetActionStateForUpdateParams struct {
-	ID    string
-	JobID string
-	Kind  spine.ActionKind
+type GetScopedActionParams struct {
+	JobID    string
+	Kind     spine.ActionKind
+	ScopeKey string
 }
 
-func (q *Queries) GetActionStateForUpdate(ctx context.Context, arg GetActionStateForUpdateParams) (spine.ActionState, error) {
-	row := q.db.QueryRowContext(ctx, getActionStateForUpdate, arg.ID, arg.JobID, arg.Kind)
-	var state spine.ActionState
-	err := row.Scan(&state)
-	return state, err
+func (q *Queries) GetScopedAction(ctx context.Context, arg GetScopedActionParams) (DorfAction, error) {
+	row := q.db.QueryRowContext(ctx, getScopedAction, arg.JobID, arg.Kind, arg.ScopeKey)
+	var i DorfAction
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Kind,
+		&i.State,
+		&i.ScopeKey,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
 }
 
 const getSetupActionForUpdate = `-- name: GetSetupActionForUpdate :one
@@ -274,24 +271,4 @@ func (q *Queries) ReserveSandbox(ctx context.Context, arg ReserveSandboxParams) 
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const sandboxRouteRevokeSucceeded = `-- name: SandboxRouteRevokeSucceeded :one
-select exists(
-    select 1 from dorf.actions
-    where job_id=$1 and kind='provider-route-revoke'
-      and scope_key=$2 and state='succeeded'
-)
-`
-
-type SandboxRouteRevokeSucceededParams struct {
-	JobID     string
-	SandboxID string
-}
-
-func (q *Queries) SandboxRouteRevokeSucceeded(ctx context.Context, arg SandboxRouteRevokeSucceededParams) (bool, error) {
-	row := q.db.QueryRowContext(ctx, sandboxRouteRevokeSucceeded, arg.JobID, arg.SandboxID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }

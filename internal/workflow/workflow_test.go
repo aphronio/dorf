@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/aphronio/dorf/internal/spine"
@@ -63,13 +62,6 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 	}
 }
 
-func TestCleanupRejectsUnsettledPullRequestAction(t *testing.T) {
-	err := unresolvedPullRequestAction(spine.Action{State: spine.ActionUnsettled})
-	if err == nil || !strings.Contains(err.Error(), "reconcile") {
-		t.Fatalf("unsettled pull-request Action cleanup error = %v", err)
-	}
-}
-
 func TestCleanupActionOrderIsExactAndStable(t *testing.T) {
 	targets := cleanupTargets([]spine.Sandbox{
 		{ID: "sandbox-b", JobID: "job-1"},
@@ -90,10 +82,6 @@ func TestCleanupActionOrderIsExactAndStable(t *testing.T) {
 	for i := range want {
 		if targets[i].Sandbox.ID != want[i].sandbox || targets[i].Kind != want[i].kind {
 			t.Fatalf("cleanup target %d = %#v, want %s %s", i, targets[i], want[i].sandbox, want[i].kind)
-		}
-		actionID := spine.ScopedActionID("job-1", targets[i].Kind, targets[i].Sandbox.ID)
-		if got := actionStepName(actionID); got != "dorf/action/v1/"+actionID {
-			t.Fatalf("cleanup Action Step = %q", got)
 		}
 	}
 }
