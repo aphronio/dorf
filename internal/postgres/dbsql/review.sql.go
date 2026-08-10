@@ -339,7 +339,7 @@ func (q *Queries) GetReviewPlanForUpdate(ctx context.Context, arg GetReviewPlanF
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, sandbox_id, route_id, ownership_nonce, submission_nonce, sandbox_state, route_state
+select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, sandbox_id, ownership_nonce, submission_nonce
 from dorf.review_run_projection
 where id=$1
 `
@@ -371,11 +371,8 @@ func (q *Queries) GetReviewRun(ctx context.Context, runID string) (DorfReviewRun
 		&i.RequestDeliveryIntent,
 		&i.RequestTargetTurnID,
 		&i.SandboxID,
-		&i.RouteID,
 		&i.OwnershipNonce,
 		&i.SubmissionNonce,
-		&i.SandboxState,
-		&i.RouteState,
 	)
 	return i, err
 }
@@ -473,7 +470,7 @@ func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunPa
 }
 
 const listAllReviewRuns = `-- name: ListAllReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.route_id, p.ownership_nonce, p.submission_nonce, p.sandbox_state, p.route_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -521,11 +518,8 @@ func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAl
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
 			&i.DorfReviewRunProjection.SandboxID,
-			&i.DorfReviewRunProjection.RouteID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.DorfReviewRunProjection.SandboxState,
-			&i.DorfReviewRunProjection.RouteState,
 			&i.FeedbackMessageID,
 			&i.Stale,
 		); err != nil {
@@ -624,7 +618,7 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 }
 
 const listReviewRuns = `-- name: ListReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.route_id, p.ownership_nonce, p.submission_nonce, p.sandbox_state, p.route_state,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -677,11 +671,8 @@ func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) 
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
 			&i.DorfReviewRunProjection.SandboxID,
-			&i.DorfReviewRunProjection.RouteID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
-			&i.DorfReviewRunProjection.SandboxState,
-			&i.DorfReviewRunProjection.RouteState,
 			&i.FeedbackMessageID,
 			&i.Stale,
 		); err != nil {
@@ -739,9 +730,12 @@ const reviewBoundaryReady = `-- name: ReviewBoundaryReady :one
 select exists(
     select 1 from dorf.agent_runs ar
     join dorf.sandboxes s on s.id=ar.sandbox_id
-    join dorf.routes r on r.sandbox_id=s.id
-    where ar.id=$1 and s.state='created' and r.state='active'
+    where ar.id=$1
       and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
+      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+          and a.kind='sandbox-create' and a.scope_key=s.id and a.state='succeeded')
+      and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
+          and a.kind='provider-route-create' and a.scope_key=s.id and a.state='succeeded')
       and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
           and a.kind='review-checkout' and a.scope_key=s.id and a.state='succeeded')
 )

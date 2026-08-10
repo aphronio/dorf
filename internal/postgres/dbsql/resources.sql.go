@@ -11,21 +11,8 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const getRouteBySandbox = `-- name: GetRouteBySandbox :one
-select id,sandbox_id,state
-from dorf.routes
-where sandbox_id=$1
-`
-
-func (q *Queries) GetRouteBySandbox(ctx context.Context, sandboxID string) (DorfRoute, error) {
-	row := q.db.QueryRowContext(ctx, getRouteBySandbox, sandboxID)
-	var i DorfRoute
-	err := row.Scan(&i.ID, &i.SandboxID, &i.State)
-	return i, err
-}
-
 const getSandbox = `-- name: GetSandbox :one
-select id,job_id,state,ownership_nonce
+select id,job_id,ownership_nonce
 from dorf.sandboxes
 where id=$1
 `
@@ -33,12 +20,7 @@ where id=$1
 func (q *Queries) GetSandbox(ctx context.Context, id string) (DorfSandbox, error) {
 	row := q.db.QueryRowContext(ctx, getSandbox, id)
 	var i DorfSandbox
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.State,
-		&i.OwnershipNonce,
-	)
+	err := row.Scan(&i.ID, &i.JobID, &i.OwnershipNonce)
 	return i, err
 }
 
@@ -81,40 +63,22 @@ func (q *Queries) GetScopedActionBySandbox(ctx context.Context, arg GetScopedAct
 }
 
 const listJobSandboxes = `-- name: ListJobSandboxes :many
-select s.id,s.job_id,s.state,s.ownership_nonce,
-       coalesce(r.id,'') as route_id,coalesce(r.state,'') as route_state
+select s.id,s.job_id,s.ownership_nonce
 from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
 where s.job_id=$1
 order by s.id
 `
 
-type ListJobSandboxesRow struct {
-	ID             string
-	JobID          string
-	State          string
-	OwnershipNonce string
-	RouteID        string
-	RouteState     string
-}
-
-func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]ListJobSandboxesRow, error) {
+func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]DorfSandbox, error) {
 	rows, err := q.db.QueryContext(ctx, listJobSandboxes, jobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListJobSandboxesRow
+	var items []DorfSandbox
 	for rows.Next() {
-		var i ListJobSandboxesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
-			&i.State,
-			&i.OwnershipNonce,
-			&i.RouteID,
-			&i.RouteState,
-		); err != nil {
+		var i DorfSandbox
+		if err := rows.Scan(&i.ID, &i.JobID, &i.OwnershipNonce); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

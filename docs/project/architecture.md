@@ -50,9 +50,10 @@ The same mutable fact must not be mirrored into multiple authorities. Read model
 facts for inspection, but they are disposable and rebuildable.
 
 Resource ownership follows lifetime. A Job is the aggregate and lifetime owner of one or more
-Sandboxes. Each Sandbox owns its scoped Provider Route. AgentRuns use a Sandbox and retain the
-binding they used; they do not own infrastructure. Cleanup starts at the Job and walks its
-Sandboxes, revoking each Route before deleting its Sandbox. There is no polymorphic owner kind/id.
+Sandboxes. Each Sandbox deterministically identifies one scoped Provider Route; a separate Route row
+would repeat that identity. AgentRuns use a Sandbox and retain the binding they used; they do not own
+infrastructure. Cleanup starts at the Job and walks its Sandboxes, using immutable Action success to
+prove each Route revoke before each Sandbox delete. There is no polymorphic owner kind/id.
 
 ## Execution model
 
@@ -115,7 +116,8 @@ observes the Turn and resulting Git state at the AgentRun boundary.
 
 Action success is immutable: the first reconciled result is recorded, an identical retry is a
 no-op, and a conflicting later result is rejected. An Absurd Step checkpoints execution; it does
-not replace the Action's external-settlement fact.
+not replace the Action's external-settlement fact. Sandbox records retain identity and the ownership
+nonce needed for exact reconciliation; they do not mirror lifecycle state already recorded by Actions.
 
 Actions apply at least to Sandbox creation and destruction, repository clone and push, scoped
 credential or provider-route creation, and pull-request publication. Agent execution has one

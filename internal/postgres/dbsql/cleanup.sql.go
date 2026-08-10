@@ -26,16 +26,18 @@ func (q *Queries) CompleteCleanup(ctx context.Context, jobID string) (int64, err
 	return result.RowsAffected()
 }
 
-const countUnsettledJobResources = `-- name: CountUnsettledJobResources :one
+const countUnsettledSandboxCleanupActions = `-- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
 where s.job_id=$1
-  and (s.state<>'deleted' or (r.id is not null and r.state<>'revoked'))
+  and (
+    not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
+    or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
+  )
 `
 
-func (q *Queries) CountUnsettledJobResources(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUnsettledJobResources, jobID)
+func (q *Queries) CountUnsettledSandboxCleanupActions(ctx context.Context, jobID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnsettledSandboxCleanupActions, jobID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -65,29 +67,5 @@ func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (Get
 		&i.CleanupTaskID,
 		&i.WorkflowAttention,
 	)
-	return i, err
-}
-
-const getResourceStates = `-- name: GetResourceStates :one
-select s.state as sandbox_state,coalesce(r.state,'') as route_state
-from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
-where s.id=$1 and s.job_id=$2
-`
-
-type GetResourceStatesParams struct {
-	SandboxID string
-	JobID     string
-}
-
-type GetResourceStatesRow struct {
-	SandboxState string
-	RouteState   string
-}
-
-func (q *Queries) GetResourceStates(ctx context.Context, arg GetResourceStatesParams) (GetResourceStatesRow, error) {
-	row := q.db.QueryRowContext(ctx, getResourceStates, arg.SandboxID, arg.JobID)
-	var i GetResourceStatesRow
-	err := row.Scan(&i.SandboxState, &i.RouteState)
 	return i, err
 }

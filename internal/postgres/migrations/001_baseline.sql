@@ -86,17 +86,10 @@ create unique index actions_one_scoped_job_effect
 create table dorf.sandboxes (
     id text primary key,
     job_id text not null references dorf.jobs(id),
-    state text not null check (state in ('pending','created','deleted')),
     ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
     unique(job_id,id)
 );
 create index sandboxes_by_job on dorf.sandboxes(job_id,id);
-
-create table dorf.routes (
-    id text primary key,
-    sandbox_id text not null unique references dorf.sandboxes(id),
-    state text not null check (state in ('pending','active','revoked'))
-);
 
 create table dorf.agent_runs (
     id text primary key,
@@ -240,15 +233,11 @@ select
     request.delivery_intent as request_delivery_intent,
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
     ar.sandbox_id as sandbox_id,
-    coalesce(route.id,'') as route_id,
     sandbox.ownership_nonce as ownership_nonce,
-    coalesce(ar.submission_nonce,'') as submission_nonce,
-    sandbox.state as sandbox_state,
-    coalesce(route.state,'') as route_state
+    coalesce(ar.submission_nonce,'') as submission_nonce
 from dorf.agent_runs ar
 join dorf.job_messages request on request.id=ar.message_id and request.job_id=ar.job_id
-join dorf.sandboxes sandbox on sandbox.id=ar.sandbox_id
-left join dorf.routes route on route.sandbox_id=sandbox.id;
+join dorf.sandboxes sandbox on sandbox.id=ar.sandbox_id;
 
 alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
 
@@ -299,7 +288,6 @@ comment on table dorf.job_messages is 'Immutable client input and Job-local admi
 comment on table dorf.agent_runs is 'Harness Thread and Turn bindings plus lifecycle outcome; the harness owns transcript and context';
 comment on table dorf.evidence is 'Immutable content-addressed Evidence references; bytes live in deployment-owned storage';
 comment on table dorf.sandboxes is 'Job-owned isolated workstations used by one or more AgentRuns';
-comment on table dorf.routes is 'One scoped provider route belonging to a Sandbox';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome bound to the retained GitHub proposal';
 

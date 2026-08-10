@@ -531,19 +531,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	type sandboxView struct {
 		Sandbox spine.Sandbox `json:"sandbox"`
-		Route   *spine.Route  `json:"route,omitempty"`
+		Route   spine.Route   `json:"route"`
 	}
 	resources := make([]sandboxView, 0, len(sandboxes))
 	for _, sandbox := range sandboxes {
-		route, routeErr := store.Route(ctx, sandbox.ID)
-		if errors.Is(routeErr, sql.ErrNoRows) {
-			resources = append(resources, sandboxView{Sandbox: sandbox})
-			continue
-		}
-		if routeErr != nil {
-			return routeErr
-		}
-		resources = append(resources, sandboxView{Sandbox: sandbox, Route: &route})
+		resources = append(resources, sandboxView{Sandbox: sandbox, Route: spine.RouteForSandbox(sandbox)})
 	}
 	var currentPlan *spine.ReviewPlanRecord
 	for i := range plans {
@@ -575,11 +567,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision)
 	for _, resource := range resources {
-		if resource.Route == nil {
-			fmt.Fprintf(stdout, "  sandbox: %s state=%s\n", resource.Sandbox.ID, resource.Sandbox.State)
-		} else {
-			fmt.Fprintf(stdout, "  sandbox: %s state=%s route=%s state=%s\n", resource.Sandbox.ID, resource.Sandbox.State, resource.Route.ID, resource.Route.State)
-		}
+		fmt.Fprintf(stdout, "  sandbox: %s route=%s\n", resource.Sandbox.ID, resource.Route.ID)
 	}
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)

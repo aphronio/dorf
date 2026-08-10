@@ -302,76 +302,6 @@ func (q *Queries) MarkActionUncertain(ctx context.Context, actionID string) erro
 	return err
 }
 
-const markRouteActive = `-- name: MarkRouteActive :execrows
-update dorf.routes
-set state='active'
-where id=$1 and sandbox_id=$2
-  and state in ('pending','active')
-`
-
-type MarkRouteActiveParams struct {
-	RouteID   string
-	SandboxID string
-}
-
-func (q *Queries) MarkRouteActive(ctx context.Context, arg MarkRouteActiveParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markRouteActive, arg.RouteID, arg.SandboxID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markRouteRevoked = `-- name: MarkRouteRevoked :execrows
-update dorf.routes
-set state='revoked'
-where id=$1 and sandbox_id=$2
-  and state in ('pending','active','revoked')
-`
-
-type MarkRouteRevokedParams struct {
-	RouteID   string
-	SandboxID string
-}
-
-func (q *Queries) MarkRouteRevoked(ctx context.Context, arg MarkRouteRevokedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markRouteRevoked, arg.RouteID, arg.SandboxID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markSandboxCreated = `-- name: MarkSandboxCreated :execrows
-update dorf.sandboxes
-set state='created'
-where id=$1 and state in ('pending','created')
-`
-
-func (q *Queries) MarkSandboxCreated(ctx context.Context, sandboxID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markSandboxCreated, sandboxID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const markSandboxDeleted = `-- name: MarkSandboxDeleted :execrows
-update dorf.sandboxes s
-set state='deleted'
-where s.id=$1
-  and not exists(select 1 from dorf.routes where sandbox_id=$1 and state<>'revoked')
-  and s.state in ('pending','created','deleted')
-`
-
-func (q *Queries) MarkSandboxDeleted(ctx context.Context, sandboxID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markSandboxDeleted, sandboxID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const recordActionSuccess = `-- name: RecordActionSuccess :execrows
 update dorf.actions
 set state='succeeded',external_id=$1,
@@ -393,29 +323,9 @@ func (q *Queries) RecordActionSuccess(ctx context.Context, arg RecordActionSucce
 	return result.RowsAffected()
 }
 
-const reserveRoute = `-- name: ReserveRoute :execrows
-insert into dorf.routes(id,sandbox_id,state)
-values($1,$2,'pending')
-on conflict(sandbox_id) do update set sandbox_id=dorf.routes.sandbox_id
-where dorf.routes.id=excluded.id
-`
-
-type ReserveRouteParams struct {
-	ID        string
-	SandboxID string
-}
-
-func (q *Queries) ReserveRoute(ctx context.Context, arg ReserveRouteParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reserveRoute, arg.ID, arg.SandboxID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const reserveSandbox = `-- name: ReserveSandbox :execrows
-insert into dorf.sandboxes(id,job_id,state,ownership_nonce)
-values($1,$2,'pending',$3)
+insert into dorf.sandboxes(id,job_id,ownership_nonce)
+values($1,$2,$3)
 on conflict(id) do update set id=dorf.sandboxes.id
 where dorf.sandboxes.job_id=excluded.job_id
   and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce
@@ -433,4 +343,24 @@ func (q *Queries) ReserveSandbox(ctx context.Context, arg ReserveSandboxParams) 
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const sandboxRouteRevokeSucceeded = `-- name: SandboxRouteRevokeSucceeded :one
+select exists(
+    select 1 from dorf.actions
+    where job_id=$1 and kind='provider-route-revoke'
+      and scope_key=$2 and state='succeeded'
+)
+`
+
+type SandboxRouteRevokeSucceededParams struct {
+	JobID     string
+	SandboxID string
+}
+
+func (q *Queries) SandboxRouteRevokeSucceeded(ctx context.Context, arg SandboxRouteRevokeSucceededParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, sandboxRouteRevokeSucceeded, arg.JobID, arg.SandboxID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

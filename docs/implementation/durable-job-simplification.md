@@ -408,17 +408,17 @@ returned no instance for the exact Sandbox ID.
 Goal: after ordinary Actions have one explicit Sandbox scope and immutable success, remove stored
 projections that repeat the same external fact.
 
-- [ ] Keep Actions distinct from Absurd Steps: a Step checkpoints durable execution; an Action records
+- [x] Keep Actions distinct from Absurd Steps: a Step checkpoints durable execution; an Action records
       one reconciled external mutation.
-- [ ] Make immutable Action success authoritative for Sandbox and Route lifecycle facts, then delete
+- [x] Make immutable Action success authoritative for Sandbox and Route lifecycle facts, then delete
       duplicated lifecycle state and branches from Sandbox and Route records.
-- [ ] Prove that Route identity is deterministic from its Sandbox and delete the Route row if it retains
+- [x] Prove that Route identity is deterministic from its Sandbox and delete the Route row if it retains
       no independent external fact.
 - [ ] Replace generic string Receipt payloads with immutable Action success plus the natural product
       record that owns each durable fact.
-- [ ] Retain Sandbox identity and ownership nonce; they authorize exact external reconciliation and
+- [x] Retain Sandbox identity and ownership nonce; they authorize exact external reconciliation and
       cleanup rather than duplicating Action progress.
-- [ ] Delete row-shape and state-mirroring tests; retain recovery tests for immutable Action success,
+- [x] Delete row-shape and state-mirroring tests; retain recovery tests for immutable Action success,
       exact ownership, and retry convergence.
 
 Terminal: every external lifecycle fact has one durable authority, while an interrupted Action still

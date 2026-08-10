@@ -14,8 +14,9 @@ clearer or when a second concrete implementation proves it; hypothetical consume
 
 A Job is the durable unit of user intent. Its initiating client, controller, task-executor process, and
 current agent process may disappear without erasing accepted input or observed progress. A Job owns
-one or more Sandboxes; each Sandbox is an isolated mutable workstation and owns its scoped Provider
-Route. AgentRuns use a Sandbox rather than owning infrastructure. A continuing harness Thread supplies
+one or more Sandboxes; each Sandbox is an isolated mutable workstation and has one deterministically
+named Provider Route. Immutable Action success records the Route and Sandbox lifecycle. AgentRuns use
+a Sandbox rather than owning infrastructure. A continuing harness Thread supplies
 conversation continuity. Every AgentRun consumes one durable Message and retains its exact Turn
 binding. Every Message selected for agent delivery has one AgentRun record. A follow normally
 creates a new Turn; a steer normally binds to its target Turn. Harness protocol and transcripts

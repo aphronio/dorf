@@ -664,7 +664,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				for i, role := range test.roles {
 					request := runs[i].Request
 					wantInput := policy.RolePrompt(role, facts, []string{"check"})
-					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || runs[i].Sandbox.State != "pending" || runs[i].Route.SandboxID != runs[i].Sandbox.ID || runs[i].Route.State != "pending" {
+					if runs[i].Role != string(role) || runs[i].ID != spine.ReviewAgentRunID(job.ID, revision, string(role)) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].Revision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 || runs[i].Route != spine.RouteForSandbox(runs[i].Sandbox) {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
 					}
 					for prior := 0; prior < i; prior++ {
@@ -901,9 +901,9 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	byID := make(map[string]spine.Sandbox, len(sandboxes))
 	for _, sandbox := range sandboxes {
 		byID[sandbox.ID] = sandbox
-		route, routeErr := store.Route(ctx, sandbox.ID)
-		if routeErr != nil || route.SandboxID != sandbox.ID || route.ID == "" {
-			t.Fatalf("Sandbox %s Route=%#v err=%v", sandbox.ID, route, routeErr)
+		route := spine.RouteForSandbox(sandbox)
+		if route.SandboxID != sandbox.ID || route.ID == "" {
+			t.Fatalf("Sandbox %s derived Route=%#v", sandbox.ID, route)
 		}
 	}
 	clone, err := store.GetOrCreateSandboxAction(ctx, spine.MainSandboxName(job.ID), spine.ActionRepositoryClone)
@@ -944,15 +944,19 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRoute, err := store.Route(ctx, otherSandbox.ID)
+	otherRoute := spine.RouteForSandbox(otherSandbox)
+
+	target := sandboxes[1]
+	targetRoute := spine.RouteForSandbox(target)
+	remove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	target := sandboxes[1]
-	targetRoute, err := store.Route(ctx, target.ID)
-	if err != nil {
-		t.Fatal(err)
+	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: otherSandbox.ID, Outcome: "deleted"}); err == nil {
+		t.Fatal("another Job's Sandbox receipt was accepted")
+	}
+	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err == nil {
+		t.Fatal("Sandbox delete succeeded before its exact Route revoke Action")
 	}
 	revoke, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionRouteRevoke)
 	if err != nil {
@@ -969,13 +973,6 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 		t.Fatalf("Route cleanup retry=%#v err=%v", retryRevoke, err)
 	}
 
-	remove, err := store.GetOrCreateSandboxAction(ctx, target.ID, spine.ActionSandboxDelete)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: otherSandbox.ID, Outcome: "deleted"}); err == nil {
-		t.Fatal("another Job's Sandbox receipt was accepted")
-	}
 	if err := store.RecordActionSuccess(ctx, remove.ID, spine.Receipt{ExternalID: target.ID, Outcome: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
@@ -984,15 +981,19 @@ func TestJobResourcesStayExactAcrossMultipleSandboxesAndRetries(t *testing.T) {
 		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
 	}
 
-	targetAfter, _ := store.Sandbox(ctx, target.ID)
-	targetRouteAfter, _ := store.Route(ctx, target.ID)
-	otherAfter, _ := store.Sandbox(ctx, otherSandbox.ID)
-	otherRouteAfter, _ := store.Route(ctx, otherSandbox.ID)
-	if targetAfter.State != "deleted" || targetRouteAfter.State != "revoked" {
-		t.Fatalf("target cleanup Sandbox=%#v Route=%#v", targetAfter, targetRouteAfter)
+	actions, err := store.Actions(ctx, job.ID)
+	if err != nil || slices.IndexFunc(actions, func(action postgres.ActionView) bool {
+		return action.ID == revoke.ID && action.State == spine.ActionSucceeded
+	}) < 0 || slices.IndexFunc(actions, func(action postgres.ActionView) bool {
+		return action.ID == remove.ID && action.State == spine.ActionSucceeded
+	}) < 0 {
+		t.Fatalf("target cleanup Actions=%#v err=%v", actions, err)
 	}
-	if otherAfter.State != "pending" || otherRouteAfter.State != "pending" {
-		t.Fatalf("cross-Job resources changed Sandbox=%#v Route=%#v", otherAfter, otherRouteAfter)
+	otherActions, err := store.Actions(ctx, other.ID)
+	if err != nil || slices.IndexFunc(otherActions, func(action postgres.ActionView) bool {
+		return action.Kind == spine.ActionRouteRevoke || action.Kind == spine.ActionSandboxDelete
+	}) >= 0 {
+		t.Fatalf("cross-Job cleanup Actions=%#v err=%v", otherActions, err)
 	}
 }
 

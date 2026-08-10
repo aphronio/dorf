@@ -4,21 +4,8 @@ select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generatio
        coalesce(j.base_branch,'') as base_branch,
        j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
-       coalesce(sb.id,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
-       coalesce(r.id,'') as route_id,coalesce(r.state,'') as route_state,
        j.workflow_phase,coalesce(j.workflow_attention,'') as workflow_attention,coalesce(j.cleanup_attention,'') as cleanup_attention
 from dorf.jobs j
-left join lateral (
-    select s.id,s.state
-    from dorf.sandboxes s
-    where s.job_id=j.id and (
-        exists(select 1 from dorf.agent_runs ar where ar.sandbox_id=s.id and ar.role='implement') or
-        not exists(select 1 from dorf.agent_runs ar where ar.sandbox_id=s.id)
-    )
-    order by exists(select 1 from dorf.agent_runs ar where ar.sandbox_id=s.id and ar.role='implement') desc,s.id
-    limit 1
-) sb on true
-left join dorf.routes r on r.sandbox_id=sb.id
 left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
 where j.id=sqlc.arg(job_id);
 

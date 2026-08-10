@@ -1263,14 +1263,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   or dogfood proves that one AgentRun cannot retain enough identity to reconcile uncertain
   submission without a distinct durable effect record.
 
-## D056 — Jobs own Sandbox lifetimes and Sandboxes own Provider Routes
+## D056 — Jobs own Sandbox lifetimes and Sandboxes identify Provider Routes
 
 - **Status:** Accepted resource-lifecycle simplification — 2026-08-10
 - **Decision:** The Job is the aggregate and lifetime owner of every Sandbox created for the coding
-  task, including isolated review Sandboxes. A Sandbox owns its scoped Provider Route. AgentRuns use
-  a Sandbox and record that binding, but do not own infrastructure. Cleanup walks Job → Sandboxes →
-  Routes, revoking each Route before deleting its Sandbox. Ownership is represented with ordinary
-  foreign keys; there is no polymorphic owner kind/id.
+  task, including isolated review Sandboxes. Each Sandbox deterministically identifies its one scoped
+  Provider Route, so Dorf does not store a second Route row. AgentRuns use a Sandbox and record that
+  binding, but do not own infrastructure. Cleanup walks Job → Sandboxes and records each Route revoke
+  before Sandbox deletion as an immutable Action success. There is no polymorphic owner kind/id.
 - **Why:** Ownership follows the longest relevant lifetime, keeps database relationships concrete,
   permits AgentRun retries and follow-ups to reuse a Sandbox, and gives one cleanup inventory without
   copied reviewer-resource state or role-specific cleanup algorithms.
@@ -1292,3 +1292,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   tell the same story while preserving the crash boundary between execution and external truth.
 - **Reconsider when:** A second ordinary external mutation genuinely targets only the Job aggregate,
   or an external system returns a non-Sandbox identity that cannot live in its natural product fact.
+
+## D058 — Action success is the external lifecycle authority
+
+- **Status:** Accepted lifecycle-authority simplification — 2026-08-10
+- **Decision:** Sandbox rows retain only durable identity, Job ownership, and the nonce required to
+  attest the exact external resource. Sandbox and Provider Route lifecycle is read from immutable
+  Sandbox-scoped Action success. Dorf does not persist parallel pending/created/deleted or
+  pending/active/revoked state machines. Provider Route identity is derived from the Sandbox's stable
+  route-create Action identity rather than stored in a separate row.
+- **Why:** The copied states could only agree with their Actions, so every completion, cleanup query,
+  inspection view, and test had to synchronize two descriptions of the same event. One authority makes
+  retries and cleanup easier to read: revoke Action succeeded, then delete Action succeeded.
+- **Reconsider when:** A provider returns a non-deterministic Route identity or a lifecycle fact exists
+  independently of any Dorf Action and has a concrete product consumer.

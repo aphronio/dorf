@@ -1,18 +1,11 @@
 -- name: GetSandbox :one
-select id,job_id,state,ownership_nonce
+select id,job_id,ownership_nonce
 from dorf.sandboxes
 where id=sqlc.arg(id);
 
--- name: GetRouteBySandbox :one
-select id,sandbox_id,state
-from dorf.routes
-where sandbox_id=sqlc.arg(sandbox_id);
-
 -- name: ListJobSandboxes :many
-select s.id,s.job_id,s.state,s.ownership_nonce,
-       coalesce(r.id,'') as route_id,coalesce(r.state,'') as route_state
+select s.id,s.job_id,s.ownership_nonce
 from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
 where s.job_id=sqlc.arg(job_id)
 order by s.id;
 

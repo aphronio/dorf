@@ -14,7 +14,6 @@ type Store interface {
 	Job(context.Context, string) (Job, error)
 	WithJobFence(context.Context, string, func() error) error
 	Sandbox(context.Context, string) (Sandbox, error)
-	Route(context.Context, string) (Route, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	AgentRuns(context.Context, string) ([]AgentRun, error)
 	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
@@ -670,12 +669,11 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	case ActionRepositoryClone:
 		receipt, err = s.Externals.RepositoryClone(ctx, job, sandbox, action)
 	case ActionRouteCreate, ActionRouteRevoke:
-		var route Route
-		route, err = s.Store.Route(ctx, sandbox.ID)
-		if err == nil && action.Kind == ActionRouteCreate {
+		route := RouteForSandbox(sandbox)
+		if action.Kind == ActionRouteCreate {
 			receipt, err = s.Externals.RouteCreate(ctx, job, sandbox, route, action)
 		}
-		if err == nil && action.Kind == ActionRouteRevoke {
+		if action.Kind == ActionRouteRevoke {
 			receipt, err = s.Externals.RouteRevoke(ctx, job, sandbox, route, action)
 		}
 	case ActionSandboxDelete:

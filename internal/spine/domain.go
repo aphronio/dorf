@@ -78,15 +78,14 @@ type Job struct {
 type Sandbox struct {
 	ID             string `json:"id"`
 	JobID          string `json:"job_id"`
-	State          string `json:"state"`
 	OwnershipNonce string `json:"-"`
 }
 
-// Route is the provider route serving one Sandbox.
+// Route is the deterministic provider route serving one Sandbox. Its
+// lifecycle is recorded by the Sandbox's route Actions.
 type Route struct {
 	ID        string `json:"id"`
 	SandboxID string `json:"sandbox_id"`
-	State     string `json:"state"`
 }
 
 type MessageFromKind string
@@ -324,14 +323,21 @@ func ReviewSandboxName(runID string) string {
 	return "dorf-review-" + digest(runID, 20)
 }
 
-// MainSandboxName and ProviderRouteID are the exact resource identities
-// durably reserved before their external create effects.
+// MainSandboxName and ProviderRouteID are exact resource identities derived
+// before their external create effects.
 func MainSandboxName(jobID string) string {
 	return "dorf-" + digest(jobID, 20)
 }
 
 func ProviderRouteID(actionID string) string {
 	return "route-" + digest(actionID, 16)
+}
+
+func RouteForSandbox(sandbox Sandbox) Route {
+	return Route{
+		ID:        ProviderRouteID(ScopedActionID(sandbox.JobID, ActionRouteCreate, sandbox.ID)),
+		SandboxID: sandbox.ID,
+	}
 }
 
 func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {

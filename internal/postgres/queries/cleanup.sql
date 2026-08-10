@@ -5,18 +5,14 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
--- name: CountUnsettledJobResources :one
+-- name: CountUnsettledSandboxCleanupActions :one
 select count(*)
 from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
 where s.job_id=sqlc.arg(job_id)
-  and (s.state<>'deleted' or (r.id is not null and r.state<>'revoked'));
-
--- name: GetResourceStates :one
-select s.state as sandbox_state,coalesce(r.state,'') as route_state
-from dorf.sandboxes s
-left join dorf.routes r on r.sandbox_id=s.id
-where s.id=sqlc.arg(sandbox_id) and s.job_id=sqlc.arg(job_id);
+  and (
+    not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='provider-route-revoke' and a.scope_key=s.id and a.state='succeeded')
+    or not exists(select 1 from dorf.actions a where a.job_id=s.job_id and a.kind='sandbox-delete' and a.scope_key=s.id and a.state='succeeded')
+  );
 
 -- name: CompleteCleanup :execrows
 update dorf.jobs

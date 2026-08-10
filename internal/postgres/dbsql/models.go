@@ -32,24 +32,13 @@ type DorfReviewRunProjection struct {
 	RequestDeliveryIntent string
 	RequestTargetTurnID   string
 	SandboxID             string
-	RouteID               string
 	OwnershipNonce        string
 	SubmissionNonce       string
-	SandboxState          string
-	RouteState            string
-}
-
-// One scoped provider route belonging to a Sandbox
-type DorfRoute struct {
-	ID        string
-	SandboxID string
-	State     string
 }
 
 // Job-owned isolated workstations used by one or more AgentRuns
 type DorfSandbox struct {
 	ID             string
 	JobID          string
-	State          string
 	OwnershipNonce string
 }

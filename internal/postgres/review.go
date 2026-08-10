@@ -227,10 +227,6 @@ func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revis
 	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: jobID, OwnershipNonce: ownerNonce})); err != nil {
 		return "", err
 	}
-	routeActionID := spine.ScopedActionID(jobID, spine.ActionRouteCreate, sandboxID)
-	if err := expectOneRows(queries.ReserveRoute(ctx, dbsql.ReserveRouteParams{ID: spine.ProviderRouteID(routeActionID), SandboxID: sandboxID})); err != nil {
-		return "", err
-	}
 	if err := queries.InsertReviewAgentRun(ctx, dbsql.InsertReviewAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, Role: role, Revision: revision, Capability: spine.ReviewReadOnlyCapability, SandboxID: sandboxID, SubmissionNonce: submissionNonce}); err != nil {
 		return "", err
 	}
@@ -262,9 +258,9 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 			Revision: row.Revision, Capability: row.Capability, SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
 		},
 		Request: messageFromValues(row.MessageID, row.JobID, spine.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, spine.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
-		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, State: row.SandboxState, OwnershipNonce: row.OwnershipNonce},
-		Route:   spine.Route{ID: row.RouteID, SandboxID: row.SandboxID, State: row.RouteState},
+		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce},
 	}
+	view.Route = spine.RouteForSandbox(view.Sandbox)
 	if row.StartedAt.Valid {
 		view.StartedAt = row.StartedAt.Time
 	}

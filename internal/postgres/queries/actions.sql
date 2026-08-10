@@ -4,17 +4,11 @@ values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending')
 on conflict do nothing;
 
 -- name: ReserveSandbox :execrows
-insert into dorf.sandboxes(id,job_id,state,ownership_nonce)
-values(sqlc.arg(id),sqlc.arg(job_id),'pending',sqlc.arg(ownership_nonce))
+insert into dorf.sandboxes(id,job_id,ownership_nonce)
+values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(ownership_nonce))
 on conflict(id) do update set id=dorf.sandboxes.id
 where dorf.sandboxes.job_id=excluded.job_id
   and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce;
-
--- name: ReserveRoute :execrows
-insert into dorf.routes(id,sandbox_id,state)
-values(sqlc.arg(id),sqlc.arg(sandbox_id),'pending')
-on conflict(sandbox_id) do update set sandbox_id=dorf.routes.sandbox_id
-where dorf.routes.id=excluded.id;
 
 -- name: GetActionForUpdate :one
 select id,job_id,kind,state,
@@ -73,29 +67,12 @@ update dorf.actions
 set state='uncertain'
 where id=sqlc.arg(action_id) and state<>'succeeded';
 
--- name: MarkSandboxCreated :execrows
-update dorf.sandboxes
-set state='created'
-where id=sqlc.arg(sandbox_id) and state in ('pending','created');
-
--- name: MarkRouteActive :execrows
-update dorf.routes
-set state='active'
-where id=sqlc.arg(route_id) and sandbox_id=sqlc.arg(sandbox_id)
-  and state in ('pending','active');
-
--- name: MarkRouteRevoked :execrows
-update dorf.routes
-set state='revoked'
-where id=sqlc.arg(route_id) and sandbox_id=sqlc.arg(sandbox_id)
-  and state in ('pending','active','revoked');
-
--- name: MarkSandboxDeleted :execrows
-update dorf.sandboxes s
-set state='deleted'
-where s.id=sqlc.arg(sandbox_id)
-  and not exists(select 1 from dorf.routes where sandbox_id=sqlc.arg(sandbox_id) and state<>'revoked')
-  and s.state in ('pending','created','deleted');
+-- name: SandboxRouteRevokeSucceeded :one
+select exists(
+    select 1 from dorf.actions
+    where job_id=sqlc.arg(job_id) and kind='provider-route-revoke'
+      and scope_key=sqlc.arg(sandbox_id) and state='succeeded'
+);
 
 -- name: ListActions :many
 select a.id,a.kind,a.state,
