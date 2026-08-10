@@ -38,16 +38,16 @@ final HEAD as the next immutable Revision.
 
 ## Working rules
 
-- [ ] Discuss and agree on the exact boundary before starting each slice.
-- [ ] Keep the complete coding workflow runnable after every slice.
-- [ ] Delete superseded code and tests in the same slice that replaces them.
-- [ ] Do not maintain old and new workflow paths in parallel.
-- [ ] Keep PostgreSQL for product facts and external Action identity, scope, and settlement only.
-- [ ] Keep Absurd responsible for task eligibility, claims, checkpoints, waits, retries, and cancellation.
-- [ ] Run the portable and PostgreSQL-backed suites after every slice.
-- [ ] Do not add data compatibility work for the prototype schema.
-- [ ] Report production, schema, and test LOC change after every slice, both for that slice and
-      cumulatively from the baseline commit.
+- Discuss and agree on the exact boundary before starting each slice.
+- Keep the complete coding workflow runnable after every slice.
+- Delete superseded code and tests in the same slice that replaces them.
+- Do not maintain old and new workflow paths in parallel.
+- Keep PostgreSQL for product facts and external Action identity, scope, and settlement only.
+- Keep Absurd responsible for task eligibility, claims, checkpoints, waits, retries, and cancellation.
+- Run the portable and PostgreSQL-backed suites after every slice.
+- Do not add data compatibility work for the prototype schema.
+- Report production, schema, and test LOC changes at slice terminals and cumulatively from the
+  baseline commit.
 
 ## Slice 1: Remove unquestionably dead state
 
@@ -568,32 +568,86 @@ Goal: finish with a small human surface and tests that protect promises rather t
 - [x] Remove copied read-model fields when their source facts are already present in the Snapshot.
 - [x] Load one concrete inspection Snapshot for CurrentWork, readiness, history, and JSON instead of
       querying the same facts twice; do not turn it into a generic graph framework.
-- [ ] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
+- [x] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
       Proposal/Outcome, and exact cleanup/retry.
-- [ ] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
+- [x] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
       fault tests.
-- [ ] Delete obsolete workflow-choreography, copied-state, duplicated status-matrix, raw-row, and
+- [x] Delete obsolete workflow-choreography, copied-state, duplicated status-matrix, raw-row, and
       brittle inspect-prose tests. Retain focused pure helper and formatting tests when they protect
       an external contract.
-- [ ] Delete matched obsolete tests during every earlier slice; leave only the final presentation and
-      overlap sweep here.
-- [ ] Correct all setup and lifecycle examples to match automatic PR Outcome observation and cleanup.
-- [ ] Report final production/test/schema LOC and name any remaining complexity centers.
+- [x] Audit earlier replacements and remove their matched obsolete tests; retain distinct concurrency,
+      recovery, and adapter-authority proofs.
+- [x] Correct all setup and lifecycle examples to match automatic PR Outcome observation and cleanup.
+- [x] Report final production/test/schema LOC and name any remaining complexity centers.
 
 Terminal: a user can understand a Job without reading implementation state, and the focused test
 suite protects the same story and external contracts shown by the workflow.
 
 ## Issue #94 closure gate
 
-- [ ] The real Job sequence, not only an outer cycle, uses stable typed Absurd Steps.
-- [ ] Checkpoint names and result shapes are treated as versioned persisted contracts.
-- [ ] Production external effects use stable Dorf Actions and reconcile external truth.
-- [ ] Every accepted Message has one immutable wake identity while PostgreSQL remains its authority.
-- [ ] Production uses only public Absurd spawn, result, cancel, retry, heartbeat, and event APIs.
-- [ ] Production never reads or mutates raw Absurd task tables.
-- [ ] The production external-Action path performs a final claim check before recording success.
-- [ ] Claim-expiry and cancellation tests exercise that actual production path.
-- [ ] Absurd operational history comes from `absurdctl` or Habitat, not Dorf tables.
-- [ ] The prototype uses one clean baseline schema pinned to Absurd 0.5.0.
-- [ ] Portable and PostgreSQL integration/fault suites pass.
-- [ ] The before/after production LOC and remaining complexity centers are reported.
+- [x] The real Job sequence, not only an outer cycle, uses stable typed Absurd Steps.
+- [x] Checkpoint names and result shapes are treated as versioned persisted contracts.
+- [x] Production external effects use stable Dorf Actions and reconcile external truth.
+- [x] Every accepted Message has one immutable wake identity while PostgreSQL remains its authority.
+- [x] Production uses only public Absurd spawn, result, cancel, retry, heartbeat, and event APIs.
+- [x] Production never reads or mutates raw Absurd task tables.
+- [x] The production external-Action path performs a final claim check before recording success.
+- [x] Claim-expiry and cancellation tests exercise that actual production path.
+- [x] Absurd operational history comes from `absurdctl` or Habitat, not Dorf tables.
+- [x] The prototype uses one clean baseline schema pinned to Absurd 0.5.0.
+- [x] Portable and PostgreSQL integration/fault suites pass.
+- [x] The before/after production LOC and remaining complexity centers are reported.
+
+### Final evidence
+
+The retained PostgreSQL stories cover concurrent Message FIFO and Thread continuation, changed and
+unchanged Revision observation plus failed-Check feedback, reviewer feedback as an ordinary Message,
+Proposal/Outcome serialization, pre-Proposal abandonment versus publication intent, and exact
+route-revoke-before-Sandbox-delete cleanup. Pure tests retain policy and readiness rules; adapter tests
+retain exact GitHub, Git, Incus, Gateway, and Codex authority. The production Action path is exercised
+by `TestAbsurdCancellationCannotRecordLateActionSuccess` and
+`TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite`, including the real claim check immediately
+before Action success.
+
+`TestPersistedWorkflowContractsV1`, `TestStepNamesComeFromDurableFactIdentity`, and
+`TestWakeEventIsStableAndFIFOScoped` pin the persisted result, Step-name, and wake contracts. A static
+source audit found only public Absurd task, Step, spawn, result, cancel, heartbeat, and event calls in
+production; the sole raw Absurd lease mutation is isolated in the version-pinned fault test. Fresh-schema
+PostgreSQL tests, SQL generation/vetting, `go test ./...`, `go vet ./...`, the repository check script,
+and the built `dorf 0.2.0` binary pass against Absurd 0.5.0.
+
+Live Jobs on 2026-08-10 proved both no-review and selected-review paths. Job
+`job-518e89c940f3f147ddd6` produced Revision `c68e4b15531967b697ad20a8b3c815a44fbf4d7e`, passed both
+Checks, selected no review, proposed PR #123, recorded rejection, and cleaned its exact Route and
+Sandbox. Job `job-c7f6919ff693e3c0d045` produced Revision
+`d7bc86c92227b8c051082d868850d2aff905c6da`, ran the selected general reviewer in a dedicated
+read-only Sandbox, returned feedback as an implementation Message, proposed PR #125, recorded
+rejection, and cleaned both Sandboxes and Routes. Their Absurd histories contain singular
+`dorf/action/v1/<ActionID>` Steps with `ActionStepResultV1`, alongside typed AgentRun, Revision, Check,
+and ReviewPolicy Steps; normal Dorf inspection shows only the shared fact-derived product history.
+
+Terminal-target steer recovery was also exercised through public boundaries. On Job
+`job-fcd3196fec2b366c0957`, a steer targeting Turn
+`019fecdb-2cd3-7100-b685-30d86ace7e32` recovered on the same Thread as distinct Turn
+`019fecdc-f90f-7440-aee7-c2f97e0fdb2c`. Its exact AgentRun-owned `git-revision` Evidence produced
+Revision `91585c3b52d41a407a5a8356212649972b09f6ec` before either Check began. Dorf then proposed PR
+#126, observed rejection, and completed exact cleanup with no Route or Sandbox left behind.
+
+Final commit `f51b6d9` was dogfooded at the manual stop boundary. Public `dorf abandon` recorded Job
+`job-a2e6043bb7696c7107f8` before any worker or Proposal, with no invented GitHub observation, closed
+admission, and cancelled the pending main task. Inspection showed `Complete — abandoned`, Proposal
+`null`, no Actions, and only the initial Message; the deterministically expected Route and Sandbox and
+the Job branch's PR list were all empty. Fresh-PostgreSQL tests separately exercise abandonment with
+an active AgentRun and its serialization against publication intent; live worker execution for that
+variant was not authorized, so the retained evidence does not claim it occurred live.
+
+From baseline `d2e9d07` to final implementation commit `f51b6d9`, handwritten production Go changed
+from 12,371 to 12,298 lines (-73), tests from 8,818 to 6,946 (-1,872), and the baseline schema from
+343 to 275 lines (-68). Slice 9 itself started at `51bbf51`: handwritten production Go grew from
+12,017 to 12,298 (+281) and tests from 6,278 to 6,946 (+668) because hidden multi-Action coordination,
+claim-loss boundaries, and concurrency recovery became explicit and directly proved. Over the same
+slice generated sqlc Go fell from 3,711 to 3,530 (-181), named query SQL from 916 to 899 (-17), and
+the schema stayed at 275 lines. The remaining complexity centers are concrete external authorities:
+Codex app-server delivery/recovery, PostgreSQL concurrency and atomicity, reviewer capability isolation,
+and GitHub/provider reconciliation. Snapshot/Projection and exact Action Steps are the simplifying
+boundaries, not new workflow frameworks.
