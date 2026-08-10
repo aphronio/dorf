@@ -520,7 +520,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if assessment.Ready {
 		readiness = "ready"
 	}
-	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	renderInspectSummary(stdout, job, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -548,6 +548,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	renderHistory(stdout, history)
 	return nil
+}
+
+func renderInspectSummary(stdout io.Writer, job spine.Job, readiness, reason string) {
+	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  branch: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Branch, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, readiness, reason)
 }
 
 func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {

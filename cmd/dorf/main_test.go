@@ -9,6 +9,26 @@ import (
 	"github.com/aphronio/dorf/internal/workflow"
 )
 
+func TestRenderInspectSummaryShowsAdmittedBranchAfterRepository(t *testing.T) {
+	job := spine.Job{
+		ID:            "job-1",
+		Goal:          "Improve inspection",
+		Repository:    "https://example.com/repository.git",
+		Branch:        "dorf/inspect-branch",
+		Revision:      "revision-1",
+		AdmissionOpen: true,
+		CleanupState:  spine.CleanupPending,
+	}
+	var output strings.Builder
+
+	renderInspectSummary(&output, job, "not ready", "checks remain")
+
+	want := "Job job-1\n  goal: Improve inspection\n  repository: https://example.com/repository.git\n  branch: dorf/inspect-branch\n  current Revision: revision-1\n  admission: open\n  cleanup: pending\n  readiness: not ready — checks remain\n"
+	if output.String() != want {
+		t.Fatalf("unexpected inspect summary:\n%s", output.String())
+	}
+}
+
 func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.T) {
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
 	entries := workflowHistory(workflow.Snapshot{
