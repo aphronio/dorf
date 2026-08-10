@@ -344,3 +344,14 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 		t.Fatalf("publication readiness retained a Message admitted after publication began")
 	}
 }
+
+func TestCurrentWorkHistoryNeverOverridesReadyFacts(t *testing.T) {
+	facts := readyFacts()
+	facts.Actions = append(facts.Actions, spine.Action{
+		Kind: spine.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "rev-0",
+		CreatedAt: time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+	})
+	if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
+		t.Fatalf("CurrentWork = %#v, want exact-ready publication despite older workflow history", got)
+	}
+}
