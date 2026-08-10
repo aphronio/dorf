@@ -57,9 +57,13 @@ func TestAdmittedGitHubCommentRemainsImmutableAfterEdit(t *testing.T) {
 
 func TestFeedbackReplyNamesExactRevisionAndReconcilesByStableMarker(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	body := feedbackReply("job-7", 42, revision)
+	source := githubapi.Comment{ID: 42, Login: "aphronio", Body: "Please simplify this boundary.\nKeep it direct."}
+	body := feedbackReply("job-7", source, revision)
 	if !strings.Contains(body, "`"+revision+"`") {
 		t.Fatalf("reply does not name exact Revision: %q", body)
+	}
+	if !strings.Contains(body, "Regarding feedback from @aphronio:") || !strings.Contains(body, "> Please simplify this boundary.\n> Keep it direct.") {
+		t.Fatalf("reply does not visibly quote its source comment: %q", body)
 	}
 	comments := []githubapi.Comment{{ID: 99, Body: body}}
 	if !hasFeedbackReply(comments, "job-7", 42) {

@@ -102,14 +102,14 @@ func (c Client) IssueComments(ctx context.Context, authority Authority, number i
 	return comments, nil
 }
 
-// AddEyesReaction acknowledges one exact issue or pull-request comment. GitHub
-// treats adding the same reaction by the same user as a successful no-op, so a
-// caller can safely reconcile this after interruption.
+// AddEyesReaction acknowledges one exact pull-request timeline comment.
+// GitHub treats adding the same reaction by the same user as a successful
+// no-op, so a caller can safely reconcile this after interruption.
 func (c Client) AddEyesReaction(ctx context.Context, authority Authority, commentID int64) error {
 	if commentID < 1 {
 		return fmt.Errorf("GitHub issue-comment ID must be positive")
 	}
-	token, err := c.mint(ctx, authority, "issues", "write")
+	token, err := c.mint(ctx, authority, "pull_requests", "write")
 	if err != nil {
 		return err
 	}
@@ -411,6 +411,9 @@ func (c Client) request(ctx context.Context, token, method, endpoint string, bod
 		detail := ""
 		if json.Unmarshal(contents, &failure) == nil && strings.TrimSpace(failure.Message) != "" {
 			detail = ": " + strings.TrimSpace(failure.Message)
+		}
+		if accepted := strings.TrimSpace(response.Header.Get("X-Accepted-GitHub-Permissions")); accepted != "" {
+			detail += " (accepted permissions: " + accepted + ")"
 		}
 		return response.StatusCode, redact(fmt.Errorf("GitHub REST %s %s failed with status %d%s", method, endpoint, response.StatusCode, detail), token)
 	}

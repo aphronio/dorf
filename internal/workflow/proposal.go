@@ -98,7 +98,7 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 			if err := absurdruntime.RequireClaim(ctx); err != nil {
 				return ProposalObservationResultV1{}, err
 			}
-			if _, err := r.GitHub.CreateIssueComment(ctx, authority, proposal.Number, feedbackReply(jobID, comment.ID, job.Revision)); err != nil {
+			if _, err := r.GitHub.CreateIssueComment(ctx, authority, proposal.Number, feedbackReply(jobID, comment, job.Revision)); err != nil {
 				return ProposalObservationResultV1{}, fmt.Errorf("report completed GitHub feedback comment %d: %w", comment.ID, err)
 			}
 			continue
@@ -137,8 +137,9 @@ func admittedGitHubComments(messages []spine.MessageView) map[string]spine.Messa
 	return admitted
 }
 
-func feedbackReply(jobID string, commentID int64, revision string) string {
-	return fmt.Sprintf("Dorf handled this feedback in exact Revision `%s`.\n\n%s", revision, feedbackReplyMarker(jobID, commentID))
+func feedbackReply(jobID string, comment githubapi.Comment, revision string) string {
+	quoted := "> " + strings.ReplaceAll(strings.TrimSpace(comment.Body), "\n", "\n> ")
+	return fmt.Sprintf("Regarding feedback from @%s:\n\n%s\n\nDorf handled this feedback in exact Revision `%s`.\n\n%s", comment.Login, quoted, revision, feedbackReplyMarker(jobID, comment.ID))
 }
 
 func feedbackReplyMarker(jobID string, commentID int64) string {

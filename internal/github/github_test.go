@@ -301,8 +301,14 @@ func TestPullRequestFeedbackWritesUseExactGitHubEdgesAndPermissions(t *testing.T
 	if err != nil || comment.ID != 92 || comment.UserType != "Bot" {
 		t.Fatalf("comment=%#v err=%v", comment, err)
 	}
-	if got := strings.Join(scopes, ","); got != "issues:write,pull_requests:write" {
-		t.Fatalf("scopes=%s", got)
+	operations := []string{"feedback reaction", "completion comment"}
+	if len(scopes) != len(operations) {
+		t.Fatalf("permission requests=%v", scopes)
+	}
+	for i, operation := range operations {
+		if scopes[i] != "pull_requests:write" {
+			t.Fatalf("%s permission=%s", operation, scopes[i])
+		}
 	}
 }
 
