@@ -15,11 +15,16 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if MainSandboxName(jobA) != MainSandboxName(jobB) || MainSandboxName(jobA) == MainSandboxName(jobC) {
 		t.Fatal("main Sandbox identity is not stable and Job-scoped")
 	}
-	if ActionID(jobA, ActionSandboxCreate) != ActionID(jobA, ActionSandboxCreate) {
+	actionA := ActionID(jobA, ActionSandboxCreate)
+	actionB := ActionID(jobA, ActionRouteCreate)
+	if actionA != ActionID(jobA, ActionSandboxCreate) {
 		t.Fatal("Sandbox Action identity is not stable")
 	}
-	if ActionID(jobA, ActionSandboxCreate) == ActionID(jobA, ActionRouteCreate) {
+	if actionA == actionB {
 		t.Fatal("different effects share an Action identity")
+	}
+	if ProviderRouteID(actionA) != ProviderRouteID(actionA) || ProviderRouteID(actionA) == ProviderRouteID(actionB) {
+		t.Fatal("Provider route identity is not stable and Action-scoped")
 	}
 	messageA := MessageID(jobA, MessageFromHuman, "caller-a")
 	messageB := MessageID(jobA, MessageFromHuman, "caller-b")
