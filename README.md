@@ -45,7 +45,7 @@ dorf admit ...
 dorf worker
 dorf message --job JOB --id STABLE_ID --input-file message.txt --intent steer
 dorf inspect JOB
-dorf outcome JOB accepted|rejected|abandoned
+dorf abandon JOB
 dorf cleanup JOB
 ```
 

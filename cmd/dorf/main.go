@@ -99,9 +99,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, service, args[1:], stdout, stderr)
-	case "outcome":
+	case "abandon":
 		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
-		return outcomeCommand(ctx, store, client, githubClient, args[1:], stdout)
+		return abandon(ctx, store, client, githubClient, args[1:], stdout)
 	default:
 		_ = service
 		return usage(stderr)
@@ -578,12 +578,12 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if proposal == nil {
 		fmt.Fprintln(stdout, "  proposal: none")
 	} else {
-		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s remote=%s body=%s stale=%t\n", proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.ObservedRemoteHead, proposal.BodyDigest, proposal.Stale)
+		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s body=%s stale=%t\n", proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.BodyDigest, proposal.Stale)
 	}
 	if outcome == nil {
 		fmt.Fprintln(stdout, "  outcome: none")
 	} else {
-		fmt.Fprintf(stdout, "  outcome: %s PR=#%d state=%s merged=%t proposed=%s observed-head=%s merge=%s observed-at=%s\n", outcome.Kind, outcome.Number, outcome.ObservedState, outcome.ObservedMerged, outcome.ProposedRevision, outcome.ObservedHead, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
+		fmt.Fprintf(stdout, "  outcome: %s state=%s merged=%t merge=%s observed-at=%s\n", outcome.Kind, outcome.ObservedState, outcome.ObservedMerged, empty(outcome.MergeCommitOID), outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
 	fmt.Fprintf(stdout, "  Absurd run: %s state=%s\n", empty(runEvidence.TaskID), empty(string(runEvidence.State)))
 	if cleanupEvidence.TaskID != "" {
@@ -690,12 +690,11 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, s
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
 }
 
-func outcomeCommand(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
-	if len(args) != 2 || strings.TrimSpace(args[0]) == "" {
-		return fmt.Errorf("outcome requires: JOB_ID <accepted|rejected|abandoned>")
+func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("abandon requires one Job ID")
 	}
-	requested := spine.JobOutcomeKind(strings.TrimSpace(args[1]))
-	receipt, created, err := (outcomeapp.Service{Store: store, GitHub: githubClient}).Record(ctx, strings.TrimSpace(args[0]), requested)
+	receipt, created, err := (outcomeapp.Service{Store: store, GitHub: githubClient}).Record(ctx, strings.TrimSpace(args[0]), spine.OutcomeAbandoned)
 	if err != nil {
 		return err
 	}
@@ -893,6 +892,6 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	return detail
 }
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|outcome|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

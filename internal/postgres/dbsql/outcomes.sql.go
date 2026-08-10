@@ -32,28 +32,19 @@ func (q *Queries) ClearOutcomeAttention(ctx context.Context, arg ClearOutcomeAtt
 }
 
 const getOutcome = `-- name: GetOutcome :one
-select job_id,outcome,repository,installation_id,base_branch,head_branch,
-       pr_number,pr_url,proposed_revision,observed_head,observed_state,observed_merged,
+select job_id,outcome,observed_state,observed_merged,
        coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
 from dorf.job_outcomes
 where job_id=$1
 `
 
 type GetOutcomeRow struct {
-	JobID            string
-	Outcome          spine.JobOutcomeKind
-	Repository       string
-	InstallationID   string
-	BaseBranch       string
-	HeadBranch       string
-	PRNumber         int64
-	PRURL            string
-	ProposedRevision string
-	ObservedHead     string
-	ObservedState    string
-	ObservedMerged   bool
-	MergeCommitOID   string
-	ObservedAt       time.Time
+	JobID          string
+	Outcome        spine.JobOutcomeKind
+	ObservedState  string
+	ObservedMerged bool
+	MergeCommitOID string
+	ObservedAt     time.Time
 }
 
 func (q *Queries) GetOutcome(ctx context.Context, jobID string) (GetOutcomeRow, error) {
@@ -62,14 +53,6 @@ func (q *Queries) GetOutcome(ctx context.Context, jobID string) (GetOutcomeRow, 
 	err := row.Scan(
 		&i.JobID,
 		&i.Outcome,
-		&i.Repository,
-		&i.InstallationID,
-		&i.BaseBranch,
-		&i.HeadBranch,
-		&i.PRNumber,
-		&i.PRURL,
-		&i.ProposedRevision,
-		&i.ObservedHead,
 		&i.ObservedState,
 		&i.ObservedMerged,
 		&i.MergeCommitOID,
@@ -99,65 +82,37 @@ func (q *Queries) GetOutcomeJobForUpdate(ctx context.Context, jobID string) (Get
 
 const insertOutcome = `-- name: InsertOutcome :one
 insert into dorf.job_outcomes(
-    job_id,outcome,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-    proposed_revision,observed_head,observed_state,observed_merged,merge_commit_oid,observed_at
+    job_id,outcome,observed_state,observed_merged,merge_commit_oid,observed_at
 ) values(
-    $1,$2,$3,$4,
-    $5,$6,$7,$8,
-    $9,$10,$11,
-    $12,nullif($13::text,''),$14
+    $1,$2,$3,
+    $4,nullif($5::text,''),$6
 )
-returning job_id,outcome,repository,installation_id,base_branch,head_branch,
-          pr_number,pr_url,proposed_revision,observed_head,observed_state,observed_merged,
+returning job_id,outcome,observed_state,observed_merged,
           coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
 `
 
 type InsertOutcomeParams struct {
-	JobID            string
-	Outcome          spine.JobOutcomeKind
-	Repository       string
-	InstallationID   string
-	BaseBranch       string
-	HeadBranch       string
-	PRNumber         int64
-	PRURL            string
-	ProposedRevision string
-	ObservedHead     string
-	ObservedState    string
-	ObservedMerged   bool
-	MergeCommitOID   string
-	ObservedAt       time.Time
+	JobID          string
+	Outcome        spine.JobOutcomeKind
+	ObservedState  string
+	ObservedMerged bool
+	MergeCommitOID string
+	ObservedAt     time.Time
 }
 
 type InsertOutcomeRow struct {
-	JobID            string
-	Outcome          spine.JobOutcomeKind
-	Repository       string
-	InstallationID   string
-	BaseBranch       string
-	HeadBranch       string
-	PRNumber         int64
-	PRURL            string
-	ProposedRevision string
-	ObservedHead     string
-	ObservedState    string
-	ObservedMerged   bool
-	MergeCommitOID   string
-	ObservedAt       time.Time
+	JobID          string
+	Outcome        spine.JobOutcomeKind
+	ObservedState  string
+	ObservedMerged bool
+	MergeCommitOID string
+	ObservedAt     time.Time
 }
 
 func (q *Queries) InsertOutcome(ctx context.Context, arg InsertOutcomeParams) (InsertOutcomeRow, error) {
 	row := q.db.QueryRowContext(ctx, insertOutcome,
 		arg.JobID,
 		arg.Outcome,
-		arg.Repository,
-		arg.InstallationID,
-		arg.BaseBranch,
-		arg.HeadBranch,
-		arg.PRNumber,
-		arg.PRURL,
-		arg.ProposedRevision,
-		arg.ObservedHead,
 		arg.ObservedState,
 		arg.ObservedMerged,
 		arg.MergeCommitOID,
@@ -167,14 +122,6 @@ func (q *Queries) InsertOutcome(ctx context.Context, arg InsertOutcomeParams) (I
 	err := row.Scan(
 		&i.JobID,
 		&i.Outcome,
-		&i.Repository,
-		&i.InstallationID,
-		&i.BaseBranch,
-		&i.HeadBranch,
-		&i.PRNumber,
-		&i.PRURL,
-		&i.ProposedRevision,
-		&i.ObservedHead,
 		&i.ObservedState,
 		&i.ObservedMerged,
 		&i.MergeCommitOID,

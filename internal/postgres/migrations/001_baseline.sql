@@ -40,9 +40,7 @@ create table dorf.jobs (
         (github_repository is null and github_installation_id is null and base_branch is null) or
         (github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$' and
          github_installation_id ~ '^[1-9][0-9]*$' and length(base_branch) > 0 and base_branch <> branch)
-    ),
-    constraint jobs_github_authority_identity_key
-        unique(id,github_repository,github_installation_id,base_branch,branch)
+    )
 );
 
 create table dorf.job_messages (
@@ -241,39 +239,19 @@ alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup
 
 create table dorf.github_proposals (
     job_id text primary key references dorf.jobs(id),
-    repository text not null,
-    installation_id text not null,
-    base_branch text not null,
-    head_branch text not null,
     pr_number bigint not null check (pr_number>0),
     pr_url text not null check (length(pr_url)>0),
     proposed_revision text not null check (proposed_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    observed_remote_head text not null check (observed_remote_head ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    body_digest text not null check (body_digest ~ '^[0-9a-f]{64}$'),
-    observed_at timestamptz not null default clock_timestamp(),
-    foreign key(job_id,repository,installation_id,base_branch,head_branch)
-        references dorf.jobs(id,github_repository,github_installation_id,base_branch,branch)
+    body_digest text not null check (body_digest ~ '^[0-9a-f]{64}$')
 );
-create unique index github_proposals_exact_outcome_identity
-    on dorf.github_proposals(job_id,repository,installation_id,base_branch,head_branch,pr_number,proposed_revision);
 
 create table dorf.job_outcomes (
-    job_id text primary key references dorf.jobs(id),
+    job_id text primary key references dorf.github_proposals(job_id),
     outcome text not null check (outcome in ('accepted','rejected','abandoned')),
-    repository text not null,
-    installation_id text not null,
-    base_branch text not null,
-    head_branch text not null,
-    pr_number bigint not null check (pr_number>0),
-    pr_url text not null check (length(pr_url)>0),
-    proposed_revision text not null check (proposed_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    observed_head text not null check (observed_head ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     observed_state text not null check (observed_state in ('open','closed')),
     observed_merged boolean not null,
     merge_commit_oid text check (merge_commit_oid is null or merge_commit_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     observed_at timestamptz not null default clock_timestamp(),
-    foreign key(job_id,repository,installation_id,base_branch,head_branch,pr_number,proposed_revision)
-        references dorf.github_proposals(job_id,repository,installation_id,base_branch,head_branch,pr_number,proposed_revision),
     check (
         (outcome='accepted' and observed_state='closed' and observed_merged and merge_commit_oid is not null) or
         (outcome='rejected' and observed_state='closed' and not observed_merged and merge_commit_oid is null) or

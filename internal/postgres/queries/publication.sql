@@ -39,10 +39,8 @@ update dorf.actions
 set state='succeeded'
 where id=sqlc.arg(action_id) and kind='repository-push' and scope_key=sqlc.arg(revision);
 
--- name: GetProposalAuthorityJobForUpdate :one
-select coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch,branch,revision,workflow_phase
+-- name: GetProposalJobForUpdate :one
+select revision,workflow_phase
 from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
@@ -54,29 +52,20 @@ where job_id=sqlc.arg(job_id) and kind='repository-push' and scope_key=sqlc.arg(
 
 -- GetProposal is the one proposal projection shared by publication and outcome code.
 -- name: GetProposal :one
-select job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-       proposed_revision,observed_remote_head,body_digest
+select job_id,pr_number,pr_url,proposed_revision,body_digest
 from dorf.github_proposals
 where job_id=sqlc.arg(job_id);
 
 -- name: UpsertProposal :execrows
 insert into dorf.github_proposals(
-    job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-    proposed_revision,observed_remote_head,body_digest
+    job_id,pr_number,pr_url,proposed_revision,body_digest
 ) values(
-    sqlc.arg(job_id),sqlc.arg(repository),sqlc.arg(installation_id),sqlc.arg(base_branch),
-    sqlc.arg(head_branch),sqlc.arg(pr_number),sqlc.arg(pr_url),sqlc.arg(proposed_revision),
-    sqlc.arg(observed_remote_head),sqlc.arg(body_digest)
+    sqlc.arg(job_id),sqlc.arg(pr_number),sqlc.arg(pr_url),sqlc.arg(proposed_revision),sqlc.arg(body_digest)
 )
 on conflict(job_id) do update set
   pr_url=excluded.pr_url,proposed_revision=excluded.proposed_revision,
-  observed_remote_head=excluded.observed_remote_head,body_digest=excluded.body_digest,
-  observed_at=clock_timestamp()
-where dorf.github_proposals.repository=excluded.repository
-  and dorf.github_proposals.installation_id=excluded.installation_id
-  and dorf.github_proposals.base_branch=excluded.base_branch
-  and dorf.github_proposals.head_branch=excluded.head_branch
-  and dorf.github_proposals.pr_number=excluded.pr_number;
+  body_digest=excluded.body_digest
+where dorf.github_proposals.pr_number=excluded.pr_number;
 
 -- name: CompleteProposalAction :execrows
 update dorf.actions

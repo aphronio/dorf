@@ -48,8 +48,8 @@ func (g *outcomeGitHub) PullRequest(_ context.Context, authority githubapi.Autho
 func outcomeFixture() (*outcomeStore, *outcomeGitHub, Service) {
 	revision := strings.Repeat("a", 40)
 	store := &outcomeStore{
-		job:      spine.Job{ID: "job-exact", Revision: revision},
-		proposal: &spine.GitHubProposal{JobID: "job-exact", Repository: "aphronio/dorf", InstallationID: "42", BaseBranch: "greenfield", HeadBranch: "dorf/issue-39", Number: 39, URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision, ObservedRemoteHead: revision},
+		job:      spine.Job{ID: "job-exact", Revision: revision, GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield", Branch: "dorf/issue-39"},
+		proposal: &spine.GitHubProposal{JobID: "job-exact", Number: 39, URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision},
 	}
 	github := &outcomeGitHub{pull: githubapi.PullRequest{Number: 39, URL: store.proposal.URL, Repository: "aphronio/dorf", Head: "dorf/issue-39", Base: "greenfield", HeadSHA: revision}}
 	service := Service{Store: store, GitHub: github, Now: func() time.Time { return time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC) }}
@@ -74,7 +74,7 @@ func TestExactGitHubAuthorityRecordsThreeDistinctOutcomes(t *testing.T) {
 			if err != nil || !created || store.writes != 1 || github.calls != 1 {
 				t.Fatalf("receipt=%#v created=%t writes=%d calls=%d err=%v", receipt, created, store.writes, github.calls, err)
 			}
-			if receipt.Kind != test.kind || receipt.ObservedState != test.state || receipt.ObservedMerged != test.merged || receipt.MergeCommitOID != test.merge || receipt.ProposedRevision != store.job.Revision || receipt.ObservedHead != store.job.Revision {
+			if receipt.Kind != test.kind || receipt.ObservedState != test.state || receipt.ObservedMerged != test.merged || receipt.MergeCommitOID != test.merge {
 				t.Fatalf("inexact outcome receipt=%#v", receipt)
 			}
 		})

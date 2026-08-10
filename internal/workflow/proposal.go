@@ -54,12 +54,12 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	if proposal == nil || proposal.Stale || proposal.ProposedRevision != job.Revision {
 		return ProposalObservationResultV1{}, fmt.Errorf("Job proposal observation requires one exact current GitHub proposal")
 	}
-	authority := githubapi.Authority{Repository: proposal.Repository, InstallationID: proposal.InstallationID}
+	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pull, err := r.GitHub.PullRequest(ctx, authority, proposal.Number)
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
 	}
-	if err := validateExactProposal(*proposal, pull); err != nil {
+	if err := validateExactProposal(job, *proposal, pull); err != nil {
 		return ProposalObservationResultV1{}, err
 	}
 	result := ProposalObservationResultV1{Revision: job.Revision}
@@ -156,9 +156,9 @@ func hasFeedbackReply(comments []githubapi.Comment, jobID string, commentID int6
 	return false
 }
 
-func validateExactProposal(proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
-	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != proposal.Repository ||
-		pull.Head != proposal.HeadBranch || pull.Base != proposal.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
+func validateExactProposal(job spine.Job, proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
+	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
+		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
 		return fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
 	}
 	return nil

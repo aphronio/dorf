@@ -1322,3 +1322,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   in two places. Settlement plus the natural owner states the same recovery story directly.
 - **Reconsider when:** A concrete external mutation returns a stable, non-derivable fact required for
   reconciliation that has no honest typed product owner.
+
+## D060 — GitHub authority is stored once
+
+- **Status:** Accepted Proposal/Outcome simplification — 2026-08-10
+- **Decision:** The Job owns immutable GitHub repository, installation, base branch, and head branch
+  authority. Proposal retains only pull-request number, URL, exact proposed Revision, and body digest.
+  Outcome retains only disposition, the terminal pull-request observation, optional merge commit, and
+  observation time. Publication and observation join these facts instead of copying authority or an
+  already-validated remote head. Merge and close are observed automatically; `dorf abandon JOB` is the
+  only manual Outcome command.
+- **Why:** Proposal and Outcome repeated facts fixed by their Job and predecessor, creating comparison
+  code, larger schemas, and inconsistent states that had no product meaning. One owner per fact makes
+  publication, inspection, and terminal recovery read in the same order as the workflow.
+- **Reconsider when:** A Proposal must survive independently of its Job, one Job can own multiple live
+  GitHub authorities, or a terminal external observation contains a new fact that has no current owner.

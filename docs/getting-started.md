@@ -126,14 +126,15 @@ dorf inspect JOB_ID
 ```
 
 `worker` may be restarted after process loss. Send a stable message while work is active with
-`dorf message`; use `--intent steer` to target the current native turn. After GitHub records the
-human decision, record exactly one explicit outcome:
+`dorf message`; use `--intent steer` to target the current native turn. Dorf observes merge or close
+on the exact pull request and records acceptance or rejection automatically. To stop without a
+GitHub decision, explicitly abandon the Job:
 
 ```bash
-dorf outcome JOB_ID accepted   # or rejected / abandoned
-dorf worker --once
+dorf abandon JOB_ID
 dorf inspect JOB_ID
 ```
 
-Cleanup is a separate observable lifecycle fact. If ordinary durable cleanup needs bounded operator
-reconciliation, use `dorf cleanup --now JOB_ID` and inspect again.
+Cleanup remains a separate observable lifecycle fact and follows a terminal Outcome automatically.
+Use `dorf cleanup JOB_ID` only when an operator must explicitly start or retry cleanup, then inspect
+again.

@@ -20,7 +20,7 @@ func (s Store) Outcome(ctx context.Context, jobID string) (*spine.JobOutcome, er
 	if err != nil {
 		return nil, err
 	}
-	outcome := jobOutcome(row.JobID, row.Outcome, row.Repository, row.InstallationID, row.BaseBranch, row.HeadBranch, row.PRNumber, row.PRURL, row.ProposedRevision, row.ObservedHead, row.ObservedState, row.ObservedMerged, row.MergeCommitOID, row.ObservedAt)
+	outcome := jobOutcome(row.JobID, row.Outcome, row.ObservedState, row.ObservedMerged, row.MergeCommitOID, row.ObservedAt)
 	return &outcome, nil
 }
 
@@ -46,13 +46,13 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 		return spine.JobOutcome{}, false, err
 	}
 	if err == nil {
-		existing := jobOutcome(existingRow.JobID, existingRow.Outcome, existingRow.Repository, existingRow.InstallationID, existingRow.BaseBranch, existingRow.HeadBranch, existingRow.PRNumber, existingRow.PRURL, existingRow.ProposedRevision, existingRow.ObservedHead, existingRow.ObservedState, existingRow.ObservedMerged, existingRow.MergeCommitOID, existingRow.ObservedAt)
+		existing := jobOutcome(existingRow.JobID, existingRow.Outcome, existingRow.ObservedState, existingRow.ObservedMerged, existingRow.MergeCommitOID, existingRow.ObservedAt)
 		if existing.Kind != receipt.Kind {
 			return spine.JobOutcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", receipt.JobID, existing.Kind, receipt.Kind)
 		}
 		return existing, false, nil
 	}
-	if locked.WorkflowPhase != "published" || receipt.ProposedRevision != locked.Revision {
+	if locked.WorkflowPhase != "published" {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Revision")
 	}
 	proposalRow, err := queries.GetProposal(ctx, receipt.JobID)
@@ -60,40 +60,36 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 		return spine.JobOutcome{}, false, fmt.Errorf("load exact GitHub proposal for outcome: %w", err)
 	}
 	proposal := githubProposal(proposalRow)
-	if receipt.Repository != proposal.Repository || receipt.InstallationID != proposal.InstallationID || receipt.BaseBranch != proposal.BaseBranch || receipt.HeadBranch != proposal.HeadBranch || receipt.Number != proposal.Number || receipt.URL != proposal.URL || receipt.ProposedRevision != proposal.ProposedRevision || receipt.ObservedHead != proposal.ProposedRevision || proposal.ObservedRemoteHead != proposal.ProposedRevision {
-		return spine.JobOutcome{}, false, fmt.Errorf("observed GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
+	if proposal.ProposedRevision != locked.Revision {
+		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Proposal")
 	}
 	inserted, err := queries.InsertOutcome(ctx, dbsql.InsertOutcomeParams{
-		JobID: receipt.JobID, Outcome: receipt.Kind, Repository: receipt.Repository,
-		InstallationID: receipt.InstallationID, BaseBranch: receipt.BaseBranch, HeadBranch: receipt.HeadBranch,
-		PRNumber: receipt.Number, PRURL: receipt.URL, ProposedRevision: receipt.ProposedRevision,
-		ObservedHead: receipt.ObservedHead, ObservedState: receipt.ObservedState, ObservedMerged: receipt.ObservedMerged,
+		JobID: receipt.JobID, Outcome: receipt.Kind,
+		ObservedState: receipt.ObservedState, ObservedMerged: receipt.ObservedMerged,
 		MergeCommitOID: receipt.MergeCommitOID, ObservedAt: receipt.ObservedAt,
 	})
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	if err := expectOneRows(queries.ClearOutcomeAttention(ctx, dbsql.ClearOutcomeAttentionParams{JobID: receipt.JobID, Revision: receipt.ProposedRevision})); err != nil {
+	if err := expectOneRows(queries.ClearOutcomeAttention(ctx, dbsql.ClearOutcomeAttentionParams{JobID: receipt.JobID, Revision: locked.Revision})); err != nil {
 		return spine.JobOutcome{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	stored := jobOutcome(inserted.JobID, inserted.Outcome, inserted.Repository, inserted.InstallationID, inserted.BaseBranch, inserted.HeadBranch, inserted.PRNumber, inserted.PRURL, inserted.ProposedRevision, inserted.ObservedHead, inserted.ObservedState, inserted.ObservedMerged, inserted.MergeCommitOID, inserted.ObservedAt)
+	stored := jobOutcome(inserted.JobID, inserted.Outcome, inserted.ObservedState, inserted.ObservedMerged, inserted.MergeCommitOID, inserted.ObservedAt)
 	return stored, true, nil
 }
 
-func jobOutcome(jobID string, kind spine.JobOutcomeKind, repository, installationID, baseBranch, headBranch string, number int64, url, proposedRevision, observedHead, observedState string, observedMerged bool, mergeCommitOID string, observedAt time.Time) spine.JobOutcome {
+func jobOutcome(jobID string, kind spine.JobOutcomeKind, observedState string, observedMerged bool, mergeCommitOID string, observedAt time.Time) spine.JobOutcome {
 	return spine.JobOutcome{
-		JobID: jobID, Kind: kind, Repository: repository, InstallationID: installationID,
-		BaseBranch: baseBranch, HeadBranch: headBranch, Number: number, URL: url,
-		ProposedRevision: proposedRevision, ObservedHead: observedHead, ObservedState: observedState,
+		JobID: jobID, Kind: kind, ObservedState: observedState,
 		ObservedMerged: observedMerged, MergeCommitOID: mergeCommitOID, ObservedAt: observedAt,
 	}
 }
 
 func validateOutcomeReceipt(receipt spine.JobOutcome) error {
-	if strings.TrimSpace(receipt.JobID) == "" || receipt.Number < 1 || strings.TrimSpace(receipt.URL) == "" || !ValidRevision(receipt.ProposedRevision) || !ValidRevision(receipt.ObservedHead) || receipt.ObservedAt.IsZero() {
+	if strings.TrimSpace(receipt.JobID) == "" || receipt.ObservedAt.IsZero() {
 		return fmt.Errorf("Job outcome receipt is incomplete")
 	}
 	switch receipt.Kind {

@@ -34,7 +34,7 @@ ADMISSION_KEY="image-proof:$PROOF_ID:$FINGERPRINT"
 JOB_ID=""
 cleanup() {
   if [[ -n "$JOB_ID" ]]; then
-    "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || "$BINARY" cleanup --now "$JOB_ID" >/dev/null 2>&1 || true
+    "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || true
     "$BINARY" worker --once >/dev/null 2>&1 || true
   fi
   rm -rf -- "$PROOF_ROOT"

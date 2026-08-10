@@ -220,17 +220,12 @@ type Evidence struct {
 }
 
 type GitHubProposal struct {
-	JobID              string `json:"job_id"`
-	Repository         string `json:"repository"`
-	InstallationID     string `json:"installation_id"`
-	BaseBranch         string `json:"base_branch"`
-	HeadBranch         string `json:"head_branch"`
-	Number             int64  `json:"pr_number"`
-	URL                string `json:"pr_url"`
-	ProposedRevision   string `json:"proposed_revision"`
-	ObservedRemoteHead string `json:"observed_remote_head"`
-	BodyDigest         string `json:"body_digest"`
-	Stale              bool   `json:"stale"`
+	JobID            string `json:"job_id"`
+	Number           int64  `json:"pr_number"`
+	URL              string `json:"pr_url"`
+	ProposedRevision string `json:"proposed_revision"`
+	BodyDigest       string `json:"body_digest"`
+	Stale            bool   `json:"stale"`
 }
 
 type JobOutcomeKind string
@@ -242,20 +237,12 @@ const (
 )
 
 type JobOutcome struct {
-	JobID            string         `json:"job_id"`
-	Kind             JobOutcomeKind `json:"outcome"`
-	Repository       string         `json:"repository"`
-	InstallationID   string         `json:"installation_id"`
-	BaseBranch       string         `json:"base_branch"`
-	HeadBranch       string         `json:"head_branch"`
-	Number           int64          `json:"pr_number"`
-	URL              string         `json:"pr_url"`
-	ProposedRevision string         `json:"proposed_revision"`
-	ObservedHead     string         `json:"observed_head"`
-	ObservedState    string         `json:"observed_state"`
-	ObservedMerged   bool           `json:"observed_merged"`
-	MergeCommitOID   string         `json:"merge_commit_oid,omitempty"`
-	ObservedAt       time.Time      `json:"observed_at"`
+	JobID          string         `json:"job_id"`
+	Kind           JobOutcomeKind `json:"outcome"`
+	ObservedState  string         `json:"observed_state"`
+	ObservedMerged bool           `json:"observed_merged"`
+	MergeCommitOID string         `json:"merge_commit_oid,omitempty"`
+	ObservedAt     time.Time      `json:"observed_at"`
 }
 
 type HarnessTurn struct {

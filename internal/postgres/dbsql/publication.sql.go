@@ -91,72 +91,21 @@ func (q *Queries) CompleteRepositoryPush(ctx context.Context, arg CompleteReposi
 }
 
 const getProposal = `-- name: GetProposal :one
-select job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-       proposed_revision,observed_remote_head,body_digest
+select job_id,pr_number,pr_url,proposed_revision,body_digest
 from dorf.github_proposals
 where job_id=$1
 `
 
-type GetProposalRow struct {
-	JobID              string
-	Repository         string
-	InstallationID     string
-	BaseBranch         string
-	HeadBranch         string
-	PRNumber           int64
-	PRURL              string
-	ProposedRevision   string
-	ObservedRemoteHead string
-	BodyDigest         string
-}
-
 // GetProposal is the one proposal projection shared by publication and outcome code.
-func (q *Queries) GetProposal(ctx context.Context, jobID string) (GetProposalRow, error) {
+func (q *Queries) GetProposal(ctx context.Context, jobID string) (DorfGithubProposal, error) {
 	row := q.db.QueryRowContext(ctx, getProposal, jobID)
-	var i GetProposalRow
+	var i DorfGithubProposal
 	err := row.Scan(
 		&i.JobID,
-		&i.Repository,
-		&i.InstallationID,
-		&i.BaseBranch,
-		&i.HeadBranch,
 		&i.PRNumber,
 		&i.PRURL,
 		&i.ProposedRevision,
-		&i.ObservedRemoteHead,
 		&i.BodyDigest,
-	)
-	return i, err
-}
-
-const getProposalAuthorityJobForUpdate = `-- name: GetProposalAuthorityJobForUpdate :one
-select coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch,branch,revision,workflow_phase
-from dorf.jobs
-where id=$1
-for update
-`
-
-type GetProposalAuthorityJobForUpdateRow struct {
-	GithubRepository     string
-	GithubInstallationID string
-	BaseBranch           string
-	Branch               string
-	Revision             string
-	WorkflowPhase        string
-}
-
-func (q *Queries) GetProposalAuthorityJobForUpdate(ctx context.Context, jobID string) (GetProposalAuthorityJobForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getProposalAuthorityJobForUpdate, jobID)
-	var i GetProposalAuthorityJobForUpdateRow
-	err := row.Scan(
-		&i.GithubRepository,
-		&i.GithubInstallationID,
-		&i.BaseBranch,
-		&i.Branch,
-		&i.Revision,
-		&i.WorkflowPhase,
 	)
 	return i, err
 }
@@ -170,6 +119,25 @@ func (q *Queries) GetProposalCurrentRevision(ctx context.Context, jobID string) 
 	var revision string
 	err := row.Scan(&revision)
 	return revision, err
+}
+
+const getProposalJobForUpdate = `-- name: GetProposalJobForUpdate :one
+select revision,workflow_phase
+from dorf.jobs
+where id=$1
+for update
+`
+
+type GetProposalJobForUpdateRow struct {
+	Revision      string
+	WorkflowPhase string
+}
+
+func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (GetProposalJobForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getProposalJobForUpdate, jobID)
+	var i GetProposalJobForUpdateRow
+	err := row.Scan(&i.Revision, &i.WorkflowPhase)
+	return i, err
 }
 
 const getPublicationAction = `-- name: GetPublicationAction :one
@@ -366,48 +334,30 @@ func (q *Queries) StartPublicationIntent(ctx context.Context, arg StartPublicati
 
 const upsertProposal = `-- name: UpsertProposal :execrows
 insert into dorf.github_proposals(
-    job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-    proposed_revision,observed_remote_head,body_digest
+    job_id,pr_number,pr_url,proposed_revision,body_digest
 ) values(
-    $1,$2,$3,$4,
-    $5,$6,$7,$8,
-    $9,$10
+    $1,$2,$3,$4,$5
 )
 on conflict(job_id) do update set
   pr_url=excluded.pr_url,proposed_revision=excluded.proposed_revision,
-  observed_remote_head=excluded.observed_remote_head,body_digest=excluded.body_digest,
-  observed_at=clock_timestamp()
-where dorf.github_proposals.repository=excluded.repository
-  and dorf.github_proposals.installation_id=excluded.installation_id
-  and dorf.github_proposals.base_branch=excluded.base_branch
-  and dorf.github_proposals.head_branch=excluded.head_branch
-  and dorf.github_proposals.pr_number=excluded.pr_number
+  body_digest=excluded.body_digest
+where dorf.github_proposals.pr_number=excluded.pr_number
 `
 
 type UpsertProposalParams struct {
-	JobID              string
-	Repository         string
-	InstallationID     string
-	BaseBranch         string
-	HeadBranch         string
-	PRNumber           int64
-	PRURL              string
-	ProposedRevision   string
-	ObservedRemoteHead string
-	BodyDigest         string
+	JobID            string
+	PRNumber         int64
+	PRURL            string
+	ProposedRevision string
+	BodyDigest       string
 }
 
 func (q *Queries) UpsertProposal(ctx context.Context, arg UpsertProposalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, upsertProposal,
 		arg.JobID,
-		arg.Repository,
-		arg.InstallationID,
-		arg.BaseBranch,
-		arg.HeadBranch,
 		arg.PRNumber,
 		arg.PRURL,
 		arg.ProposedRevision,
-		arg.ObservedRemoteHead,
 		arg.BodyDigest,
 	)
 	if err != nil {

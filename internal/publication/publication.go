@@ -221,7 +221,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 			return err
 		}
 	}
-	proposal := spine.GitHubProposal{JobID: job.ID, Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation, BaseBranch: job.BaseBranch, HeadBranch: job.Branch, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, ObservedRemoteHead: pull.HeadSHA, BodyDigest: bodyDigest}
+	proposal := spine.GitHubProposal{JobID: job.ID, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, BodyDigest: bodyDigest}
 	return s.recordAfterClaim(ctx, func() error {
 		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 	})

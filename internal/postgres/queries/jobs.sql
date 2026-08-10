@@ -117,12 +117,10 @@ update dorf.jobs
 set workflow_phase=case when exists (
       select 1 from dorf.github_proposals p
       where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
-        and p.observed_remote_head=dorf.jobs.revision
     ) then 'published' else 'blocked' end,
     workflow_attention=case when exists (
       select 1 from dorf.github_proposals p
       where p.job_id=dorf.jobs.id and p.proposed_revision=dorf.jobs.revision
-        and p.observed_remote_head=dorf.jobs.revision
     ) then null else sqlc.arg(reason) end
 where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
   and workflow_phase='implementing';

@@ -40,7 +40,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	case "publishing":
 	case "published":
 		proposal, proposalErr := queries.GetProposal(ctx, jobID)
-		if proposalErr == nil && proposal.ProposedRevision == revision && proposal.ObservedRemoteHead == revision {
+		if proposalErr == nil && proposal.ProposedRevision == revision {
 		} else {
 			return spine.Job{}, spine.Action{}, spine.Action{}, fmt.Errorf("published Job is not stale at a later exact ready Revision")
 		}
@@ -100,8 +100,8 @@ func (s Store) RecordPush(ctx context.Context, actionID, revision string) error 
 }
 
 func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spine.GitHubProposal) error {
-	if proposal.Number < 1 || proposal.URL == "" || proposal.BodyDigest == "" || proposal.ProposedRevision != proposal.ObservedRemoteHead {
-		return fmt.Errorf("proposal receipt is incomplete or not exact-Revision fresh")
+	if proposal.Number < 1 || proposal.URL == "" || proposal.BodyDigest == "" || !ValidRevision(proposal.ProposedRevision) {
+		return fmt.Errorf("Proposal is incomplete or not exact-Revision")
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -109,12 +109,12 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	locked, err := queries.GetProposalAuthorityJobForUpdate(ctx, proposal.JobID)
+	locked, err := queries.GetProposalJobForUpdate(ctx, proposal.JobID)
 	if err != nil {
 		return err
 	}
-	if locked.WorkflowPhase != "publishing" || locked.GithubRepository != proposal.Repository || locked.GithubInstallationID != proposal.InstallationID || locked.BaseBranch != proposal.BaseBranch || locked.Branch != proposal.HeadBranch || locked.Revision != proposal.ProposedRevision {
-		return fmt.Errorf("proposal receipt conflicts with immutable Job authority or exact current Revision")
+	if locked.WorkflowPhase != "publishing" || locked.Revision != proposal.ProposedRevision {
+		return fmt.Errorf("Proposal conflicts with the exact current Job Revision")
 	}
 	pushState, err := queries.GetRepositoryPushState(ctx, dbsql.GetRepositoryPushStateParams{JobID: proposal.JobID, Revision: locked.Revision})
 	if err != nil || pushState != "succeeded" {
@@ -123,7 +123,7 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	existingRow, err := queries.GetProposal(ctx, proposal.JobID)
 	if err == nil {
 		existing := githubProposal(existingRow)
-		if existing.Number != proposal.Number || existing.Repository != proposal.Repository || existing.InstallationID != proposal.InstallationID || existing.BaseBranch != proposal.BaseBranch || existing.HeadBranch != proposal.HeadBranch {
+		if existing.Number != proposal.Number {
 			return fmt.Errorf("Job already owns conflicting GitHub proposal identity at pull request #%d", existing.Number)
 		}
 	}
@@ -131,10 +131,8 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 		return err
 	}
 	if err := expectOneRows(queries.UpsertProposal(ctx, dbsql.UpsertProposalParams{
-		JobID: proposal.JobID, Repository: proposal.Repository, InstallationID: proposal.InstallationID,
-		BaseBranch: proposal.BaseBranch, HeadBranch: proposal.HeadBranch, PRNumber: proposal.Number,
-		PRURL: proposal.URL, ProposedRevision: proposal.ProposedRevision,
-		ObservedRemoteHead: proposal.ObservedRemoteHead, BodyDigest: proposal.BodyDigest,
+		JobID: proposal.JobID, PRNumber: proposal.Number, PRURL: proposal.URL,
+		ProposedRevision: proposal.ProposedRevision, BodyDigest: proposal.BodyDigest,
 	})); err != nil {
 		return err
 	}
@@ -169,7 +167,7 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 	if err != nil {
 		return nil, err
 	}
-	proposal.Stale = proposal.ProposedRevision != current || proposal.ObservedRemoteHead != current
+	proposal.Stale = proposal.ProposedRevision != current
 	return &proposal, nil
 }
 
@@ -177,10 +175,9 @@ func publicationAction(id, jobID string, kind spine.ActionKind, state spine.Acti
 	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, Scope: scope}
 }
 
-func githubProposal(row dbsql.GetProposalRow) spine.GitHubProposal {
+func githubProposal(row dbsql.DorfGithubProposal) spine.GitHubProposal {
 	return spine.GitHubProposal{
-		JobID: row.JobID, Repository: row.Repository, InstallationID: row.InstallationID,
-		BaseBranch: row.BaseBranch, HeadBranch: row.HeadBranch, Number: row.PRNumber, URL: row.PRURL,
-		ProposedRevision: row.ProposedRevision, ObservedRemoteHead: row.ObservedRemoteHead, BodyDigest: row.BodyDigest,
+		JobID: row.JobID, Number: row.PRNumber, URL: row.PRURL,
+		ProposedRevision: row.ProposedRevision, BodyDigest: row.BodyDigest,
 	}
 }

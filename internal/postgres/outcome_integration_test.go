@@ -39,10 +39,8 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 		t.Fatal(err)
 	}
 	proposal := spine.GitHubProposal{
-		JobID: job.ID, Repository: input.GitHubRepository, InstallationID: input.GitHubInstallation,
-		BaseBranch: input.BaseBranch, HeadBranch: input.Branch, Number: 39,
-		URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision,
-		ObservedRemoteHead: revision, BodyDigest: strings.Repeat("1", 64),
+		JobID: job.ID, Number: 39, URL: "https://github.com/aphronio/dorf/pull/39",
+		ProposedRevision: revision, BodyDigest: strings.Repeat("1", 64),
 	}
 	if err := store.RecordProposal(ctx, pull.ID, proposal); err != nil {
 		t.Fatal(err)
@@ -56,7 +54,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 
 func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, proposal := preparePublishedOutcomeJob(t, store, "follow-unchanged")
+	job, _ := preparePublishedOutcomeJob(t, store, "follow-unchanged")
 	message, created, err := store.AdmitMessage(context.Background(), postgres.NewMessage{
 		JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "github-comment-1",
 		Input: "Please explain the tradeoff without changing code.", Intent: spine.MessageFollow,
@@ -65,11 +63,8 @@ func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testi
 		t.Fatalf("admit published follow=%#v created=%t err=%v", message, created, err)
 	}
 	merge := spine.JobOutcome{
-		JobID: job.ID, Kind: spine.OutcomeAccepted, Repository: proposal.Repository,
-		InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch,
-		HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL,
-		ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision,
-		ObservedState: "closed", ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: time.Now().UTC(),
+		JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed",
+		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: time.Now().UTC(),
 	}
 	if _, _, err := store.RecordOutcome(context.Background(), merge); err == nil {
 		t.Fatal("recorded an Outcome while proposal feedback was still being handled")
@@ -87,16 +82,13 @@ func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testi
 	}
 }
 
-func TestPostgresOutcomeFirstWriteWinsAndRetainsExactProposalSnapshot(t *testing.T) {
+func TestPostgresOutcomeFirstWriteWinsAndLeavesProposalAuthorityUntouched(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "first-write")
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	receipt := spine.JobOutcome{
-		JobID: job.ID, Kind: spine.OutcomeAccepted, Repository: proposal.Repository,
-		InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch,
-		HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL,
-		ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision,
-		ObservedState: "closed", ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
+		JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed",
+		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
 	}
 	stored, created, err := store.RecordOutcome(context.Background(), receipt)
 	if err != nil || !created || stored.Kind != spine.OutcomeAccepted || stored.MergeCommitOID != receipt.MergeCommitOID {
@@ -114,15 +106,15 @@ func TestPostgresOutcomeFirstWriteWinsAndRetainsExactProposalSnapshot(t *testing
 		t.Fatalf("conflicting outcome error=%v", err)
 	}
 	proposalAfter, err := store.Proposal(context.Background(), job.ID)
-	if err != nil || proposalAfter == nil || proposalAfter.ProposedRevision != receipt.ProposedRevision || proposalAfter.Number != receipt.Number {
+	if err != nil || proposalAfter == nil || proposalAfter.ProposedRevision != proposal.ProposedRevision || proposalAfter.Number != proposal.Number {
 		t.Fatalf("proposal changed after outcome: %#v err=%v", proposalAfter, err)
 	}
 }
 
 func TestPostgresConcurrentConflictingOutcomesSerializeToOneReceipt(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, proposal := preparePublishedOutcomeJob(t, store, "concurrent")
-	base := spine.JobOutcome{JobID: job.ID, Repository: proposal.Repository, InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch, HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL, ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision, ObservedState: "closed", ObservedAt: time.Now().UTC()}
+	job, _ := preparePublishedOutcomeJob(t, store, "concurrent")
+	base := spine.JobOutcome{JobID: job.ID, ObservedState: "closed", ObservedAt: time.Now().UTC()}
 	accepted := base
 	accepted.Kind, accepted.ObservedMerged, accepted.MergeCommitOID = spine.OutcomeAccepted, true, strings.Repeat("c", 40)
 	rejected := base
@@ -155,13 +147,12 @@ func TestPostgresConcurrentConflictingOutcomesSerializeToOneReceipt(t *testing.T
 	}
 }
 
-func TestPostgresOutcomeRejectsProposalIdentityOrStateMismatch(t *testing.T) {
+func TestPostgresOutcomeRejectsInvalidExternalObservation(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, proposal := preparePublishedOutcomeJob(t, store, "mismatch")
-	receipt := spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAbandoned, Repository: proposal.Repository, InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch, HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL, ProposedRevision: proposal.ProposedRevision, ObservedHead: proposal.ProposedRevision, ObservedState: "open", ObservedAt: time.Now().UTC()}
-	receipt.Number++
-	if _, _, err := store.RecordOutcome(context.Background(), receipt); err == nil || !strings.Contains(err.Error(), "exact stored proposal") {
-		t.Fatalf("identity mismatch error=%v", err)
+	job, _ := preparePublishedOutcomeJob(t, store, "mismatch")
+	receipt := spine.JobOutcome{JobID: job.ID, Kind: spine.OutcomeAccepted, ObservedState: "closed", ObservedAt: time.Now().UTC()}
+	if _, _, err := store.RecordOutcome(context.Background(), receipt); err == nil || !strings.Contains(err.Error(), "merged GitHub pull request") {
+		t.Fatalf("observation mismatch error=%v", err)
 	}
 	if stored, err := store.Outcome(context.Background(), job.ID); err != nil || stored != nil {
 		t.Fatalf("invalid outcome persisted=%#v err=%v", stored, err)

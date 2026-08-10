@@ -102,6 +102,9 @@ durable task sequences explicit, named phases; it does not contain a generic use
   GitHub edge reconciles one eyes reaction and one exact-Revision completion reply without adding core
   state. Merge records an accepted Outcome; close without merge records a rejected Outcome. A bounded
   wait keeps quiet observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
+  GitHub repository, installation, base branch, and head branch remain immutable Job authority.
+  Proposal adds only pull-request identity and exact Revision; Outcome adds only the terminal external
+  observation. Neither copies authority already owned by the preceding fact.
 
 ## Deterministic effects
 

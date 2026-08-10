@@ -52,12 +52,12 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 	if proposal == nil || proposal.Stale || proposal.ProposedRevision != job.Revision {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
 	}
-	authority := githubapi.Authority{Repository: proposal.Repository, InstallationID: proposal.InstallationID}
+	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	pull, err := s.GitHub.PullRequest(ctx, authority, proposal.Number)
 	if err != nil {
 		return spine.JobOutcome{}, false, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
 	}
-	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != proposal.Repository || pull.Head != proposal.HeadBranch || pull.Base != proposal.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
+	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
 		return spine.JobOutcome{}, false, fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
 	}
 	switch requested {
@@ -79,11 +79,7 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 		now = s.Now
 	}
 	receipt := spine.JobOutcome{
-		JobID: job.ID, Kind: requested, Repository: proposal.Repository,
-		InstallationID: proposal.InstallationID, BaseBranch: proposal.BaseBranch,
-		HeadBranch: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL,
-		ProposedRevision: proposal.ProposedRevision, ObservedHead: pull.HeadSHA,
-		ObservedState: pull.State, ObservedMerged: pull.Merged,
+		JobID: job.ID, Kind: requested, ObservedState: pull.State, ObservedMerged: pull.Merged,
 		MergeCommitOID: pull.MergeCommitOID, ObservedAt: now().UTC(),
 	}
 	if s.ClaimCheck != nil {

@@ -10,13 +10,14 @@ import (
 
 func TestProposalObservationRequiresExactIdentity(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	proposal := spine.GitHubProposal{Repository: "aphronio/dorf", BaseBranch: "greenfield", HeadBranch: "dorf/job", Number: 94, URL: "https://github.com/aphronio/dorf/pull/94", ProposedRevision: revision}
-	pull := githubapi.PullRequest{Repository: proposal.Repository, Base: proposal.BaseBranch, Head: proposal.HeadBranch, Number: proposal.Number, URL: proposal.URL, HeadSHA: revision}
-	if err := validateExactProposal(proposal, pull); err != nil {
+	job := spine.Job{GitHubRepository: "aphronio/dorf", BaseBranch: "greenfield", Branch: "dorf/job"}
+	proposal := spine.GitHubProposal{Number: 94, URL: "https://github.com/aphronio/dorf/pull/94", ProposedRevision: revision}
+	pull := githubapi.PullRequest{Repository: job.GitHubRepository, Base: job.BaseBranch, Head: job.Branch, Number: proposal.Number, URL: proposal.URL, HeadSHA: revision}
+	if err := validateExactProposal(job, proposal, pull); err != nil {
 		t.Fatal(err)
 	}
 	pull.HeadSHA = strings.Repeat("b", 40)
-	if err := validateExactProposal(proposal, pull); err == nil {
+	if err := validateExactProposal(job, proposal, pull); err == nil {
 		t.Fatal("accepted a pull request for a different Revision")
 	}
 }

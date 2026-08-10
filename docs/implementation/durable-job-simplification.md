@@ -449,16 +449,16 @@ Proposal -> PR number, URL, exact Revision, body digest
 Outcome  -> kind, external observation, merge commit, observed time
 ```
 
-- [ ] Remove repository, installation, base-branch, and head-branch copies from Proposal and Outcome.
-- [ ] Remove `observed_remote_head`; recording already requires the PR head to equal the proposed
+- [x] Remove repository, installation, base-branch, and head-branch copies from Proposal and Outcome.
+- [x] Remove `observed_remote_head`; recording already requires the PR head to equal the proposed
       Revision.
-- [ ] Keep the PR body digest on Proposal only; do not copy it into the PR Action outcome.
-- [ ] Remove Outcome copies that are fixed by Proposal identity, while retaining the external
+- [x] Keep the PR body digest on Proposal only; do not copy it into the PR Action outcome.
+- [x] Remove Outcome copies that are fixed by Proposal identity, while retaining the external
       observation needed to prove accepted, rejected, or abandoned.
-- [ ] Join immutable Job and Proposal authority when reconciling, rendering, or recording Outcome.
-- [ ] Align CLI and documentation with the live flow: merge/close is observed automatically and the
+- [x] Join immutable Job and Proposal authority when reconciling, rendering, or recording Outcome.
+- [x] Align CLI and documentation with the live flow: merge/close is observed automatically and the
       explicit human command is for abandonment.
-- [ ] Consolidate identity-copy tests into exact-Revision proposal, outcome, and concurrency stories.
+- [x] Consolidate identity-copy tests into exact-Revision proposal, outcome, and concurrency stories.
 - [ ] Dogfood one exact-Revision PR through close or merge and terminal cleanup.
 
 Terminal: changing one admitted GitHub authority fact requires changing one row, and Proposal/Outcome

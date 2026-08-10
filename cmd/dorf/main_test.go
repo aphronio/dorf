@@ -13,10 +13,10 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestOutcomeGrammarExposesOneExactBoundary(t *testing.T) {
-	for _, args := range [][]string{nil, {"job-only"}, {"job", "accepted", "extra"}} {
-		err := outcomeCommand(context.Background(), postgres.Store{}, nil, githubapi.Client{}, args, io.Discard)
-		if err == nil || err.Error() != "outcome requires: JOB_ID <accepted|rejected|abandoned>" {
+func TestAbandonGrammarExposesOneExactBoundary(t *testing.T) {
+	for _, args := range [][]string{nil, {"job", "extra"}} {
+		err := abandon(context.Background(), postgres.Store{}, nil, githubapi.Client{}, args, io.Discard)
+		if err == nil || err.Error() != "abandon requires one Job ID" {
 			t.Fatalf("args=%v err=%v", args, err)
 		}
 	}

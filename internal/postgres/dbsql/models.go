@@ -8,6 +8,15 @@ import (
 	"database/sql"
 )
 
+// One exact-Revision GitHub proposal projection per Job
+type DorfGithubProposal struct {
+	JobID            string
+	PRNumber         int64
+	PRURL            string
+	ProposedRevision string
+	BodyDigest       string
+}
+
 type DorfReviewRunProjection struct {
 	ID                    string
 	JobID                 string
