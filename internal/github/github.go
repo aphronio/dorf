@@ -405,7 +405,14 @@ func (c Client) request(ctx context.Context, token, method, endpoint string, bod
 		return response.StatusCode, redact(err, token)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return response.StatusCode, fmt.Errorf("GitHub REST %s %s failed with status %d", method, endpoint, response.StatusCode)
+		var failure struct {
+			Message string `json:"message"`
+		}
+		detail := ""
+		if json.Unmarshal(contents, &failure) == nil && strings.TrimSpace(failure.Message) != "" {
+			detail = ": " + strings.TrimSpace(failure.Message)
+		}
+		return response.StatusCode, redact(fmt.Errorf("GitHub REST %s %s failed with status %d%s", method, endpoint, response.StatusCode, detail), token)
 	}
 	if output != nil && len(contents) != 0 {
 		if err := json.Unmarshal(contents, output); err != nil {
