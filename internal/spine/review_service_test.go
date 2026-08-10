@@ -36,11 +36,11 @@ func TestReviewAttemptKeepsItsExactRequestMessage(t *testing.T) {
 	}
 }
 
-func TestReviewEvidenceObservesAgentRunAndExactPostReviewTreeWithoutCopyingFeedback(t *testing.T) {
+func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedback(t *testing.T) {
 	blobs := evidence.Store{Root: t.TempDir()}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	post := ReviewWorkspaceObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	post := ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	run := ReviewRunView{AgentRun: AgentRun{
 		ID: "agent-run-review", JobID: "job-1", Revision: revision, Role: "critical-boundary",
 		Capability: ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
@@ -62,7 +62,7 @@ func TestReviewEvidenceObservesAgentRunAndExactPostReviewTreeWithoutCopyingFeedb
 	if err := json.Unmarshal(contents, &artifact); err != nil {
 		t.Fatal(err)
 	}
-	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, PostState: post}
+	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: post}
 	if artifact != want {
 		t.Fatalf("review observation = %#v, want %#v", artifact, want)
 	}

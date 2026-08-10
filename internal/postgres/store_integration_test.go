@@ -1008,13 +1008,12 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 		}
 	}
 	tree := strings.Repeat("d", 40)
-	workspacePath := "/review/" + run.ID
-	workspace, err := store.BeginReviewWorkspace(ctx, run.ID)
+	checkout, err := store.BeginReviewCheckout(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if workspace.State != spine.ActionSucceeded {
-		if err := store.CompleteAction(ctx, workspace.ID, spine.Receipt{ExternalID: workspacePath, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
+	if checkout.State != spine.ActionSucceeded {
+		if err := store.CompleteAction(ctx, checkout.ID, spine.Receipt{ExternalID: run.Sandbox.ID, Outcome: run.Revision + " " + tree + " clean"}); err != nil {
 			t.Fatal(err)
 		}
 	}

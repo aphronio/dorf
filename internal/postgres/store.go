@@ -517,7 +517,7 @@ func (s Store) BeginResourceAction(ctx context.Context, sandboxID string, kind s
 		return spine.Action{}, err
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRouteCreate, spine.ActionReviewWorkspaceCreate, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
 	default:
 		return spine.Action{}, fmt.Errorf("unsupported resource Action %q", kind)
 	}
@@ -1133,9 +1133,9 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			break
 		}
 		err = expectOneRows(queries.MarkSandboxDeleted(ctx, scope))
-	case spine.ActionReviewWorkspaceCreate:
-		if scope == "" || strings.TrimSpace(receipt.ExternalID) == "" {
-			err = fmt.Errorf("review workspace receipt has no materialized path")
+	case spine.ActionReviewCheckout:
+		if scope == "" || receipt.ExternalID != scope {
+			err = fmt.Errorf("review checkout receipt conflicts with its exact Sandbox identity")
 			break
 		}
 		expected, getErr := queries.GetReviewRevisionBySandbox(ctx, scope)
@@ -1145,7 +1145,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 		}
 		parts := strings.Fields(receipt.Outcome)
 		if len(parts) != 3 || parts[2] != "clean" || !expected.Valid || parts[0] != expected.String || !ValidRevision(parts[1]) {
-			err = fmt.Errorf("review workspace receipt conflicts with its exact Revision/tree/clean state")
+			err = fmt.Errorf("review checkout receipt conflicts with its exact Revision/tree/clean state")
 		}
 	}
 	if err != nil {

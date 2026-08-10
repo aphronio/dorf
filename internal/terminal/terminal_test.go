@@ -123,7 +123,7 @@ func (r *localReviewBoundaryRunner) Run(ctx context.Context, command string, inp
 	return result, err
 }
 
-func TestReviewMaterializationRealGitIgnoresImplementationForgedReviewWorktree(t *testing.T) {
+func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *testing.T) {
 	root := t.TempDir()
 	implementationPath := filepath.Join(root, "implementation", "workspace", "job")
 	reviewerPath := filepath.Join(root, "reviewer", "workspace", "job")
@@ -146,7 +146,7 @@ func TestReviewMaterializationRealGitIgnoresImplementationForgedReviewWorktree(t
 	runGit("-c", "user.name=Dorf Test", "-c", "user.email=dorf@example.invalid", "commit", "-m", "admitted")
 	revision := runGit("rev-parse", "HEAD")
 	tree := runGit("rev-parse", "HEAD^{tree}")
-	forged := filepath.Join(root, "implementation", "tmp", "dorf", "review-workspaces", "agent-run-forged")
+	forged := filepath.Join(root, "implementation", "tmp", "dorf", "review-checkouts", "agent-run-forged")
 	if err := os.MkdirAll(forged, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -167,17 +167,17 @@ func TestReviewMaterializationRealGitIgnoresImplementationForgedReviewWorktree(t
 	runner := &localReviewBoundaryRunner{implementationName: sandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
 	sandbox.Runner = runner
 	externals := Externals{Sandbox: sandbox}
-	receipt, err := externals.ReviewWorkspaceCreate(context.Background(), job, run, spine.Action{})
+	receipt, err := externals.PrepareReviewCheckout(context.Background(), job, run, spine.Action{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if receipt.Outcome != revision+" "+tree+" clean" {
-		t.Fatalf("materialized state=%q", receipt.Outcome)
+		t.Fatalf("prepared checkout state=%q", receipt.Outcome)
 	}
-	post, err := externals.ReviewWorkspaceVerify(context.Background(), job, run)
-	wantPost := spine.ReviewWorkspaceObservation{Revision: revision, Tree: tree}
-	if err != nil || post != wantPost {
-		t.Fatalf("post-review state=%#v err=%v", post, err)
+	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
+	wantCheckout := spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}
+	if err != nil || checkout != wantCheckout {
+		t.Fatalf("review checkout=%#v err=%v", checkout, err)
 	}
 	contents, err := os.ReadFile(filepath.Join(reviewerPath, "reviewed.txt"))
 	if err != nil || string(contents) != "exact admitted tree\n" {
@@ -205,13 +205,13 @@ func (r *reviewBoundaryRunner) Run(_ context.Context, command string, _ []byte, 
 	if strings.Contains(joined, "dorf-review-source") {
 		return incus.Result{Stdout: "trusted-git-bundle"}, nil
 	}
-	if strings.Contains(joined, "dorf-review-materialize") || strings.Contains(joined, "dorf-review-verify") {
+	if strings.Contains(joined, "dorf-review-checkout") || strings.Contains(joined, "dorf-review-verify") {
 		return incus.Result{Stdout: r.revision + " " + r.tree + " clean\n"}, nil
 	}
 	return incus.Result{}, nil
 }
 
-func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testing.T) {
+func TestPrepareReviewCheckoutUsesSeparateOwnedSandboxAndExactGitState(t *testing.T) {
 	revision, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	job := spine.Job{ID: "job-1", Revision: revision}
 	run := spine.ReviewRunView{
@@ -225,23 +225,23 @@ func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testin
 	externals := Externals{Sandbox: incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}, Runner: runner}}
 	withoutSandbox := run
 	withoutSandbox.SandboxID = ""
-	if _, err := externals.ReviewWorkspaceCreate(context.Background(), job, withoutSandbox, spine.Action{}); err == nil {
-		t.Fatal("review materialization accepted the implementation Sandbox")
+	if _, err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox, spine.Action{}); err == nil {
+		t.Fatal("review checkout accepted the implementation Sandbox")
 	}
-	receipt, err := externals.ReviewWorkspaceCreate(context.Background(), job, run, spine.Action{})
+	receipt, err := externals.PrepareReviewCheckout(context.Background(), job, run, spine.Action{})
 	if err != nil || receipt.ExternalID != run.Sandbox.ID || receipt.Outcome != revision+" "+tree+" clean" {
-		t.Fatalf("review materialization receipt=%#v err=%v", receipt, err)
+		t.Fatalf("review checkout receipt=%#v err=%v", receipt, err)
 	}
-	post, err := externals.ReviewWorkspaceVerify(context.Background(), job, run)
-	if err != nil || post != (spine.ReviewWorkspaceObservation{Revision: revision, Tree: tree}) {
-		t.Fatalf("post-review state=%#v err=%v", post, err)
+	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
+	if err != nil || checkout != (spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}) {
+		t.Fatalf("review checkout=%#v err=%v", checkout, err)
 	}
 	implementationSandbox := externals.Sandbox.Name(job.ID)
 	var sourceImplementation, targetReviewer, verifyReviewer bool
 	for _, call := range runner.calls {
 		joined := strings.Join(call, " ")
 		sourceImplementation = sourceImplementation || strings.Contains(joined, "exec "+implementationSandbox+" --") && strings.Contains(joined, "dorf-review-source")
-		targetReviewer = targetReviewer || strings.Contains(joined, "exec "+run.Sandbox.ID+" --") && strings.Contains(joined, "dorf-review-materialize")
+		targetReviewer = targetReviewer || strings.Contains(joined, "exec "+run.Sandbox.ID+" --") && strings.Contains(joined, "dorf-review-checkout")
 		verifyReviewer = verifyReviewer || strings.Contains(joined, "exec "+run.Sandbox.ID+" --") && strings.Contains(joined, "dorf-review-verify")
 	}
 	if !sourceImplementation || !targetReviewer || !verifyReviewer {

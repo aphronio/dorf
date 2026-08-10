@@ -126,7 +126,7 @@ select exists(
     where ar.id=sqlc.arg(run_id) and s.state='created' and r.state='active'
       and ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
       and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
-          and a.kind='review-workspace-create' and a.scope_key=s.id and a.state='succeeded')
+          and a.kind='review-checkout' and a.scope_key=s.id and a.state='succeeded')
 );
 
 -- name: GetReviewFeedbackMessage :one

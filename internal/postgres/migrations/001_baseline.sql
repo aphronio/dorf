@@ -69,7 +69,7 @@ create table dorf.actions (
     job_id text not null references dorf.jobs(id),
     kind text not null check (kind in (
         'sandbox-create','repository-clone','repository-setup',
-        'repository-push','github-pull-request','review-workspace-create',
+        'repository-push','github-pull-request','review-checkout',
         'provider-route-create','provider-route-revoke','sandbox-delete'
     )),
     state text not null check (state in ('pending','succeeded','failed','uncertain')),

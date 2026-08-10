@@ -67,12 +67,12 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (po
 	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
 }
 
-func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
+func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
 	if run.SandboxID == "" {
-		return spine.Receipt{}, fmt.Errorf("review materialization requires a dedicated reviewer Sandbox")
+		return spine.Receipt{}, fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
 	}
 	if run.Revision != job.Revision {
-		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision")
+		return spine.Receipt{}, fmt.Errorf("review checkout identity conflicts with current Revision")
 	}
 	workspace := e.Sandbox.Config.Workspace
 	if err := e.Sandbox.AttachReviewMetadata(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
@@ -112,22 +112,22 @@ test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"
 printf '%s %s clean\n' "$head" "$tree"`
-	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.Revision)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
 	if result.ExitCode != 0 {
-		return spine.Receipt{}, fmt.Errorf("materialize exact review checkout: %s", strings.TrimSpace(result.Stderr))
+		return spine.Receipt{}, fmt.Errorf("prepare exact review checkout: %s", strings.TrimSpace(result.Stderr))
 	}
 	return spine.Receipt{ExternalID: run.SandboxID, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
-func (e Externals) ReviewWorkspaceVerify(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewWorkspaceObservation, error) {
+func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewCheckoutObservation, error) {
 	if run.SandboxID == "" {
-		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
+		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
 	}
 	if err := e.Sandbox.AttestReview(ctx, run.SandboxID, reviewMetadata(job, run)); err != nil {
-		return spine.ReviewWorkspaceObservation{}, err
+		return spine.ReviewCheckoutObservation{}, err
 	}
 	script := `set -eu
 workspace=$1; revision=$2
@@ -139,13 +139,13 @@ printf '%s %s clean\n' "$head" "$tree"`
 	workspace := e.Sandbox.Config.Workspace
 	result, err := e.Sandbox.Exec(ctx, run.SandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.Revision)
 	if err != nil || result.ExitCode != 0 {
-		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
+		return spine.ReviewCheckoutObservation{}, fmt.Errorf("verify exact review checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
 	fields := strings.Fields(result.Stdout)
 	if len(fields) != 3 || fields[0] != run.Revision || fields[2] != "clean" {
-		return spine.ReviewWorkspaceObservation{}, fmt.Errorf("reviewer checkout returned malformed post-turn attestation")
+		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review checkout returned malformed verification")
 	}
-	return spine.ReviewWorkspaceObservation{Revision: fields[0], Tree: fields[1]}, nil
+	return spine.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
 }
 
 func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {

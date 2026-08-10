@@ -114,7 +114,7 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		Request:           Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
 		FeedbackMessageID: MessageID(jobID, MessageFromAgent, runID),
 	}
-	observed, err := (Service{Evidence: store}).reviewEvidence(run, ReviewWorkspaceObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
+	observed, err := (Service{Evidence: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	if err != nil {
 		t.Fatal(err)
 	}

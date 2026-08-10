@@ -281,9 +281,9 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 		expected := reviewObservationArtifact{
 			AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
 			Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
-			PostState: artifact.PostState,
+			Checkout: artifact.Checkout,
 		}
-		if artifact.PostState.Revision != run.Revision || !fullGitObjectID(artifact.PostState.Tree) {
+		if artifact.Checkout.Revision != run.Revision || !fullGitObjectID(artifact.Checkout.Tree) {
 			fail("observed artifact has no exact Revision checkout identity")
 		}
 		if artifact != expected {

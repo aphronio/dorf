@@ -32,18 +32,18 @@ type ReviewRunView struct {
 }
 
 type reviewObservationArtifact struct {
-	AgentRunID  string                     `json:"agent_run_id"`
-	Revision    string                     `json:"revision"`
-	Role        string                     `json:"role"`
-	Capability  string                     `json:"capability"`
-	Harness     string                     `json:"harness"`
-	ThreadID    string                     `json:"thread_id"`
-	TurnID      string                     `json:"turn_id"`
-	TurnOutcome string                     `json:"turn_outcome"`
-	PostState   ReviewWorkspaceObservation `json:"post_state"`
+	AgentRunID  string                    `json:"agent_run_id"`
+	Revision    string                    `json:"revision"`
+	Role        string                    `json:"role"`
+	Capability  string                    `json:"capability"`
+	Harness     string                    `json:"harness"`
+	ThreadID    string                    `json:"thread_id"`
+	TurnID      string                    `json:"turn_id"`
+	TurnOutcome string                    `json:"turn_outcome"`
+	Checkout    ReviewCheckoutObservation `json:"checkout"`
 }
 
-type ReviewWorkspaceObservation struct {
+type ReviewCheckoutObservation struct {
 	Revision string `json:"revision"`
 	Tree     string `json:"tree"`
 }
@@ -54,7 +54,7 @@ type ReviewStore interface {
 	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
 	ReviewRuns(context.Context, string, string) ([]ReviewRunView, error)
 	AllReviewRuns(context.Context, string) ([]ReviewRunView, error)
-	BeginReviewWorkspace(context.Context, string) (Action, error)
+	BeginReviewCheckout(context.Context, string) (Action, error)
 	ReviewRun(context.Context, string) (ReviewRunView, error)
 	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
 	CompleteReviewFeedback(context.Context, string, string, string) (bool, error)
@@ -62,8 +62,8 @@ type ReviewStore interface {
 
 type ReviewExternals interface {
 	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
-	ReviewWorkspaceCreate(context.Context, Job, ReviewRunView, Action) (Receipt, error)
-	ReviewWorkspaceVerify(context.Context, Job, ReviewRunView) (ReviewWorkspaceObservation, error)
+	PrepareReviewCheckout(context.Context, Job, ReviewRunView, Action) (Receipt, error)
+	VerifyReviewCheckout(context.Context, Job, ReviewRunView) (ReviewCheckoutObservation, error)
 	ReviewInitialTurn(context.Context, Job, ReviewRunView) (HarnessBinding, error)
 	ReviewRecover(context.Context, Job, ReviewRunView) (HarnessBinding, error)
 	ReviewTurns(context.Context, Job, ReviewRunView) (HarnessHistory, error)
