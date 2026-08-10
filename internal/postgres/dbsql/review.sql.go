@@ -188,7 +188,7 @@ func (q *Queries) GetReviewPlanDigestForUpdate(ctx context.Context, arg GetRevie
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, input_revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, sandbox_id, ownership_nonce, submission_nonce
+select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, input_revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, request_admitted_at, sandbox_id, ownership_nonce, submission_nonce
 from dorf.review_run_projection
 where id=$1 and role<>'implement'
 `
@@ -219,6 +219,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, runID string) (DorfReviewRun
 		&i.RequestInput,
 		&i.RequestDeliveryIntent,
 		&i.RequestTargetTurnID,
+		&i.RequestAdmittedAt,
 		&i.SandboxID,
 		&i.OwnershipNonce,
 		&i.SubmissionNonce,
@@ -313,7 +314,7 @@ func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunPa
 }
 
 const listAllReviewRuns = `-- name: ListAllReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -360,6 +361,7 @@ func (q *Queries) ListAllReviewRuns(ctx context.Context, jobID string) ([]ListAl
 			&i.DorfReviewRunProjection.RequestInput,
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
+			&i.DorfReviewRunProjection.RequestAdmittedAt,
 			&i.DorfReviewRunProjection.SandboxID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,
@@ -457,7 +459,7 @@ func (q *Queries) ListReviewPlans(ctx context.Context, jobID string) ([]ListRevi
 }
 
 const listReviewRuns = `-- name: ListReviewRuns :many
-select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
+select p.id, p.job_id, p.message_id, p.state, p.harness, p.thread_id, p.baseline_recorded, p.baseline_turn_id, p.turn_id, p.turn_outcome, p.attention, p.role, p.input_revision, p.capability, p.started_at, p.finished_at, p.request_from_kind, p.request_from_id, p.request_sequence, p.request_input, p.request_delivery_intent, p.request_target_turn_id, p.request_admitted_at, p.sandbox_id, p.ownership_nonce, p.submission_nonce,coalesce(m.id,'') as feedback_message_id,(p.input_revision<>j.revision)::boolean as stale
 from dorf.review_run_projection p
 join dorf.jobs j on j.id=p.job_id
 left join dorf.job_messages m
@@ -509,6 +511,7 @@ func (q *Queries) ListReviewRuns(ctx context.Context, arg ListReviewRunsParams) 
 			&i.DorfReviewRunProjection.RequestInput,
 			&i.DorfReviewRunProjection.RequestDeliveryIntent,
 			&i.DorfReviewRunProjection.RequestTargetTurnID,
+			&i.DorfReviewRunProjection.RequestAdmittedAt,
 			&i.DorfReviewRunProjection.SandboxID,
 			&i.DorfReviewRunProjection.OwnershipNonce,
 			&i.DorfReviewRunProjection.SubmissionNonce,

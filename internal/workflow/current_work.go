@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
@@ -40,6 +41,10 @@ type Work struct {
 	Revision string   `json:"revision,omitempty"`
 	FactID   string   `json:"fact_id,omitempty"`
 	Detail   string   `json:"detail,omitempty"`
+}
+
+type PublicationReadiness interface {
+	AssessReadiness(ctx context.Context, jobID, revision string, intentAt time.Time) (spine.ReadinessAssessment, error)
 }
 
 func (w Work) Description() string {
@@ -95,12 +100,40 @@ type currentWorkFacts struct {
 // CurrentWork derives the one coding-workflow answer used by execution and
 // inspection. Reads may span snapshots; every operation still revalidates its
 // exact owning fact transactionally before recording an effect.
-func CurrentWork(ctx context.Context, store postgres.Store, jobID string) (Work, error) {
+func CurrentWork(ctx context.Context, store postgres.Store, publication PublicationReadiness, jobID string) (Work, error) {
 	facts, err := loadCurrentWorkFacts(ctx, store, jobID)
 	if err != nil {
 		return Work{}, err
 	}
-	return decideCurrentWork(facts), nil
+	return assessPublicationReadiness(ctx, publication, facts, decideCurrentWork(facts))
+}
+
+func assessPublicationReadiness(ctx context.Context, publication PublicationReadiness, facts currentWorkFacts, tentative Work) (Work, error) {
+	if tentative.Kind != WorkPublishProposal {
+		return tentative, nil
+	}
+	if publication == nil {
+		return Work{}, fmt.Errorf("publication readiness is not configured")
+	}
+	assessment, err := publication.AssessReadiness(ctx, facts.job.ID, facts.job.Revision, publicationIntentAt(facts.actions, facts.job.Revision))
+	if err != nil {
+		return Work{}, err
+	}
+	if assessment.Ready {
+		return tentative, nil
+	}
+	tentative.Kind = WorkAttention
+	tentative.Detail = "publication lost exact-Revision readiness: " + assessment.Reason
+	return tentative, nil
+}
+
+func publicationIntentAt(actions []spine.Action, revision string) time.Time {
+	for _, action := range actions {
+		if action.Kind == spine.ActionGitHubPullRequest && action.Scope == revision {
+			return action.CreatedAt
+		}
+	}
+	return time.Time{}
 }
 
 func loadCurrentWorkFacts(ctx context.Context, store postgres.Store, jobID string) (currentWorkFacts, error) {
@@ -252,8 +285,11 @@ func decideCurrentWork(f currentWorkFacts) Work {
 		}
 		return work(WorkDeliverMessage, run.ID, fmt.Sprintf("Message %d", f.delivery.Message.Sequence))
 	}
-	if latest := latestImplementationFollow(f); latest != nil &&
-		(latest.State == spine.AgentRunFailed || latest.State == spine.AgentRunInterrupted || latest.State == spine.AgentRunUncertain) {
+	if latest := latestImplementationFollow(f); latest != nil && latest.State != spine.AgentRunCompleted {
+		// Pending and active Runs normally appear as DeliveryCandidate. If any
+		// nonterminal Run does not, there is no safe delivery operation to
+		// execute from these facts. In particular, a submitting Run must be
+		// reconciled rather than letting Checks race its harness submission.
 		return work(WorkAttention, latest.ID, attentionDetail(f.job, latest.ID, agentRunAttention(*latest)))
 	}
 

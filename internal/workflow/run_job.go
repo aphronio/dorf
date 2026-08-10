@@ -31,7 +31,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		return Work{}, fmt.Errorf("coding workflow requires repository externals")
 	}
 	for {
-		work, err := CurrentWork(ctx, store, jobID)
+		work, err := CurrentWork(ctx, store, proposal.Publication, jobID)
 		if err != nil {
 			return Work{}, err
 		}

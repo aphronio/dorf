@@ -44,13 +44,11 @@ not execute a mutable network installer.
 8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
    VMs and candidate alias.
 
-This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. Before
-cleanup, the validator requires no repository-commit Action: implementation commits belong to the
-AgentRun, and that Action kind no longer exists. The expected unchanged tree leaves the starting
-Revision current at generation zero and records the unchanged observation after the completed
-AgentRun, before any Checks, review AgentRuns, or proposal. Inspection derives that the Message was
-handled without a committed change from the Evidence; it does not require a stored workflow phase
-or attention. Retained evidence
+This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. The expected
+unchanged tree leaves the starting Revision current at generation zero and records the unchanged
+observation after the completed AgentRun, before any Checks, review AgentRuns, or proposal.
+Inspection derives that the Message was handled without a committed change from the Evidence; it
+does not require a stored workflow phase or attention. Retained evidence
 labels Checks, review, and publication as not run or claimed. Evidence must name the exact AgentRun
 and source Revision, so another Job's attention cannot satisfy the proof. The separate final cutover dogfood
 owns exact-Revision Checks and Evidence, selected review, repair, publication, outcome, and cleanup.

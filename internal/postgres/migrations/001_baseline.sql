@@ -232,6 +232,7 @@ select
     request.input as request_input,
     request.delivery_intent as request_delivery_intent,
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
+    request.admitted_at as request_admitted_at,
     ar.sandbox_id as sandbox_id,
     sandbox.ownership_nonce as ownership_nonce,
     coalesce(ar.submission_nonce,'') as submission_nonce

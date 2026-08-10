@@ -78,9 +78,8 @@ jq -e --arg source "$SOURCE_COMMIT" '
     (.started_at | length > 0) and
     (.finished_at | length > 0)
   )) and
-  ([.observed_facts.actions[] | select(.kind == "repository-commit")] | length == 0) and
   (.observed_facts.checks | length == 0) and
-  (.review_agent_runs | length == 0) and
+  ([.observed_facts.agent_runs[] | select(.role != "implement")] | length == 0) and
   .proposal == null
 ' <<<"$INSPECTION" >/dev/null
 

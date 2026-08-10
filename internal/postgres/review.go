@@ -212,6 +212,7 @@ func reviewRunView(row dbsql.DorfReviewRunProjection) spine.ReviewRunView {
 		Request: messageFromValues(row.MessageID, row.JobID, spine.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, spine.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
 		Sandbox: spine.Sandbox{ID: row.SandboxID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce},
 	}
+	view.Request.AdmittedAt = row.RequestAdmittedAt
 	view.Route = spine.RouteForSandbox(view.Sandbox)
 	if row.StartedAt.Valid {
 		view.StartedAt = row.StartedAt.Time

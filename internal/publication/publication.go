@@ -47,6 +47,70 @@ type AttentionError struct{ Reason string }
 
 func (e *AttentionError) Error() string { return e.Reason }
 
+type readinessView struct {
+	Assessment spine.ReadinessAssessment
+	Checks     []spine.Check
+	Evidence   []spine.Evidence
+	ReviewRuns []spine.ReviewRunView
+}
+
+// AssessReadiness is the single publication-readiness projection shared by
+// workflow decisions and external-effect reconciliation. intentAt is zero
+// before publication starts; once Actions exist it preserves their admitted
+// input boundary so a later accepted Message cannot strand reconciliation.
+func (s Service) AssessReadiness(ctx context.Context, jobID, revision string, intentAt time.Time) (spine.ReadinessAssessment, error) {
+	job, err := s.Store.Job(ctx, jobID)
+	if err != nil {
+		return spine.ReadinessAssessment{}, err
+	}
+	if job.Revision != revision {
+		return spine.ReadinessAssessment{}, fmt.Errorf("publication readiness Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
+	}
+	view, err := s.readiness(ctx, job, intentAt)
+	return view.Assessment, err
+}
+
+func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Time) (readinessView, error) {
+	var view readinessView
+	declared, err := s.Store.DeclaredChecks(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	view.Checks, err = s.Store.Checks(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	view.Evidence, err = s.Store.Evidence(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	plans, err := s.Store.ReviewPlans(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	view.ReviewRuns, err = s.Store.AllReviewRuns(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	messages, err := s.Store.Messages(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	agentRuns, err := s.Store.AgentRuns(ctx, job.ID)
+	if err != nil {
+		return view, err
+	}
+	messages, agentRuns = publicationInputsAt(messages, agentRuns, intentAt)
+	var plan *spine.ReviewPlanRecord
+	for i := range plans {
+		if plans[i].Revision == job.Revision {
+			plan = &plans[i]
+		}
+	}
+	view.Assessment = spine.AssessReviewReadiness(job, declared, view.Checks, view.Evidence, s.Evidence, plan, view.ReviewRuns, messages, agentRuns)
+	return view, nil
+}
+
 // Push reconciles and, when necessary, pushes the Job's exact Revision. It
 // owns no scheduling: its caller decides when this independently recoverable
 // effect is eligible to run.
@@ -68,6 +132,13 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	pushAction, _, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
 	if err != nil {
 		return err
+	}
+	readiness, err := s.AssessReadiness(ctx, job.ID, job.Revision, pushAction.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if !readiness.Ready || readiness.Revision != job.Revision {
+		return s.block(ctx, job, pushAction, "publication lost exact-Revision readiness: "+readiness.Reason)
 	}
 	authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 	if _, present, err := s.GitHub.RemoteHead(ctx, authority, job.BaseBranch); err != nil {
@@ -142,46 +213,14 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if err != nil {
 		return err
 	}
-	declared, err := s.Store.DeclaredChecks(ctx, job.ID)
+	readiness, err := s.readiness(ctx, job, pullAction.CreatedAt)
 	if err != nil {
 		return err
 	}
-	checks, err := s.Store.Checks(ctx, job.ID)
-	if err != nil {
-		return err
+	if !readiness.Assessment.Ready || readiness.Assessment.Revision != job.Revision {
+		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+readiness.Assessment.Reason)
 	}
-	records, err := s.Store.Evidence(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	plans, err := s.Store.ReviewPlans(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	runs, err := s.Store.AllReviewRuns(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	messages, err := s.Store.Messages(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	agentRuns, err := s.Store.AgentRuns(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	messages, agentRuns = publicationInputsAt(messages, agentRuns, pullAction.CreatedAt)
-	var plan *spine.ReviewPlanRecord
-	for i := range plans {
-		if plans[i].Revision == job.Revision {
-			plan = &plans[i]
-		}
-	}
-	assessment := spine.AssessReviewReadiness(job, declared, checks, records, s.Evidence, plan, runs, messages, agentRuns)
-	if !assessment.Ready || assessment.Revision != job.Revision {
-		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+assessment.Reason)
-	}
-	body := Body(job, assessment, checks, records, runs)
+	body := Body(job, readiness.Assessment, readiness.Checks, readiness.Evidence, readiness.ReviewRuns)
 	bodyDigest := BodyDigest(body)
 	title := Title(job.Goal)
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
@@ -235,7 +274,7 @@ func publicationInputsAt(messages []spine.MessageView, runs []spine.AgentRun, st
 	retainedMessages := make([]spine.MessageView, 0, len(messages))
 	retainedIDs := make(map[string]struct{}, len(messages))
 	for _, message := range messages {
-		if message.AdmittedAt.After(startedAt) {
+		if !startedAt.IsZero() && message.AdmittedAt.After(startedAt) {
 			continue
 		}
 		retainedMessages = append(retainedMessages, message)

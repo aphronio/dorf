@@ -13,9 +13,7 @@ import (
 )
 
 const (
-	BarrierReviewCheckoutReady = "review-checkout-ready-before-record"
-	BarrierReviewFeedbackReady = "review-feedback-ready-before-record"
-	reviewEvidenceProducer     = "dorf-agent-review"
+	reviewEvidenceProducer = "dorf-agent-review"
 )
 
 type reviewBoundaryError string
@@ -106,9 +104,6 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	}
 	observed, err := s.reviewEvidence(run, checkout)
 	if err != nil {
-		return outcome, err
-	}
-	if err := s.reachWorkflow(ctx, BarrierReviewFeedbackReady, job.ID, run.ID); err != nil {
 		return outcome, err
 	}
 	if _, _, err := store.RecordReviewFeedback(ctx, run.ID, outcome, observed); err != nil {
@@ -251,9 +246,6 @@ func (s Service) ensureReviewCheckout(ctx context.Context, job Job, original Rev
 	}
 	if checkout.State != ActionSucceeded {
 		if err := externals.PrepareReviewCheckout(ctx, job, original); err != nil {
-			return err
-		}
-		if err := s.reachWorkflow(ctx, BarrierReviewCheckoutReady, job.ID, original.ID); err != nil {
 			return err
 		}
 		if err := s.requireClaim(ctx); err != nil {

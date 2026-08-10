@@ -53,6 +53,7 @@ type DorfReviewRunProjection struct {
 	RequestInput          string
 	RequestDeliveryIntent string
 	RequestTargetTurnID   string
+	RequestAdmittedAt     time.Time
 	SandboxID             string
 	OwnershipNonce        string
 	SubmissionNonce       string

@@ -95,7 +95,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "inspect":
-		return inspect(ctx, store, client, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
+		evidenceStore := evidence.Store{Root: cfg.EvidenceRoot}
+		return inspect(ctx, store, client, publication.Service{Store: store, Evidence: evidenceStore}, evidenceStore, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
 	case "cleanup":
@@ -484,7 +485,7 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	return err
 }
 
-func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, publicationReadiness workflow.PublicationReadiness, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
@@ -498,7 +499,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
-	currentWork, err := workflow.CurrentWork(ctx, store, job.ID)
+	currentWork, err := workflow.CurrentWork(ctx, store, publicationReadiness, job.ID)
 	if err != nil {
 		return err
 	}

@@ -1,11 +1,23 @@
 package workflow
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+type publicationReadinessStub struct {
+	assessment spine.ReadinessAssessment
+	intentAt   time.Time
+}
+
+func (s *publicationReadinessStub) AssessReadiness(_ context.Context, _, _ string, intentAt time.Time) (spine.ReadinessAssessment, error) {
+	s.intentAt = intentAt
+	return s.assessment, nil
+}
 
 func readyFacts() currentWorkFacts {
 	job := spine.Job{ID: "job-1", Revision: "rev-1", AdmissionOpen: true}
@@ -179,5 +191,70 @@ func TestLaterSuccessfulFollowRecoversEarlierFailure(t *testing.T) {
 	facts.runs[1].State = spine.AgentRunFailed
 	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "run-2" {
 		t.Fatalf("CurrentWork = %#v, want latest failed Follow attention", got)
+	}
+}
+
+func TestLatestImplementationFollowStateCannotFallThrough(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    spine.AgentRunState
+		observed bool
+		want     WorkKind
+	}{
+		{name: "pending without delivery candidate", state: spine.AgentRunPending, want: WorkAttention},
+		{name: "submitting", state: spine.AgentRunSubmitting, want: WorkAttention},
+		{name: "active without delivery candidate", state: spine.AgentRunActive, want: WorkAttention},
+		{name: "failed", state: spine.AgentRunFailed, want: WorkAttention},
+		{name: "interrupted", state: spine.AgentRunInterrupted, want: WorkAttention},
+		{name: "uncertain", state: spine.AgentRunUncertain, want: WorkAttention},
+		{name: "completed awaits Git observation", state: spine.AgentRunCompleted, want: WorkObserveRevision},
+		{name: "completed and observed may run Checks", state: spine.AgentRunCompleted, observed: true, want: WorkRunChecks},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts := readyFacts()
+			facts.checks = nil
+			facts.reviewPlan = nil
+			message := spine.Message{ID: "message-1", Sequence: 1, Intent: spine.MessageFollow}
+			run := spine.AgentRun{ID: "run-1", MessageID: message.ID, Role: "implement", State: test.state, InputRevision: facts.job.Revision}
+			facts.messages = []spine.MessageView{{Message: message}}
+			facts.runs = []spine.AgentRun{run}
+			wantFactID := run.ID
+			if test.observed {
+				facts.runs[0].InputRevision = "rev-0"
+				facts.evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: run.ID, Revision: facts.job.Revision}}
+				wantFactID = spine.CheckID(facts.job.ID, facts.job.Revision, "check")
+			}
+			got := decideCurrentWork(facts)
+			if got.Kind != test.want || got.FactID != wantFactID {
+				t.Fatalf("CurrentWork = %#v, want kind %s owned by latest safe fact", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
+	facts := readyFacts()
+	startedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	facts.actions = append(facts.actions, spine.Action{
+		Kind:      spine.ActionGitHubPullRequest,
+		State:     spine.ActionUnsettled,
+		Scope:     facts.job.Revision,
+		CreatedAt: startedAt,
+	})
+	tentative := decideCurrentWork(facts)
+	if tentative.Kind != WorkPublishProposal {
+		t.Fatalf("tentative CurrentWork = %#v, want publication", tentative)
+	}
+	readiness := &publicationReadinessStub{assessment: spine.ReadinessAssessment{Reason: "Evidence digest does not match"}}
+	got, err := assessPublicationReadiness(context.Background(), readiness, facts, tentative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != WorkAttention || got.Detail != "publication lost exact-Revision readiness: Evidence digest does not match" {
+		t.Fatalf("CurrentWork = %#v, want publication readiness attention", got)
+	}
+	if readiness.intentAt != startedAt {
+		t.Fatalf("publication readiness intent = %s, want PR Action creation %s", readiness.intentAt, startedAt)
 	}
 }
