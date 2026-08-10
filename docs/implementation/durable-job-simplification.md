@@ -313,50 +313,141 @@ scoped route and Sandbox, observed agent-created Revision
 Closing the disposable PR recorded a rejected Outcome, revoked the route, and deleted the Sandbox.
 The durable Job retained the Provider Connection name and no host filesystem locator.
 
-## Slice 5: Isolate Cleanup
+## Slice 5: Let AgentRun own its native execution
 
-Goal: leave Cleanup as the only independently scheduled, observable lifecycle task.
+Goal: make one AgentRun the complete durable record of one agent invocation, without a paired Action
+describing the same submission.
 
-- [ ] Close admission and request cancellation before cleanup starts destructive reconciliation.
+```text
+Message -> AgentRun -> native Session and turn
+                    -> observed Evidence
+                    -> feedback Message when the Role is review
+```
+
+- [ ] Remove the paired `codex-turn-start` Action and `agent_runs.action_id` synchronization.
+- [ ] Remove the separate Session-start Action; retain the implementation Session binding as its own
+      product fact and each AgentRun's exact native Session/turn binding.
+- [ ] Tie native observation Evidence directly to its AgentRun.
+- [ ] Keep reviewer output only as the ordinary agent Message delivered to the implementation Session;
+      delete the duplicate claim-Evidence copy.
+- [ ] Retain real AgentRun inputs and recovery identities: Role, Revision, capability, exact input
+      contract, native baseline, Session/turn IDs, ownership nonce, and submission nonce.
+- [ ] Delete adapter-owned or derived AgentRun fields: persisted workspace path, input digest, copied
+      controller identity, and unused review token/cost/yield telemetry.
+- [ ] Shrink review readiness to completed AgentRun, exact feedback Message, verified native Evidence,
+      and the required read-only capability/Revision facts.
+- [ ] Delete Action/AgentRun state synchronization tests and replace them with one shared native
+      submission/recovery contract.
+- [ ] Dogfood one implementation AgentRun and one selected review AgentRun whose text returns through
+      Message.
+
+Terminal: implementation and review use one AgentRun durability mechanism; no second Action or claim
+artifact describes the same invocation.
+
+## Slice 6: Unify owned resources and isolate Cleanup
+
+Goal: leave Cleanup as the only independently scheduled lifecycle task and give it one inventory of
+exact resources owned by a Job or AgentRun.
+
+```text
+Job or AgentRun
+  -> owned Sandbox
+  -> owned provider Route
+  -> stable create and cleanup Actions
+```
+
+- [ ] Represent main and reviewer Sandboxes through one concrete owned-Sandbox shape.
+- [ ] Represent main and reviewer provider Routes through one concrete owned-Route shape.
+- [ ] Retain exact external identities and lifecycle facts needed for reconciliation; derive stable
+      Action IDs instead of copying them into review resource rows.
+- [ ] Delete copied reviewer Sandbox/Route/checkout/post-review states when Actions or verified Evidence
+      already own the fact.
+- [ ] Close admission and request cancellation before destructive cleanup reconciliation starts.
 - [ ] Reconcile unsettled AgentRuns and Actions before deleting resources.
-- [ ] Represent reviewer and main provider routes as one list of owned resources with revoke Actions.
-- [ ] Represent reviewer and main Sandboxes as one list of owned resources with delete Actions.
-- [ ] Use the same external Action executor as the ordinary and publication paths.
-- [ ] Record cleanup attention or completion as a Dorf product fact.
-- [ ] Use stable cleanup Action identities and Absurd retry.
-- [ ] Delete duplicated per-resource cleanup orchestration, broad Job fencing, and task-state mirrors.
-- [ ] Consolidate cleanup tests around partial success and retry.
+- [ ] Revoke every owned Route and delete every owned Sandbox through one cleanup loop and the shared
+      external Action executor.
+- [ ] Keep Cleanup as its own observable Absurd task with stable Action identities, attention,
+      retry, and explicit completion.
+- [ ] Delete the separate main/reviewer cleanup algorithms, broad Job fencing, and the superseded
+      `review_resources` projection.
+- [ ] Replace duplicated cleanup choreography tests with exact-identity, partial-success, attention,
+      and retry-convergence stories.
+- [ ] Dogfood terminal Outcome cleanup with at least one reviewer resource present.
 
-Terminal: cleanup can fail visibly, retry safely, and eventually prove that all owned resources are
-gone.
+Terminal: cleanup can fail visibly, retry safely, and eventually prove that every exact owned resource
+is gone through one path.
 
-## Slice 6: Delete the old program counter and shrink the tests
+## Slice 7: Store GitHub authority once
 
-Goal: leave one obvious workflow story with no second durable scheduler in Dorf.
+Goal: keep admitted repository authority on the Job and retain only new Proposal and Outcome facts.
 
-- [ ] Remove `workflow_phase` as sequencing authority.
-- [ ] Derive the next operation from retained product facts: resources, AgentRuns, Revisions, Checks,
+```text
+Job      -> repository, installation, base branch, head branch
+Proposal -> PR number, URL, exact Revision, body digest
+Outcome  -> kind, external observation, merge commit, observed time
+```
+
+- [ ] Remove repository, installation, base-branch, and head-branch copies from Proposal and Outcome.
+- [ ] Remove `observed_remote_head`; recording already requires the PR head to equal the proposed
+      Revision.
+- [ ] Keep the PR body digest on Proposal only; do not copy it into the PR Action outcome.
+- [ ] Remove Outcome copies that are fixed by Proposal identity, while retaining the external
+      observation needed to prove accepted, rejected, or abandoned.
+- [ ] Join immutable Job and Proposal authority when reconciling, rendering, or recording Outcome.
+- [ ] Align CLI and documentation with the live flow: merge/close is observed automatically and the
+      explicit human command is for abandonment.
+- [ ] Consolidate identity-copy tests into exact-Revision proposal, outcome, and concurrency stories.
+- [ ] Dogfood one exact-Revision PR through close or merge and terminal cleanup.
+
+Terminal: changing one admitted GitHub authority fact requires changing one row, and Proposal/Outcome
+contain no second copies to reconcile.
+
+## Slice 8: Delete the old program counter
+
+Goal: let retained product facts tell `RunJob` what comes next instead of a second durable scheduler.
+
+- [ ] Remove `workflow_phase` from Job, PostgreSQL, SQL transitions, readiness, and inspection.
+- [ ] Derive the next operation from owned resources, Messages, AgentRuns, Revisions, Checks,
       ReviewPlans, Proposals, Outcomes, and cleanup receipts.
-- [ ] Remove review and repair counters; derive follow-up history from Messages, AgentRuns, and review
-      provenance.
-- [ ] Replace copied run/publication/cleanup task columns with one minimal task-handle shape, or remove
-      them where Absurd identity is sufficient.
-- [ ] Remove duplicated Action outcome prose when immutable Evidence already owns the detail.
-- [ ] Remove review resource Action-ID and state columns that are deterministic or already represented
-      by Actions and receipts.
-- [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B; remove the
-      remaining review-oriented disposition once Slice 3B no longer needs it.
-- [ ] Remove remaining task attachment and cancellation plumbing made unnecessary by the final task
-      shape.
-- [ ] Add one central Job inspection read model.
-- [ ] Keep a small set of end-to-end product-story tests.
-- [ ] Keep pure policy, readiness, identity, and publication decision tests.
-- [ ] Keep one shared external-Action crash/reconciliation contract test.
-- [ ] Delete private-helper, phase-transition, duplicated status-matrix, and raw-row behavioral tests.
-- [ ] Report before/after production LOC and name any remaining complexity centers.
+- [ ] Keep explicit workflow attention as an operator-visible fact without coupling it to a phase.
+- [ ] Remove `RunDisposition`; admission closure and retained facts already describe whether the task
+      should continue, wait, or finish.
+- [ ] Drive setup retry from the selected failed setup Action and explicit operator Message rather than
+      a blocked phase.
+- [ ] Derive the starting Revision from Revision generation zero instead of storing a second copy on
+      Job.
+- [ ] Retain only the main and cleanup Absurd task handles while public cancellation and inspection
+      require them; do not mirror task state.
+- [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B.
+- [ ] Delete phase-transition helpers, CAS branches, fixtures, and tests as fact-derived decisions become
+      authoritative.
+- [ ] Dogfood the whole implementation, check, review, proposal, Outcome, and cleanup sequence.
 
-Terminal: the main task reads in the same order as the target flow, and tests protect product promises
-rather than internal choreography.
+Terminal: the main task reads in target-flow order and no Dorf-owned phase value decides eligibility.
+
+## Slice 9: Make inspection and tests tell the product story
+
+Goal: finish with a small human surface and tests that protect promises rather than choreography.
+
+- [ ] Make default `inspect` show goal, current Revision, current work or attention, Proposal/Outcome,
+      and cleanup.
+- [ ] Keep deep machine facts under `inspect --json`; use `absurdctl` for task runs, attempts,
+      checkpoints, waits, and leases.
+- [ ] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
+      output.
+- [ ] Keep compact PostgreSQL-backed stories for Message/Session, Check feedback, review feedback,
+      Proposal/Outcome, and exact cleanup/retry.
+- [ ] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
+      fault tests.
+- [ ] Delete remaining private-helper, phase-transition, duplicated status-matrix, raw-row,
+      formatting, and inspect-prose tests.
+- [ ] Delete matched obsolete tests during every earlier slice; leave only the final presentation and
+      overlap sweep here.
+- [ ] Correct all setup and lifecycle examples to match automatic PR Outcome observation and cleanup.
+- [ ] Report final production/test/schema LOC and name any remaining complexity centers.
+
+Terminal: a user can understand a Job without reading implementation state, and the small test suite
+protects the same story shown by the workflow.
 
 ## Issue #94 closure gate
 
