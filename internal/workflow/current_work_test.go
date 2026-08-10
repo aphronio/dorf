@@ -258,3 +258,19 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 		t.Fatalf("publication readiness intent = %s, want PR Action creation %s", readiness.intentAt, startedAt)
 	}
 }
+
+func TestCurrentWorkHistoryNeverOverridesReadyFacts(t *testing.T) {
+	facts := readyFacts()
+	facts.actions = append(facts.actions, spine.Action{
+		Kind: spine.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "rev-0",
+		CreatedAt: time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+	})
+	readiness := &publicationReadinessStub{assessment: spine.ReadinessAssessment{Ready: true}}
+	got, err := assessPublicationReadiness(context.Background(), readiness, facts, decideCurrentWork(facts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != WorkPublishProposal {
+		t.Fatalf("CurrentWork = %#v, want exact-ready publication despite older workflow history", got)
+	}
+}
