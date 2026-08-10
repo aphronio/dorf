@@ -301,10 +301,17 @@ Goal: make one deployment configuration the obvious Provider Gateway authority.
 - [x] Retain only the Provider Connection name in Job data.
 - [x] Delete the Gateway filesystem locator from the domain, baseline schema, SQL projections, inspect
       output, runtime overrides, and tests.
-- [ ] Remove the temporary local compatibility symlink and dogfood a small Job without a path override.
+- [x] Remove the temporary local compatibility symlink and dogfood a small Job without a path override.
 
 Terminal: a fresh default installation connects and runs a Job through one Gateway location, while no
 host filesystem path is stored in or exposed by the Job.
+
+Live proof (2026-08-10): with no path override and no compatibility symlink, Job
+`job-ee3649bcad1a008434f8` found `personal-chatgpt` through the default XDG data location, created a
+scoped route and Sandbox, observed agent-created Revision
+`3e9facdc3db1f61e3069624eb02864857ed04292`, passed both checks, and created exact-Revision PR #107.
+Closing the disposable PR recorded a rejected Outcome, revoked the route, and deleted the Sandbox.
+The durable Job retained the Provider Connection name and no host filesystem locator.
 
 ## Slice 5: Isolate Cleanup
 
