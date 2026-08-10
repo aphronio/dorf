@@ -524,6 +524,25 @@ feedback unchanged in the implementation Thread. Dorf proposed GitHub PR #116, o
 closed/not-merged state as a rejected Outcome, then revoked both Routes and deleted both Sandboxes;
 the main and cleanup Absurd tasks both completed.
 
+Expanded dogfood matrix (2026-08-10):
+
+- Job `job-f91109766db4e3e47967` took the documentation-only/no-review path through PR #117.
+- Job `job-4ce4e8197c758896b0dc` accepted a second human Message while implementation was active;
+  both ran once in FIFO order on one Thread and produced one batch Revision before PR #120.
+- Job `job-ffa3afacbccd28c1a8f6` recorded an unchanged first attempt as derived attention, then a human
+  follow resumed the same Thread and continued through PR #118.
+- Job `job-af0f0aa9139b8501d5c8` admitted trusted PR comment `5242694451`, reacted to it, reused the
+  implementation Thread, produced a second Revision, reran Checks and review, updated PR #119, and
+  posted a quoted completion reply naming the exact Revision.
+- Job `job-71d7ff0fd285bae302e7` survived a worker stop during an active AgentRun. The replacement
+  reconciled the same Thread and Turn, completed two Revision/review cycles, and proposed PR #121.
+
+Every PR was closed to exercise the rejected Outcome. All five main tasks and cleanup tasks completed,
+and every exact Route and Sandbox was absent afterward. The matrix found and fixed three fact-boundary
+bugs: nonterminal implementation runs could fall through to Checks, reviewer request projections omitted
+Message admission time, and publication could begin before full Evidence-blob readiness. It also deleted
+two unreachable review proof barriers and obsolete image-validator vocabulary.
+
 ## Slice 9: Make inspection and tests tell the product story
 
 Goal: finish with a small human surface and tests that protect promises rather than choreography.
@@ -538,6 +557,14 @@ Goal: finish with a small human surface and tests that protect promises rather t
       checkpoints, waits, and leases.
 - [x] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
       output.
+- [ ] Make feedback and delivery explanations derive only from Messages and AgentRuns; delete joined
+      `FeedbackMessageID`, role-specific AgentRun identity, and the second FIFO/blocking projection.
+- [ ] Replace runtime Store/External capability assertions with one compile-time service boundary after
+      trimming methods the service does not call.
+- [ ] Remove copied read-model fields whose source facts are already loaded (`RevisionGeneration`, stale
+      flags, derived reviewer Route, and readiness status text).
+- [ ] Load one concrete inspection snapshot for CurrentWork, readiness, history, and JSON instead of
+      querying the same facts twice; do not turn it into a generic graph framework.
 - [ ] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
       Proposal/Outcome, and exact cleanup/retry.
 - [ ] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
