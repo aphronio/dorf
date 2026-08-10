@@ -86,6 +86,17 @@ func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
 	}
 }
 
+func TestHistoricalAttentionDoesNotBecomeWorkflowAuthority(t *testing.T) {
+	facts := readyFacts()
+	facts.job.WorkflowAttention = "historical failure"
+	facts.job.WorkflowAttentionSource = spine.CheckID(facts.job.ID, "rev-0", "check")
+	facts.checks = nil
+
+	if got := decideCurrentWork(facts); got.Kind != WorkRunChecks {
+		t.Fatalf("CurrentWork = %#v, want current Revision Check", got)
+	}
+}
+
 func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	tests := []struct {
 		name      string
