@@ -12,7 +12,7 @@ SQLite schemas, Python APIs, CLI shapes, and document formats may be discarded.
 ## System shape
 
 The core is a Go application using Absurd on PostgreSQL for durable execution. Incus is the first
-Sandbox provider, Codex app-server is the first Agent runner, and GitHub remains authoritative for
+Sandbox provider, Codex app-server is the first agent Harness, and GitHub remains authoritative for
 the proposed coding deliverable.
 
 ```mermaid
@@ -39,9 +39,9 @@ be understood.
 
 | Fact | Authority |
 | --- | --- |
-| Job goal, lifecycle, current Revision, Session binding, inbox order, selected ReviewPlan, and terminal outcome | Dorf-owned PostgreSQL tables |
+| Job goal, lifecycle, current Revision, inbox order, selected ReviewPlan, AgentRun inputs/state and exact Harness/Thread/Turn binding, and terminal outcome | Dorf-owned PostgreSQL tables |
 | Task claims, runs, checkpoints, retry schedule, sleeps, and wake events | Absurd schema in the same PostgreSQL deployment |
-| Agent transcript, native tool items, and resumable conversation identifier | The selected agent harness |
+| Agent transcript, harness tool items, and Thread and Turn history | The selected agent Harness |
 | Mutable checkout, running processes, and local build output | The Job's Sandbox |
 | Branch, commits, pull request, review state, and merge result | Git and GitHub |
 | Retained proof | Content-addressed Evidence referenced by Dorf records and pinned to a Revision |
@@ -65,40 +65,49 @@ durable task sequences explicit, named phases; it does not contain a generic use
   a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
   Dorf keeps only product facts and Action receipts. The spine exposes single operations to this
   coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
-  `workflow_phase` remains a transitional domain guard until Slice 6; no second service-layer
+  `workflow_phase` remains a transitional domain guard until Slice 8; no second service-layer
   coordinator or publication task interprets it. Publication is two direct main-task Steps backed by
   stable Actions. Absurd's public retry resumes that task after an operator resolves attention.
-- Judgment executes as an AgentRun with a bounded Role, input Revision, capability envelope, and
-  ordinary text input and output.
-- AgentRuns in the original implementation Session create one or many commits when they change
-  code. On completion, Dorf validates a clean checkout. A descendant `HEAD` becomes the next exact
-  Revision; unchanged `HEAD` records that the Message was handled without a code change.
-- A Job-local Session is reused for the initial goal and later user, Check, and reviewer Messages.
-  Absurd retry of infrastructure is not a new AgentRun.
-- Accepted client messages receive an immutable Job-local sequence and identity. Follow-up turns
-  preserve FIFO order. A `steer` is an explicit priority lane targeting the active native turn, so
+- Judgment executes as an AgentRun consuming an exact durable Message, with a bounded Role, input
+  Revision, capability envelope, Harness, Thread, Turn, and Turn outcome. The Message is its only
+  durable text input. Evidence retained for a harness observation links directly to that AgentRun.
+  The Sandbox workspace and harness protocol are adapter inputs, not durable AgentRun fields.
+- Implementation AgentRuns create one or many commits when they change code. On completion, Dorf
+  validates a clean checkout. A descendant `HEAD` becomes the next exact Revision; unchanged `HEAD`
+  records that the Message was handled without a code change.
+- Thread reuse is a workflow choice, not a distinct core or storage primitive. The current
+  implementation flow reuses the Thread bound to a prior implementation AgentRun; current reviewers
+  use isolated one-shot Threads. Another Role may later reuse a prior Thread without changing
+  AgentRun storage. Every AgentRun consumes one Message, and every Message selected for agent delivery
+  has one AgentRun record. A follow normally submits a new Turn; a steer normally binds to its target
+  Turn and submits a new Turn only on terminal-target fallback. Absurd retry reconciles the same
+  delivery and is not a new AgentRun.
+- Accepted client messages receive an immutable Job-local sequence and identity. Follow-up Turns
+  preserve FIFO order. A `steer` is an explicit priority lane targeting the active harness Turn, so
   it may overtake already queued follow-ups. Default text and structured inspection, command help,
   and admission acknowledgement expose the priority behavior, original admission sequence, and
   targeted turn so it is never presented as ordinary FIFO delivery. A wake event only makes work
-  eligible, and delivery is reconciled against the harness-native turn identity before retry.
+  eligible, and delivery is reconciled against the exact Harness/Thread/Turn identity before retry.
 - A changed Revision invalidates Evidence whose claim depended on the previous Revision. It does not
   invalidate unrelated immutable facts.
 - After publication, the same Job task observes the exact pull request. An owner or collaborator
-  comment becomes an idempotent human Message and re-enters the implementation Session. The GitHub
-  edge reconciles one eyes reaction and one exact-Revision completion reply without adding core state.
-  Merge records an accepted Outcome; close without merge records a rejected Outcome. A bounded wait
-  keeps quiet observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
+  comment becomes an idempotent human Message and re-enters the implementation AgentRun path. The
+  GitHub edge reconciles one eyes reaction and one exact-Revision completion reply without adding core
+  state. Merge records an accepted Outcome; close without merge records a rejected Outcome. A bounded
+  wait keeps quiet observation durable without adding a Dorf polling scheduler or GitHub-state mirror.
 
 ## Deterministic effects
 
-Every code-owned operation that changes external state receives a stable Action identity derived
-from the Job and its intended meaning. Dorf records enough information to classify the Action as
+Every code-owned external mutation receives a stable Action identity derived from the Job and its
+intended meaning. Dorf records enough information to classify the Action as
 pending, succeeded, failed, or uncertain. On an uncertain result, recovery inspects the external
 authority before repeating the operation. Agent tool calls and commits are AgentRun work, not
-Actions; Dorf observes their resulting Git state at the AgentRun boundary.
+Actions; so is submission and recovery of the harness Turn that the AgentRun itself records. Dorf
+observes the Turn and resulting Git state at the AgentRun boundary.
 
-This applies at least to Sandbox creation and destruction, repository clone and push, agent-turn
-submission, scoped credential or provider-route creation, and pull-request publication. Absurd
+Actions apply at least to Sandbox creation and destruction, repository clone and push, scoped
+credential or provider-route creation, and pull-request publication. Agent execution has one
+durable record instead: AgentRun. Absurd
 checkpoints prevent completed logical steps from normally repeating; Action reconciliation handles
 the unavoidable boundary where an external system succeeds and its response is lost.
 
@@ -111,9 +120,14 @@ durable Job already coordinates mechanics.
 
 Each selected Role is an AgentRun against an immutable Revision in its own disposable Sandbox and
 scoped provider route. This deliberately uniform isolation model also applies to read-only review.
-Independent Roles may run in parallel, and each Role's live resources are reclaimed after its
-output is retained. Reviewer output remains ordinary text. Dorf copies it into a Message to the
-original implementation Session instead of parsing a `ReviewResult` or persisting a `Finding`.
+ReviewPolicy creates one stable workflow Message containing the selected Role's input; the review
+AgentRun consumes that Message through the same durable relationship as any other AgentRun. Later
+reviewer follow-up may therefore reuse its Thread without a new storage primitive.
+Independent Roles may run in parallel, and each Role's live resources are reclaimed after its output
+is retained. Reviewer output remains ordinary text. Dorf copies it into a Message to the
+implementation AgentRun path instead of parsing a `ReviewResult`, persisting a `Finding`, or
+copying the prose into Evidence. One observed Evidence record proves the completed AgentRun's
+Harness/Thread/Turn binding and Turn outcome.
 The implementation agent decides whether to act, ignore, or explain. If it commits, Dorf observes
 a new Revision and repeats Checks and policy; if it leaves a clean unchanged checkout, review is
 complete for that Revision.
@@ -121,9 +135,10 @@ complete for that Revision.
 ## Failure and code evolution
 
 - **Process loss:** Absurd leases and checkpoints make the Job eligible for another task executor. Dorf
-  reconciles unsettled Actions and native agent turns before continuing.
+  reconciles unsettled Actions and AgentRuns against their respective external authorities before
+  continuing.
 - **Sandbox loss:** Report the loss honestly. Replace it only when authoritative Git state and a
-  resumable or intentionally fresh Session make the resulting continuity truthful.
+  resumable or intentionally fresh Thread make the resulting continuity truthful.
 - **External ambiguity:** Inspect the Action receipt and external authority; never infer success
   from a timeout and never retry blindly.
 - **Code changes:** Prefer short-lived Jobs. Make additive checkpoint-result changes when possible;
@@ -198,12 +213,12 @@ The replacement is ready to become `main` when a clean machine can complete one 
 
 1. converge local setup without a cloud account or host Docker socket;
 2. admit a complete goal and create one isolated Sandbox and branch;
-3. start a real implementation Session and accept steering while it is active;
+3. start a real implementation AgentRun and accept steering while it is active;
 4. survive controller and task-executor loss without duplicating a Sandbox, message, turn, or external
    Action;
 5. run deterministic repository Checks and retain Revision-pinned Evidence;
 6. select any review through deterministic policy and return its text as a Message to the same
-   implementation Session;
+   implementation AgentRun path;
 7. publish an exact-Revision pull-request proposal;
 8. reach an explicit accepted, rejected, or abandoned outcome; and
 9. reconcile cleanup to an observable terminal.

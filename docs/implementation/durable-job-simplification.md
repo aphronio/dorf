@@ -18,7 +18,7 @@ Goal
        -> no review
        -> selected specialist AgentRuns
        -> one general review AgentRun for unknown risk
-  -> reviewer text becomes a Message to the original implementation Session
+  -> reviewer text becomes a Message through the implementation AgentRun path
   -> implementation AgentRun decides whether to act
        -> committed change: observe a new Revision; loop
        -> clean unchanged checkout: continue
@@ -28,7 +28,7 @@ Goal
 ```
 
 Dorf never creates an implementation commit on the agent's behalf. An AgentRun in the implementation
-Session may create one commit or several. Dorf validates the branch, clean workspace, commit and tree,
+Thread may create one commit or several. Dorf validates the branch, clean workspace, commit and tree,
 and proves that the final Git HEAD descends from the previously accepted Revision. It then records that
 final HEAD as the next immutable Revision.
 
@@ -82,7 +82,7 @@ Keep the implementation concrete until another real workflow proves a reusable s
 
 Goal: replace Dorf-created commits with a clear observation boundary.
 
-- [x] Update the North Star and decision log: AgentRuns in the implementation Session decide when and
+- [x] Update the North Star and decision log: implementation AgentRuns decide when and
       what to commit; Dorf observes and validates their result.
 - [x] Allow an AgentRun to create one commit or several.
 - [x] After the AgentRun completes, inspect the coding branch and require a clean workspace.
@@ -97,7 +97,7 @@ Goal: replace Dorf-created commits with a clear observation boundary.
       has exactly one new commit.
 - [x] Keep the complete coding workflow runnable and run Checks against the observed exact Revision.
 
-Terminal: a real AgentRun in the implementation Session creates one or more commits, Dorf records its
+Terminal: a real implementation AgentRun creates one or more commits, Dorf records its
 clean final descendant as one immutable Revision, and Checks run against that exact Revision.
 
 ### Slice 2B: Move coding order into one readable workflow
@@ -139,17 +139,17 @@ Sandbox deleted.
 ## Slice 3: Use one AgentRun mechanism and one Message follow-up path
 
 Implementation and review are not different execution systems. They are AgentRuns with different
-Roles, prompts, Revision inputs, workspaces, and capability envelopes. User text, Check output, and
+Roles, prompts, Revision inputs, adapter-supplied Sandbox contexts, and capability envelopes. User
+text, Check output, and
 reviewer text are not different follow-up primitives. They are Messages to the original implementation
-Session.
+Thread.
 
 ```text
 AgentRun
   +-- Role
-  +-- prompt
+  +-- Message
   +-- input Revision
   +-- capability envelope
-  +-- workspace
 
 Message
   +-- text
@@ -164,28 +164,29 @@ Check that caused the Message. The AgentRun that consumes the Message supplies t
 history: `sender -> Message -> handling AgentRun`. Add reply or thread fields only when a real
 outward-response feature needs them.
 
-### Slice 3A: Use one AgentRun runner
+### Slice 3A: Use one AgentRun execution mechanism
 
-Goal: make submission, native recovery, waiting, and terminal recording one durable mechanism.
+Goal: make submission, harness recovery, waiting, and terminal recording one durable mechanism.
 
 - [x] Define one small AgentRun execution contract containing only the durable run identity and the
       concrete harness operations needed to inspect, submit, and wait.
-- [x] Use one runner for initial and follow-up implementation, general review, and specialist review.
-- [x] Keep Role-specific prompt construction outside the runner.
+- [x] Use one execution mechanism for initial and follow-up implementation, general review, and
+      specialist review.
+- [x] Keep Role-specific prompt construction outside the shared mechanism.
 - [x] Keep reviewer Sandbox creation, immutable checkout, scoped route creation, and capability
-      validation outside the runner as preparation facts.
+      validation outside the mechanism as preparation facts.
 - [x] Keep reviewer output as opaque text; persist the cross-AgentRun handoff as a Message, with no
       review-result parser or finding schema.
 - [x] Give every Message explicit `FromKind` and `FromID`; use the same pair as its stable
       admission identity and remove the caller-only naming.
-- [x] Reconcile missing acknowledgements through the same native-history path for every AgentRun.
+- [x] Reconcile missing acknowledgements through the same harness-history path for every AgentRun.
 - [x] Give every run one stable `dorf/agent-run/v1/<AgentRun ID>` Absurd Step.
 - [x] Delete the separate implementation and review submission/recovery state machines.
-- [x] Replace duplicated native-status and uncertainty tests with one runner recovery contract plus one
+- [x] Replace duplicated harness-status and uncertainty tests with one execution recovery contract plus one
       reviewer ownership/capability test.
 - [x] Dogfood one normal implementation AgentRun and one selected read-only review AgentRun.
 
-Terminal: implementation and selected review both execute through the same AgentRun runner without
+Terminal: implementation and selected review both execute through the same AgentRun mechanism without
 weakening reviewer isolation or exact-Revision ownership.
 
 ### Slice 3B: Put the review feedback loop directly in `RunJob`
@@ -196,9 +197,9 @@ Goal: make ReviewPolicy, review, Message delivery, and Revision observation one 
 - [x] Keep `ReviewPolicy(ChangeFacts) -> ReviewPlan` pure and deterministic.
 - [x] Run one general read-only reviewer when policy reports unknown risk; do not use reviewer prose
       as a router protocol.
-- [x] Run each selected specialist through the shared AgentRun runner in its prepared read-only
+- [x] Run each selected specialist through the shared AgentRun mechanism in its prepared read-only
       workspace.
-- [x] Turn each reviewer's returned text into one stable Message to the original implementation Session.
+- [x] Turn each reviewer's returned text into one stable Message through the implementation AgentRun path.
 - [x] Deliver human, workflow, and agent Messages through the same implementation AgentRun path.
 - [x] Let the implementation agent decide whether to act, ignore, or explain; Dorf does not classify
       the text as clear, material, a suggestion, or a finding.
@@ -212,15 +213,15 @@ Goal: make ReviewPolicy, review, Message delivery, and Revision observation one 
 - [x] Dogfood no-review and selected-review paths; let later dogfood expose further feedback edge cases.
 
 Terminal: no-review, known-role review, and general review all follow the visible `RunJob` story; review
-text reaches the original implementation Session through Message and no parser decides what it means.
+text reaches the implementation AgentRun path through Message and no parser decides what it means.
 
 Live proof (2026-08-10): Job `job-dd819a66732c3e7c556c` ran an implementation AgentRun, observed
 agent-created Revision `395362a33eff41cec67f746259b29df00d36e87c`, passed `check` and `smoke`,
 ran a selected general reviewer in an isolated read-only Sandbox, delivered its opaque text as an
-agent Message to the original implementation Session, created exact-Revision PR #103, then completed
+agent Message through the implementation AgentRun path, created exact-Revision PR #103, then completed
 abandoned-Outcome cleanup with both routes revoked and both Sandboxes deleted. The run exposed and
-closed one shared-runner adapter bug: the adopted reviewer controller must remain visible during an
-active native wait.
+closed one shared-execution adapter bug: the adopted reviewer controller must remain visible during
+an active harness wait.
 
 ### Slice 3C: Add compiler-checked SQL queries before further storage changes
 
@@ -313,36 +314,38 @@ scoped route and Sandbox, observed agent-created Revision
 Closing the disposable PR recorded a rejected Outcome, revoked the route, and deleted the Sandbox.
 The durable Job retained the Provider Connection name and no host filesystem locator.
 
-## Slice 5: Let AgentRun own its native execution
+## Slice 5: Let AgentRun own its harness execution
 
-Goal: make one AgentRun the complete durable record of one agent invocation, without a paired Action
-describing the same submission.
+Goal: make one AgentRun the complete durable record of one Message delivery, without a paired
+Action describing the same submission.
 
 ```text
-Message -> AgentRun -> native Session and turn
-                    -> observed Evidence
+Message -> AgentRun -> Harness / Thread / Turn
+                    -> observed Evidence linked to the AgentRun
                     -> feedback Message when the Role is review
 ```
 
-- [ ] Remove the paired `codex-turn-start` Action and `agent_runs.action_id` synchronization.
-- [ ] Remove the separate Session-start Action; retain the implementation Session binding as its own
-      product fact and each AgentRun's exact native Session/turn binding.
-- [ ] Tie native observation Evidence directly to its AgentRun.
-- [ ] Keep reviewer output only as the ordinary agent Message delivered to the implementation Session;
-      delete the duplicate claim-Evidence copy.
-- [ ] Retain real AgentRun inputs and recovery identities: Role, Revision, capability, exact input
-      contract, native baseline, Session/turn IDs, ownership nonce, and submission nonce.
-- [ ] Delete adapter-owned or derived AgentRun fields: persisted workspace path, input digest, copied
+- [x] Remove the paired `codex-turn-start` Action and `agent_runs.action_id` synchronization.
+- [x] Remove the separate `codex-session-start` Action and Thread record; derive implementation
+      continuity from prior implementation AgentRuns, with every binding stored only on AgentRun.
+- [x] Tie harness-observation Evidence directly to its AgentRun.
+- [x] Store selected review input only as an ordinary workflow Message and require every AgentRun to
+      consume exactly one Message.
+- [x] Keep reviewer output only as the ordinary agent Message delivered through the implementation
+      AgentRun path; delete the duplicate Evidence copy of that prose.
+- [x] Retain real AgentRun inputs and recovery identities: exact Message ID, Role, Revision,
+      capability, Harness/Thread/Turn IDs, harness baseline, ownership nonce, and submission nonce.
+- [x] Delete adapter-owned or derived AgentRun fields: persisted workspace path, input digest, copied
       controller identity, and unused review token/cost/yield telemetry.
-- [ ] Shrink review readiness to completed AgentRun, exact feedback Message, verified native Evidence,
+- [x] Shrink review readiness to completed AgentRun, exact feedback Message, verified harness Evidence,
       and the required read-only capability/Revision facts.
-- [ ] Delete Action/AgentRun state synchronization tests and replace them with one shared native
+- [x] Delete Action/AgentRun state synchronization tests and replace them with one shared harness
       submission/recovery contract.
 - [ ] Dogfood one implementation AgentRun and one selected review AgentRun whose text returns through
       Message.
 
-Terminal: implementation and review use one AgentRun durability mechanism; no second Action or claim
-artifact describes the same invocation.
+Terminal: implementation and review use one AgentRun durability mechanism; no second Action or prose
+artifact describes the same delivery.
 
 ## Slice 6: Unify owned resources and isolate Cleanup
 
@@ -435,7 +438,7 @@ Goal: finish with a small human surface and tests that protect promises rather t
       checkpoints, waits, and leases.
 - [ ] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
       output.
-- [ ] Keep compact PostgreSQL-backed stories for Message/Session, Check feedback, review feedback,
+- [ ] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
       Proposal/Outcome, and exact cleanup/retry.
 - [ ] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
       fault tests.

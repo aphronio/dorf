@@ -37,7 +37,7 @@ The more of a job that is verifiable, the more of it can be approved after the f
 supervised live. Verification capacity, not model quality, is the practical ceiling on detached
 work.
 
-Core capability: claim/observed provenance on state and Evidence.
+Core capability: Message provenance for claims and Evidence for observed facts.
 
 ## Calibrated isolated verification roles
 

@@ -16,9 +16,10 @@ where job_id=sqlc.arg(job_id) and from_kind=sqlc.arg(from_kind)
   and from_id=sqlc.arg(from_id);
 
 -- name: GetActiveImplementationTurn :one
-select coalesce(native_turn_id,'') as native_turn_id,coalesce(session_id,'') as session_id,role
+select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
+       coalesce(thread_id,'') as thread_id,role
 from dorf.agent_runs
-where job_id=sqlc.arg(job_id) and state='active' and native_turn_id is not null
+where job_id=sqlc.arg(job_id) and state='active' and turn_id is not null
   and role='implement'
 order by started_at,id
 limit 1;
@@ -49,7 +50,7 @@ select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)
-  and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))
+  and ar.role='implement' and ar.state not in ('completed','failed','interrupted')
 order by m.sequence
 limit 1;
 
@@ -58,13 +59,13 @@ select count(*)
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)
-  and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'));
+  and ar.role='implement' and ar.state not in ('completed','failed','interrupted');
 
 -- name: GetLatestFollowRun :one
 select ar.id,ar.job_id,ar.state,ar.role
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id) and m.delivery_intent='follow'
+where m.job_id=sqlc.arg(job_id) and m.delivery_intent='follow' and ar.role='implement'
 order by m.sequence desc
 limit 1;
 
@@ -78,10 +79,12 @@ where job_id=sqlc.arg(job_id) and from_kind='workflow' and from_id=sqlc.arg(from
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
-       coalesce(ar.native_turn_id,'') as native_turn_id,
-       coalesce(ar.native_outcome,'') as native_outcome,
+       coalesce(ar.role,'') as role,
+       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
+       coalesce(ar.turn_id,'') as turn_id,
+       coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,
-       (ar.native_turn_id is not null)::boolean as delivered
+       (ar.turn_id is not null)::boolean as delivered
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id)
@@ -103,14 +106,15 @@ select coalesce(
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=sqlc.arg(job_id) and m.sequence>1 and ar.native_turn_id is null
+        where m.job_id=sqlc.arg(job_id) and m.sequence>1 and ar.role='implement'
+          and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1
               from dorf.job_messages earlier
               join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
               where earlier.job_id=m.job_id and earlier.sequence<m.sequence
-                and (earlier_run.native_turn_id is null
-                     or earlier_run.state not in ('completed','failed','interrupted'))
+                and earlier_run.role='implement'
+                and earlier_run.state not in ('completed','failed','interrupted')
           )
     ),
     (select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=sqlc.arg(job_id))

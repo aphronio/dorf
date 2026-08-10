@@ -24,6 +24,7 @@ type ReviewPlanRecord struct {
 
 type ReviewRunView struct {
 	AgentRun
+	Request Message `json:"request"`
 	ReviewRunProjection
 	FeedbackMessageID string `json:"feedback_message_id,omitempty"`
 	Stale             bool   `json:"stale"`
@@ -33,14 +34,10 @@ type ReviewRunView struct {
 // and its isolated review resources. They are intentionally not part of the
 // generic AgentRun contract.
 type ReviewRunProjection struct {
-	ClaimEvidenceID      string `json:"claim_evidence_id,omitempty"`
-	ObservedEvidenceID   string `json:"observed_evidence_id,omitempty"`
 	ReviewerSandboxID    string `json:"reviewer_sandbox_id,omitempty"`
 	ReviewerRouteID      string `json:"reviewer_route_id,omitempty"`
-	ReviewerAppServer    string `json:"reviewer_app_server_id,omitempty"`
 	ReviewerOwnerNonce   string `json:"-"`
 	SubmissionNonce      string `json:"-"`
-	InputDigest          string `json:"input_digest,omitempty"`
 	RevisionTree         string `json:"revision_tree,omitempty"`
 	ReviewerSandboxState string `json:"reviewer_sandbox_state,omitempty"`
 	ReviewerRouteState   string `json:"reviewer_route_state,omitempty"`
@@ -48,39 +45,15 @@ type ReviewRunProjection struct {
 	PostReviewState      string `json:"post_review_state,omitempty"`
 }
 
-type ReviewNativeBinding struct {
-	AppServerID string
-	SessionID   string
-	Turn        NativeTurn
-}
-
-type ReviewNativeHistory struct {
-	AppServerID string
-	SessionID   string
-	Turns       []NativeTurn
-}
-
-const ReviewSubmissionUncertainOutcome = "review-submission-uncertain"
-
 type reviewObservationArtifact struct {
-	AgentRunID        string `json:"agent_run_id"`
-	Revision          string `json:"revision"`
-	Role              string `json:"role"`
-	Capability        string `json:"capability"`
-	Workspace         string `json:"workspace"`
-	SessionID         string `json:"session_id"`
-	NativeTurnID      string `json:"native_turn_id"`
-	NativeOutcome     string `json:"native_outcome"`
-	InputTokens       int64  `json:"input_tokens"`
-	CachedInputTokens int64  `json:"cached_input_tokens"`
-	OutputTokens      int64  `json:"output_tokens"`
-	CostMicrousd      int64  `json:"cost_microusd"`
-	UsageAvailable    bool   `json:"usage_available"`
-	ReviewerSandboxID string `json:"reviewer_sandbox_id"`
-	ReviewerRouteID   string `json:"reviewer_route_id"`
-	ReviewerAppServer string `json:"reviewer_app_server_id"`
-	InputDigest       string `json:"input_digest"`
-	RevisionTree      string `json:"revision_tree"`
+	AgentRunID  string `json:"agent_run_id"`
+	Revision    string `json:"revision"`
+	Role        string `json:"role"`
+	Capability  string `json:"capability"`
+	Harness     string `json:"harness"`
+	ThreadID    string `json:"thread_id"`
+	TurnID      string `json:"turn_id"`
+	TurnOutcome string `json:"turn_outcome"`
 }
 
 type ReviewStore interface {
@@ -93,10 +66,8 @@ type ReviewStore interface {
 	BeginReviewSandbox(context.Context, string) (Action, error)
 	BeginReviewRoute(context.Context, string) (Action, error)
 	BeginReviewWorkspace(context.Context, string) (Action, error)
-	BeginReviewSession(context.Context, string) (Action, error)
-	UncertainReviewSubmission(context.Context, string, string, string) error
 	ReviewRun(context.Context, string) (ReviewRunView, error)
-	RecordReviewFeedback(context.Context, string, NativeTurn, Evidence, Evidence) (Message, bool, error)
+	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
 	CompleteReviewFeedback(context.Context, string, string, string) (bool, error)
 	BeginReviewRouteCleanup(context.Context, string) (Action, error)
 	BeginReviewSandboxCleanup(context.Context, string) (Action, error)
@@ -112,8 +83,8 @@ type ReviewExternals interface {
 	ReviewWorkspaceVerify(context.Context, Job, ReviewRunView) (Receipt, error)
 	ReviewRouteRevoke(context.Context, Job, ReviewRunView, Action) (Receipt, error)
 	ReviewSandboxDelete(context.Context, Job, ReviewRunView, Action) (Receipt, error)
-	ReviewInitialTurn(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error)
-	ReviewRecover(context.Context, Job, ReviewRunView) (ReviewNativeBinding, error)
-	ReviewTurns(context.Context, Job, ReviewRunView) (ReviewNativeHistory, error)
-	ReviewWait(context.Context, Job, ReviewRunView, string) (ReviewNativeBinding, error)
+	ReviewInitialTurn(context.Context, Job, ReviewRunView) (HarnessBinding, error)
+	ReviewRecover(context.Context, Job, ReviewRunView) (HarnessBinding, error)
+	ReviewTurns(context.Context, Job, ReviewRunView) (HarnessHistory, error)
+	ReviewWait(context.Context, Job, ReviewRunView, string) (HarnessBinding, error)
 }

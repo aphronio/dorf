@@ -2,7 +2,6 @@ package spine
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +14,7 @@ import (
 const (
 	BarrierReviewWorkspaceReady = "review-workspace-ready-before-record"
 	BarrierReviewFeedbackReady  = "review-feedback-ready-before-record"
-	reviewEvidenceProducer      = "dorf-codex-review"
+	reviewEvidenceProducer      = "dorf-agent-review"
 )
 
 type reviewBoundaryError string
@@ -35,10 +34,6 @@ func (s Service) PlanReview(ctx context.Context, job Job) error {
 	if job.WorkflowPhase != "review-planning" {
 		return fmt.Errorf("cannot plan review from phase %q", job.WorkflowPhase)
 	}
-	record, err := store.ReviewPlan(ctx, job.ID, job.Revision)
-	if err != nil {
-		return err
-	}
 	facts, err := externals.RepositoryChangeFacts(ctx, job)
 	if err != nil {
 		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, "deterministic ChangeFacts failed: "+err.Error())
@@ -47,8 +42,7 @@ func (s Service) PlanReview(ctx context.Context, job Job) error {
 	if err != nil {
 		return s.Store.(CodingStore).BlockWorkflow(ctx, job.ID, "mandatory ReviewPolicy rejected input: "+err.Error())
 	}
-	record.Facts, record.Plan = facts, plan
-	return store.RecordReviewPolicy(ctx, record)
+	return store.RecordReviewPolicy(ctx, ReviewPlanRecord{JobID: job.ID, Revision: job.Revision, Facts: facts, Plan: plan})
 }
 
 func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
@@ -77,10 +71,10 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 	return err
 }
 
-func (s Service) executeAndRecordReview(ctx context.Context, job Job, run ReviewRunView, store ReviewStore, externals ReviewExternals) (NativeTurn, error) {
+func (s Service) executeAndRecordReview(ctx context.Context, job Job, run ReviewRunView, store ReviewStore, externals ReviewExternals) (HarnessTurn, error) {
 	outcome, err := s.executeReviewRun(ctx, job, run, externals, store)
 	if err != nil {
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	if outcome.Status != "completed" {
 		return outcome, fmt.Errorf("review Role %s settled as %s", run.Role, outcome.Status)
@@ -95,14 +89,14 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	if strings.TrimSpace(outcome.Output) == "" {
 		return outcome, reviewBoundaryError(fmt.Sprintf("review Role %s returned no feedback text", run.Role))
 	}
-	claim, observed, err := s.reviewEvidence(run, outcome, "review-feedback")
+	observed, err := s.reviewEvidence(run)
 	if err != nil {
 		return outcome, err
 	}
 	if err := s.reachWorkflow(ctx, BarrierReviewFeedbackReady, job.ID, run.ID); err != nil {
 		return outcome, err
 	}
-	if _, _, err := store.RecordReviewFeedback(ctx, run.ID, outcome, claim, observed); err != nil {
+	if _, _, err := store.RecordReviewFeedback(ctx, run.ID, outcome, observed); err != nil {
 		return outcome, err
 	}
 	return outcome, nil
@@ -123,85 +117,54 @@ func (s Service) verifyReviewPostState(ctx context.Context, job Job, run ReviewR
 	return nil
 }
 
-func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView, externals ReviewExternals, store ReviewStore) (NativeTurn, error) {
-	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(original.InputContract)))
-	if original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 || original.InputDigest != digest {
-		reason := "review AgentRun durable Sandbox ownership or exact submission contract is invalid"
+func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView, externals ReviewExternals, store ReviewStore) (HarnessTurn, error) {
+	expectedFromID := ReviewRequestFromID(original.Revision, original.Role)
+	expectedMessageID := ReviewRequestMessageID(job.ID, original.Revision, original.Role)
+	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.ReviewerSandboxID != ReviewSandboxName(original.ID) || len(original.ReviewerOwnerNonce) != 64 || len(original.SubmissionNonce) != 64 {
+		reason := "review AgentRun request Message, Sandbox ownership, or exact submission contract is invalid"
 		_ = s.Store.UncertainAgentRun(ctx, original.ID, reason)
-		return NativeTurn{}, reviewBoundaryError(reason)
+		return HarnessTurn{}, reviewBoundaryError(reason)
 	}
 	if err := s.ensureReviewWorkspace(ctx, job, original, store, externals); err != nil {
 		if attentionNeeded(err) {
 			_ = s.Store.UncertainAgentRun(ctx, original.ID, err.Error())
 		}
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	run, err := store.ReviewRun(ctx, original.ID)
 	if err != nil {
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	var session Action
-	if run.State != AgentRunCompleted && run.State != AgentRunFailed && run.State != AgentRunInterrupted {
-		session, err = store.BeginReviewSession(ctx, run.ID)
-		if err != nil {
-			return NativeTurn{}, err
-		}
-	}
-	if run.State == AgentRunUncertain {
-		switch {
-		case run.SessionID == "" && run.NativeTurnID == "":
-			if session.State != ActionUncertain || !strings.HasPrefix(session.Outcome, ReviewSubmissionUncertainOutcome+": ") {
-				return NativeTurn{}, reviewBoundaryError("uncertain review AgentRun is not eligible for no-submit reconciliation: " + run.Attention)
-			}
-		case run.SessionID == "" || run.NativeTurnID == "":
-			reason := "uncertain review AgentRun has a partial native Session/turn binding"
-			_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
-			return NativeTurn{}, reviewBoundaryError(reason)
-		case session.State != ActionSucceeded:
-			reason := "uncertain bound review AgentRun does not have a succeeded Session Action"
-			_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
-			return NativeTurn{}, reviewBoundaryError(reason)
-		}
+	if run.State == AgentRunUncertain && (run.ThreadID == "") != (run.TurnID == "") {
+		reason := "uncertain review AgentRun has a partial harness thread/turn binding"
+		_ = s.Store.UncertainAgentRun(ctx, run.ID, reason)
+		return HarnessTurn{}, reviewBoundaryError(reason)
 	}
 	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
 	projection := run.ReviewRunProjection
-	contract := nativeAgentRunContract{
+	contract := agentRunContract{
 		service:             s,
 		delivery:            Delivery{AgentRun: run.AgentRun},
 		run:                 run.AgentRun,
+		harness:             s.Externals.Harness(),
 		label:               "review",
 		bindUnsupportedTurn: false,
-		submitNew: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewInitialTurn(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
-			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
+		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+			return externals.ReviewInitialTurn(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 		},
-		recover: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewRecover(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
-			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
+		recover: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+			return externals.ReviewRecover(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 		},
-		history: func(ctx context.Context, run AgentRun) (nativeAgentHistory, error) {
-			history, err := externals.ReviewTurns(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
-			return nativeAgentHistory{OwnerID: history.AppServerID, SessionID: history.SessionID, Turns: history.Turns}, err
+		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+			return externals.ReviewTurns(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection})
 		},
-		wait: func(ctx context.Context, run AgentRun, turnID string) (nativeAgentBinding, error) {
-			binding, err := externals.ReviewWait(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, turnID)
-			return nativeAgentBinding{OwnerID: binding.AppServerID, SessionID: binding.SessionID, Turn: binding.Turn}, err
+		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
+			return externals.ReviewWait(ctx, job, ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, turnID)
 		},
-		validateOwner: func(run AgentRun, appServerID, sessionID string) error {
-			if run.SessionID == "" {
-				if appServerID == "" || appServerID != expectedController || sessionID == "" {
-					return reviewBoundaryError("review native recovery returned a foreign or incomplete controller, Session, or turn binding")
-				}
-				return nil
-			}
-			return validateReviewNativeOwner(ReviewRunView{AgentRun: run, ReviewRunProjection: projection}, appServerID, sessionID)
+		validateOwner: func(binding HarnessBinding) error {
+			return validateReviewController(expectedController, binding)
 		},
-		bindSession: func(ctx context.Context, binding nativeAgentBinding) error {
-			return s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.OwnerID})
-		},
-		adoptBinding: func(_ *AgentRun, binding nativeAgentBinding) {
-			projection.ReviewerAppServer = binding.OwnerID
-		},
+		beforeBind:  s.requireClaim,
 		onReadError: s.recordReviewReadError,
 		onRecoverError: func(ctx context.Context, run AgentRun, err error) error {
 			var missing interface{ RetryableReviewVisibility() bool }
@@ -214,32 +177,28 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 			}
 			return err
 		},
-		onSubmitError: func(ctx context.Context, run AgentRun, binding nativeAgentBinding, err error) (NativeTurn, error) {
+		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				_ = s.Store.UncertainAction(ctx, session.ID)
-				if binding.SessionID != "" {
-					if bindErr := s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID, Outcome: binding.OwnerID}); bindErr != nil {
-						return NativeTurn{}, bindErr
-					}
-				}
 				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-					return NativeTurn{}, failErr
+					return HarnessTurn{}, failErr
 				}
-				return NativeTurn{Status: "failed"}, nil
+				return HarnessTurn{Status: "failed"}, nil
 			}
-			if attentionNeeded(err) {
-				_ = s.Store.UncertainAction(ctx, session.ID)
-				if attentionErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); attentionErr != nil {
-					return NativeTurn{}, attentionErr
-				}
-			} else if uncertainErr := store.UncertainReviewSubmission(ctx, run.ID, session.ID, err.Error()); uncertainErr != nil {
-				return NativeTurn{}, uncertainErr
+			if uncertainErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
+				return HarnessTurn{}, uncertainErr
 			}
-			return NativeTurn{}, err
+			return HarnessTurn{}, err
 		},
 	}
 	return contract.execute(ctx)
+}
+
+func validateReviewController(expected string, binding HarnessBinding) error {
+	if expected == "" || binding.ControllerID != expected {
+		return reviewBoundaryError("review harness recovery returned a foreign controller")
+	}
+	return nil
 }
 
 func (s Service) recordReviewReadError(ctx context.Context, runID string, err error) {
@@ -303,42 +262,22 @@ func (s Service) ensureReviewWorkspace(ctx context.Context, job Job, original Re
 	return nil
 }
 
-func validateReviewNativeOwner(run ReviewRunView, appServerID, sessionID string) error {
-	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
-	if appServerID == "" || appServerID != expectedController || sessionID == "" || run.ReviewerAppServer != appServerID || run.SessionID != sessionID {
-		return reviewBoundaryError("review native recovery conflicts with the exact reviewer app-server or Session")
-	}
-	return nil
-}
-
-func (s Service) reviewEvidence(run ReviewRunView, outcome NativeTurn, claimKind string) (Evidence, Evidence, error) {
-	if outcome.InputTokens < 0 || outcome.CachedInputTokens < 0 || outcome.OutputTokens < 0 || outcome.CostMicrousd < 0 {
-		return Evidence{}, Evidence{}, fmt.Errorf("review AgentRun %s returned invalid negative usage facts", run.ID)
-	}
+func (s Service) reviewEvidence(run ReviewRunView) (Evidence, error) {
 	finished := run.FinishedAt.UTC().Truncate(time.Microsecond)
 	started := run.StartedAt.UTC().Truncate(time.Microsecond)
 	if started.IsZero() || finished.IsZero() || started.After(finished) {
-		return Evidence{}, Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
+		return Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
 	}
-	claimBlob, err := s.Evidence.Put([]byte(outcome.Output))
-	if err != nil {
-		return Evidence{}, Evidence{}, err
-	}
-	claim := Evidence{ID: EvidenceID(run.ID, claimKind), Digest: claimBlob.Digest, ByteSize: claimBlob.ByteSize, MediaType: "text/plain; charset=utf-8", Producer: reviewEvidenceProducer, Provenance: "claim", Kind: claimKind, ActionID: run.ActionID, Revision: run.Revision, StartedAt: started, FinishedAt: finished}
 	artifact, err := json.Marshal(reviewObservationArtifact{
-		AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Workspace: run.Workspace,
-		SessionID: run.SessionID, NativeTurnID: outcome.ID, NativeOutcome: outcome.Status, InputTokens: outcome.InputTokens,
-		CachedInputTokens: outcome.CachedInputTokens, OutputTokens: outcome.OutputTokens, CostMicrousd: outcome.CostMicrousd,
-		UsageAvailable: outcome.UsageAvailable, ReviewerSandboxID: run.ReviewerSandboxID, ReviewerRouteID: run.ReviewerRouteID,
-		ReviewerAppServer: run.ReviewerAppServer, InputDigest: run.InputDigest, RevisionTree: run.RevisionTree,
+		AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
+		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
 	})
 	if err != nil {
-		return Evidence{}, Evidence{}, err
+		return Evidence{}, err
 	}
-	observedBlob, err := s.Evidence.Put(artifact)
+	blob, err := s.Evidence.Put(artifact)
 	if err != nil {
-		return Evidence{}, Evidence{}, err
+		return Evidence{}, err
 	}
-	observed := Evidence{ID: EvidenceID(run.ID, "review-native-observation"), Digest: observedBlob.Digest, ByteSize: observedBlob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Provenance: "observed", Kind: "review-native-observation", ActionID: run.ActionID, Revision: run.Revision, StartedAt: started, FinishedAt: finished}
-	return claim, observed, nil
+	return Evidence{ID: EvidenceID(run.ID, "review-observation"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation", AgentRunID: run.ID, Revision: run.Revision, StartedAt: started, FinishedAt: finished}, nil
 }

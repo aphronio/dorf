@@ -10,8 +10,8 @@ issue backlog. Concrete implementation follows the greenfield architecture and l
 
 ```text
 A Job changes code in a Sandbox.
-Actions and Checks do deterministic work.
-AgentRuns do judgment.
+Actions change external state; Checks observe it.
+AgentRuns do judgment and retain exact harness bindings.
 Evidence proves claims about a Revision.
 ```
 
@@ -22,15 +22,18 @@ Evidence proves claims about a Revision.
 | **Job** | The durable user goal and lifecycle, from admission to explicit terminal outcome |
 | **Sandbox** | The isolated mutable machine and checkout boundary for one Job |
 | **Revision** | The exact immutable commit being implemented, checked, reviewed, or proposed |
-| **AgentRun** | One bounded invocation of an agent against a Job and Revision |
-| **Session** | Optional Job-scoped conversational continuity across implementation AgentRuns |
+| **AgentRun** | The complete durable delivery record for one Message and its exact harness binding |
+| **Harness** | The software hosting an agent, such as Codex app-server |
+| **Thread** | A continuing harness conversation that AgentRuns may reuse |
+| **Turn** | One request/response cycle in a harness Thread, bound durably to its AgentRuns |
 | **Role** | The bounded responsibility of an AgentRun, such as implement, general review, QA, or security |
 | **Action** | Code-owned work that changes external state |
 | **Check** | Code-owned observation or assertion |
-| **Evidence** | Immutable, provenance-labelled proof tied to a Revision or lifecycle fact |
+| **Evidence** | Immutable observed proof tied to a Revision, AgentRun, or lifecycle fact |
 
 `Role` is a field, not an executing object. There is no `RoleRun`. An agent executes in a Role.
-There is no first-class Worker until identity or memory must survive across Jobs.
+`Thread` and `Turn` are harness identities retained for exact recovery. There is no first-class
+Worker until identity or memory must survive across Jobs.
 
 ## High-level flow
 
@@ -45,12 +48,12 @@ flowchart TD
     Revision --> Checks["Deterministic Checks"]
     Checks --> Facts["Compute ChangeFacts"]
     Facts --> Policy{"ReviewPolicy"}
-    Policy -->|"known roles"| Reviews["Selected review AgentRuns"]
-    Policy -->|"unknown"| GeneralReview["General review AgentRun"]
+    Policy -->|"known roles"| Reviews["Workflow Messages → selected review AgentRuns"]
+    Policy -->|"unknown"| GeneralReview["Workflow Message → general review AgentRun"]
     Policy -->|"no review"| Proposal
     Reviews --> Feedback["Reviewer text becomes a Message"]
     GeneralReview --> Feedback
-    Feedback --> Respond["Original implementation Session decides what to do"]
+    Feedback --> Respond["Next implementation AgentRun decides what to do"]
     Respond -->|"committed change"| Revision
     Respond -->|"clean unchanged checkout"| Proposal["Push and propose exact Revision"]
     Proposal --> Observe["Observe exact pull request"]
@@ -61,16 +64,20 @@ flowchart TD
 ```
 
 Review is optional and explainable. Deterministic policy selects known specialist Roles and uses one
-general reviewer for an unknown change. Each reviewer returns ordinary text. Dorf sends that text as
-a Message to the original implementation Session; it does not parse a universal review result. The
-implementation agent decides whether to act, explain, or leave the Revision unchanged. No agent
+general reviewer for an unknown change. Each selected review begins as an ordinary workflow Message;
+its review AgentRun consumes that Message. Each reviewer returns ordinary text. Dorf sends that text
+as a Message through the implementation AgentRun path; it does not parse a universal review result.
+The implementation agent decides whether to act, explain, or leave the Revision unchanged. No agent
 replaces the durable Job as coordinator.
 
+Agent prose remains a Message. Evidence records observed facts, including the harness observation of
+an AgentRun's exact Thread and Turn; reviewer prose is not copied into a second Evidence artifact.
+
 The pull request is the acceptance UI. A comment from the repository owner or a collaborator becomes
-an ordinary human Message to the same implementation Session. Dorf acknowledges accepted feedback
-with an eyes reaction and, after the normal checks and review flow republishes, replies with the exact
-Revision that handled it. Merging the exact pull request accepts the Job; closing it without merging
-rejects the Job. Explicit abandonment remains a Dorf command.
+an ordinary human Message to the same implementation AgentRun path. Dorf acknowledges accepted
+feedback with an eyes reaction and, after the normal checks and review flow republishes, replies with
+the exact Revision that handled it. Merging the exact pull request accepts the Job; closing it without
+merging rejects the Job. Explicit abandonment remains a Dorf command.
 
 ## The deterministic and agentic boundary
 
@@ -80,7 +87,7 @@ rejects the Job. Explicit abandonment remains a Dorf command.
 | Allocate stable identities, FIFO follow order, and explicit steer priority | Design and implement the change |
 | Create, inspect, and destroy Sandboxes | Resolve ambiguity with documented assumptions |
 | Clone, set up, observe the final Revision, diff, push, and publish | Decide whether an unfamiliar change needs specialist review |
-| — | Create one or many commits when the implementation Session changes code |
+| — | Create one or many commits in an implementation AgentRun |
 | Run declared tests, linters, smoke checks, and probes | Perform QA, security, architecture, or performance review |
 | Compute ChangeFacts and apply known review rules | Decide what to do with user, Check, or reviewer Messages |
 | Hash, pin, invalidate, and render Evidence | Explain material decisions and remaining uncertainty |
@@ -107,7 +114,7 @@ establish, and deterministic mechanisms do not pretend to answer questions requi
 
 ```text
 L0  Existing tools       Git, GitHub, Incus, agent harnesses, provider SDKs
-L1  Deterministic edge   Actions, Checks, Sandbox and Agent adapters
+L1  Deterministic edge   Actions, Checks, Sandbox and Harness adapters
 L2  Durable core         Job facts, inbox, Absurd execution, recovery
 L3  Coding workflow      admission, implementation, review policy, evidence, proposal, terminal
 L4  Clients              CLI first; other trusted clients later
@@ -134,7 +141,7 @@ render the same application boundary; they do not become authorities.
 
 A stranger on a clean machine can delegate one real change and later inspect an evidence-backed
 pull-request proposal. During the run, the controller and task executor can be killed and restarted,
-a message can be accepted while the agent is active, selected review can feed the same implementation
-Session through a Message, and cleanup can be retried. No duplicate Job, Sandbox, agent turn, branch,
-or pull request appears, and the user
-never has to understand Absurd, PostgreSQL rows, Incus names, or harness protocol details.
+a message can be accepted while the agent is active, selected review can feed the implementation
+AgentRun path through a Message, and cleanup can be retried. No duplicate Job, Sandbox, harness Turn,
+branch, or pull request appears, and the user never has to understand Absurd, PostgreSQL rows, Incus
+names, or harness protocol details.

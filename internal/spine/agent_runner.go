@@ -5,76 +5,71 @@ import (
 	"fmt"
 )
 
-// nativeAgentBinding is the complete harness identity needed to durably adopt a
-// native turn. OwnerID is optional for harnesses whose Session is the ownership
-// boundary and required by adapters (such as review) with a distinct logical
-// controller.
-type nativeAgentBinding struct {
-	OwnerID   string
-	SessionID string
-	Turn      NativeTurn
-}
-
-type nativeAgentHistory struct {
-	OwnerID   string
-	SessionID string
-	Turns     []NativeTurn
-}
-
-// nativeAgentRunContract contains only the concrete harness operations and the
-// durable boundary variations needed by one AgentRun. Prompt construction,
-// workspace preparation, capability checks, and result interpretation remain
-// outside this runner.
-type nativeAgentRunContract struct {
+// agentRunContract contains only the harness operations and recovery policy
+// needed to execute one durable AgentRun. Prompt construction, workspace
+// preparation, and capability enforcement remain at the adapter boundary.
+type agentRunContract struct {
 	service  Service
 	delivery Delivery
 	run      AgentRun
+	harness  string
 
-	submitNew   func(context.Context, AgentRun) (nativeAgentBinding, error)
-	submitBound func(context.Context, AgentRun) (nativeAgentBinding, error)
-	recover     func(context.Context, AgentRun) (nativeAgentBinding, error)
-	history     func(context.Context, AgentRun) (nativeAgentHistory, error)
-	wait        func(context.Context, AgentRun, string) (nativeAgentBinding, error)
+	submitNew   func(context.Context, AgentRun) (HarnessBinding, error)
+	submitBound func(context.Context, AgentRun) (HarnessBinding, error)
+	recover     func(context.Context, AgentRun) (HarnessBinding, error)
+	history     func(context.Context, AgentRun) (HarnessHistory, error)
+	wait        func(context.Context, AgentRun, string) (HarnessBinding, error)
 
-	validateOwner  func(AgentRun, string, string) error
-	bindSession    func(context.Context, nativeAgentBinding) error
-	adoptBinding   func(*AgentRun, nativeAgentBinding)
+	validateOwner  func(HarnessBinding) error
 	beforeBind     func(context.Context) error
 	onReadError    func(context.Context, string, error)
-	onSubmitError  func(context.Context, AgentRun, nativeAgentBinding, error) (NativeTurn, error)
+	onSubmitError  func(context.Context, AgentRun, HarnessBinding, error) (HarnessTurn, error)
 	onRecoverError func(context.Context, AgentRun, error) error
 
-	reconcileSubmitError bool
-	bindUnsupportedTurn  bool
-	label                string
+	bindUnsupportedTurn bool
+	label               string
 }
 
-func (c nativeAgentRunContract) execute(ctx context.Context) (NativeTurn, error) {
+func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 	if c.label == "" {
-		c.label = "native"
+		c.label = "harness"
 	}
 	run := c.run
+	if run.Harness != "" && c.harness != "" && run.Harness != c.harness {
+		reason := fmt.Sprintf("%s AgentRun is bound to harness %s, not %s", c.label, run.Harness, c.harness)
+		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
+	}
+	if run.Harness == "" {
+		run.Harness = c.harness
+	}
+	if run.Harness == "" {
+		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness", c.label)
+	}
 	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-		return NativeTurn{ID: run.NativeTurnID, Status: string(run.State)}, nil
+		status := run.TurnOutcome
+		if status == "" {
+			status = string(run.State)
+		}
+		return HarnessTurn{ID: run.TurnID, Status: status}, nil
 	}
 	if run.State == AgentRunCompleted && c.history == nil {
-		return NativeTurn{ID: run.NativeTurnID, Status: string(run.State)}, nil
+		return HarnessTurn{ID: run.TurnID, Status: run.TurnOutcome}, nil
 	}
 	if run.State == AgentRunCompleted {
 		return c.completedTurn(ctx, run)
 	}
 
-	if run.SessionID == "" {
+	if run.ThreadID == "" {
 		preparedBeforeCall := run.BaselineRecorded
 		if !run.BaselineRecorded {
-			if err := c.service.Store.PrepareAgentRun(ctx, run.ID, ""); err != nil {
-				return NativeTurn{}, err
+			if err := c.service.Store.PrepareAgentRun(ctx, run.ID, run.Harness, ""); err != nil {
+				return HarnessTurn{}, err
 			}
 			run.BaselineRecorded, run.State = true, AgentRunSubmitting
 			c.delivery.AgentRun = run
 		} else if run.BaselineTurnID != "" {
-			reason := c.label + " AgentRun without a Session has a nonempty native baseline"
-			return NativeTurn{}, c.markUncertain(ctx, run.ID, reason)
+			reason := c.label + " AgentRun without a thread has a nonempty turn baseline"
+			return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
 		}
 		if preparedBeforeCall && c.recover != nil {
 			return c.recoverAndSettle(ctx, run)
@@ -85,98 +80,95 @@ func (c nativeAgentRunContract) execute(ctx context.Context) (NativeTurn, error)
 	return c.inspectAndSettle(ctx, run)
 }
 
-func (c nativeAgentRunContract) completedTurn(ctx context.Context, run AgentRun) (NativeTurn, error) {
+func (c agentRunContract) completedTurn(ctx context.Context, run AgentRun) (HarnessTurn, error) {
 	history, err := c.history(ctx, run)
 	if err != nil {
 		c.recordReadError(ctx, run.ID, err)
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	if err := c.owner(run, history.OwnerID, history.SessionID); err != nil {
+	if err := c.validateHistory(run, history); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	for _, turn := range history.Turns {
-		if turn.ID == run.NativeTurnID {
+		if turn.ID == run.TurnID {
 			return turn, nil
 		}
 	}
-	return NativeTurn{}, fmt.Errorf("terminal %s AgentRun %s native output is unavailable", c.label, run.ID)
+	return HarnessTurn{}, fmt.Errorf("terminal %s AgentRun %s output is unavailable", c.label, run.ID)
 }
 
-func (c nativeAgentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (NativeTurn, error) {
+func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (HarnessTurn, error) {
 	binding, err := c.recover(ctx, run)
 	if err != nil {
 		if c.onRecoverError != nil {
-			return NativeTurn{}, c.onRecoverError(ctx, run, err)
+			return HarnessTurn{}, c.onRecoverError(ctx, run, err)
 		}
 		c.recordReadError(ctx, run.ID, err)
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	if binding.OwnerID == "" && binding.SessionID == "" && binding.Turn.ID == "" {
+	if binding.Harness == "" && binding.ThreadID == "" && binding.Turn.ID == "" {
 		return c.submitAndSettle(ctx, run, c.submitNew)
 	}
 	if err := c.validateBinding(run, binding, false); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	return c.bindAndSettle(ctx, run, binding, true)
+	return c.bindAndSettle(ctx, run, binding)
 }
 
-func (c nativeAgentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (NativeTurn, error) {
+func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (HarnessTurn, error) {
 	history, err := c.history(ctx, run)
 	if err != nil {
 		c.recordReadError(ctx, run.ID, err)
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	if err := c.owner(run, history.OwnerID, history.SessionID); err != nil {
+	if err := c.validateHistory(run, history); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	if !run.BaselineRecorded {
 		baseline := ""
 		if len(history.Turns) > 0 {
 			baseline = history.Turns[len(history.Turns)-1].ID
 		}
-		if err := c.service.Store.PrepareAgentRun(ctx, run.ID, baseline); err != nil {
-			return NativeTurn{}, err
+		if err := c.service.Store.PrepareAgentRun(ctx, run.ID, run.Harness, baseline); err != nil {
+			return HarnessTurn{}, err
 		}
 		run.BaselineRecorded, run.BaselineTurnID, run.State = true, baseline, AgentRunSubmitting
 		c.delivery.AgentRun = run
 	}
-	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, history.Turns)
+	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.TurnID, history.Turns)
 	switch reconciliation.Classification {
 	case "no-submit":
 		if c.submitBound == nil {
-			return NativeTurn{}, fmt.Errorf("%s Session exists but its durably prepared turn was not submitted", c.label)
+			return HarnessTurn{}, fmt.Errorf("%s thread exists but its prepared turn was not submitted", c.label)
 		}
 		return c.submitAndSettle(ctx, run, c.submitBound)
 	case "uncertain":
 		if reconciliation.Turn.ID != "" && c.bindUnsupportedTurn {
-			if err := c.durableBind(ctx, run, nativeAgentBinding{OwnerID: history.OwnerID, SessionID: history.SessionID, Turn: reconciliation.Turn}, false); err != nil {
-				return NativeTurn{}, err
+			binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID}
+			if err := c.durableBind(ctx, run, binding); err != nil {
+				return HarnessTurn{}, err
 			}
 			return reconciliation.Turn, nil
 		}
-		return NativeTurn{}, c.markUncertain(ctx, run.ID, reconciliation.Reason)
+		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reconciliation.Reason)
 	default:
-		binding := nativeAgentBinding{OwnerID: history.OwnerID, SessionID: history.SessionID, Turn: reconciliation.Turn}
-		return c.bindAndSettle(ctx, run, binding, false)
+		return c.bindAndSettle(ctx, run, HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID})
 	}
 }
 
-func (c nativeAgentRunContract) submitAndSettle(ctx context.Context, run AgentRun, submit func(context.Context, AgentRun) (nativeAgentBinding, error)) (NativeTurn, error) {
+func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, submit func(context.Context, AgentRun) (HarnessBinding, error)) (HarnessTurn, error) {
 	if submit == nil {
-		return NativeTurn{}, fmt.Errorf("%s AgentRun has no native submission operation", c.label)
+		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness submission operation", c.label)
 	}
 	if err := c.service.reach(ctx, BarrierBeforeSubmit, c.delivery); err != nil {
-		return NativeTurn{}, err
-	}
-	if err := c.service.Store.BeginTurnSubmission(ctx, run.ID); err != nil {
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	binding, err := submit(ctx, run)
 	if err != nil {
-		if c.reconcileSubmitError && run.SessionID != "" {
+		if run.ThreadID != "" && c.history != nil {
 			if reconciled, ok, reconcileErr := c.reconcileLostSubmission(ctx, run, err); ok || reconcileErr != nil {
 				return reconciled, reconcileErr
 			}
@@ -184,131 +176,131 @@ func (c nativeAgentRunContract) submitAndSettle(ctx context.Context, run AgentRu
 		if c.onSubmitError != nil {
 			return c.onSubmitError(ctx, run, binding, err)
 		}
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	if err := c.validateBinding(run, binding, run.SessionID != ""); err != nil {
+	if err := c.validateBinding(run, binding, run.ThreadID != ""); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	return c.bindAndSettle(ctx, run, binding, run.SessionID == "")
+	return c.bindAndSettle(ctx, run, binding)
 }
 
-func (c nativeAgentRunContract) reconcileLostSubmission(ctx context.Context, run AgentRun, submitErr error) (NativeTurn, bool, error) {
+func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run AgentRun, submitErr error) (HarnessTurn, bool, error) {
 	history, err := c.history(ctx, run)
 	if err != nil {
 		reason := c.label + " submission is genuinely uncertain: " + submitErr.Error() + "; history inspection failed: " + err.Error()
-		return NativeTurn{}, true, c.markUncertain(ctx, run.ID, reason)
+		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reason)
 	}
-	if err := c.owner(run, history.OwnerID, history.SessionID); err != nil {
+	if err := c.validateHistory(run, history); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, true, err
+		return HarnessTurn{}, true, err
 	}
 	reconciliation := ReconcileTurns(true, run.BaselineTurnID, "", history.Turns)
 	switch reconciliation.Classification {
 	case "no-submit":
-		return NativeTurn{}, false, nil
+		return HarnessTurn{}, false, nil
 	case "uncertain":
 		if reconciliation.Turn.ID != "" && c.bindUnsupportedTurn {
 			if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
-				return NativeTurn{}, true, err
+				return HarnessTurn{}, true, err
 			}
-			err := c.durableBind(ctx, run, nativeAgentBinding{OwnerID: history.OwnerID, SessionID: history.SessionID, Turn: reconciliation.Turn}, false)
-			return reconciliation.Turn, true, err
+			binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID}
+			return reconciliation.Turn, true, c.durableBind(ctx, run, binding)
 		}
-		return NativeTurn{}, true, c.markUncertain(ctx, run.ID, reconciliation.Reason)
+		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reconciliation.Reason)
 	default:
 		if err := c.service.reach(ctx, BarrierAfterSubmitBeforeBind, c.delivery); err != nil {
-			return NativeTurn{}, true, err
+			return HarnessTurn{}, true, err
 		}
-		turn, err := c.bindAndSettle(ctx, run, nativeAgentBinding{OwnerID: history.OwnerID, SessionID: history.SessionID, Turn: reconciliation.Turn}, false)
+		binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn, ControllerID: history.ControllerID}
+		turn, err := c.bindAndSettle(ctx, run, binding)
 		return turn, true, err
 	}
 }
 
-func (c nativeAgentRunContract) bindAndSettle(ctx context.Context, run AgentRun, binding nativeAgentBinding, bindSession bool) (NativeTurn, error) {
-	if err := c.durableBind(ctx, run, binding, bindSession); err != nil {
-		return NativeTurn{}, err
+func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, binding HarnessBinding) (HarnessTurn, error) {
+	if err := c.durableBind(ctx, run, binding); err != nil {
+		return HarnessTurn{}, err
 	}
-	run.SessionID, run.NativeTurnID = binding.SessionID, binding.Turn.ID
-	if c.adoptBinding != nil {
-		c.adoptBinding(&run, binding)
-	}
-	if terminalNative(binding.Turn.Status) || c.wait == nil || !activeNative(binding.Turn.Status) {
+	run.Harness, run.ThreadID, run.TurnID = binding.Harness, binding.ThreadID, binding.Turn.ID
+	if terminalHarness(binding.Turn.Status) || c.wait == nil || !activeHarness(binding.Turn.Status) {
 		return binding.Turn, nil
 	}
-	if err := c.service.reach(ctx, BarrierNativeActive, c.delivery); err != nil {
-		return NativeTurn{}, err
+	if err := c.service.reach(ctx, BarrierHarnessActive, c.delivery); err != nil {
+		return HarnessTurn{}, err
 	}
 	waited, err := c.wait(ctx, run, binding.Turn.ID)
 	if err != nil {
 		c.recordReadError(ctx, run.ID, err)
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	if err := c.validateBinding(run, waited, true); err != nil {
 		_ = c.service.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
 	if waited.Turn.ID != binding.Turn.ID {
-		reason := fmt.Sprintf("%s wait returned native turn %s for bound turn %s", c.label, waited.Turn.ID, binding.Turn.ID)
-		return NativeTurn{}, c.markUncertain(ctx, run.ID, reason)
+		reason := fmt.Sprintf("%s wait returned turn %s for bound turn %s", c.label, waited.Turn.ID, binding.Turn.ID)
+		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
 	}
 	if err := c.beforeDurableBind(ctx); err != nil {
-		return NativeTurn{}, err
+		return HarnessTurn{}, err
 	}
-	if err := c.service.Store.BindNativeTurn(ctx, run.ID, waited.Turn.ID, waited.Turn.Status); err != nil {
-		return NativeTurn{}, err
+	if err := c.service.Store.BindAgentRun(ctx, run.ID, waited.Harness, waited.ThreadID, waited.Turn.ID, waited.Turn.Status); err != nil {
+		return HarnessTurn{}, err
 	}
 	return waited.Turn, nil
 }
 
-func (c nativeAgentRunContract) durableBind(ctx context.Context, run AgentRun, binding nativeAgentBinding, bindSession bool) error {
+func (c agentRunContract) durableBind(ctx context.Context, run AgentRun, binding HarnessBinding) error {
 	if err := c.beforeDurableBind(ctx); err != nil {
 		return err
 	}
-	if bindSession && c.bindSession != nil {
-		if err := c.bindSession(ctx, binding); err != nil {
-			return err
-		}
-	}
-	return c.service.Store.BindNativeTurn(ctx, run.ID, binding.Turn.ID, binding.Turn.Status)
+	return c.service.Store.BindAgentRun(ctx, run.ID, binding.Harness, binding.ThreadID, binding.Turn.ID, binding.Turn.Status)
 }
 
-func (c nativeAgentRunContract) validateBinding(run AgentRun, binding nativeAgentBinding, requireBoundSession bool) error {
-	if binding.SessionID == "" || binding.Turn.ID == "" {
-		return fmt.Errorf("%s native submission or recovery returned an incomplete Session or turn binding", c.label)
+func (c agentRunContract) validateBinding(run AgentRun, binding HarnessBinding, requireBoundThread bool) error {
+	if binding.Turn.ID == "" {
+		return fmt.Errorf("%s submission or recovery returned an incomplete harness, thread, or turn binding", c.label)
 	}
-	if requireBoundSession && binding.SessionID != run.SessionID {
-		return fmt.Errorf("%s native recovery returned Session %s for bound Session %s", c.label, binding.SessionID, run.SessionID)
-	}
-	return c.owner(run, binding.OwnerID, binding.SessionID)
+	return c.validateHarnessIdentity(run, binding, requireBoundThread)
 }
 
-func (c nativeAgentRunContract) owner(run AgentRun, ownerID, sessionID string) error {
-	if c.validateOwner == nil {
-		return nil
+func (c agentRunContract) validateHarnessIdentity(run AgentRun, binding HarnessBinding, requireBoundThread bool) error {
+	if binding.Harness == "" || binding.ThreadID == "" {
+		return fmt.Errorf("%s recovery returned an incomplete harness or thread identity", c.label)
 	}
-	return c.validateOwner(run, ownerID, sessionID)
+	if requireBoundThread && (binding.Harness != run.Harness || binding.ThreadID != run.ThreadID) {
+		return fmt.Errorf("%s recovery returned %s thread %s for bound %s thread %s", c.label, binding.Harness, binding.ThreadID, run.Harness, run.ThreadID)
+	}
+	if c.validateOwner != nil {
+		return c.validateOwner(binding)
+	}
+	return nil
 }
 
-func (c nativeAgentRunContract) beforeDurableBind(ctx context.Context) error {
+func (c agentRunContract) validateHistory(run AgentRun, history HarnessHistory) error {
+	return c.validateHarnessIdentity(run, HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, ControllerID: history.ControllerID}, run.ThreadID != "")
+}
+
+func (c agentRunContract) beforeDurableBind(ctx context.Context) error {
 	if c.beforeBind == nil {
 		return nil
 	}
 	return c.beforeBind(ctx)
 }
 
-func (c nativeAgentRunContract) recordReadError(ctx context.Context, runID string, err error) {
+func (c agentRunContract) recordReadError(ctx context.Context, runID string, err error) {
 	if c.onReadError != nil {
 		c.onReadError(ctx, runID, err)
 	}
 }
 
-func (c nativeAgentRunContract) markUncertain(ctx context.Context, runID, reason string) error {
+func (c agentRunContract) markUncertain(ctx context.Context, runID, reason string) error {
 	if err := c.service.Store.UncertainAgentRun(ctx, runID, reason); err != nil {
 		return err
 	}
-	return fmt.Errorf("%s native reconciliation is uncertain: %s", c.label, reason)
+	return fmt.Errorf("%s reconciliation is uncertain: %s", c.label, reason)
 }

@@ -945,16 +945,19 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted foundation — 2026-08-06; review-request and Absurd-usage clauses superseded
   by D048 — 2026-08-09; commit ownership clarified by D050 — 2026-08-10; review handoff and unknown
-  review selection superseded by D052 — 2026-08-10
+  review selection superseded by D052 — 2026-08-10; harness execution vocabulary clarified by
+  D055 — 2026-08-10
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
   reconciliation in Dorf because no workflow engine can atomically commit an Incus, agent, Git, or
   GitHub effect together with its own checkpoint. Incus remains the first Sandbox, Codex app-server
-  the first Agent runner, and GitHub pull requests the first acceptance surface.
+  the first agent Harness, and GitHub pull requests the first acceptance surface.
 - **Product vocabulary:** A coding request is a `Job`; its isolated execution body is a `Sandbox`;
-  a bounded invocation of an agent in a named `Role` is an `AgentRun`; resumable native context is a
-  `Session`. `Action`, `Check`, `Revision`, and `Evidence` name deterministic work and proof. Do not
+  a bounded invocation of an agent in a named `Role` is an `AgentRun`. A `Harness` hosts agents, a
+  `Thread` is its continuing conversation context, and a
+  `Turn` is one request/response cycle. `Action`, `Check`, `Revision`, and `Evidence` name
+  deterministic work and proof. Do not
   create a durable `Worker` identity until a real product requirement needs personality or memory
   across Jobs. Do not introduce `Assignment` or `RoleRun` as aliases for facts that these names
   already express.
@@ -1002,7 +1005,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   reproducible cross-host build graph; direct repo-owned commands are simpler for the first system.
 - **Reconsider when:** Absurd cannot survive the real crash and redelivery terminals, its evolution
   or license makes self-hosting unsuitable, multi-region or high-volume hosted operation requires a
-  more mature distributed control plane, a second concrete language or Agent runner proves a
+  more mature distributed control plane, a second concrete language or agent Harness proves a
   smaller stable seam, a real cross-Job identity requirement earns `Worker`, or repeated dogfood
   identifies a concrete authoritative input that deterministic facts plus bounded triage cannot
   express and that justifies a structured additional-review contract rather than parsing agent
@@ -1019,7 +1022,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   controller into Dorf-owned schema. Version-pinned white-box tests and operator diagnostics may
   inspect those tables without making them product authority.
 - **Message order:** Every accepted message keeps a monotonic Job-local admission sequence. Follow-up
-  turns are FIFO. A `steer` is an explicit priority lane for the active native turn and may overtake
+  Turns are FIFO. A `steer` is an explicit priority lane for the active harness Turn and may overtake
   queued follow-ups. Default text and structured inspection, command help, and the admission
   acknowledgement must expose its intent, target, original sequence, and priority effect; an
   architecture document alone is not adequate observability.
@@ -1075,19 +1078,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
   successfully prepared repository environment behind the same `commands.prepare` contract.
 
-## D050 — AgentRuns in the implementation Session own commits
+## D050 — Implementation AgentRuns own commits
 
-- **Status:** Accepted workflow correction — 2026-08-10; terminology clarified by D052
-- **Decision:** An AgentRun in the implementation Session owns the code change and, when it changes
+- **Status:** Accepted workflow correction — 2026-08-10; terminology clarified by D052 and D055
+- **Decision:** An implementation AgentRun owns the code change and, when it changes
   code, creates one or many commits in the Job checkout. Its successful change contract requires a clean
   checkout and a final `HEAD` that is a proper descendant of the AgentRun's input Revision. Dorf
   validates those facts and records the observed `HEAD` as the next exact Revision; it does not
   manufacture, squash, or amend the agent's commits. A follow-up Message may instead be handled with
   a clean unchanged `HEAD`; that creates no new Revision.
-- **Action boundary:** An Action is a code-owned operation that changes external state. Submitting
-  the bounded agent turn is therefore an Action, but tool calls and commits made inside that
-  AgentRun are not separate Actions. Their transcript remains harness-owned, their commits remain
-  Git-owned, and Dorf retains the observed Revision and Revision-pinned Evidence it needs.
+- **Action boundary:** An Action is a code-owned external mutation such as creating a Sandbox or
+  route, pushing Git, or publishing a pull request. An AgentRun owns submission and recovery of its
+  harness Turn directly; it is not paired with an Action. Tool calls and commits made inside that
+  AgentRun are also not separate Actions. Their transcript remains harness-owned, their commits
+  remain Git-owned, and Dorf retains the observed Revision and Revision-pinned Evidence it needs.
 - **Why:** Commit structure is part of implementation judgment and may naturally require more than
   one commit. Treating commit creation as a later deterministic Dorf step both erases that judgment
   and misstates the recovery boundary. Validating clean descendant Git state gives the workflow an
@@ -1104,8 +1108,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Check operation a stable versioned Absurd Step name plus a small typed result. Absurd owns durable
   execution mechanics; PostgreSQL remains authoritative for Job facts and receipts.
 - **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
-  Each external mutation reserves and reconciles its stable Action, performs a final claim check,
-  records the receipt, and then completes its Step. `workflow_phase` is retained temporarily as a
+  Each code-owned external mutation reserves and reconciles its stable Action, performs a final
+  claim check, records the receipt, and then completes its Step. Each AgentRun instead reconciles
+  its own Harness/Thread/Turn identity. `workflow_phase` is retained temporarily as a
   domain guard and review/publication handoff projection until Slice 6; the mixed service-layer
   coordinator that interpreted it has been deleted.
 - **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
@@ -1114,13 +1119,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   or a real dogfood workflow shows that a stable Step identity or boundary cannot represent recovery
   truthfully.
 
-## D052 — Feedback is a Message to the implementation Session
+## D052 — Feedback is a Message to the implementation AgentRun path
 
 - **Status:** Accepted workflow simplification — 2026-08-10
-- **Decision:** User text, Check output, and reviewer text use the same durable `Message` primitive and
-  are consumed by the original implementation Session through the normal AgentRun path. A review
-  AgentRun returns ordinary text. Dorf does not parse a universal `ReviewResult`, classify findings,
-  or create separate respond-to-review, respond-to-check, or repair AgentRun types.
+- **Decision:** User text, Check output, ReviewPolicy prompts, and reviewer text use the same durable
+  `Message` primitive. Every AgentRun consumes exactly one Message. ReviewPolicy creates the stable
+  workflow Message consumed by a selected review AgentRun; reviewer output is an ordinary agent
+  Message consumed through the implementation AgentRun path. Dorf does not parse a universal
+  `ReviewResult`, classify findings, or create separate respond-to-review, respond-to-check, or
+  repair AgentRun types.
 - **Message identity:** A Message records text, Job-local sequence, `FromKind`, and `FromID`.
   `FromKind` names the sender: human, agent, or workflow. `FromID` retains the exact request, AgentRun,
   or Check that caused the Message, and the consuming AgentRun points back to the Message. A Check or
@@ -1129,20 +1136,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   feature needs them.
 - **Review selection:** Deterministic policy selects known specialist Roles. Unknown risk selects one
   bounded general read-only reviewer rather than a triage AgentRun whose prose must be parsed to route
-  more work. Role, prompt, Revision, workspace, and capability envelope specialize an AgentRun; they
-  do not create a new execution primitive.
+  more work. Role, Revision, and capability envelope specialize an AgentRun; its prompt is the input
+  Message. The adapter supplies its Sandbox workspace without persisting that path on the run. These
+  inputs do not create a new execution primitive.
 - **Outcome:** The implementation agent decides whether to act, ignore, or explain. Dorf observes the
   resulting Git state. A committed descendant becomes a new Revision and loops through Checks and
   policy. A clean unchanged checkout means the Message was handled without a code change. A failed
   mandatory Check still blocks readiness until it passes, but it reaches the agent through the same
   Message mechanism.
-- **Authority:** Reviewer prose is an advisory claim. The Message is the durable handoff between agent
-  Sessions. Git remains authoritative for commits, and deterministic Checks remain authoritative for
-  their results.
+- **Authority:** Reviewer prose is an advisory Message, not Evidence. The Message is the durable
+  handoff between agent Threads. One observed Evidence record proves the review AgentRun's harness
+  execution; the prose is not duplicated as Evidence. Git remains authoritative for commits,
+  and deterministic Checks remain authoritative for their results.
 - **Why:** This matches ordinary human collaboration: one worker receives feedback from different
-  people and tools, decides what it means, and either changes the work or explains why not. One runner,
-  one inbox, and opaque text remove parsers and review-specific state without weakening deterministic
-  gates.
+  people and tools, decides what it means, and either changes the work or explains why not. One
+  AgentRun mechanism, one inbox, and opaque text remove parsers and review-specific state without
+  weakening deterministic gates.
 - **Reconsider when:** A concrete acceptance surface requires a machine-readable reviewer decision, or
   dogfood proves that ordinary text cannot safely carry a specific cross-agent contract.
 
@@ -1203,7 +1212,53 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   workflow contract.
 - **Why:** Push, propose, wait, and continue are one product story. Giving publication its own durable
   scheduler duplicated retry and attachment mechanics already owned by Absurd. Treating GitHub input
-  like any other Message also lets the original implementation Session decide whether to act without
+  like any other Message also lets the next implementation AgentRun decide whether to act without
   a new review-result or response type.
 - **Reconsider when:** GitHub polling is measurably wasteful enough to justify a webhook wake-up. A
   webhook should wake the same observer; it must not create a second workflow authority.
+
+## D055 — AgentRun owns its harness execution binding
+
+- **Status:** Accepted execution simplification — 2026-08-10
+- **Decision:** `AgentRun` is Dorf's complete durable delivery record for one durable Message.
+  Submitting, reconciling, waiting for, and recording the harness Turn are its lifecycle, not a
+  paired `Action`. Every AgentRun consumes exactly one durable Message; every Message selected for
+  agent delivery has exactly one AgentRun. The AgentRun retains the Message identity, Harness,
+  Thread, Turn, Role, Revision, capability, Turn outcome, recovery baseline, and the nonces required
+  to prove ownership and submission. Implementation continuity comes from reusing the Thread bound
+  to prior implementation AgentRuns; there is no separate Thread row or binding on Job. A follow
+  normally creates a new Turn; a steer normally binds to its target Turn and creates a new Turn only
+  on terminal-target fallback.
+- **Vocabulary:** A Harness is software that hosts an agent and exposes Threads and Turns; Codex
+  app-server is the first Harness. A Thread is a continuing harness conversation that one or more
+  AgentRuns may use. A Turn is one request/response cycle inside a Thread. These known terms replace
+  ambiguous session/execution vocabulary without leaking Codex protocol types into the core.
+- **Action boundary:** Actions record code-owned external mutations such as creating or destroying a
+  Sandbox or route, pushing Git, and publishing a pull request. Agent execution has one durable
+  identity and state machine: AgentRun. There is no turn-start Action, separate
+  `codex-session-start` Action, or Action/AgentRun synchronization.
+- **Evidence and feedback:** Agent prose is advisory text carried by Message. Evidence for a harness
+  observation links directly to the AgentRun whose Harness/Thread/Turn binding and Turn outcome it
+  records. A completed review retains one such observed Evidence record; its prose is delivered as
+  the exact feedback Message through the implementation AgentRun path and is not copied into
+  Evidence. Atomic feedback recording makes the completed AgentRun, observed Evidence, and exact
+  Message one idempotent handoff.
+- **Review input:** Deterministic ReviewPolicy creates one stable workflow Message for each selected
+  Role. The review AgentRun consumes that Message like any other AgentRun, and review prompt text is
+  stored only on the Message. This keeps future reviewer follow-up and Thread reuse inside the same
+  Message-to-AgentRun model. The current coding workflow routes ordinary follow-ups only to the
+  implementation Role; adding reviewer follow-up later is a routing decision, not a new durable
+  primitive or table.
+- **Adapter boundary:** The Harness adapter owns app-server protocol, transcript, tool items, and the
+  transient Sandbox workspace and controller process. Dorf does not persist adapter-owned workspace
+  paths, derived input digests or controller identities, or unused token, cost, and yield telemetry.
+  Adding another Harness should implement the same narrow execution boundary; it does not justify a
+  registry or speculative portability layer.
+- **Why:** One agent delivery previously had overlapping AgentRun, turn-start Action, and
+  `codex-session-start` Action state. Recovery had to synchronize records that described the same
+  work, while review copied input text onto AgentRun and output prose into Evidence beside the
+  Messages that could carry both. One input Message, one AgentRun, one observed fact and, for review,
+  one output Message state the product story directly.
+- **Reconsider when:** A second concrete Harness cannot express a resumable Thread and bounded Turn,
+  or dogfood proves that one AgentRun cannot retain enough identity to reconcile uncertain
+  submission without a distinct durable effect record.

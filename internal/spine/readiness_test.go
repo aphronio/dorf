@@ -1,8 +1,6 @@
 package spine
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,27 +102,30 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	}
 	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, State: "final", Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
 	incomplete := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &selected, nil)
-	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not returned a Message") {
+	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not returned a feedback Message") {
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	input := "bounded review input"
 	runID := ReviewAgentRunID(jobID, revision, string(policy.RoleCriticalBoundary))
-	ownerNonce := strings.Repeat("a", 64)
-	reviewerSandbox := ReviewSandboxName(runID)
+	requestFromID := ReviewRequestFromID(revision, string(policy.RoleCriticalBoundary))
+	requestID := ReviewRequestMessageID(jobID, revision, string(policy.RoleCriticalBoundary))
 	run := ReviewRunView{
-		AgentRun:            AgentRun{ID: runID, JobID: jobID, ActionID: "action-review", Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, NativeOutcome: "completed", NativeTurnID: "turn-review", SessionID: "session-review", Capability: ReviewReadOnlyCapability, Workspace: "/workspace/job", InputContract: input, StartedAt: now, FinishedAt: now.Add(time.Second)},
-		ReviewRunProjection: ReviewRunProjection{ReviewerSandboxID: reviewerSandbox, ReviewerRouteID: "route-review", ReviewerAppServer: ReviewControllerID(runID, reviewerSandbox, ownerNonce), ReviewerOwnerNonce: ownerNonce, SubmissionNonce: strings.Repeat("b", 64), InputDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(input))), RevisionTree: strings.Repeat("c", 40), ReviewerSandboxState: "created", ReviewerRouteState: "active", CheckoutState: "verified", PostReviewState: "verified"},
-		FeedbackMessageID:   MessageID(jobID, MessageFromAgent, runID),
+		AgentRun:          AgentRun{ID: runID, JobID: jobID, MessageID: requestID, Revision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
+		Request:           Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
+		FeedbackMessageID: MessageID(jobID, MessageFromAgent, runID),
 	}
-	outcome := NativeTurn{ID: run.NativeTurnID, Status: "completed", Output: "No material issue found. The boundary remains intact."}
-	claim, observed, err := (Service{Evidence: store}).reviewEvidence(run, outcome, "review-feedback")
+	observed, err := (Service{Evidence: store}).reviewEvidence(run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	run.ClaimEvidenceID, run.ObservedEvidenceID = claim.ID, observed.ID
-	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, claim, observed}, store, &selected, []ReviewRunView{run})
-	if !settled.Ready || !strings.Contains(settled.Reason, "claim Evidence") {
+	wrongMessage := run
+	wrongMessage.FeedbackMessageID = "message-foreign"
+	wrong := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{wrongMessage})
+	if wrong.Ready || !strings.Contains(wrong.Reason, "has not returned a feedback Message") {
+		t.Fatalf("foreign feedback Message satisfied readiness: %#v", wrong)
+	}
+	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run})
+	if !settled.Ready || !strings.Contains(settled.Reason, "returned feedback") {
 		t.Fatalf("settled selected readiness=%#v", settled)
 	}
 }
@@ -145,7 +146,7 @@ func readinessFixture(t *testing.T) (evidence.Store, string, string, []DeclaredC
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := Evidence{ID: EvidenceID(checkID, "check-output"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Provenance: observedProvenance, Kind: "check-output", CheckID: checkID, Revision: revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
+	record := Evidence{ID: EvidenceID(checkID, "check-output"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: "check-output", CheckID: checkID, Revision: revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
 	check := Check{ID: checkID, JobID: jobID, Name: declared[0].Name, Command: declared[0].Command, Revision: revision, State: "passed", EvidenceID: record.ID, EvidenceDigest: record.Digest, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
 	return store, jobID, revision, declared, check, record
 }

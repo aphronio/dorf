@@ -74,7 +74,7 @@ func TestPostgresPublishedFollowReopensAndUnchangedRunReturnsToProposal(t *testi
 	if _, _, err := store.RecordOutcome(context.Background(), merge); err == nil {
 		t.Fatal("recorded an Outcome while proposal feedback was still being handled")
 	}
-	if _, err := store.DB.ExecContext(context.Background(), `update dorf.agent_runs set state='completed',native_turn_id='turn-completed' where job_id=$1`, job.ID); err != nil {
+	if _, err := store.DB.ExecContext(context.Background(), `update dorf.agent_runs set state='completed',harness='codex',thread_id='thread-completed',turn_id='turn-completed',turn_outcome='completed' where job_id=$1`, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	completed, err := store.CompleteUnchangedRun(context.Background(), job.ID, spine.AgentRunID(message.ID), job.Revision, "no code change")

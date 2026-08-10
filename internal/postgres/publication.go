@@ -75,7 +75,7 @@ func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID s
 	if err != nil {
 		return spine.Action{}, err
 	}
-	return publicationAction(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+	return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
 }
 
 func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (spine.Action, spine.Action, error) {
@@ -85,7 +85,7 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 		if err != nil {
 			return spine.Action{}, err
 		}
-		return publicationAction(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
+		return publicationAction(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
 	}
 	push, err := load(spine.ActionRepositoryPush)
 	if err != nil {
@@ -175,9 +175,9 @@ func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposa
 	return &proposal, nil
 }
 
-func publicationAction(id, jobID, messageID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
+func publicationAction(id, jobID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
 	return spine.Action{
-		ID: id, JobID: jobID, MessageID: messageID, Kind: kind, State: state,
+		ID: id, JobID: jobID, Kind: kind, State: state,
 		ExternalID: externalID, Outcome: outcome, Scope: scope,
 	}
 }

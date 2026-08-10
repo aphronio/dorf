@@ -33,6 +33,41 @@ func TestReviewerRouteCleanupRecoversExactIDFromStableCreateAction(t *testing.T)
 	}
 }
 
+func TestReviewControllerIdentityIsDerivedFromDurableOwnership(t *testing.T) {
+	run := spine.ReviewRunView{
+		AgentRun: spine.AgentRun{ID: "agent-run-review"},
+		ReviewRunProjection: spine.ReviewRunProjection{
+			ReviewerSandboxID:  "dorf-review-owned",
+			ReviewerOwnerNonce: strings.Repeat("a", 64),
+		},
+	}
+	want := spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+	if got := reviewControllerID(run); got != want {
+		t.Fatalf("review controller=%q want %q", got, want)
+	}
+}
+
+func TestHarnessIdentityIsCodex(t *testing.T) {
+	if got := (Externals{}).Harness(); got != "codex" {
+		t.Fatalf("harness=%q", got)
+	}
+}
+
+func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
+	run := spine.ReviewRunView{
+		AgentRun: spine.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
+		Request: spine.Message{ID: "message-review", JobID: "job-review", FromKind: spine.MessageFromWorkflow, Input: "review this exact Revision"},
+	}
+	input, err := reviewInput(run)
+	if err != nil || input != run.Request.Input {
+		t.Fatalf("review input=%q err=%v", input, err)
+	}
+	run.Request.ID = "message-forged"
+	if _, err := reviewInput(run); err == nil {
+		t.Fatal("review accepted a request Message that did not own the AgentRun")
+	}
+}
+
 func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
 	if err := requireBridgeRoute("http://10.42.0.1:8317/v1", "10.42.0.1"); err != nil {
 		t.Fatal(err)
@@ -139,7 +174,7 @@ func TestReviewMaterializationRealGitIgnoresImplementationForgedReviewWorktree(t
 
 	job := spine.Job{ID: "job-real-boundary", Revision: revision}
 	run := spine.ReviewRunView{
-		AgentRun:            spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, Revision: revision, Workspace: "/workspace/job"},
+		AgentRun:            spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, Revision: revision},
 		ReviewRunProjection: spine.ReviewRunProjection{ReviewerSandboxID: "dorf-review-real", ReviewerOwnerNonce: strings.Repeat("d", 64)},
 	}
 	metadata := map[string]string{
@@ -197,7 +232,7 @@ func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testin
 	revision, tree := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	job := spine.Job{ID: "job-1", Revision: revision}
 	run := spine.ReviewRunView{
-		AgentRun:            spine.AgentRun{ID: "agent-run-1", JobID: job.ID, Revision: revision, Workspace: "/workspace/job"},
+		AgentRun:            spine.AgentRun{ID: "agent-run-1", JobID: job.ID, Revision: revision},
 		ReviewRunProjection: spine.ReviewRunProjection{ReviewerSandboxID: "dorf-review-owned", ReviewerOwnerNonce: strings.Repeat("c", 64)},
 	}
 	runner := &reviewBoundaryRunner{revision: revision, tree: tree, metadata: map[string]string{
@@ -211,7 +246,7 @@ func TestReviewMaterializationUsesSeparateOwnedSandboxAndExactGitState(t *testin
 		t.Fatal("review materialization accepted the implementation Sandbox")
 	}
 	receipt, err := externals.ReviewWorkspaceCreate(context.Background(), job, run, spine.Action{})
-	if err != nil || receipt.ExternalID != run.Workspace || receipt.Outcome != revision+" "+tree+" clean" {
+	if err != nil || receipt.ExternalID != "/workspace/job" || receipt.Outcome != revision+" "+tree+" clean" {
 		t.Fatalf("review materialization receipt=%#v err=%v", receipt, err)
 	}
 	post, err := externals.ReviewWorkspaceVerify(context.Background(), job, run)

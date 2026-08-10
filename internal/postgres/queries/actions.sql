@@ -3,20 +3,6 @@ insert into dorf.actions(id,job_id,kind,state)
 values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending')
 on conflict do nothing;
 
--- name: InsertMessageActionIfAbsent :exec
-insert into dorf.actions(id,job_id,message_id,kind,state)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(kind),'pending')
-on conflict do nothing;
-
--- name: InsertMessageAction :exec
-insert into dorf.actions(id,job_id,message_id,kind,state)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(kind),'pending');
-
--- name: GetMessageActionID :one
-select id
-from dorf.actions
-where message_id=sqlc.arg(message_id) and kind=sqlc.arg(kind);
-
 -- name: ReserveMainSandbox :execrows
 insert into dorf.sandboxes(job_id,action_id,incus_name,state)
 values(sqlc.arg(job_id),sqlc.arg(action_id),sqlc.arg(incus_name),'pending')
@@ -32,25 +18,23 @@ where dorf.routes.action_id=excluded.action_id
   and dorf.routes.route_id=excluded.route_id;
 
 -- name: GetUnscopedActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
-where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
-  and message_id is null and scope_key=''
+where job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and scope_key=''
 for update;
 
 -- name: GetActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
 where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind)
-  and message_id is null
 for update;
 
 -- name: GetAction :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
@@ -92,31 +76,6 @@ update dorf.actions
 set state='uncertain'
 where id=sqlc.arg(action_id) and state<>'succeeded';
 
--- name: MarkTurnActionSucceeded :exec
-update dorf.actions
-set state='succeeded',external_id=sqlc.arg(turn_id),external_outcome=sqlc.arg(outcome)
-where id=sqlc.arg(action_id);
-
--- name: ResetTurnActionForSubmission :execrows
-update dorf.actions
-set state='pending'
-where id=(select ar.action_id from dorf.agent_runs ar where ar.id=sqlc.arg(run_id))
-  and state in ('pending','uncertain');
-
--- name: MarkRunActionFailed :exec
-update dorf.actions
-set state=case when exists(
-        select 1 from dorf.agent_runs ar
-        where ar.id=sqlc.arg(run_id) and ar.native_turn_id is null
-    ) then 'uncertain' else 'failed' end,
-    external_outcome=sqlc.arg(reason)
-where dorf.actions.id=sqlc.arg(action_id);
-
--- name: MarkRunActionUncertain :exec
-update dorf.actions
-set state='uncertain',external_outcome=sqlc.arg(reason)
-where id=sqlc.arg(action_id) and state<>'succeeded';
-
 -- name: GetReviewSandboxReceiptIdentity :one
 select sandbox_name,revision
 from dorf.review_resources
@@ -150,28 +109,6 @@ update dorf.routes
 set state='active',observed_at=clock_timestamp()
 where job_id=sqlc.arg(job_id) and action_id=sqlc.arg(action_id)
   and route_id=sqlc.arg(route_id) and state in ('pending','active');
-
--- name: ImplementationSessionExists :one
-select exists(select 1 from dorf.sessions where native_session_id=sqlc.arg(session_id));
-
--- name: GetReviewControllerIdentity :one
-select sandbox_name,ownership_nonce
-from dorf.review_resources
-where run_id=sqlc.arg(run_id);
-
--- name: BindReviewAppServer :execrows
-update dorf.review_resources
-set app_server_id=coalesce(app_server_id,sqlc.arg(app_server_id))
-where run_id=sqlc.arg(run_id) and sandbox_state='created' and route_state='active'
-  and checkout_state='verified'
-  and (app_server_id is null or app_server_id=sqlc.arg(app_server_id));
-
--- name: UpsertImplementationSession :execrows
-insert into dorf.sessions(job_id,action_id,native_session_id)
-values(sqlc.arg(job_id),sqlc.arg(action_id),sqlc.arg(session_id))
-on conflict(job_id) do update
-set native_session_id=excluded.native_session_id,observed_at=clock_timestamp()
-where dorf.sessions.native_session_id=excluded.native_session_id;
 
 -- name: GetReviewRouteForCleanup :one
 select route_id
@@ -217,9 +154,8 @@ where job_id=sqlc.arg(job_id) and incus_name=sqlc.arg(incus_name)
   and state in ('pending','created','deleted');
 
 -- name: GetReviewWorkspaceReceiptIdentity :one
-select ar.workspace,rr.revision
+select rr.revision
 from dorf.review_resources rr
-join dorf.agent_runs ar on ar.id=rr.run_id
 where rr.materialize_action_id=sqlc.arg(action_id) and rr.run_id=sqlc.arg(run_id);
 
 -- name: MarkReviewCheckoutVerified :execrows
@@ -231,7 +167,7 @@ where run_id=sqlc.arg(run_id) and sandbox_state='created'
   and (revision_tree is null or revision_tree=sqlc.arg(tree));
 
 -- name: ListActions :many
-select a.id,coalesce(a.message_id,'') as message_id,a.kind,a.state,
+select a.id,a.kind,a.state,
        coalesce(a.external_id,'') as external_id,a.scope_key,
        coalesce(e.digest,'') as evidence_digest
 from dorf.actions a

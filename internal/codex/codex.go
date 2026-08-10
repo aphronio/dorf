@@ -35,7 +35,9 @@ type Agent struct {
 	Timeout time.Duration
 }
 
-type TurnOutcome = spine.NativeTurn
+const Harness = "codex"
+
+type TurnOutcome = spine.HarnessTurn
 
 type RejectedError struct{ Method string }
 
@@ -45,7 +47,7 @@ func (e *RejectedError) DefiniteNoSubmit() bool { return true }
 type resumeBindingError struct{}
 
 func (e *resumeBindingError) Error() string {
-	return "thread/resume did not return the exact bound native Session"
+	return "thread/resume did not return the exact bound thread"
 }
 func (e *resumeBindingError) DefiniteNoSubmit() bool { return true }
 
@@ -59,55 +61,55 @@ type reviewVisibilityError struct{ reason string }
 func (e *reviewVisibilityError) Error() string                   { return e.reason }
 func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (string, TurnOutcome, error) {
-	return a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
+func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
+	threadID, turn, err := a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
+	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	var binding spine.ReviewNativeBinding
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
-		sessionID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
-		binding = spine.ReviewNativeBinding{AppServerID: appServerID, SessionID: sessionID, Turn: turn}
+	binding := spine.HarnessBinding{Harness: Harness}
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
+		binding.ThreadID, binding.Turn = threadID, turn
 		return err
 	})
 	return binding, err
 }
 
-func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, sessionID, submissionNonce, input, model, effort string) (spine.ReviewNativeHistory, error) {
+func (a Agent) ReadStrictReviewTurns(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, threadID, submissionNonce, input, model, effort string) (spine.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	var history spine.ReviewNativeHistory
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
-		observedSession, turns, err := protocol.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
-		history = spine.ReviewNativeHistory{AppServerID: appServerID, SessionID: observedSession, Turns: turns}
+	history := spine.HarnessHistory{Harness: Harness}
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+		observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
+		history.ThreadID, history.Turns = observedThread, turns
 		return err
 	})
 	return history, err
 }
 
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	var binding spine.ReviewNativeBinding
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
-		sessionID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
-		binding = spine.ReviewNativeBinding{AppServerID: appServerID, SessionID: sessionID, Turn: turn}
+	binding := spine.HarnessBinding{Harness: Harness}
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
+		binding.ThreadID, binding.Turn = threadID, turn
 		return err
 	})
 	return binding, err
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, sessionID, turnID, submissionNonce, input, model, effort string) (spine.ReviewNativeBinding, error) {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	binding := spine.ReviewNativeBinding{SessionID: sessionID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol, appServerID string) error {
-		binding.AppServerID = appServerID
+	binding := spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
+	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
 		missingAttempts := 0
 		for {
-			observedSession, turns, err := protocol.strictReviewHistory(ctx, workspace, sessionID, submissionNonce, input, model, effort)
+			observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
 			if err != nil {
 				var missing interface{ RetryableReviewVisibility() bool }
 				if !errors.As(err, &missing) || !missing.RetryableReviewVisibility() || missingAttempts >= 20 {
@@ -122,7 +124,7 @@ func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace 
 				continue
 			}
 			missingAttempts = 0
-			binding.SessionID = observedSession
+			binding.ThreadID = observedThread
 			if len(turns) != 1 || turns[0].ID != turnID {
 				return reviewAttention("strict review recovery found the wrong native turn")
 			}
@@ -153,41 +155,41 @@ func (a Agent) startInitialTurn(ctx context.Context, sandboxName, workspace, age
 	return sessionID, outcome, err
 }
 
-func (a Agent) ReadInitialTurns(ctx context.Context, sandboxName, workspace string) (string, []TurnOutcome, error) {
+func (a Agent) ReadInitialTurns(ctx context.Context, sandboxName, workspace string) (spine.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	var sessionID string
+	var threadID string
 	var turns []TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		sessionID, turns, err = protocol.inspectInitialTurns(ctx, workspace)
+		threadID, turns, err = protocol.inspectInitialTurns(ctx, workspace)
 		return err
 	})
-	return sessionID, turns, err
+	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) ReadTurns(ctx context.Context, sandboxName, workspace, sessionID string) ([]TurnOutcome, error) {
+func (a Agent) ReadTurns(ctx context.Context, sandboxName, threadID string) (spine.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var turns []TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		turns, err = protocol.readTurns(ctx, sessionID)
+		turns, err = protocol.readTurns(ctx, threadID)
 		return err
 	})
-	return turns, err
+	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, sessionID, agentRunID, input, model, effort string) (TurnOutcome, error) {
+func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var outcome TurnOutcome
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
 		var err error
-		outcome, err = protocol.resumeAndStartTurn(ctx, sessionID, workspace, agentRunID, input, model, effort, "danger-full-access")
+		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
 	})
-	return outcome, err
+	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
 func (a Agent) SteerTurn(ctx context.Context, sandboxName, sessionID, turnID, agentRunID, input string) (string, error) {
@@ -202,14 +204,14 @@ func (a Agent) SteerTurn(ctx context.Context, sandboxName, sessionID, turnID, ag
 	return acceptedTurnID, err
 }
 
-func (a Agent) WaitTurn(ctx context.Context, sandboxName, workspace, sessionID, turnID string) (TurnOutcome, error) {
+func (a Agent) WaitTurn(ctx context.Context, sandboxName, threadID, turnID string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	outcome := TurnOutcome{ID: turnID, Status: "running"}
 	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
-		return protocol.pollTurn(ctx, sessionID, turnID, &outcome)
+		return protocol.pollTurn(ctx, threadID, turnID, &outcome)
 	})
-	return outcome, err
+	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
 func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -220,19 +222,15 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (a Agent) withServer(ctx context.Context, sandboxName string, fn func(*protocol) error) error {
-	return a.withServerIdentity(ctx, sandboxName, func(protocol *protocol, _ string) error { return fn(protocol) })
-}
-
-func (a Agent) withServerIdentity(ctx context.Context, sandboxName string, fn func(*protocol, string) error) error {
 	address, err := a.Sandbox.PrivateIPv4(ctx, sandboxName)
 	if err != nil {
 		return err
 	}
 	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
-	return a.withServerEndpointIdentity(ctx, sandboxName, endpoint, fn)
+	return a.withServerEndpoint(ctx, sandboxName, endpoint, fn)
 }
 
-func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner incus.ReviewMetadata, fn func(*protocol, string) error) error {
+func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner incus.ReviewMetadata, fn func(*protocol) error) error {
 	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
 		return err
 	}
@@ -244,29 +242,22 @@ func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner i
 	return a.withReviewServerEndpoint(ctx, sandboxName, endpoint, owner, fn)
 }
 
-func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol, string) error) error {
-	logicalID := spine.ReviewControllerID(owner.AgentRunID, sandboxName, owner.OwnershipNonce)
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, true, func(_ string) (string, error) {
+func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol) error) error {
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, true, func() error {
 		// Re-attest after reconnect or process replacement. The authentication
 		// token can rotate; only this exact host-owned Sandbox identity persists.
 		if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
-			return "", err
+			return err
 		}
-		return logicalID, nil
+		return nil
 	}, fn)
 }
 
 func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint string, fn func(*protocol) error) error {
-	return a.withServerEndpointIdentity(ctx, sandboxName, endpoint, func(protocol *protocol, _ string) error { return fn(protocol) })
+	return a.withServerEndpointController(ctx, sandboxName, endpoint, false, nil, fn)
 }
 
-func (a Agent) withServerEndpointIdentity(ctx context.Context, sandboxName, endpoint string, fn func(*protocol, string) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, false, func(token string) (string, error) {
-		return appServerIdentity(token), nil
-	}, fn)
-}
-
-func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, reviewReadOnly bool, controllerIdentity func(string) (string, error), fn func(*protocol, string) error) error {
+func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
 	probe, err := a.probeServer(ctx, sandboxName, endpoint)
 	if err != nil {
 		return err
@@ -277,11 +268,12 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 		protocol, dialErr := dialProtocol(ctx, endpoint, probe.token)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
-			identity, identityErr := controllerIdentity(probe.token)
-			if identityErr != nil {
-				return identityErr
+			if authorize != nil {
+				if err := authorize(); err != nil {
+					return err
+				}
 			}
-			return fn(protocol, identity)
+			return fn(protocol)
 		}
 		if probe.running {
 			return fmt.Errorf("exact live Codex app-server could not be authenticated or inspected: %w", dialErr)
@@ -314,11 +306,12 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 		protocol, dialErr := dialProtocol(ctx, endpoint, token)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
-			identity, identityErr := controllerIdentity(token)
-			if identityErr != nil {
-				return identityErr
+			if authorize != nil {
+				if err := authorize(); err != nil {
+					return err
+				}
 			}
-			return fn(protocol, identity)
+			return fn(protocol)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("Codex app-server did not become ready: %w", dialErr)
@@ -329,10 +322,6 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-}
-
-func appServerIdentity(token string) string {
-	return "codex-app-server-" + tokenSHA256(token)
 }
 
 func controlCapabilityScript() string {
@@ -409,7 +398,6 @@ func dialProtocol(ctx context.Context, endpoint, token string) (*protocol, error
 type protocol struct {
 	connection *websocket.Conn
 	nextID     int
-	pending    []map[string]any
 }
 
 func (p *protocol) initialize(ctx context.Context) error {
@@ -448,20 +436,20 @@ func (p *protocol) listStrictReviewThreads(ctx context.Context, workspace string
 		return nil, err
 	}
 	if cursor, ok := result["nextCursor"].(string); ok && cursor != "" {
-		return nil, reviewAttention("strict review native Session discovery exceeded its bound")
+		return nil, reviewAttention("strict review thread discovery exceeded its bound")
 	}
 	data, ok := result["data"].([]any)
 	if !ok {
-		return nil, reviewAttention("strict review native Session discovery omitted result.data")
+		return nil, reviewAttention("strict review thread discovery omitted result.data")
 	}
 	if len(data) > 1 {
-		return nil, reviewAttention(fmt.Sprintf("strict review recovery found %d competing native Sessions", len(data)))
+		return nil, reviewAttention(fmt.Sprintf("strict review recovery found %d competing threads", len(data)))
 	}
 	threads := make([]map[string]any, 0, len(data))
 	for _, value := range data {
 		thread, ok := value.(map[string]any)
 		if !ok || strings.TrimSpace(stringValue(thread["id"])) == "" || stringValue(thread["cwd"]) != workspace {
-			return nil, reviewAttention("strict review native Session identity or cwd is missing or mismatched")
+			return nil, reviewAttention("strict review thread identity or cwd is missing or mismatched")
 		}
 		threads = append(threads, thread)
 	}
@@ -495,14 +483,14 @@ func (p *protocol) startStrictReviewThread(ctx context.Context, workspace, model
 	thread, _ := result["thread"].(map[string]any)
 	id := stringValue(thread["id"])
 	if id == "" || stringValue(thread["cwd"]) != workspace {
-		return "", reviewAttention("strict review thread/start returned a mismatched native Session")
+		return "", reviewAttention("strict review thread/start returned a mismatched thread")
 	}
 	return id, nil
 }
 
 func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, expectedSession, submissionNonce, input, model, effort string, allowStart bool) (string, TurnOutcome, error) {
 	if len(submissionNonce) != 64 || strings.TrimSpace(input) == "" {
-		return "", TurnOutcome{}, reviewAttention("strict review submission nonce or input contract is missing")
+		return "", TurnOutcome{}, reviewAttention("strict review submission nonce or review Message is missing")
 	}
 	threads, err := p.listStrictReviewThreads(ctx, workspace)
 	if err != nil {
@@ -512,7 +500,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 	fresh := false
 	if len(threads) == 0 {
 		if !allowStart || expectedSession != "" {
-			return "", TurnOutcome{}, reviewVisibilityMissing("strict review bound native Session is not yet visible")
+			return "", TurnOutcome{}, reviewVisibilityMissing("strict review bound thread is not yet visible")
 		}
 		sessionID, err = p.startStrictReviewThread(ctx, workspace, model, effort)
 		if err != nil {
@@ -522,7 +510,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 	} else {
 		sessionID = stringValue(threads[0]["id"])
 		if expectedSession != "" && sessionID != expectedSession {
-			return "", TurnOutcome{}, reviewAttention("strict review recovery found the wrong native Session")
+			return "", TurnOutcome{}, reviewAttention("strict review recovery found the wrong thread")
 		}
 	}
 	if !fresh {
@@ -531,7 +519,7 @@ func (p *protocol) reconcileStrictReviewTurn(ctx context.Context, workspace, exp
 			return sessionID, TurnOutcome{}, err
 		}
 		if len(turns) > 1 {
-			return sessionID, TurnOutcome{}, reviewAttention("strict review native Session contains extra turns")
+			return sessionID, TurnOutcome{}, reviewAttention("strict review thread contains extra turns")
 		}
 		if len(turns) == 1 {
 			if err := attestReviewTurn(turns[0], submissionNonce, input); err != nil {
@@ -556,10 +544,10 @@ func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedS
 		return "", nil, err
 	}
 	if len(threads) == 0 {
-		return "", nil, reviewVisibilityMissing("strict review bound native Session is not yet visible")
+		return "", nil, reviewVisibilityMissing("strict review bound thread is not yet visible")
 	}
 	if len(threads) != 1 || stringValue(threads[0]["id"]) != expectedSession {
-		return "", nil, reviewAttention("strict review recovery found a missing or competing native Session")
+		return "", nil, reviewAttention("strict review recovery found a missing or competing thread")
 	}
 	sessionID, rawTurns, err := p.strictReviewSnapshot(ctx, workspace, expectedSession, model, effort)
 	if err != nil {
@@ -569,7 +557,7 @@ func (p *protocol) strictReviewHistory(ctx context.Context, workspace, expectedS
 		return sessionID, nil, reviewVisibilityMissing("strict review bound native turn is not yet visible")
 	}
 	if len(rawTurns) != 1 {
-		return sessionID, nil, reviewAttention(fmt.Sprintf("strict review native Session contains %d turns; exactly one is required", len(rawTurns)))
+		return sessionID, nil, reviewAttention(fmt.Sprintf("strict review thread contains %d turns; exactly one is required", len(rawTurns)))
 	}
 	if err := attestReviewTurn(rawTurns[0], submissionNonce, input); err != nil {
 		return sessionID, nil, err
@@ -592,11 +580,11 @@ func (p *protocol) strictReviewSnapshot(ctx context.Context, workspace, sessionI
 	}
 	thread, _ := result["thread"].(map[string]any)
 	if stringValue(thread["id"]) != sessionID || stringValue(thread["cwd"]) != workspace {
-		return "", nil, reviewAttention("strict review thread/resume returned a mismatched native Session")
+		return "", nil, reviewAttention("strict review thread/resume returned a mismatched thread")
 	}
 	values, ok := thread["turns"].([]any)
 	if !ok {
-		return "", nil, reviewAttention("strict review native Session omitted persisted turns")
+		return "", nil, reviewAttention("strict review thread omitted persisted turns")
 	}
 	turns := make([]map[string]any, 0, len(values))
 	for _, value := range values {
@@ -647,7 +635,7 @@ func attestReviewTurn(turn map[string]any, submissionNonce, input string) error 
 		}
 		text, ok := content[0].(map[string]any)
 		if !ok || text["type"] != "text" || stringValue(text["text"]) != input {
-			return reviewAttention("strict review native turn prompt differs from the exact input contract")
+			return reviewAttention("strict review turn prompt differs from the exact review Message")
 		}
 	}
 	if matched != 1 {
@@ -691,17 +679,17 @@ func (p *protocol) inspectInitialTurns(ctx context.Context, workspace string) (s
 		return "", nil, err
 	}
 	if len(threads) > 1 {
-		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: isolated Sandbox contains %d native Sessions", len(threads))}
+		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: isolated Sandbox contains %d threads", len(threads))}
 	}
 	if len(threads) == 0 {
 		return "", nil, nil
 	}
 	turns, err := p.readTurns(ctx, threads[0])
 	if err != nil {
-		return "", nil, fmt.Errorf("inspect isolated native Session before initial submit: %v", err)
+		return "", nil, fmt.Errorf("inspect isolated thread before initial submit: %v", err)
 	}
 	if len(turns) > 1 {
-		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: initial native Session contains %d turns", len(turns))}
+		return "", nil, &attentionError{reason: fmt.Sprintf("Codex reconciliation is ambiguous: initial thread contains %d turns", len(turns))}
 	}
 	return threads[0], turns, nil
 }
@@ -713,7 +701,7 @@ func (p *protocol) readTurns(ctx context.Context, sessionID string) ([]TurnOutco
 	}
 	thread, _ := result["thread"].(map[string]any)
 	if thread == nil || thread["id"] != sessionID {
-		return nil, fmt.Errorf("thread/read did not return the bound native Session")
+		return nil, fmt.Errorf("thread/read did not return the bound thread")
 	}
 	values, ok := thread["turns"].([]any)
 	if !ok {
@@ -737,13 +725,6 @@ func parseTurn(turn map[string]any) TurnOutcome {
 	id, _ := turn["id"].(string)
 	status, _ := turn["status"].(string)
 	outcome := TurnOutcome{ID: id, Status: status}
-	if usage, ok := turn["usage"].(map[string]any); ok {
-		outcome.UsageAvailable = true
-		outcome.InputTokens = integer(usage["inputTokens"])
-		outcome.CachedInputTokens = integer(usage["cachedInputTokens"])
-		outcome.OutputTokens = integer(usage["outputTokens"])
-		outcome.CostMicrousd = integer(usage["costMicrousd"])
-	}
 	items, _ := turn["items"].([]any)
 	for _, value := range items {
 		item, ok := value.(map[string]any)
@@ -773,19 +754,6 @@ func parseTurn(turn map[string]any) TurnOutcome {
 		}
 	}
 	return outcome
-}
-
-func integer(value any) int64 {
-	switch number := value.(type) {
-	case float64:
-		return int64(number)
-	case int64:
-		return number
-	case int:
-		return int64(number)
-	default:
-		return 0
-	}
 }
 
 func (p *protocol) resumeThread(ctx context.Context, sessionID string) error {
@@ -856,7 +824,7 @@ func (p *protocol) pollTurn(ctx context.Context, sessionID, turnID string, outco
 			return nil
 		}
 	}
-	return fmt.Errorf("bound native turn %s is missing from Session history", turnID)
+	return fmt.Errorf("bound turn %s is missing from thread history", turnID)
 }
 
 func (p *protocol) call(ctx context.Context, method string, params any) (map[string]any, error) {
@@ -872,7 +840,6 @@ func (p *protocol) call(ctx context.Context, method string, params any) (map[str
 		}
 		responseID, exists := numericID(message["id"])
 		if !exists {
-			p.pending = append(p.pending, message)
 			continue
 		}
 		if responseID != id {
@@ -898,15 +865,6 @@ func (p *protocol) send(ctx context.Context, message map[string]any) error {
 		return fmt.Errorf("send Codex app-server message: %w", err)
 	}
 	return nil
-}
-
-func (p *protocol) receive(ctx context.Context) (map[string]any, error) {
-	if len(p.pending) > 0 {
-		message := p.pending[0]
-		p.pending = p.pending[1:]
-		return message, nil
-	}
-	return p.receiveRaw(ctx)
 }
 
 func (p *protocol) receiveRaw(ctx context.Context) (map[string]any, error) {

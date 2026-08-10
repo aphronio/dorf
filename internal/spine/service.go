@@ -17,37 +17,31 @@ type Store interface {
 	BeginSetup(context.Context, string) (Action, error)
 	CompleteAction(context.Context, string, Receipt) error
 	UncertainAction(context.Context, string) error
-	NextDelivery(context.Context, string, string) (*Delivery, error)
-	PrepareAgentRun(context.Context, string, string) error
-	BeginTurnSubmission(context.Context, string) error
-	BindNativeTurn(context.Context, string, string, string) error
+	NextDelivery(context.Context, string) (*Delivery, error)
+	PrepareAgentRun(context.Context, string, string, string) error
+	BindAgentRun(context.Context, string, string, string, string, string) error
+	BindSteer(context.Context, string, string, string) error
 	FailAgentRun(context.Context, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
-	NativeMutationDelivery(context.Context, string) (*Delivery, error)
+	HarnessMutationDelivery(context.Context, string) (*Delivery, error)
 	SetCleanupAttention(context.Context, string, string) error
 	CompleteCleanup(context.Context, string) error
 }
 
 type Externals interface {
+	Harness() string
 	SandboxCreate(context.Context, Job, Action) (Receipt, error)
 	RepositoryClone(context.Context, Job, Action) (Receipt, error)
 	RouteCreate(context.Context, Job, Action) (Receipt, error)
-	AgentInitialTurn(context.Context, Job, Delivery) (string, NativeTurn, error)
-	AgentInitialTurns(context.Context, Job) (string, []NativeTurn, error)
-	AgentTurns(context.Context, Job, string) ([]NativeTurn, error)
-	AgentSubmit(context.Context, Job, Delivery) (NativeTurn, error)
-	AgentWait(context.Context, Job, string, string) (NativeTurn, error)
+	AgentInitialTurn(context.Context, Job, Delivery) (HarnessBinding, error)
+	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
+	AgentTurns(context.Context, Job, string) (HarnessHistory, error)
+	AgentSubmit(context.Context, Job, Delivery) (HarnessBinding, error)
+	AgentSteer(context.Context, Job, Delivery) (string, error)
+	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
 	RouteRevoke(context.Context, Job, Action) (Receipt, error)
 	SandboxDelete(context.Context, Job, Action) (Receipt, error)
-}
-
-type steeringStore interface {
-	BindNativeSteer(context.Context, string, string, string) error
-}
-
-type steeringExternals interface {
-	AgentSteer(context.Context, Job, Delivery) (string, error)
 }
 
 type CodingStore interface {
@@ -75,15 +69,12 @@ type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
 }
 
-const (
-	commandEvidenceProducer = "dorf-go-worker"
-	observedProvenance      = "observed"
-)
+const commandEvidenceProducer = "dorf-command-observer"
 
 const (
 	BarrierBeforeSubmit           = "before-submit"
 	BarrierAfterSubmitBeforeBind  = "after-submit-before-bind"
-	BarrierNativeActive           = "native-active"
+	BarrierHarnessActive          = "harness-active"
 	BarrierSetupComplete          = "setup-complete-before-record"
 	BarrierCheckExited            = "check-exited-before-record"
 	BarrierPushAccepted           = "push-accepted-before-record"
@@ -303,7 +294,6 @@ func commandArtifact(identity, revision string, observation CommandObservation) 
 		Identity        string    `json:"identity"`
 		Revision        string    `json:"revision"`
 		Producer        string    `json:"producer"`
-		Provenance      string    `json:"provenance"`
 		Command         string    `json:"command"`
 		ExitCode        int       `json:"exit_code"`
 		StartedAt       time.Time `json:"started_at"`
@@ -313,7 +303,7 @@ func commandArtifact(identity, revision string, observation CommandObservation) 
 		StdoutTruncated bool      `json:"stdout_truncated"`
 		StderrTruncated bool      `json:"stderr_truncated"`
 		Redactions      []string  `json:"redactions"`
-	}{identity, revision, commandEvidenceProducer, observedProvenance, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
+	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
 }
 
 func (s Service) retainEvidence(ownerID, kind, actionID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
@@ -321,7 +311,7 @@ func (s Service) retainEvidence(ownerID, kind, actionID, checkID, revision strin
 	if err != nil {
 		return Evidence{}, err
 	}
-	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Provenance: observedProvenance, Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
+	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: kind, ActionID: actionID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
 }
 
 func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
@@ -334,154 +324,97 @@ func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity strin
 	return barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func (s Service) DeliverInitial(ctx context.Context, job Job, session Action, delivery Delivery) (string, error) {
-	run := delivery.AgentRun
-	if run.SessionID != "" {
-		return "", s.Store.UncertainAgentRun(ctx, run.ID, "initial AgentRun is bound while its native Session action is unsettled")
+func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) error {
+	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
+		_, err := s.deliverSteer(ctx, job, delivery)
+		return err
 	}
-	var sessionID string
-	contract := nativeAgentRunContract{
+	_, err := s.deliverAgentRun(ctx, job, delivery)
+	return err
+}
+
+func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery) (bool, error) {
+	run := delivery.AgentRun
+	contract := agentRunContract{
 		service:             s,
 		delivery:            delivery,
 		run:                 run,
-		label:               "initial",
+		harness:             s.Externals.Harness(),
+		label:               "harness",
 		bindUnsupportedTurn: true,
-		submitNew: func(ctx context.Context, _ AgentRun) (nativeAgentBinding, error) {
-			id, turn, err := s.Externals.AgentInitialTurn(ctx, job, delivery)
-			sessionID = id
-			return nativeAgentBinding{SessionID: id, Turn: turn}, err
-		},
-		recover: func(ctx context.Context, _ AgentRun) (nativeAgentBinding, error) {
-			id, turns, err := s.Externals.AgentInitialTurns(ctx, job)
-			if err != nil || id == "" || len(turns) == 0 {
-				return nativeAgentBinding{}, err
-			}
-			sessionID = id
-			return nativeAgentBinding{SessionID: id, Turn: turns[len(turns)-1]}, nil
-		},
-		bindSession: func(ctx context.Context, binding nativeAgentBinding) error {
-			sessionID = binding.SessionID
-			return s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: binding.SessionID})
-		},
-		beforeBind: func(ctx context.Context) error {
-			if err := s.requireClaim(ctx); err != nil {
-				_ = s.Store.UncertainAction(ctx, session.ID)
-				return err
-			}
-			return nil
-		},
-		onSubmitError: func(ctx context.Context, run AgentRun, _ nativeAgentBinding, err error) (NativeTurn, error) {
-			_ = s.Store.UncertainAction(ctx, session.ID)
-			var attention interface{ AttentionNeeded() bool }
-			if errors.As(err, &attention) && attention.AttentionNeeded() {
-				return NativeTurn{}, s.Store.UncertainAgentRun(ctx, run.ID, err.Error())
-			}
-			var definite interface{ DefiniteNoSubmit() bool }
-			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-					return NativeTurn{}, failErr
-				}
-				return NativeTurn{}, err
-			}
-			_ = s.Store.AgentRunAttention(ctx, run.ID, "initial native submission is awaiting isolated Session reconciliation: "+err.Error())
-			return NativeTurn{}, err
-		},
-	}
-	if _, err := contract.execute(ctx); err != nil {
-		return "", err
-	}
-	return sessionID, nil
-}
-
-func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) (bool, error) {
-	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.NativeTurnID == "" || delivery.AgentRun.NativeTurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery)
-	}
-	return s.deliverTurnStart(ctx, job, delivery)
-}
-
-func (s Service) deliverTurnStart(ctx context.Context, job Job, delivery Delivery) (bool, error) {
-	run := delivery.AgentRun
-	contract := nativeAgentRunContract{
-		service:              s,
-		delivery:             delivery,
-		run:                  run,
-		label:                "native",
-		reconcileSubmitError: true,
-		bindUnsupportedTurn:  true,
-		submitBound: func(ctx context.Context, run AgentRun) (nativeAgentBinding, error) {
+		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
 			delivery.AgentRun = run
-			turn, err := s.Externals.AgentSubmit(ctx, job, delivery)
-			return nativeAgentBinding{SessionID: run.SessionID, Turn: turn}, err
+			return s.Externals.AgentInitialTurn(ctx, job, delivery)
 		},
-		history: func(ctx context.Context, run AgentRun) (nativeAgentHistory, error) {
-			turns, err := s.Externals.AgentTurns(ctx, job, run.SessionID)
-			return nativeAgentHistory{SessionID: run.SessionID, Turns: turns}, err
-		},
-		wait: func(ctx context.Context, run AgentRun, turnID string) (nativeAgentBinding, error) {
-			turn, err := s.Externals.AgentWait(ctx, job, run.SessionID, turnID)
-			return nativeAgentBinding{SessionID: run.SessionID, Turn: turn}, err
-		},
-		validateOwner: func(run AgentRun, _ string, sessionID string) error {
-			if sessionID == "" || sessionID != run.SessionID {
-				return fmt.Errorf("native recovery conflicts with the bound Session")
+		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
+			history, err := s.Externals.AgentInitialTurns(ctx, job)
+			if err != nil || history.ThreadID == "" || len(history.Turns) == 0 {
+				return HarnessBinding{}, err
 			}
-			return nil
+			return HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: history.Turns[len(history.Turns)-1], ControllerID: history.ControllerID}, nil
+		},
+		submitBound: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+			delivery.AgentRun = run
+			return s.Externals.AgentSubmit(ctx, job, delivery)
+		},
+		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+			return s.Externals.AgentTurns(ctx, job, run.ThreadID)
+		},
+		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
+			return s.Externals.AgentWait(ctx, job, run.ThreadID, turnID)
 		},
 		beforeBind: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.Store.AgentRunAttention(ctx, runID, "native Session or submitted turn is currently unavailable: "+err.Error())
+			_ = s.Store.AgentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
 		},
-		onSubmitError: func(ctx context.Context, run AgentRun, _ nativeAgentBinding, err error) (NativeTurn, error) {
+		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
 				if failErr := s.Store.FailAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-					return NativeTurn{}, failErr
+					return HarnessTurn{}, failErr
 				}
 			}
-			return NativeTurn{}, err
+			if attentionNeeded(err) {
+				if uncertainErr := s.Store.UncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
+					return HarnessTurn{}, uncertainErr
+				}
+			}
+			return HarnessTurn{}, err
 		},
 	}
 	outcome, err := contract.execute(ctx)
 	if err != nil {
 		return false, err
 	}
-	return terminalNative(outcome.Status), nil
+	return terminalHarness(outcome.Status), nil
 }
 
 func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (bool, error) {
-	store, ok := s.Store.(steeringStore)
-	if !ok {
-		return false, errors.New("store does not support native turn steering")
-	}
-	externals, ok := s.Externals.(steeringExternals)
-	if !ok {
-		return false, errors.New("agent harness does not support native turn steering")
-	}
 	run := delivery.AgentRun
-	turns, err := s.Externals.AgentTurns(ctx, job, run.SessionID)
+	history, err := s.Externals.AgentTurns(ctx, job, run.ThreadID)
 	if err != nil {
-		_ = s.Store.AgentRunAttention(ctx, run.ID, "native Session history is currently unavailable: "+err.Error())
+		_ = s.Store.AgentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
 		return false, err
 	}
+	turns := history.Turns
 	reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 	if reconciliation.Classification == "completed" {
 		if err := s.requireClaim(ctx); err != nil {
 			return false, err
 		}
-		return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
+		return true, s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
-			return false, s.Store.UncertainAgentRun(ctx, run.ID, "native turns appeared after the terminal steer target before a fallback baseline was recorded")
+			return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 		}
-		return s.deliverTurnStart(ctx, job, delivery)
+		return s.deliverAgentRun(ctx, job, delivery)
 	}
 	if reconciliation.Classification == "uncertain" {
 		return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason)
 	}
 	if !run.BaselineRecorded {
-		if err := s.Store.PrepareAgentRun(ctx, run.ID, delivery.Message.TargetTurnID); err != nil {
+		if err := s.Store.PrepareAgentRun(ctx, run.ID, run.Harness, delivery.Message.TargetTurnID); err != nil {
 			return false, err
 		}
 		delivery.AgentRun.BaselineRecorded = true
@@ -490,28 +423,26 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	if err := s.reach(ctx, BarrierBeforeSubmit, delivery); err != nil {
 		return false, err
 	}
-	if err := s.Store.BeginTurnSubmission(ctx, run.ID); err != nil {
-		return false, err
-	}
-	acceptedTurnID, err := externals.AgentSteer(ctx, job, delivery)
+	acceptedTurnID, err := s.Externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observed, inspectErr := s.Externals.AgentTurns(ctx, job, run.SessionID)
+		observedHistory, inspectErr := s.Externals.AgentTurns(ctx, job, run.ThreadID)
 		if inspectErr != nil {
-			reason := "native steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
+			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
 			return false, s.Store.UncertainAgentRun(ctx, run.ID, reason)
 		}
+		observed := observedHistory.Turns
 		reconciled := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed)
 		if reconciled.Classification == "completed" {
 			if claimErr := s.requireClaim(ctx); claimErr != nil {
 				return false, claimErr
 			}
-			return true, store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
+			return true, s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
-				return false, s.Store.UncertainAgentRun(ctx, run.ID, "native turns appeared after the terminal steer target before a fallback baseline was recorded")
+				return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 			}
-			return s.deliverTurnStart(ctx, job, delivery)
+			return s.deliverAgentRun(ctx, job, delivery)
 		}
 		if reconciled.Classification == "uncertain" {
 			return false, s.Store.UncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -519,7 +450,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 		return false, err
 	}
 	if acceptedTurnID != delivery.Message.TargetTurnID {
-		return false, s.Store.UncertainAgentRun(ctx, run.ID, "native steer acknowledgement named a different active turn")
+		return false, s.Store.UncertainAgentRun(ctx, run.ID, "harness steer acknowledgement named a different active turn")
 	}
 	if err := s.reach(ctx, BarrierAfterSubmitBeforeBind, delivery); err != nil {
 		return false, err
@@ -527,7 +458,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) (
 	if err := s.requireClaim(ctx); err != nil {
 		return false, err
 	}
-	return true, store.BindNativeSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
+	return true, s.Store.BindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
 }
 
 func (s Service) reach(ctx context.Context, point string, delivery Delivery) error {
@@ -537,11 +468,11 @@ func (s Service) reach(ctx context.Context, point string, delivery Delivery) err
 	return s.Barrier.Reach(ctx, point, delivery)
 }
 
-func terminalNative(status string) bool {
+func terminalHarness(status string) bool {
 	return status == "completed" || status == "failed" || status == "interrupted"
 }
 
-func activeNative(status string) bool {
+func activeHarness(status string) bool {
 	// "inProgress" is the app-server thread/read spelling. "running" is
 	// Dorf's local status immediately after turn/start acceptance.
 	return status == "running" || status == "inProgress"
@@ -559,7 +490,7 @@ func (s Service) Cleanup(ctx context.Context, jobID string) error {
 		if job.CleanupState == CleanupComplete {
 			return nil
 		}
-		if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation native mutation", func() error { return s.reconcileCleanupMutation(ctx, job) }); err != nil {
+		if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
 			return err
 		}
 		if reviewStore, ok := s.Store.(ReviewStore); ok {
@@ -663,8 +594,8 @@ func emptyCleanupIdentity(value string) string {
 	return value
 }
 
-func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
-	delivery, err := s.Store.NativeMutationDelivery(ctx, job.ID)
+func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
+	delivery, err := s.Store.HarnessMutationDelivery(ctx, job.ID)
 	if err != nil || delivery == nil {
 		return err
 	}
@@ -672,28 +603,20 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 	if run.State == AgentRunUncertain {
 		return cleanupBlocked(*delivery, run.Attention)
 	}
-	sessionID := run.SessionID
-	var turns []NativeTurn
-	if sessionID == "" {
-		sessionID, turns, err = s.Externals.AgentInitialTurns(ctx, job)
-		if err == nil && sessionID == "" && len(turns) > 0 {
-			err = fmt.Errorf("cleanup initial history returned turns without a native Session")
+	threadID := run.ThreadID
+	var history HarnessHistory
+	if threadID == "" {
+		history, err = s.Externals.AgentInitialTurns(ctx, job)
+		if err == nil && history.ThreadID == "" && len(history.Turns) > 0 {
+			err = fmt.Errorf("cleanup initial history returned turns without a harness thread")
 		}
-		if err == nil && sessionID != "" && len(turns) > 0 {
-			session, actionErr := s.Store.BeginAction(ctx, job.ID, ActionSessionStart)
-			if actionErr != nil {
-				return actionErr
-			}
-			if session.State == ActionSucceeded && session.ExternalID != sessionID {
-				err = fmt.Errorf("cleanup isolated Session conflicts with the recorded Session")
-			} else if session.State != ActionSucceeded {
-				err = s.Store.CompleteAction(ctx, session.ID, Receipt{ExternalID: sessionID})
-			}
-			run.SessionID = sessionID
+		if err == nil && history.ThreadID != "" && len(history.Turns) > 0 {
+			threadID = history.ThreadID
+			run.Harness, run.ThreadID = history.Harness, history.ThreadID
 			delivery.AgentRun = run
 		}
 	} else {
-		turns, err = s.Externals.AgentTurns(ctx, job, sessionID)
+		history, err = s.Externals.AgentTurns(ctx, job, threadID)
 	}
 	if err != nil {
 		var attention interface{ AttentionNeeded() bool }
@@ -703,24 +626,21 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 			}
 			return cleanupBlocked(*delivery, err.Error())
 		}
-		reason := "cleanup could not inspect the bound native Session: " + err.Error()
+		reason := "cleanup could not inspect the bound harness thread: " + err.Error()
 		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
-	if delivery.Message.Intent == MessageSteer && (run.NativeTurnID == "" || run.NativeTurnID == delivery.Message.TargetTurnID) {
+	turns := history.Turns
+	if delivery.Message.Intent == MessageSteer && (run.TurnID == "" || run.TurnID == delivery.Message.TargetTurnID) {
 		reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
 		switch reconciliation.Classification {
 		case "completed":
-			store, ok := s.Store.(steeringStore)
-			if !ok {
-				return cleanupBlocked(*delivery, "store does not support native turn steering")
-			}
-			return store.BindNativeSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
+			return s.Store.BindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 		case "no-submit":
-			return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after native history proved it was not accepted")
+			return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
 		case "target-terminal":
 			if !run.BaselineRecorded {
-				return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after native history proved it was not accepted")
+				return s.Store.FailAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
 			}
 		default:
 			if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
@@ -729,17 +649,17 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 			return cleanupBlocked(*delivery, reconciliation.Reason)
 		}
 	}
-	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.NativeTurnID, turns)
+	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.TurnID, turns)
 	switch reconciliation.Classification {
 	case "no-submit":
-		reason := "cleanup closed delivery after native history proved no turn was submitted"
+		reason := "cleanup closed delivery after harness history proved no turn was submitted"
 		if err := s.Store.FailAgentRun(ctx, run.ID, reason); err != nil {
 			return err
 		}
 		return nil
 	case "uncertain":
 		if reconciliation.Turn.ID != "" {
-			if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+			if err := s.Store.BindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
 				return err
 			}
 		} else if err := s.Store.UncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
@@ -747,23 +667,23 @@ func (s Service) reconcileCleanupMutation(ctx context.Context, job Job) error {
 		}
 		return cleanupBlocked(*delivery, reconciliation.Reason)
 	}
-	if err := s.Store.BindNativeTurn(ctx, run.ID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
+	if err := s.Store.BindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
 		return err
 	}
 	if reconciliation.Classification != "active" {
 		return nil
 	}
-	outcome, err := s.Externals.AgentWait(ctx, job, sessionID, reconciliation.Turn.ID)
+	outcome, err := s.Externals.AgentWait(ctx, job, threadID, reconciliation.Turn.ID)
 	if err != nil {
-		reason := "cleanup is waiting for the exact native turn outcome: " + err.Error()
+		reason := "cleanup is waiting for the exact harness turn outcome: " + err.Error()
 		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}
-	if err := s.Store.BindNativeTurn(ctx, run.ID, outcome.ID, outcome.Status); err != nil {
+	if err := s.Store.BindAgentRun(ctx, run.ID, outcome.Harness, outcome.ThreadID, outcome.Turn.ID, outcome.Turn.Status); err != nil {
 		return err
 	}
-	if !terminalNative(outcome.Status) {
-		reason := fmt.Sprintf("cleanup inspection returned nonterminal native status %q", outcome.Status)
+	if !terminalHarness(outcome.Turn.Status) {
+		reason := fmt.Sprintf("cleanup inspection returned nonterminal harness status %q", outcome.Turn.Status)
 		_ = s.Store.AgentRunAttention(ctx, run.ID, reason)
 		return cleanupBlocked(*delivery, reason)
 	}

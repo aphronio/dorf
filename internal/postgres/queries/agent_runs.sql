@@ -1,144 +1,141 @@
--- name: InsertInitialAgentRun :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state)
-values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(action_id),'implement','pending')
+-- name: InsertImplementationAgentRun :execrows
+insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state)
+select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending'
+from dorf.jobs j
+left join lateral (
+    select ar.harness,ar.thread_id
+    from dorf.agent_runs ar
+    left join dorf.job_messages m on m.id=ar.message_id
+    where ar.job_id=j.id and ar.role='implement' and ar.thread_id is not null
+    order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
+    limit 1
+) prior on true
+where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
--- name: InsertAgentRun :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-values(
-    sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(action_id),
-    nullif(sqlc.arg(session_id)::text,''),sqlc.arg(role),'pending'
+-- name: ListImplementationThreadBindings :many
+select harness,thread_id
+from dorf.agent_runs
+where job_id=sqlc.arg(job_id) and role='implement' and thread_id is not null
+order by id;
+
+-- name: ImplementationThreadExists :one
+select exists(
+    select 1 from dorf.agent_runs
+    where role='implement' and harness=sqlc.arg(harness) and thread_id=sqlc.arg(thread_id)
 );
 
--- name: InsertAgentRunIfAbsent :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-values(
-    sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(action_id),
-    nullif(sqlc.arg(session_id)::text,''),'implement','pending'
-)
-on conflict do nothing;
-
--- name: InsertAgentRunFromImplementationSession :execrows
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-select sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(message_id),sqlc.arg(action_id),
-       native_session_id,'implement','pending'
-from dorf.sessions
-where job_id=sqlc.arg(job_id);
-
--- name: BindAgentRunSessionByMessage :exec
-update dorf.agent_runs
-set session_id=coalesce(session_id,sqlc.arg(session_id)),updated_at=clock_timestamp()
-where message_id=sqlc.arg(message_id)
-  and (session_id is null or session_id=sqlc.arg(session_id));
-
--- name: BindReviewAgentRunSession :execrows
-update dorf.agent_runs
-set session_id=coalesce(session_id,sqlc.arg(session_id)),updated_at=clock_timestamp()
-where id=sqlc.arg(run_id) and (session_id is null or session_id=sqlc.arg(session_id));
-
--- name: BindImplementationAgentRunSessions :exec
-update dorf.agent_runs
-set session_id=sqlc.arg(session_id),updated_at=clock_timestamp()
-where job_id=sqlc.arg(job_id) and role='implement'
-  and (session_id is null or session_id=sqlc.arg(session_id));
-
 -- name: GetAgentRunByMessage :one
-select id,job_id,coalesce(message_id,'') as message_id,action_id,
-       coalesce(session_id,'') as session_id,state,
-       (baseline_native_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(baseline_native_turn_id,'') as baseline_native_turn_id,
-       coalesce(native_turn_id,'') as native_turn_id,
-       coalesce(native_outcome,'') as native_outcome,
+select id,job_id,message_id,state,
+       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       (baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(baseline_turn_id,'') as baseline_turn_id,
+       coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
+-- name: GetAgentRunForBinding :one
+select job_id,role,state,coalesce(harness,'') as harness,
+       coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
+       coalesce(turn_outcome,'') as turn_outcome
+from dorf.agent_runs
+where id=sqlc.arg(run_id)
+for update;
+
 -- name: BlockAgentRunDelivery :exec
 update dorf.agent_runs
-set state='uncertain',attention=sqlc.arg(reason),updated_at=clock_timestamp()
+set state='uncertain',attention=sqlc.arg(reason)
 where id=sqlc.arg(run_id) and state not in ('completed','failed','interrupted');
 
 -- name: PrepareAgentRun :execrows
 update dorf.agent_runs
-set state='submitting',baseline_native_turn_id=sqlc.arg(baseline_turn_id),
-    attention=null,started_at=coalesce(started_at,clock_timestamp()),
-    updated_at=clock_timestamp()
-where id=sqlc.arg(run_id) and state='pending';
+set state='submitting',harness=coalesce(harness,sqlc.arg(harness)),
+    baseline_turn_id=sqlc.arg(baseline_turn_id),
+    attention=null,started_at=coalesce(started_at,clock_timestamp())
+where id=sqlc.arg(run_id) and state='pending'
+  and (harness is null or harness=sqlc.arg(harness));
 
--- name: GetAgentRunBaseline :one
-select (baseline_native_turn_id is not null)::boolean as recorded,
-       coalesce(baseline_native_turn_id,'') as baseline_turn_id
+-- name: GetAgentRunPreparation :one
+select coalesce(harness,'') as harness,(baseline_turn_id is not null)::boolean as recorded,
+       coalesce(baseline_turn_id,'') as baseline_turn_id
 from dorf.agent_runs
 where id=sqlc.arg(run_id);
 
--- name: BindNativeTurn :one
+-- name: BindAgentRunIdentity :execrows
 update dorf.agent_runs
-set native_turn_id=coalesce(native_turn_id,sqlc.arg(turn_id)),
-    state=sqlc.arg(state),native_outcome=nullif(sqlc.arg(outcome)::text,''),
-    attention=nullif(sqlc.arg(attention)::text,''),
-    finished_at=case when sqlc.arg(state)::text in ('completed','failed','interrupted')
-        then coalesce(finished_at,clock_timestamp()) else finished_at end,
-    updated_at=clock_timestamp()
-where id=sqlc.arg(run_id) and (native_turn_id is null or native_turn_id=sqlc.arg(turn_id))
-returning action_id;
+set harness=coalesce(harness,sqlc.arg(harness)),
+    thread_id=coalesce(thread_id,sqlc.arg(thread_id))
+where id=sqlc.arg(run_id)
+  and (harness is null or harness=sqlc.arg(harness))
+  and (thread_id is null or thread_id=sqlc.arg(thread_id));
 
--- name: PropagateNativeTurnOutcomeToSteers :exec
+-- name: BindHarnessTurn :execrows
+update dorf.agent_runs
+set turn_id=coalesce(turn_id,sqlc.arg(turn_id)),state=sqlc.arg(state),
+    turn_outcome=nullif(sqlc.arg(turn_outcome)::text,''),attention=nullif(sqlc.arg(attention)::text,''),
+    finished_at=case when sqlc.arg(state)::text in ('completed','failed','interrupted')
+        then coalesce(finished_at,clock_timestamp()) else finished_at end
+where id=sqlc.arg(run_id) and harness=sqlc.arg(harness) and thread_id=sqlc.arg(thread_id)
+  and (turn_id is null or turn_id=sqlc.arg(turn_id));
+
+-- name: PropagateTurnOutcomeToSteers :exec
 update dorf.agent_runs accepted
-set native_outcome=sqlc.arg(outcome),updated_at=clock_timestamp()
+set turn_outcome=sqlc.arg(turn_outcome)
 from dorf.job_messages message,dorf.agent_runs source
 where source.id=sqlc.arg(run_id) and accepted.id<>source.id
-  and accepted.job_id=source.job_id and accepted.session_id=source.session_id
+  and accepted.job_id=source.job_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
   and accepted.message_id=message.id and message.delivery_intent='steer'
   and message.steer_target_turn_id=sqlc.arg(turn_id)
-  and accepted.native_turn_id=sqlc.arg(turn_id)
-  and accepted.state='completed' and accepted.native_outcome is null;
+  and accepted.turn_id=sqlc.arg(turn_id)
+  and accepted.state='completed' and accepted.turn_outcome is null;
 
--- name: BindNativeSteer :one
+-- name: BindSteer :one
 update dorf.agent_runs
-set native_turn_id=coalesce(native_turn_id,sqlc.arg(turn_id)),state='completed',
-    native_outcome=coalesce(native_outcome,nullif(sqlc.arg(outcome)::text,'')),
-    attention=null,finished_at=coalesce(finished_at,clock_timestamp()),
-    updated_at=clock_timestamp()
-where id=sqlc.arg(run_id) and (native_turn_id is null or native_turn_id=sqlc.arg(turn_id))
-returning action_id,coalesce(native_outcome,'') as native_outcome;
+set turn_id=coalesce(turn_id,sqlc.arg(turn_id)),state='completed',
+    turn_outcome=coalesce(turn_outcome,nullif(sqlc.arg(turn_outcome)::text,'')),
+    attention=null,finished_at=coalesce(finished_at,clock_timestamp())
+where id=sqlc.arg(run_id) and harness is not null and thread_id is not null
+  and state not in ('failed','interrupted')
+  and (turn_id is null or turn_id=sqlc.arg(turn_id))
+returning coalesce(turn_outcome,'') as turn_outcome;
 
--- name: FailAgentRun :one
+-- name: FailAgentRun :execrows
 update dorf.agent_runs
 set state='failed',
-    native_outcome=case when native_turn_id is null then null else 'failed' end,
-    attention=sqlc.arg(reason),updated_at=clock_timestamp()
-where id=sqlc.arg(run_id)
-returning action_id;
+    turn_outcome=case when turn_id is null then null else 'failed' end,
+    attention=sqlc.arg(reason),
+    finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
+where id=sqlc.arg(run_id) and state not in ('completed','interrupted');
 
--- name: MarkAgentRunUncertain :one
+-- name: MarkAgentRunUncertain :execrows
 update dorf.agent_runs
-set state='uncertain',attention=sqlc.arg(reason),updated_at=clock_timestamp()
-where id=sqlc.arg(run_id)
-returning action_id;
+set state='uncertain',attention=sqlc.arg(reason)
+where id=sqlc.arg(run_id) and state not in ('completed','failed','interrupted');
 
 -- name: SetAgentRunAttention :execrows
 update dorf.agent_runs
-set attention=sqlc.arg(reason),updated_at=clock_timestamp()
+set attention=sqlc.arg(reason)
 where id=sqlc.arg(run_id);
 
--- name: GetNativeMutationDelivery :one
+-- name: GetHarnessMutationDelivery :one
 select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
        m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        ar.id as agent_run_id,ar.job_id as agent_run_job_id,
-       coalesce(ar.message_id,'') as agent_run_message_id,ar.action_id,
-       coalesce(ar.session_id,'') as session_id,ar.state,
-       (ar.baseline_native_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(ar.baseline_native_turn_id,'') as baseline_native_turn_id,
-       coalesce(ar.native_turn_id,'') as native_turn_id,
-       coalesce(ar.native_outcome,'') as native_outcome,
+       ar.message_id as agent_run_message_id,ar.state,
+       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
+       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
+       coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,ar.role
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertain')
+  and ar.role='implement'
 order by m.sequence
 limit 1;
 
--- name: CountImplementationNativeMutations :one
+-- name: CountImplementationHarnessMutations :one
 select count(*)
 from dorf.agent_runs
 where job_id=sqlc.arg(job_id) and role='implement'

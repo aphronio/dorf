@@ -183,12 +183,11 @@ select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generatio
        j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(sb.incus_name,'') as sandbox_id,coalesce(sb.state,'') as sandbox_state,
-       coalesce(r.route_id,'') as route_id,coalesce(r.state,'') as route_state,coalesce(se.native_session_id,'') as session_id,
+       coalesce(r.route_id,'') as route_id,coalesce(r.state,'') as route_state,
        j.workflow_phase,coalesce(j.workflow_attention,'') as workflow_attention,coalesce(j.cleanup_attention,'') as cleanup_attention
 from dorf.jobs j
 left join dorf.sandboxes sb on sb.job_id=j.id
 left join dorf.routes r on r.job_id=j.id
-left join dorf.sessions se on se.job_id=j.id
 left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
 where j.id=$1
 `
@@ -216,7 +215,6 @@ type GetJobRow struct {
 	SandboxState         string
 	RouteID              string
 	RouteState           string
-	SessionID            string
 	WorkflowPhase        string
 	WorkflowAttention    string
 	CleanupAttention     string
@@ -248,7 +246,6 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.SandboxState,
 		&i.RouteID,
 		&i.RouteState,
-		&i.SessionID,
 		&i.WorkflowPhase,
 		&i.WorkflowAttention,
 		&i.CleanupAttention,

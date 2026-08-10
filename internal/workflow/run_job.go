@@ -116,14 +116,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			continue
 		}
 
-		if job.SessionID == "" {
-			if err := runInitialAgentStep(ctx, service, store, job); err != nil {
-				return spine.RunIdle, err
-			}
-			continue
-		}
-
-		delivery, err := store.NextDelivery(ctx, jobID, job.SessionID)
+		delivery, err := store.NextDelivery(ctx, jobID)
 		if err != nil {
 			return spine.RunIdle, err
 		}
@@ -132,13 +125,12 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			case spine.AgentRunUncertain:
 				return spine.RunBlocked, nil
 			case spine.AgentRunFailed, spine.AgentRunInterrupted:
-				if delivery.AgentRun.NativeTurnID != "" {
+				if delivery.AgentRun.TurnID != "" {
 					return spine.RunBlocked, nil
 				}
 			}
 			if err := runFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
-				_, err := service.Deliver(workCtx, job, *delivery)
-				return err
+				return service.Deliver(workCtx, job, *delivery)
 			}); err != nil {
 				return spine.RunIdle, err
 			}
@@ -200,27 +192,6 @@ func runActionStep(ctx context.Context, service spine.Service, job spine.Job, ac
 	}
 	return runFactStep(ctx, actionStepName(action.ID), action.ID, func(workCtx context.Context) error {
 		_, err := service.ExecuteAction(workCtx, job, action)
-		return err
-	})
-}
-
-func runInitialAgentStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job) error {
-	session, err := store.BeginAction(ctx, job.ID, spine.ActionSessionStart)
-	if err != nil {
-		return err
-	}
-	delivery, err := store.NextDelivery(ctx, job.ID, "")
-	if err != nil {
-		return err
-	}
-	if delivery == nil || delivery.Message.Sequence != 1 || delivery.Message.Intent != spine.MessageFollow {
-		return fmt.Errorf("unbound native Session has no initial delivery")
-	}
-	if delivery.AgentRun.State == spine.AgentRunUncertain {
-		return fmt.Errorf("initial AgentRun %s is uncertain: %s", delivery.AgentRun.ID, delivery.AgentRun.Attention)
-	}
-	return runFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
-		_, err := service.DeliverInitial(workCtx, job, session, *delivery)
 		return err
 	})
 }

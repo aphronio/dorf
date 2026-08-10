@@ -21,6 +21,8 @@ type Externals struct {
 	Agent   codex.Agent
 }
 
+func (Externals) Harness() string { return codex.Harness }
+
 func (e Externals) repository() repository.Manager {
 	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
 }
@@ -66,19 +68,20 @@ func (e Externals) ReviewWorkspaceCreate(ctx context.Context, job spine.Job, run
 	if run.ReviewerSandboxID == "" {
 		return spine.Receipt{}, fmt.Errorf("review materialization requires a dedicated reviewer Sandbox")
 	}
-	if run.Revision != job.Revision || run.Workspace != e.Sandbox.Config.Workspace {
-		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision or bounded root")
+	if run.Revision != job.Revision {
+		return spine.Receipt{}, fmt.Errorf("review workspace identity conflicts with current Revision")
 	}
+	workspace := e.Sandbox.Config.Workspace
 	if err := e.Sandbox.AttestReview(ctx, run.ReviewerSandboxID, reviewMetadata(job, run)); err != nil {
 		return spine.Receipt{}, err
 	}
 	sourceScript := `set -eu
-main=$1; workspace=$2; revision=$3
-	test "$(git -C "$main" rev-parse HEAD)" = "$revision"
-	test -z "$(git -C "$main" status --porcelain=v1 --untracked-files=all)"
-	git -C "$main" cat-file -e "$revision^{commit}"
-	git -C "$main" bundle create - HEAD`
-	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", e.Sandbox.Config.Workspace, run.Workspace, run.Revision)
+workspace=$1; revision=$2
+	test "$(git -C "$workspace" rev-parse HEAD)" = "$revision"
+	test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
+	git -C "$workspace" cat-file -e "$revision^{commit}"
+	git -C "$workspace" bundle create - HEAD`
+	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.Revision)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
@@ -106,14 +109,14 @@ test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"
 printf '%s %s clean\n' "$head" "$tree"`
-	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", run.Workspace, run.Revision)
+	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-materialize", workspace, run.Revision)
 	if err != nil {
 		return spine.Receipt{}, err
 	}
 	if result.ExitCode != 0 {
 		return spine.Receipt{}, fmt.Errorf("materialize exact review checkout: %s", strings.TrimSpace(result.Stderr))
 	}
-	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
+	return spine.Receipt{ExternalID: workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
 func (e Externals) ReviewSandboxCreate(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
@@ -163,11 +166,12 @@ tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
 test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 printf '%s %s clean\n' "$head" "$tree"`
-	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-verify", run.Workspace, run.Revision)
+	workspace := e.Sandbox.Config.Workspace
+	result, err := e.Sandbox.Exec(ctx, run.ReviewerSandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.Revision)
 	if err != nil || result.ExitCode != 0 {
 		return spine.Receipt{}, fmt.Errorf("verify exact reviewer checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
-	return spine.Receipt{ExternalID: run.Workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
+	return spine.Receipt{ExternalID: workspace, Outcome: strings.TrimSpace(result.Stdout)}, nil
 }
 
 func (e Externals) ReviewRouteRevoke(ctx context.Context, job spine.Job, run spine.ReviewRunView, _ spine.Action) (spine.Receipt, error) {
@@ -207,20 +211,60 @@ func (e Externals) ReviewSandboxDelete(ctx context.Context, job spine.Job, run s
 	return spine.Receipt{ExternalID: run.ReviewerSandboxID, Outcome: "deleted"}, err
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeBinding, error) {
-	return e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+	input, err := reviewInput(run)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	binding, err := e.Agent.StartStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding.ControllerID = reviewControllerID(run)
+	return binding, err
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeHistory, error) {
-	return e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessHistory, error) {
+	input, err := reviewInput(run)
+	if err != nil {
+		return spine.HarnessHistory{}, err
+	}
+	history, err := e.Agent.ReadStrictReviewTurns(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	history.ControllerID = reviewControllerID(run)
+	return history, err
 }
 
-func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewNativeBinding, error) {
-	return e.Agent.RecoverStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+	input, err := reviewInput(run)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding.ControllerID = reviewControllerID(run)
+	return binding, err
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.ReviewRunView, turnID string) (spine.ReviewNativeBinding, error) {
-	return e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, run.Workspace, reviewMetadata(job, run), run.SessionID, turnID, run.SubmissionNonce, run.InputContract, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
+	input, err := reviewInput(run)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	binding, err := e.Agent.WaitStrictReviewTurn(ctx, run.ReviewerSandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding.ControllerID = reviewControllerID(run)
+	return binding, err
+}
+
+func reviewControllerID(run spine.ReviewRunView) string {
+	return spine.ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
+}
+
+type reviewInputError string
+
+func (e reviewInputError) Error() string         { return string(e) }
+func (e reviewInputError) AttentionNeeded() bool { return true }
+
+func reviewInput(run spine.ReviewRunView) (string, error) {
+	if run.MessageID == "" || run.Request.ID != run.MessageID || run.Request.JobID != run.JobID || run.Request.FromKind != spine.MessageFromWorkflow || strings.TrimSpace(run.Request.Input) == "" {
+		return "", reviewInputError("review AgentRun request Message is missing or conflicts with its workflow input")
+	}
+	return run.Request.Input, nil
 }
 
 func reviewMetadata(job spine.Job, run spine.ReviewRunView) incus.ReviewMetadata {
@@ -256,20 +300,20 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, action spine.
 	return spine.Receipt{ExternalID: route.ID}, nil
 }
 
-func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, spine.NativeTurn, error) {
+func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
 	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
 }
 
-func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (string, []spine.NativeTurn, error) {
+func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (spine.HarnessHistory, error) {
 	return e.Agent.ReadInitialTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace)
 }
 
-func (e Externals) AgentTurns(ctx context.Context, job spine.Job, sessionID string) ([]spine.NativeTurn, error) {
-	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID)
+func (e Externals) AgentTurns(ctx context.Context, job spine.Job, threadID string) (spine.HarnessHistory, error) {
+	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), threadID)
 }
 
-func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.NativeTurn, error) {
-	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.SessionID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
+func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ThreadID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
 }
 
 func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
@@ -280,11 +324,11 @@ func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {
-	return e.Agent.SteerTurn(ctx, e.Sandbox.Name(job.ID), delivery.AgentRun.SessionID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
+	return e.Agent.SteerTurn(ctx, e.Sandbox.Name(job.ID), delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
 }
 
-func (e Externals) AgentWait(ctx context.Context, job spine.Job, sessionID, turnID string) (spine.NativeTurn, error) {
-	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, sessionID, turnID)
+func (e Externals) AgentWait(ctx context.Context, job spine.Job, threadID, turnID string) (spine.HarnessBinding, error) {
+	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), threadID, turnID)
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, _ spine.Action) (spine.Receipt, error) {

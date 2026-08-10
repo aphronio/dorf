@@ -66,7 +66,7 @@ JOB_ID="$(jq -er .job_id <<<"$ADMISSION")"
 "$BINARY" worker --once
 INSPECTION="$($BINARY inspect --json "$JOB_ID")"
 jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$INSPECTION" >/dev/null
-jq -e '.claims.implementation_agent_runs | map(select(.sequence == 1 and .native_outcome == "completed" and (.native_turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
+jq -e '.claims.implementation_agent_runs | map(select(.sequence == 1 and .harness == "codex" and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
 jq -e --arg source "$SOURCE_COMMIT" '
   (.claims.implementation_agent_runs | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
   .job.starting_revision == $source and
@@ -93,5 +93,5 @@ jq -n \
   --arg job "$JOB_ID" \
   '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_generation:0,repository_commit_action:"absent; the AgentRun owns commits",workflow_outcome:"blocked: completed without a new committed Revision",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
   >"$EVIDENCE_DIR/image-proof.json"
-printf 'Candidate image setup/turn/no-change/cleanup proof passed: %s\n' "$JOB_ID"
+printf 'Candidate image setup/Harness Turn/no-change/cleanup proof passed: %s\n' "$JOB_ID"
 JOB_ID=""

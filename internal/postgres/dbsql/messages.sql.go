@@ -16,7 +16,7 @@ select count(*)
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
-  and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))
+  and ar.role='implement' and ar.state not in ('completed','failed','interrupted')
 `
 
 func (q *Queries) CountUnsettledInputs(ctx context.Context, jobID string) (int64, error) {
@@ -27,24 +27,31 @@ func (q *Queries) CountUnsettledInputs(ctx context.Context, jobID string) (int64
 }
 
 const getActiveImplementationTurn = `-- name: GetActiveImplementationTurn :one
-select coalesce(native_turn_id,'') as native_turn_id,coalesce(session_id,'') as session_id,role
+select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
+       coalesce(thread_id,'') as thread_id,role
 from dorf.agent_runs
-where job_id=$1 and state='active' and native_turn_id is not null
+where job_id=$1 and state='active' and turn_id is not null
   and role='implement'
 order by started_at,id
 limit 1
 `
 
 type GetActiveImplementationTurnRow struct {
-	NativeTurnID string
-	SessionID    string
-	Role         string
+	TurnID   string
+	Harness  string
+	ThreadID string
+	Role     string
 }
 
 func (q *Queries) GetActiveImplementationTurn(ctx context.Context, jobID string) (GetActiveImplementationTurnRow, error) {
 	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, jobID)
 	var i GetActiveImplementationTurnRow
-	err := row.Scan(&i.NativeTurnID, &i.SessionID, &i.Role)
+	err := row.Scan(
+		&i.TurnID,
+		&i.Harness,
+		&i.ThreadID,
+		&i.Role,
+	)
 	return i, err
 }
 
@@ -92,7 +99,7 @@ select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
-  and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))
+  and ar.role='implement' and ar.state not in ('completed','failed','interrupted')
 order by m.sequence
 limit 1
 `
@@ -138,7 +145,7 @@ const getLatestFollowRun = `-- name: GetLatestFollowRun :one
 select ar.id,ar.job_id,ar.state,ar.role
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1 and m.delivery_intent='follow'
+where m.job_id=$1 and m.delivery_intent='follow' and ar.role='implement'
 order by m.sequence desc
 limit 1
 `
@@ -266,10 +273,12 @@ const listMessages = `-- name: ListMessages :many
 select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,
        coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        coalesce(ar.id,'') as agent_run_id,coalesce(ar.state,'') as state,
-       coalesce(ar.native_turn_id,'') as native_turn_id,
-       coalesce(ar.native_outcome,'') as native_outcome,
+       coalesce(ar.role,'') as role,
+       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
+       coalesce(ar.turn_id,'') as turn_id,
+       coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,
-       (ar.native_turn_id is not null)::boolean as delivered
+       (ar.turn_id is not null)::boolean as delivered
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
@@ -287,8 +296,11 @@ type ListMessagesRow struct {
 	SteerTargetTurnID string
 	AgentRunID        string
 	State             spine.AgentRunState
-	NativeTurnID      string
-	NativeOutcome     string
+	Role              string
+	Harness           string
+	ThreadID          string
+	TurnID            string
+	TurnOutcome       string
 	Attention         string
 	Delivered         bool
 }
@@ -313,8 +325,11 @@ func (q *Queries) ListMessages(ctx context.Context, jobID string) ([]ListMessage
 			&i.SteerTargetTurnID,
 			&i.AgentRunID,
 			&i.State,
-			&i.NativeTurnID,
-			&i.NativeOutcome,
+			&i.Role,
+			&i.Harness,
+			&i.ThreadID,
+			&i.TurnID,
+			&i.TurnOutcome,
 			&i.Attention,
 			&i.Delivered,
 		); err != nil {
@@ -360,14 +375,15 @@ select coalesce(
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=$1 and m.sequence>1 and ar.native_turn_id is null
+        where m.job_id=$1 and m.sequence>1 and ar.role='implement'
+          and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1
               from dorf.job_messages earlier
               join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
               where earlier.job_id=m.job_id and earlier.sequence<m.sequence
-                and (earlier_run.native_turn_id is null
-                     or earlier_run.state not in ('completed','failed','interrupted'))
+                and earlier_run.role='implement'
+                and earlier_run.state not in ('completed','failed','interrupted')
           )
     ),
     (select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)

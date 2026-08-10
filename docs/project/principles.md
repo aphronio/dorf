@@ -14,8 +14,11 @@ clearer or when a second concrete implementation proves it; hypothetical consume
 
 A Job is the durable unit of user intent. Its initiating client, controller, task-executor process, and
 current agent process may disappear without erasing accepted input or observed progress. A Sandbox
-is the isolated mutable workstation in which the Job acts. A Job-local Session supplies
-conversation continuity when the harness supports it.
+is the isolated mutable workstation in which the Job acts. A continuing harness Thread supplies
+conversation continuity. Every AgentRun consumes one durable Message and retains its exact Turn
+binding. Every Message selected for agent delivery has one AgentRun record. A follow normally
+creates a new Turn; a steer normally binds to its target Turn. Harness protocol and transcripts
+remain behind the adapter.
 
 Do not introduce a durable Worker merely as a synonym for a process or AgentRun. Add Worker only
 when persistent personality, capability, reputation, ownership, or memory across Jobs becomes a
@@ -25,15 +28,18 @@ real product requirement.
 
 Anything that can be derived or executed programmatically should be. Admission, identity,
 sequencing, setup, policy facts, Checks, evidence hashing, publication, retry, and cleanup are
-code-owned. AgentRuns in the original implementation Session own code changes, including one or
-many Git commits. User input, failed Check output, and reviewer text all return through the same
-Message path. The implementation agent decides whether to act. Dorf then observes either a clean
-descendant commit as the next Revision or a clean unchanged checkout.
+code-owned. Actions record code-owned external mutations; an agent invocation is instead owned and
+reconciled by its AgentRun. Implementation AgentRuns own code changes, including one or many Git
+commits. User input, failed Check output, and reviewer text all return through the same Message path.
+The implementation agent decides whether to act. Dorf then observes either a clean descendant commit
+as the next Revision or a clean unchanged checkout.
 
 Review authority starts with deterministic mandatory policy. Known risks select bounded read-only
 review Roles; an unknown classification selects one general reviewer instead of a triage router.
-Reviewer prose is advisory Message input to the implementation Session, not a policy protocol to
-parse. No agent can waive a Check, mandatory Role, capability boundary, or spend limit.
+ReviewPolicy expresses each selected review prompt as an ordinary workflow Message consumed by its
+review AgentRun; that Message is the run's only durable text input. Reviewer prose is advisory Message
+input to the implementation AgentRun path, not a policy protocol to parse. No agent can waive a
+Check, mandatory Role, capability boundary, or spend limit.
 
 ## Disposable developer workstations
 
@@ -83,9 +89,10 @@ remain targeted terminals for changes that touch those authorities, not default 
 
 ## Evidence over narration
 
-Agent output is a claim. Process state, command results, commits, external authority, and retained
-artifacts are observed facts. Evidence must identify its provenance and Revision. A fluent agent
-must never silently become the authority for its own success.
+Agent prose is a Message, not Evidence. Process state, command results, commits, harness observation,
+external authority, and retained artifacts are observed facts. Evidence records those observed facts
+and must identify the AgentRun, Check, Action, or Revision it proves. Do not duplicate reviewer prose
+as Evidence. A fluent agent must never silently become the authority for its own success.
 
 ## No host Docker socket as isolation
 

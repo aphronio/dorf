@@ -2,7 +2,6 @@ package spine
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,7 +34,6 @@ type ReviewEvidenceVerification struct {
 	AgentRunID         string `json:"agent_run_id"`
 	Role               string `json:"role"`
 	Revision           string `json:"revision"`
-	ClaimEvidenceID    string `json:"claim_evidence_id,omitempty"`
 	ObservedEvidenceID string `json:"observed_evidence_id,omitempty"`
 	Verified           bool   `json:"verified"`
 	Error              string `json:"error,omitempty"`
@@ -45,7 +43,6 @@ type commandEvidenceArtifact struct {
 	Identity        string    `json:"identity"`
 	Revision        string    `json:"revision"`
 	Producer        string    `json:"producer"`
-	Provenance      string    `json:"provenance"`
 	Command         string    `json:"command"`
 	ExitCode        int       `json:"exit_code"`
 	StartedAt       time.Time `json:"started_at"`
@@ -112,8 +109,8 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 			continue
 		}
 		result.Digest = record.Digest
-		if record.ID != EvidenceID(check.ID, "check-output") || record.CheckID != check.ID || record.ActionID != "" || record.Revision != revision || record.Kind != "check-output" || record.MediaType != "application/vnd.dorf.observation+json" || record.Producer != commandEvidenceProducer || record.Provenance != observedProvenance || check.EvidenceDigest != record.Digest {
-			fail("Evidence metadata does not match its Check, Revision, producer, provenance, or digest")
+		if record.ID != EvidenceID(check.ID, "check-output") || record.CheckID != check.ID || record.ActionID != "" || record.AgentRunID != "" || record.Revision != revision || record.Kind != "check-output" || record.MediaType != "application/vnd.dorf.observation+json" || record.Producer != commandEvidenceProducer || check.EvidenceDigest != record.Digest {
+			fail("Evidence metadata does not match its Check, Revision, producer, or digest")
 		}
 		if record.StartedAt.IsZero() || record.FinishedAt.Before(record.StartedAt) || !record.StartedAt.Equal(check.StartedAt) || !record.FinishedAt.Equal(check.FinishedAt) {
 			fail("Evidence timing does not match the bounded Check observation")
@@ -132,7 +129,7 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 		} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			fail("observation artifact has trailing content")
 		}
-		if artifact.Identity != check.ID || artifact.Revision != revision || artifact.Producer != record.Producer || artifact.Provenance != record.Provenance || artifact.Command != check.Command || artifact.ExitCode != check.ExitCode || !artifact.StartedAt.Equal(check.StartedAt) || !artifact.FinishedAt.Equal(check.FinishedAt) {
+		if artifact.Identity != check.ID || artifact.Revision != revision || artifact.Producer != record.Producer || artifact.Command != check.Command || artifact.ExitCode != check.ExitCode || !artifact.StartedAt.Equal(check.StartedAt) || !artifact.FinishedAt.Equal(check.FinishedAt) {
 			fail("observation artifact facts do not match the persisted Check row")
 		}
 		result.Verified = result.Error == ""
@@ -169,16 +166,17 @@ func AssessReadiness(job Job, declared []DeclaredCheck, checks []Check, records 
 }
 
 func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, runs []ReviewRunView) ReadinessAssessment {
-	assessment := AssessReadiness(job, declared, checks, records, blobs)
-	if job.WorkflowPhase == "blocked" || assessment.Status == "blocked" {
+	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
+	assessment := ReadinessAssessment{Status: "not_ready", Revision: job.Revision, Evidence: verified}
+	if job.WorkflowPhase == "blocked" {
+		assessment.Status = "blocked"
+		assessment.Reason = job.WorkflowAttention
+		if assessment.Reason == "" {
+			assessment.Reason = "deterministic workflow attention must be resolved"
+		}
 		return assessment
 	}
-	// AssessReadiness intentionally treats non-ready workflow phases as
-	// incomplete. Review-aware readiness still verifies Check Evidence first.
-	verified, err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
-	assessment.Evidence = verified
 	if err != nil {
-		assessment.Status, assessment.Ready = "not_ready", false
 		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
 		return assessment
 	}
@@ -194,7 +192,7 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	}
 	byRole := make(map[string]ReviewRunView, len(runs))
 	for _, run := range runs {
-		if run.Revision == job.Revision {
+		if run.JobID == job.ID && run.Revision == job.Revision {
 			byRole[run.Role] = run
 		}
 	}
@@ -210,9 +208,13 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	}
 	for _, role := range plan.Plan.Roles {
 		run, ok := byRole[string(role)]
-		if !ok || run.State != AgentRunCompleted || run.FeedbackMessageID == "" || run.ClaimEvidenceID == "" || run.ObservedEvidenceID == "" {
+		expectedRunID := ReviewAgentRunID(job.ID, job.Revision, string(role))
+		expectedRequestID := ReviewRequestMessageID(job.ID, job.Revision, string(role))
+		expectedRequestFromID := ReviewRequestFromID(job.Revision, string(role))
+		expectedMessageID := MessageID(job.ID, MessageFromAgent, expectedRunID)
+		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != AgentRunCompleted || run.FeedbackMessageID != expectedMessageID {
 			assessment.Status, assessment.Ready = "not_ready", false
-			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a Message with separate claim and observed Evidence", role)
+			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
 			return assessment
 		}
 		if !verifyRun(run) {
@@ -221,14 +223,14 @@ func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, re
 	}
 	if !readinessPreserved(job.WorkflowPhase) {
 		assessment.Status, assessment.Ready = "not_ready", false
-		assessment.Reason = "review planning, selected AgentRuns, or same-Session feedback handling is incomplete"
+		assessment.Reason = "review planning, selected AgentRuns, or same-thread feedback handling is incomplete"
 		return assessment
 	}
 	assessment.Status, assessment.Ready = "ready", true
 	if plan.Plan.Decision == "no-review" {
 		assessment.Reason = "Checks have observed Evidence and ReviewPolicy explicitly selected no agent review for the exact Revision"
 	} else {
-		assessment.Reason = "Checks have observed Evidence and every selected Revision-bound review AgentRun is settled; reviewer output remains claim Evidence"
+		assessment.Reason = "Checks have observed Evidence and every selected Revision-bound review AgentRun returned feedback to the implementation thread"
 	}
 	return assessment
 }
@@ -243,48 +245,26 @@ func readinessPreserved(phase string) bool {
 }
 
 func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs evidence.Store) ReviewEvidenceVerification {
-	result := ReviewEvidenceVerification{AgentRunID: run.ID, Role: run.Role, Revision: run.Revision, ClaimEvidenceID: run.ClaimEvidenceID, ObservedEvidenceID: run.ObservedEvidenceID}
+	expectedEvidenceID := EvidenceID(run.ID, "review-observation")
+	result := ReviewEvidenceVerification{AgentRunID: run.ID, Role: run.Role, Revision: run.Revision, ObservedEvidenceID: expectedEvidenceID}
 	fail := func(format string, args ...any) {
 		if result.Error == "" {
 			result.Error = fmt.Sprintf(format, args...)
 		}
 	}
-	if run.State != AgentRunCompleted || run.NativeOutcome != "completed" || run.NativeTurnID == "" || run.SessionID == "" || run.Revision == "" || run.Capability != ReviewReadOnlyCapability || run.Workspace == "" {
-		fail("terminal native binding, exact Revision, or least-capability envelope is incomplete")
-	}
-	inputDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(run.InputContract)))
-	expectedController := ReviewControllerID(run.ID, run.ReviewerSandboxID, run.ReviewerOwnerNonce)
-	if run.ReviewerSandboxID != ReviewSandboxName(run.ID) || run.ReviewerRouteID == "" || run.ReviewerAppServer != expectedController || len(run.SubmissionNonce) != 64 || run.InputDigest != inputDigest || run.RevisionTree == "" || run.CheckoutState != "verified" || run.PostReviewState != "verified" || run.ReviewerSandboxState != "created" && run.ReviewerSandboxState != "deleted" || run.ReviewerRouteState != "active" && run.ReviewerRouteState != "revoked" {
-		fail("isolated reviewer Sandbox, route, strict submission, or pre/post Git attestation is incomplete")
+	if run.State != AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.Revision == "" || run.Capability != ReviewReadOnlyCapability {
+		fail("terminal harness binding, exact Revision, or least-capability envelope is incomplete")
 	}
 	recordsByID := make(map[string]Evidence, len(records))
 	for _, record := range records {
 		recordsByID[record.ID] = record
 	}
-	claimKind := "review-feedback"
-	claim, claimOK := recordsByID[run.ClaimEvidenceID]
-	observed, observedOK := recordsByID[run.ObservedEvidenceID]
-	if !claimOK || run.ClaimEvidenceID != EvidenceID(run.ID, claimKind) {
-		fail("claim Evidence metadata is missing or has the wrong stable identity")
-	}
-	if !observedOK || run.ObservedEvidenceID != EvidenceID(run.ID, "review-native-observation") {
+	observed, observedOK := recordsByID[expectedEvidenceID]
+	if !observedOK {
 		fail("observed Evidence metadata is missing or has the wrong stable identity")
 	}
-	for _, item := range []struct {
-		record     Evidence
-		provenance string
-		kind       string
-		mediaType  string
-	}{{claim, "claim", claimKind, "text/plain; charset=utf-8"}, {observed, "observed", "review-native-observation", "application/vnd.dorf.observation+json"}} {
-		if item.record.ActionID != run.ActionID || item.record.CheckID != "" || item.record.Revision != run.Revision || item.record.Producer != reviewEvidenceProducer || item.record.Provenance != item.provenance || item.record.Kind != item.kind || item.record.MediaType != item.mediaType || !item.record.StartedAt.Equal(run.StartedAt) || !item.record.FinishedAt.Equal(run.FinishedAt) {
-			fail("%s Evidence does not match its AgentRun, Revision, provenance, producer, or bounded timing", item.kind)
-		}
-	}
-	claimBytes, err := blobs.ReadVerified(claim.Digest, claim.ByteSize)
-	if err != nil {
-		fail("claim blob is unavailable or invalid: %v", err)
-	} else if strings.TrimSpace(string(claimBytes)) == "" {
-		fail("review feedback claim is empty")
+	if observed.ActionID != "" || observed.CheckID != "" || observed.AgentRunID != run.ID || observed.Revision != run.Revision || observed.Producer != reviewEvidenceProducer || observed.Kind != "review-observation" || observed.MediaType != "application/vnd.dorf.observation+json" || !observed.StartedAt.Equal(run.StartedAt) || !observed.FinishedAt.Equal(run.FinishedAt) {
+		fail("observed Evidence does not match its AgentRun, Revision, producer, or bounded timing")
 	}
 	observedBytes, err := blobs.ReadVerified(observed.Digest, observed.ByteSize)
 	if err != nil {
@@ -299,14 +279,11 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs eviden
 			fail("observed artifact has trailing content")
 		}
 		expected := reviewObservationArtifact{
-			AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability, Workspace: run.Workspace,
-			SessionID: run.SessionID, NativeTurnID: run.NativeTurnID, NativeOutcome: run.NativeOutcome, InputTokens: run.InputTokens,
-			CachedInputTokens: run.CachedInputTokens, OutputTokens: run.OutputTokens, CostMicrousd: run.CostMicrousd,
-			UsageAvailable: run.UsageAvailable, ReviewerSandboxID: run.ReviewerSandboxID, ReviewerRouteID: run.ReviewerRouteID,
-			ReviewerAppServer: run.ReviewerAppServer, InputDigest: run.InputDigest, RevisionTree: run.RevisionTree,
+			AgentRunID: run.ID, Revision: run.Revision, Role: run.Role, Capability: run.Capability,
+			Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
 		}
 		if artifact != expected {
-			fail("observed artifact differs from native AgentRun facts")
+			fail("observed artifact differs from harness AgentRun facts")
 		}
 	}
 	result.Verified = result.Error == ""

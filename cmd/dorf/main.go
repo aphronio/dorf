@@ -549,11 +549,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		return err
 	}
 	continuation := continuationFor(job, outcome, runEvidence, cleanupEvidence)
-	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Codex native Sessions (not copied into Dorf)"}
+	view := map[string]any{"job": job, "continuation": continuation, "readiness": assessment, "proposal": proposal, "outcome": outcome, "review_plans": plans, "review_agent_runs": reviewRuns, "claims": map[string]any{"messages": messages, "review_agent_runs": reviewRuns, "authority": "Agent text is a claim carried by Message; it does not satisfy Checks"}, "observed_facts": map[string]any{"actions": actions, "checks": checks, "evidence": evidenceRecords, "current_revision_evidence_verification": assessment.Evidence}, "absurd_run": runEvidence, "absurd_cleanup": cleanupEvidence, "absurd_inspection": "Use absurdctl dump-task --task-id=<task-id> for runs, attempts, checkpoints, leases, waits, and history", "transcript_authority": "Harness threads (not copied into Dorf)"}
 	if *jsonOutput {
 		return writeJSON(stdout, view)
 	}
-	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n  session: %s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState), empty(job.SessionID))
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s\n  continuation: %s — %s\n  readiness: %s — %s\n  admission: %s\n  cleanup: %s\n  goal: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  sandbox: %s state=%s\n  route: %s state=%s\n", job.ID, job.WorkflowPhase, continuation.Mode, continuation.Detail, assessment.Status, assessment.Reason, openClosed(job.AdmissionOpen), job.CleanupState, job.Goal, job.Repository, job.StartingRevision, job.Revision, empty(job.SandboxID), empty(job.SandboxState), empty(job.RouteID), empty(job.RouteState))
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
 	}
@@ -579,7 +579,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	for _, message := range messages {
 		description := describeMessage(message, messages)
 		if !job.AdmissionOpen && message.State == spine.AgentRunPending {
-			description += "; delivery closed for cleanup before this native turn started"
+			description += "; delivery closed for cleanup before this harness turn started"
 		}
 		fmt.Fprintf(stdout, "  message %d %s: %s\n", message.Sequence, message.ID, description)
 	}
@@ -608,14 +608,14 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
 			latency = run.FinishedAt.Sub(run.StartedAt)
 		}
-		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s session=%s turn=%s latency=%s usage-available=%t usage=%d/%d cached=%d cost-microusd=%d yield=%d workspace=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s controller=%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.SessionID), empty(run.NativeTurnID), latency, run.UsageAvailable, run.InputTokens, run.OutputTokens, run.CachedInputTokens, run.CostMicrousd, run.YieldCount, empty(run.Workspace), empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), empty(run.ReviewerAppServer), run.Stale)
+		fmt.Fprintf(stdout, "  review AgentRun %s Role=%s Revision=%s state=%s feedback-message=%s capability=%s harness=%s thread=%s turn=%s latency=%s checkout=%s post=%s tree=%s reviewer-sandbox=%s/%s reviewer-route=%s/%s stale=%t\n", run.ID, run.Role, run.Revision, run.State, empty(run.FeedbackMessageID), empty(run.Capability), empty(run.Harness), empty(run.ThreadID), empty(run.TurnID), latency, empty(run.CheckoutState), empty(run.PostReviewState), empty(run.RevisionTree), empty(run.ReviewerSandboxID), empty(run.ReviewerSandboxState), empty(run.ReviewerRouteID), empty(run.ReviewerRouteState), run.Stale)
 	}
 	for _, record := range evidenceRecords {
 		verification := "verified"
 		if err := evidenceStore.Verify(record.Digest, record.ByteSize); err != nil {
 			verification = "INVALID: " + err.Error()
 		}
-		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d provenance=%s producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Provenance, record.Producer, empty(record.Revision), verification)
+		fmt.Fprintf(stdout, "  Evidence %s: %s sha256=%s bytes=%d producer=%s Revision=%s rehash=%s\n", record.Kind, record.ID, record.Digest, record.ByteSize, record.Producer, empty(record.Revision), verification)
 	}
 	return nil
 }
@@ -812,42 +812,48 @@ func describeMessage(message spine.MessageView, messages []spine.MessageView) st
 	case spine.AgentRunSubmitting:
 		detail = "queued; delivery reconciliation is in progress"
 	case spine.AgentRunActive:
-		if message.Intent == spine.MessageSteer && message.NativeTurnID != message.TargetTurnID {
-			detail = "active native turn started after the requested steer target became terminal"
+		if message.Intent == spine.MessageSteer && message.TurnID != message.TargetTurnID {
+			detail = "active harness turn started after the requested steer target became terminal"
 		} else {
-			detail = "active native turn"
+			detail = "active harness turn"
 		}
 	case spine.AgentRunCompleted:
 		if message.Intent == spine.MessageSteer {
-			if message.NativeTurnID == message.TargetTurnID {
-				detail = "delivered: steer accepted by the active native turn"
+			if message.TurnID == message.TargetTurnID {
+				detail = "delivered: steer accepted by the active harness turn"
 			} else {
-				detail = "terminal: native turn started after the requested steer target became terminal"
+				detail = "terminal: harness turn started after the requested steer target became terminal"
 			}
 		} else {
-			detail = "terminal: native turn completed"
+			detail = "terminal: harness turn completed"
 		}
 	case spine.AgentRunFailed:
-		if message.NativeTurnID == "" {
+		if message.TurnID == "" {
 			if strings.HasPrefix(message.Attention, "cleanup closed") {
-				detail = "cleanup closed this input after history proved no native acceptance"
+				detail = "cleanup closed this input after history proved no harness acceptance"
 			} else {
-				detail = "native delivery was not accepted; the same stable input remains retryable"
+				detail = "harness delivery was not accepted; the same stable input remains retryable"
 			}
 		} else {
-			detail = "terminal: native turn failed"
+			detail = "terminal: harness turn failed"
 		}
 	case spine.AgentRunInterrupted:
-		detail = "terminal: native turn was interrupted"
+		detail = "terminal: harness turn was interrupted"
 	case spine.AgentRunUncertain:
 		detail = "genuinely uncertain; delivery stopped without resubmission"
 	default:
 		detail = string(message.State)
 	}
-	if message.NativeTurnID != "" {
-		detail += fmt.Sprintf("; native=%s outcome=%s", message.NativeTurnID, empty(message.NativeOutcome))
+	if message.Harness != "" {
+		detail += "; harness=" + message.Harness
 	}
-	if message.Intent == spine.MessageSteer && message.TargetTurnID != "" && message.NativeTurnID != "" && message.NativeTurnID != message.TargetTurnID {
+	if message.ThreadID != "" {
+		detail += "; thread=" + message.ThreadID
+	}
+	if message.TurnID != "" {
+		detail += fmt.Sprintf("; turn=%s outcome=%s", message.TurnID, empty(message.TurnOutcome))
+	}
+	if message.Intent == spine.MessageSteer && message.TargetTurnID != "" && message.TurnID != "" && message.TurnID != message.TargetTurnID {
 		detail += "; requested steer target=" + message.TargetTurnID
 	}
 	if message.Attention != "" {

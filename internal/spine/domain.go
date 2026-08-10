@@ -24,8 +24,6 @@ const (
 	ActionGitHubPullRequest     ActionKind = "github-pull-request"
 	ActionReviewWorkspaceCreate ActionKind = "review-workspace-create"
 	ActionRouteCreate           ActionKind = "provider-route-create"
-	ActionSessionStart          ActionKind = "codex-session-start"
-	ActionTurnStart             ActionKind = "codex-turn-start"
 	ActionRouteRevoke           ActionKind = "provider-route-revoke"
 	ActionSandboxDelete         ActionKind = "sandbox-delete"
 )
@@ -74,7 +72,6 @@ type Job struct {
 	SandboxState       string       `json:"sandbox_state,omitempty"`
 	RouteID            string       `json:"route_id,omitempty"`
 	RouteState         string       `json:"route_state,omitempty"`
-	SessionID          string       `json:"session_id,omitempty"`
 	WorkflowPhase      string       `json:"workflow_phase"`
 	WorkflowAttention  string       `json:"workflow_attention,omitempty"`
 	CleanupAttention   string       `json:"cleanup_attention,omitempty"`
@@ -106,31 +103,26 @@ const (
 	MessageSteer  MessageDeliveryIntent = "steer"
 )
 
+// AgentRun is the durable delivery of one Message to an agent harness. A follow
+// normally binds a new Turn; a steer normally binds its target Turn and creates
+// a new Turn only when terminal-target fallback is required.
 type AgentRun struct {
-	ID                string        `json:"id"`
-	JobID             string        `json:"job_id"`
-	MessageID         string        `json:"message_id"`
-	ActionID          string        `json:"action_id"`
-	SessionID         string        `json:"session_id"`
-	State             AgentRunState `json:"state"`
-	BaselineRecorded  bool          `json:"baseline_recorded"`
-	BaselineTurnID    string        `json:"baseline_turn_id,omitempty"`
-	NativeTurnID      string        `json:"native_turn_id,omitempty"`
-	NativeOutcome     string        `json:"native_outcome,omitempty"`
-	Attention         string        `json:"attention,omitempty"`
-	Role              string        `json:"role"`
-	Revision          string        `json:"revision,omitempty"`
-	Capability        string        `json:"capability,omitempty"`
-	Workspace         string        `json:"workspace,omitempty"`
-	InputContract     string        `json:"input_contract,omitempty"`
-	StartedAt         time.Time     `json:"started_at,omitempty"`
-	FinishedAt        time.Time     `json:"finished_at,omitempty"`
-	InputTokens       int64         `json:"input_tokens,omitempty"`
-	CachedInputTokens int64         `json:"cached_input_tokens,omitempty"`
-	OutputTokens      int64         `json:"output_tokens,omitempty"`
-	CostMicrousd      int64         `json:"cost_microusd,omitempty"`
-	UsageAvailable    bool          `json:"usage_available"`
-	YieldCount        int           `json:"yield_count,omitempty"`
+	ID               string        `json:"id"`
+	JobID            string        `json:"job_id"`
+	MessageID        string        `json:"message_id"`
+	Harness          string        `json:"harness,omitempty"`
+	ThreadID         string        `json:"thread_id,omitempty"`
+	State            AgentRunState `json:"state"`
+	BaselineRecorded bool          `json:"baseline_recorded"`
+	BaselineTurnID   string        `json:"baseline_turn_id,omitempty"`
+	TurnID           string        `json:"turn_id,omitempty"`
+	TurnOutcome      string        `json:"turn_outcome,omitempty"`
+	Attention        string        `json:"attention,omitempty"`
+	Role             string        `json:"role"`
+	Revision         string        `json:"revision,omitempty"`
+	Capability       string        `json:"capability,omitempty"`
+	StartedAt        time.Time     `json:"started_at,omitempty"`
+	FinishedAt       time.Time     `json:"finished_at,omitempty"`
 }
 
 type Delivery struct {
@@ -142,8 +134,10 @@ type MessageView struct {
 	Message
 	AgentRunID     string        `json:"agent_run_id,omitempty"`
 	State          AgentRunState `json:"state,omitempty"`
-	NativeTurnID   string        `json:"native_turn_id,omitempty"`
-	NativeOutcome  string        `json:"native_outcome,omitempty"`
+	Harness        string        `json:"harness,omitempty"`
+	ThreadID       string        `json:"thread_id,omitempty"`
+	TurnID         string        `json:"turn_id,omitempty"`
+	TurnOutcome    string        `json:"turn_outcome,omitempty"`
 	Attention      string        `json:"attention,omitempty"`
 	BlockingSeq    int64         `json:"blocking_sequence,omitempty"`
 	BlockingReason string        `json:"blocking_reason,omitempty"`
@@ -153,7 +147,6 @@ type MessageView struct {
 type Action struct {
 	ID         string
 	JobID      string
-	MessageID  string
 	Kind       ActionKind
 	State      ActionState
 	ExternalID string
@@ -207,9 +200,9 @@ type Evidence struct {
 	ByteSize   int64     `json:"byte_size"`
 	MediaType  string    `json:"media_type"`
 	Producer   string    `json:"producer"`
-	Provenance string    `json:"provenance"`
 	Kind       string    `json:"kind"`
 	ActionID   string    `json:"action_id,omitempty"`
+	AgentRunID string    `json:"agent_run_id,omitempty"`
 	CheckID    string    `json:"check_id,omitempty"`
 	Revision   string    `json:"revision,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitempty"`
@@ -260,21 +253,32 @@ type JobOutcome struct {
 	ObservedAt       time.Time      `json:"observed_at"`
 }
 
-type NativeTurn struct {
+type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
 	AcceptedMessageIDs []string `json:"accepted_message_ids,omitempty"`
 	Output             string   `json:"output,omitempty"`
-	InputTokens        int64    `json:"input_tokens,omitempty"`
-	CachedInputTokens  int64    `json:"cached_input_tokens,omitempty"`
-	OutputTokens       int64    `json:"output_tokens,omitempty"`
-	CostMicrousd       int64    `json:"cost_microusd,omitempty"`
-	UsageAvailable     bool     `json:"usage_available"`
+}
+
+// HarnessBinding is the complete runner-neutral identity of one harness turn.
+// ControllerID is transient adapter ownership proof; Dorf does not persist it.
+type HarnessBinding struct {
+	Harness      string
+	ThreadID     string
+	Turn         HarnessTurn
+	ControllerID string
+}
+
+type HarnessHistory struct {
+	Harness      string
+	ThreadID     string
+	Turns        []HarnessTurn
+	ControllerID string
 }
 
 type Reconciliation struct {
 	Classification string
-	Turn           NativeTurn
+	Turn           HarnessTurn
 	Reason         string
 }
 
@@ -292,6 +296,14 @@ func AgentRunID(messageID string) string {
 
 func ReviewAgentRunID(jobID, revision, role string) string {
 	return "agent-run-" + digest(jobID+"\x00"+revision+"\x00"+role, 24)
+}
+
+func ReviewRequestFromID(revision, role string) string {
+	return "review:" + revision + ":" + role
+}
+
+func ReviewRequestMessageID(jobID, revision, role string) string {
+	return MessageID(jobID, MessageFromWorkflow, ReviewRequestFromID(revision, role))
 }
 
 func ReviewSandboxName(runID string) string {
@@ -326,10 +338,6 @@ func CheckID(jobID, revision, name string) string {
 
 func EvidenceID(ownerID, kind string) string {
 	return "evidence-" + digest(ownerID+"\x00"+kind, 24)
-}
-
-func TurnActionID(messageID string) string {
-	return "action-" + digest(messageID+"\x00"+string(ActionTurnStart), 24)
 }
 
 func digest(value string, length int) string {

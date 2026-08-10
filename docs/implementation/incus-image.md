@@ -34,11 +34,11 @@ not execute a mutable network installer.
    image metadata, while checking the image for forbidden credentials and other required tools;
 4. admits the release source commit through the Go durable Job spine, lets its Sandbox clone the
    repository, and requires the repository's declared preparation Action to succeed;
-5. completes one real Codex app-server turn through a scoped Provider Route, with an explicit
+5. completes one real AgentRun through the Codex app-server Harness and a scoped Provider Route, with an explicit
    no-modification goal, and requires the exact starting Revision to remain current with the
    AgentRun-specific `completed without a new committed Revision` blocked outcome and Revision
    generation zero;
-6. records the image fingerprint, native Session/turn identity, timings, and terminal state in a
+6. records the image fingerprint, Harness/Thread/Turn identity, timings, and terminal state in a
    redacted local evidence directory;
 7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
    path, with fenced Go cancellation and synchronous exact reconciliation as the failure fallback; and

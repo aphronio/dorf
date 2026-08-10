@@ -132,26 +132,44 @@ func TestBodyIsExactDeterministicRevisionProjectionWithoutNarration(t *testing.T
 func TestBodyProjectsReviewFeedbackAsMessageWithoutClassifyingIt(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback", Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
+	role := "critical-boundary"
+	runID := spine.ReviewAgentRunID(job.ID, revision, role)
+	requestID := spine.ReviewRequestMessageID(job.ID, revision, role)
+	observedID := spine.EvidenceID(runID, "review-observation")
 	runs := []spine.ReviewRunView{{
 		AgentRun: spine.AgentRun{
-			Role:     "critical-boundary-review",
-			Revision: revision,
+			ID:        runID,
+			MessageID: requestID,
+			Role:      role,
+			Revision:  revision,
 		},
-		ReviewRunProjection: spine.ReviewRunProjection{ClaimEvidenceID: "e-claim", ObservedEvidenceID: "e-observed"},
-		FeedbackMessageID:   "message-review-feedback",
+		Request:           spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
+		FeedbackMessageID: "message-review-feedback",
+	}, {
+		AgentRun:          spine.AgentRun{ID: "agent-run-unselected", MessageID: "message-unselected-input", Role: "unselected", Revision: revision},
+		Request:           spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
+		FeedbackMessageID: "message-unselected",
 	}}
 	evidence := []spine.Evidence{
-		{ID: "e-claim", Digest: strings.Repeat("1", 64)},
-		{ID: "e-observed", Digest: strings.Repeat("2", 64)},
+		{ID: observedID, Digest: strings.Repeat("2", 64)},
+		{ID: "e-unselected", Digest: strings.Repeat("3", 64)},
+	}
+	assessment := spine.ReadinessAssessment{
+		Status: "ready",
+		Reason: "review feedback handled",
+		ReviewEvidence: []spine.ReviewEvidenceVerification{{
+			AgentRunID: runID, Role: role, Revision: revision,
+			ObservedEvidenceID: observedID, Verified: true,
+		}},
 	}
 
-	body := Body(job, spine.ReadinessAssessment{Status: "ready", Reason: "review feedback handled"}, nil, evidence, runs)
-	for _, want := range []string{"critical-boundary-review", "feedback Message `message-review-feedback`", "handled by the implementation Session", "e-claim", "e-observed"} {
+	body := Body(job, assessment, nil, evidence, runs)
+	for _, want := range []string{role, "AgentRun `" + runID + "`", "feedback Message `message-review-feedback`", "handled by an implementation AgentRun", observedID, strings.Repeat("2", 64)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body is missing %q:\n%s", want, body)
 		}
 	}
-	for _, forbidden := range []string{"material finding", "no material finding", "adjudication"} {
+	for _, forbidden := range []string{"claim", "e-claim", "unselected", "material finding", "no material finding", "adjudication"} {
 		if strings.Contains(strings.ToLower(body), forbidden) {
 			t.Fatalf("body classified opaque feedback as %q:\n%s", forbidden, body)
 		}

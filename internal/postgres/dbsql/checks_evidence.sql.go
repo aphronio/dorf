@@ -125,8 +125,9 @@ func (q *Queries) GetEvidenceDigest(ctx context.Context, id string) (string, err
 }
 
 const getEvidenceIdentity = `-- name: GetEvidenceIdentity :one
-select job_id,digest,byte_size,media_type,producer,provenance,kind,
+select job_id,digest,byte_size,media_type,producer,kind,
        coalesce(action_id,'') as action_id,coalesce(check_id,'') as check_id,
+       coalesce(agent_run_id,'') as agent_run_id,
        coalesce(revision,'') as revision,started_at,finished_at
 from dorf.evidence
 where id=$1
@@ -138,10 +139,10 @@ type GetEvidenceIdentityRow struct {
 	ByteSize   int64
 	MediaType  string
 	Producer   string
-	Provenance string
 	Kind       string
 	ActionID   string
 	CheckID    string
+	AgentRunID string
 	Revision   string
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -156,10 +157,10 @@ func (q *Queries) GetEvidenceIdentity(ctx context.Context, id string) (GetEviden
 		&i.ByteSize,
 		&i.MediaType,
 		&i.Producer,
-		&i.Provenance,
 		&i.Kind,
 		&i.ActionID,
 		&i.CheckID,
+		&i.AgentRunID,
 		&i.Revision,
 		&i.StartedAt,
 		&i.FinishedAt,
@@ -212,13 +213,14 @@ func (q *Queries) InsertCheck(ctx context.Context, arg InsertCheckParams) error 
 
 const insertEvidence = `-- name: InsertEvidence :exec
 insert into dorf.evidence(
-    id,job_id,digest,byte_size,media_type,producer,provenance,kind,
-    action_id,check_id,revision,started_at,finished_at
+    id,job_id,digest,byte_size,media_type,producer,kind,
+    action_id,check_id,agent_run_id,revision,started_at,finished_at
 )
 values(
     $1,$2,$3,$4,
-    $5,$6,$7,$8,
-    nullif($9::text,''),nullif($10::text,''),
+    $5,$6,$7,
+    nullif($8::text,''),nullif($9::text,''),
+    nullif($10::text,''),
     nullif($11::text,''),$12,$13
 )
 on conflict(id) do nothing
@@ -231,10 +233,10 @@ type InsertEvidenceParams struct {
 	ByteSize   int64
 	MediaType  string
 	Producer   string
-	Provenance string
 	Kind       string
 	ActionID   string
 	CheckID    string
+	AgentRunID string
 	Revision   string
 	StartedAt  sql.NullTime
 	FinishedAt sql.NullTime
@@ -248,10 +250,10 @@ func (q *Queries) InsertEvidence(ctx context.Context, arg InsertEvidenceParams) 
 		arg.ByteSize,
 		arg.MediaType,
 		arg.Producer,
-		arg.Provenance,
 		arg.Kind,
 		arg.ActionID,
 		arg.CheckID,
+		arg.AgentRunID,
 		arg.Revision,
 		arg.StartedAt,
 		arg.FinishedAt,
@@ -373,8 +375,9 @@ func (q *Queries) ListDeclaredChecks(ctx context.Context, jobID string) ([]ListD
 }
 
 const listEvidence = `-- name: ListEvidence :many
-select id,digest,byte_size,media_type,producer,provenance,kind,
+select id,digest,byte_size,media_type,producer,kind,
        coalesce(action_id,'') as action_id,coalesce(check_id,'') as check_id,
+       coalesce(agent_run_id,'') as agent_run_id,
        coalesce(revision,'') as revision,started_at,finished_at
 from dorf.evidence
 where job_id=$1
@@ -387,10 +390,10 @@ type ListEvidenceRow struct {
 	ByteSize   int64
 	MediaType  string
 	Producer   string
-	Provenance string
 	Kind       string
 	ActionID   string
 	CheckID    string
+	AgentRunID string
 	Revision   string
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -411,10 +414,10 @@ func (q *Queries) ListEvidence(ctx context.Context, jobID string) ([]ListEvidenc
 			&i.ByteSize,
 			&i.MediaType,
 			&i.Producer,
-			&i.Provenance,
 			&i.Kind,
 			&i.ActionID,
 			&i.CheckID,
+			&i.AgentRunID,
 			&i.Revision,
 			&i.StartedAt,
 			&i.FinishedAt,

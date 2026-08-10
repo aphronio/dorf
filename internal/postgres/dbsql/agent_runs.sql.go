@@ -12,123 +12,92 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const bindAgentRunSessionByMessage = `-- name: BindAgentRunSessionByMessage :exec
+const bindAgentRunIdentity = `-- name: BindAgentRunIdentity :execrows
 update dorf.agent_runs
-set session_id=coalesce(session_id,$1),updated_at=clock_timestamp()
-where message_id=$2
-  and (session_id is null or session_id=$1)
+set harness=coalesce(harness,$1),
+    thread_id=coalesce(thread_id,$2)
+where id=$3
+  and (harness is null or harness=$1)
+  and (thread_id is null or thread_id=$2)
 `
 
-type BindAgentRunSessionByMessageParams struct {
-	SessionID sql.NullString
-	MessageID sql.NullString
+type BindAgentRunIdentityParams struct {
+	Harness  sql.NullString
+	ThreadID sql.NullString
+	RunID    string
 }
 
-func (q *Queries) BindAgentRunSessionByMessage(ctx context.Context, arg BindAgentRunSessionByMessageParams) error {
-	_, err := q.db.ExecContext(ctx, bindAgentRunSessionByMessage, arg.SessionID, arg.MessageID)
-	return err
-}
-
-const bindImplementationAgentRunSessions = `-- name: BindImplementationAgentRunSessions :exec
-update dorf.agent_runs
-set session_id=$1,updated_at=clock_timestamp()
-where job_id=$2 and role='implement'
-  and (session_id is null or session_id=$1)
-`
-
-type BindImplementationAgentRunSessionsParams struct {
-	SessionID sql.NullString
-	JobID     string
-}
-
-func (q *Queries) BindImplementationAgentRunSessions(ctx context.Context, arg BindImplementationAgentRunSessionsParams) error {
-	_, err := q.db.ExecContext(ctx, bindImplementationAgentRunSessions, arg.SessionID, arg.JobID)
-	return err
-}
-
-const bindNativeSteer = `-- name: BindNativeSteer :one
-update dorf.agent_runs
-set native_turn_id=coalesce(native_turn_id,$1),state='completed',
-    native_outcome=coalesce(native_outcome,nullif($2::text,'')),
-    attention=null,finished_at=coalesce(finished_at,clock_timestamp()),
-    updated_at=clock_timestamp()
-where id=$3 and (native_turn_id is null or native_turn_id=$1)
-returning action_id,coalesce(native_outcome,'') as native_outcome
-`
-
-type BindNativeSteerParams struct {
-	TurnID  sql.NullString
-	Outcome string
-	RunID   string
-}
-
-type BindNativeSteerRow struct {
-	ActionID      string
-	NativeOutcome string
-}
-
-func (q *Queries) BindNativeSteer(ctx context.Context, arg BindNativeSteerParams) (BindNativeSteerRow, error) {
-	row := q.db.QueryRowContext(ctx, bindNativeSteer, arg.TurnID, arg.Outcome, arg.RunID)
-	var i BindNativeSteerRow
-	err := row.Scan(&i.ActionID, &i.NativeOutcome)
-	return i, err
-}
-
-const bindNativeTurn = `-- name: BindNativeTurn :one
-update dorf.agent_runs
-set native_turn_id=coalesce(native_turn_id,$1),
-    state=$2,native_outcome=nullif($3::text,''),
-    attention=nullif($4::text,''),
-    finished_at=case when $2::text in ('completed','failed','interrupted')
-        then coalesce(finished_at,clock_timestamp()) else finished_at end,
-    updated_at=clock_timestamp()
-where id=$5 and (native_turn_id is null or native_turn_id=$1)
-returning action_id
-`
-
-type BindNativeTurnParams struct {
-	TurnID    sql.NullString
-	State     spine.AgentRunState
-	Outcome   string
-	Attention string
-	RunID     string
-}
-
-func (q *Queries) BindNativeTurn(ctx context.Context, arg BindNativeTurnParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, bindNativeTurn,
-		arg.TurnID,
-		arg.State,
-		arg.Outcome,
-		arg.Attention,
-		arg.RunID,
-	)
-	var action_id string
-	err := row.Scan(&action_id)
-	return action_id, err
-}
-
-const bindReviewAgentRunSession = `-- name: BindReviewAgentRunSession :execrows
-update dorf.agent_runs
-set session_id=coalesce(session_id,$1),updated_at=clock_timestamp()
-where id=$2 and (session_id is null or session_id=$1)
-`
-
-type BindReviewAgentRunSessionParams struct {
-	SessionID sql.NullString
-	RunID     string
-}
-
-func (q *Queries) BindReviewAgentRunSession(ctx context.Context, arg BindReviewAgentRunSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindReviewAgentRunSession, arg.SessionID, arg.RunID)
+func (q *Queries) BindAgentRunIdentity(ctx context.Context, arg BindAgentRunIdentityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindAgentRunIdentity, arg.Harness, arg.ThreadID, arg.RunID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
+const bindHarnessTurn = `-- name: BindHarnessTurn :execrows
+update dorf.agent_runs
+set turn_id=coalesce(turn_id,$1),state=$2,
+    turn_outcome=nullif($3::text,''),attention=nullif($4::text,''),
+    finished_at=case when $2::text in ('completed','failed','interrupted')
+        then coalesce(finished_at,clock_timestamp()) else finished_at end
+where id=$5 and harness=$6 and thread_id=$7
+  and (turn_id is null or turn_id=$1)
+`
+
+type BindHarnessTurnParams struct {
+	TurnID      sql.NullString
+	State       spine.AgentRunState
+	TurnOutcome string
+	Attention   string
+	RunID       string
+	Harness     sql.NullString
+	ThreadID    sql.NullString
+}
+
+func (q *Queries) BindHarnessTurn(ctx context.Context, arg BindHarnessTurnParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindHarnessTurn,
+		arg.TurnID,
+		arg.State,
+		arg.TurnOutcome,
+		arg.Attention,
+		arg.RunID,
+		arg.Harness,
+		arg.ThreadID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindSteer = `-- name: BindSteer :one
+update dorf.agent_runs
+set turn_id=coalesce(turn_id,$1),state='completed',
+    turn_outcome=coalesce(turn_outcome,nullif($2::text,'')),
+    attention=null,finished_at=coalesce(finished_at,clock_timestamp())
+where id=$3 and harness is not null and thread_id is not null
+  and state not in ('failed','interrupted')
+  and (turn_id is null or turn_id=$1)
+returning coalesce(turn_outcome,'') as turn_outcome
+`
+
+type BindSteerParams struct {
+	TurnID      sql.NullString
+	TurnOutcome string
+	RunID       string
+}
+
+func (q *Queries) BindSteer(ctx context.Context, arg BindSteerParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, bindSteer, arg.TurnID, arg.TurnOutcome, arg.RunID)
+	var turn_outcome string
+	err := row.Scan(&turn_outcome)
+	return turn_outcome, err
+}
+
 const blockAgentRunDelivery = `-- name: BlockAgentRunDelivery :exec
 update dorf.agent_runs
-set state='uncertain',attention=$1,updated_at=clock_timestamp()
+set state='uncertain',attention=$1
 where id=$2 and state not in ('completed','failed','interrupted')
 `
 
@@ -142,27 +111,27 @@ func (q *Queries) BlockAgentRunDelivery(ctx context.Context, arg BlockAgentRunDe
 	return err
 }
 
-const countImplementationNativeMutations = `-- name: CountImplementationNativeMutations :one
+const countImplementationHarnessMutations = `-- name: CountImplementationHarnessMutations :one
 select count(*)
 from dorf.agent_runs
 where job_id=$1 and role='implement'
   and state in ('submitting','active','uncertain')
 `
 
-func (q *Queries) CountImplementationNativeMutations(ctx context.Context, jobID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countImplementationNativeMutations, jobID)
+func (q *Queries) CountImplementationHarnessMutations(ctx context.Context, jobID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countImplementationHarnessMutations, jobID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
-const failAgentRun = `-- name: FailAgentRun :one
+const failAgentRun = `-- name: FailAgentRun :execrows
 update dorf.agent_runs
 set state='failed',
-    native_outcome=case when native_turn_id is null then null else 'failed' end,
-    attention=$1,updated_at=clock_timestamp()
-where id=$2
-returning action_id
+    turn_outcome=case when turn_id is null then null else 'failed' end,
+    attention=$1,
+    finished_at=case when started_at is null then null else coalesce(finished_at,clock_timestamp()) end
+where id=$2 and state not in ('completed','interrupted')
 `
 
 type FailAgentRunParams struct {
@@ -170,57 +139,38 @@ type FailAgentRunParams struct {
 	RunID  string
 }
 
-func (q *Queries) FailAgentRun(ctx context.Context, arg FailAgentRunParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, failAgentRun, arg.Reason, arg.RunID)
-	var action_id string
-	err := row.Scan(&action_id)
-	return action_id, err
-}
-
-const getAgentRunBaseline = `-- name: GetAgentRunBaseline :one
-select (baseline_native_turn_id is not null)::boolean as recorded,
-       coalesce(baseline_native_turn_id,'') as baseline_turn_id
-from dorf.agent_runs
-where id=$1
-`
-
-type GetAgentRunBaselineRow struct {
-	Recorded       bool
-	BaselineTurnID string
-}
-
-func (q *Queries) GetAgentRunBaseline(ctx context.Context, runID string) (GetAgentRunBaselineRow, error) {
-	row := q.db.QueryRowContext(ctx, getAgentRunBaseline, runID)
-	var i GetAgentRunBaselineRow
-	err := row.Scan(&i.Recorded, &i.BaselineTurnID)
-	return i, err
+func (q *Queries) FailAgentRun(ctx context.Context, arg FailAgentRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failAgentRun, arg.Reason, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getAgentRunByMessage = `-- name: GetAgentRunByMessage :one
-select id,job_id,coalesce(message_id,'') as message_id,action_id,
-       coalesce(session_id,'') as session_id,state,
-       (baseline_native_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(baseline_native_turn_id,'') as baseline_native_turn_id,
-       coalesce(native_turn_id,'') as native_turn_id,
-       coalesce(native_outcome,'') as native_outcome,
+select id,job_id,message_id,state,
+       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id,
+       (baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(baseline_turn_id,'') as baseline_turn_id,
+       coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role
 from dorf.agent_runs
 where message_id=$1::text
 `
 
 type GetAgentRunByMessageRow struct {
-	ID                   string
-	JobID                string
-	MessageID            string
-	ActionID             string
-	SessionID            string
-	State                spine.AgentRunState
-	BaselineRecorded     bool
-	BaselineNativeTurnID string
-	NativeTurnID         string
-	NativeOutcome        string
-	Attention            string
-	Role                 string
+	ID               string
+	JobID            string
+	MessageID        string
+	State            spine.AgentRunState
+	Harness          string
+	ThreadID         string
+	BaselineRecorded bool
+	BaselineTurnID   string
+	TurnID           string
+	TurnOutcome      string
+	Attention        string
+	Role             string
 }
 
 func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (GetAgentRunByMessageRow, error) {
@@ -230,63 +180,117 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 		&i.ID,
 		&i.JobID,
 		&i.MessageID,
-		&i.ActionID,
-		&i.SessionID,
 		&i.State,
+		&i.Harness,
+		&i.ThreadID,
 		&i.BaselineRecorded,
-		&i.BaselineNativeTurnID,
-		&i.NativeTurnID,
-		&i.NativeOutcome,
+		&i.BaselineTurnID,
+		&i.TurnID,
+		&i.TurnOutcome,
 		&i.Attention,
 		&i.Role,
 	)
 	return i, err
 }
 
-const getNativeMutationDelivery = `-- name: GetNativeMutationDelivery :one
+const getAgentRunForBinding = `-- name: GetAgentRunForBinding :one
+select job_id,role,state,coalesce(harness,'') as harness,
+       coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
+       coalesce(turn_outcome,'') as turn_outcome
+from dorf.agent_runs
+where id=$1
+for update
+`
+
+type GetAgentRunForBindingRow struct {
+	JobID       string
+	Role        string
+	State       spine.AgentRunState
+	Harness     string
+	ThreadID    string
+	TurnID      string
+	TurnOutcome string
+}
+
+func (q *Queries) GetAgentRunForBinding(ctx context.Context, runID string) (GetAgentRunForBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getAgentRunForBinding, runID)
+	var i GetAgentRunForBindingRow
+	err := row.Scan(
+		&i.JobID,
+		&i.Role,
+		&i.State,
+		&i.Harness,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.TurnOutcome,
+	)
+	return i, err
+}
+
+const getAgentRunPreparation = `-- name: GetAgentRunPreparation :one
+select coalesce(harness,'') as harness,(baseline_turn_id is not null)::boolean as recorded,
+       coalesce(baseline_turn_id,'') as baseline_turn_id
+from dorf.agent_runs
+where id=$1
+`
+
+type GetAgentRunPreparationRow struct {
+	Harness        string
+	Recorded       bool
+	BaselineTurnID string
+}
+
+func (q *Queries) GetAgentRunPreparation(ctx context.Context, runID string) (GetAgentRunPreparationRow, error) {
+	row := q.db.QueryRowContext(ctx, getAgentRunPreparation, runID)
+	var i GetAgentRunPreparationRow
+	err := row.Scan(&i.Harness, &i.Recorded, &i.BaselineTurnID)
+	return i, err
+}
+
+const getHarnessMutationDelivery = `-- name: GetHarnessMutationDelivery :one
 select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,
        m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
        ar.id as agent_run_id,ar.job_id as agent_run_job_id,
-       coalesce(ar.message_id,'') as agent_run_message_id,ar.action_id,
-       coalesce(ar.session_id,'') as session_id,ar.state,
-       (ar.baseline_native_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(ar.baseline_native_turn_id,'') as baseline_native_turn_id,
-       coalesce(ar.native_turn_id,'') as native_turn_id,
-       coalesce(ar.native_outcome,'') as native_outcome,
+       ar.message_id as agent_run_message_id,ar.state,
+       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
+       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
+       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
+       coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
        coalesce(ar.attention,'') as attention,ar.role
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
+  and ar.role='implement'
 order by m.sequence
 limit 1
 `
 
-type GetNativeMutationDeliveryRow struct {
-	MessageID            string
-	JobID                string
-	FromKind             spine.MessageFromKind
-	FromID               string
-	Sequence             int64
-	Input                string
-	DeliveryIntent       spine.MessageDeliveryIntent
-	SteerTargetTurnID    string
-	AgentRunID           string
-	AgentRunJobID        string
-	AgentRunMessageID    string
-	ActionID             string
-	SessionID            string
-	State                spine.AgentRunState
-	BaselineRecorded     bool
-	BaselineNativeTurnID string
-	NativeTurnID         string
-	NativeOutcome        string
-	Attention            string
-	Role                 string
+type GetHarnessMutationDeliveryRow struct {
+	MessageID         string
+	JobID             string
+	FromKind          spine.MessageFromKind
+	FromID            string
+	Sequence          int64
+	Input             string
+	DeliveryIntent    spine.MessageDeliveryIntent
+	SteerTargetTurnID string
+	AgentRunID        string
+	AgentRunJobID     string
+	AgentRunMessageID string
+	State             spine.AgentRunState
+	Harness           string
+	ThreadID          string
+	BaselineRecorded  bool
+	BaselineTurnID    string
+	TurnID            string
+	TurnOutcome       string
+	Attention         string
+	Role              string
 }
 
-func (q *Queries) GetNativeMutationDelivery(ctx context.Context, jobID string) (GetNativeMutationDeliveryRow, error) {
-	row := q.db.QueryRowContext(ctx, getNativeMutationDelivery, jobID)
-	var i GetNativeMutationDeliveryRow
+func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) (GetHarnessMutationDeliveryRow, error) {
+	row := q.db.QueryRowContext(ctx, getHarnessMutationDelivery, jobID)
+	var i GetHarnessMutationDeliveryRow
 	err := row.Scan(
 		&i.MessageID,
 		&i.JobID,
@@ -299,132 +303,107 @@ func (q *Queries) GetNativeMutationDelivery(ctx context.Context, jobID string) (
 		&i.AgentRunID,
 		&i.AgentRunJobID,
 		&i.AgentRunMessageID,
-		&i.ActionID,
-		&i.SessionID,
 		&i.State,
+		&i.Harness,
+		&i.ThreadID,
 		&i.BaselineRecorded,
-		&i.BaselineNativeTurnID,
-		&i.NativeTurnID,
-		&i.NativeOutcome,
+		&i.BaselineTurnID,
+		&i.TurnID,
+		&i.TurnOutcome,
 		&i.Attention,
 		&i.Role,
 	)
 	return i, err
 }
 
-const insertAgentRun = `-- name: InsertAgentRun :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-values(
-    $1,$2,$3,$4,
-    nullif($5::text,''),$6,'pending'
+const implementationThreadExists = `-- name: ImplementationThreadExists :one
+select exists(
+    select 1 from dorf.agent_runs
+    where role='implement' and harness=$1 and thread_id=$2
 )
 `
 
-type InsertAgentRunParams struct {
-	ID        string
-	JobID     string
-	MessageID sql.NullString
-	ActionID  string
-	SessionID string
-	Role      string
+type ImplementationThreadExistsParams struct {
+	Harness  sql.NullString
+	ThreadID sql.NullString
 }
 
-func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) error {
-	_, err := q.db.ExecContext(ctx, insertAgentRun,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.ActionID,
-		arg.SessionID,
-		arg.Role,
-	)
-	return err
+func (q *Queries) ImplementationThreadExists(ctx context.Context, arg ImplementationThreadExistsParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, implementationThreadExists, arg.Harness, arg.ThreadID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
-const insertAgentRunFromImplementationSession = `-- name: InsertAgentRunFromImplementationSession :execrows
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-select $1,$2,$3,$4,
-       native_session_id,'implement','pending'
-from dorf.sessions
-where job_id=$2
+const insertImplementationAgentRun = `-- name: InsertImplementationAgentRun :execrows
+insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state)
+select $1,j.id,$2,prior.harness,prior.thread_id,'implement','pending'
+from dorf.jobs j
+left join lateral (
+    select ar.harness,ar.thread_id
+    from dorf.agent_runs ar
+    left join dorf.job_messages m on m.id=ar.message_id
+    where ar.job_id=j.id and ar.role='implement' and ar.thread_id is not null
+    order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
+    limit 1
+) prior on true
+where j.id=$3
+on conflict do nothing
 `
 
-type InsertAgentRunFromImplementationSessionParams struct {
+type InsertImplementationAgentRunParams struct {
 	ID        string
+	MessageID string
 	JobID     string
-	MessageID sql.NullString
-	ActionID  string
 }
 
-func (q *Queries) InsertAgentRunFromImplementationSession(ctx context.Context, arg InsertAgentRunFromImplementationSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertAgentRunFromImplementationSession,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.ActionID,
-	)
+func (q *Queries) InsertImplementationAgentRun(ctx context.Context, arg InsertImplementationAgentRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertImplementationAgentRun, arg.ID, arg.MessageID, arg.JobID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const insertAgentRunIfAbsent = `-- name: InsertAgentRunIfAbsent :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state)
-values(
-    $1,$2,$3,$4,
-    nullif($5::text,''),'implement','pending'
-)
-on conflict do nothing
+const listImplementationThreadBindings = `-- name: ListImplementationThreadBindings :many
+select harness,thread_id
+from dorf.agent_runs
+where job_id=$1 and role='implement' and thread_id is not null
+order by id
 `
 
-type InsertAgentRunIfAbsentParams struct {
-	ID        string
-	JobID     string
-	MessageID sql.NullString
-	ActionID  string
-	SessionID string
+type ListImplementationThreadBindingsRow struct {
+	Harness  sql.NullString
+	ThreadID sql.NullString
 }
 
-func (q *Queries) InsertAgentRunIfAbsent(ctx context.Context, arg InsertAgentRunIfAbsentParams) error {
-	_, err := q.db.ExecContext(ctx, insertAgentRunIfAbsent,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.ActionID,
-		arg.SessionID,
-	)
-	return err
+func (q *Queries) ListImplementationThreadBindings(ctx context.Context, jobID string) ([]ListImplementationThreadBindingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listImplementationThreadBindings, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListImplementationThreadBindingsRow
+	for rows.Next() {
+		var i ListImplementationThreadBindingsRow
+		if err := rows.Scan(&i.Harness, &i.ThreadID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
-const insertInitialAgentRun = `-- name: InsertInitialAgentRun :exec
-insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state)
-values($1,$2,$3,$4,'implement','pending')
-on conflict do nothing
-`
-
-type InsertInitialAgentRunParams struct {
-	ID        string
-	JobID     string
-	MessageID sql.NullString
-	ActionID  string
-}
-
-func (q *Queries) InsertInitialAgentRun(ctx context.Context, arg InsertInitialAgentRunParams) error {
-	_, err := q.db.ExecContext(ctx, insertInitialAgentRun,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.ActionID,
-	)
-	return err
-}
-
-const markAgentRunUncertain = `-- name: MarkAgentRunUncertain :one
+const markAgentRunUncertain = `-- name: MarkAgentRunUncertain :execrows
 update dorf.agent_runs
-set state='uncertain',attention=$1,updated_at=clock_timestamp()
-where id=$2
-returning action_id
+set state='uncertain',attention=$1
+where id=$2 and state not in ('completed','failed','interrupted')
 `
 
 type MarkAgentRunUncertainParams struct {
@@ -432,60 +411,63 @@ type MarkAgentRunUncertainParams struct {
 	RunID  string
 }
 
-func (q *Queries) MarkAgentRunUncertain(ctx context.Context, arg MarkAgentRunUncertainParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, markAgentRunUncertain, arg.Reason, arg.RunID)
-	var action_id string
-	err := row.Scan(&action_id)
-	return action_id, err
-}
-
-const prepareAgentRun = `-- name: PrepareAgentRun :execrows
-update dorf.agent_runs
-set state='submitting',baseline_native_turn_id=$1,
-    attention=null,started_at=coalesce(started_at,clock_timestamp()),
-    updated_at=clock_timestamp()
-where id=$2 and state='pending'
-`
-
-type PrepareAgentRunParams struct {
-	BaselineTurnID sql.NullString
-	RunID          string
-}
-
-func (q *Queries) PrepareAgentRun(ctx context.Context, arg PrepareAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, prepareAgentRun, arg.BaselineTurnID, arg.RunID)
+func (q *Queries) MarkAgentRunUncertain(ctx context.Context, arg MarkAgentRunUncertainParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markAgentRunUncertain, arg.Reason, arg.RunID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const propagateNativeTurnOutcomeToSteers = `-- name: PropagateNativeTurnOutcomeToSteers :exec
-update dorf.agent_runs accepted
-set native_outcome=$1,updated_at=clock_timestamp()
-from dorf.job_messages message,dorf.agent_runs source
-where source.id=$2 and accepted.id<>source.id
-  and accepted.job_id=source.job_id and accepted.session_id=source.session_id
-  and accepted.message_id=message.id and message.delivery_intent='steer'
-  and message.steer_target_turn_id=$3
-  and accepted.native_turn_id=$3
-  and accepted.state='completed' and accepted.native_outcome is null
+const prepareAgentRun = `-- name: PrepareAgentRun :execrows
+update dorf.agent_runs
+set state='submitting',harness=coalesce(harness,$1),
+    baseline_turn_id=$2,
+    attention=null,started_at=coalesce(started_at,clock_timestamp())
+where id=$3 and state='pending'
+  and (harness is null or harness=$1)
 `
 
-type PropagateNativeTurnOutcomeToSteersParams struct {
-	Outcome sql.NullString
-	RunID   string
-	TurnID  sql.NullString
+type PrepareAgentRunParams struct {
+	Harness        sql.NullString
+	BaselineTurnID sql.NullString
+	RunID          string
 }
 
-func (q *Queries) PropagateNativeTurnOutcomeToSteers(ctx context.Context, arg PropagateNativeTurnOutcomeToSteersParams) error {
-	_, err := q.db.ExecContext(ctx, propagateNativeTurnOutcomeToSteers, arg.Outcome, arg.RunID, arg.TurnID)
+func (q *Queries) PrepareAgentRun(ctx context.Context, arg PrepareAgentRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, prepareAgentRun, arg.Harness, arg.BaselineTurnID, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const propagateTurnOutcomeToSteers = `-- name: PropagateTurnOutcomeToSteers :exec
+update dorf.agent_runs accepted
+set turn_outcome=$1
+from dorf.job_messages message,dorf.agent_runs source
+where source.id=$2 and accepted.id<>source.id
+  and accepted.job_id=source.job_id and accepted.harness=source.harness and accepted.thread_id=source.thread_id
+  and accepted.message_id=message.id and message.delivery_intent='steer'
+  and message.steer_target_turn_id=$3
+  and accepted.turn_id=$3
+  and accepted.state='completed' and accepted.turn_outcome is null
+`
+
+type PropagateTurnOutcomeToSteersParams struct {
+	TurnOutcome sql.NullString
+	RunID       string
+	TurnID      sql.NullString
+}
+
+func (q *Queries) PropagateTurnOutcomeToSteers(ctx context.Context, arg PropagateTurnOutcomeToSteersParams) error {
+	_, err := q.db.ExecContext(ctx, propagateTurnOutcomeToSteers, arg.TurnOutcome, arg.RunID, arg.TurnID)
 	return err
 }
 
 const setAgentRunAttention = `-- name: SetAgentRunAttention :execrows
 update dorf.agent_runs
-set attention=$1,updated_at=clock_timestamp()
+set attention=$1
 where id=$2
 `
 

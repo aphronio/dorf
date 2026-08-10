@@ -12,27 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const bindReviewAppServer = `-- name: BindReviewAppServer :execrows
-update dorf.review_resources
-set app_server_id=coalesce(app_server_id,$1)
-where run_id=$2 and sandbox_state='created' and route_state='active'
-  and checkout_state='verified'
-  and (app_server_id is null or app_server_id=$1)
-`
-
-type BindReviewAppServerParams struct {
-	AppServerID sql.NullString
-	RunID       string
-}
-
-func (q *Queries) BindReviewAppServer(ctx context.Context, arg BindReviewAppServerParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindReviewAppServer, arg.AppServerID, arg.RunID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completeAction = `-- name: CompleteAction :one
 update dorf.actions
 set state='succeeded',external_id=$1,
@@ -85,7 +64,7 @@ func (q *Queries) FinishSetupAction(ctx context.Context, arg FinishSetupActionPa
 }
 
 const getAction = `-- name: GetAction :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
@@ -101,7 +80,6 @@ type GetActionParams struct {
 type GetActionRow struct {
 	ID              string
 	JobID           string
-	MessageID       string
 	Kind            spine.ActionKind
 	State           spine.ActionState
 	ExternalID      string
@@ -115,7 +93,6 @@ func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetAction
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
-		&i.MessageID,
 		&i.Kind,
 		&i.State,
 		&i.ExternalID,
@@ -126,12 +103,11 @@ func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (GetAction
 }
 
 const getActionForUpdate = `-- name: GetActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
 where id=$1 and job_id=$2 and kind=$3
-  and message_id is null
 for update
 `
 
@@ -144,7 +120,6 @@ type GetActionForUpdateParams struct {
 type GetActionForUpdateRow struct {
 	ID              string
 	JobID           string
-	MessageID       string
 	Kind            spine.ActionKind
 	State           spine.ActionState
 	ExternalID      string
@@ -158,7 +133,6 @@ func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdate
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
-		&i.MessageID,
 		&i.Kind,
 		&i.State,
 		&i.ExternalID,
@@ -212,42 +186,6 @@ func (q *Queries) GetMainSandboxName(ctx context.Context, jobID string) (string,
 	var incus_name string
 	err := row.Scan(&incus_name)
 	return incus_name, err
-}
-
-const getMessageActionID = `-- name: GetMessageActionID :one
-select id
-from dorf.actions
-where message_id=$1 and kind=$2
-`
-
-type GetMessageActionIDParams struct {
-	MessageID sql.NullString
-	Kind      spine.ActionKind
-}
-
-func (q *Queries) GetMessageActionID(ctx context.Context, arg GetMessageActionIDParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getMessageActionID, arg.MessageID, arg.Kind)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
-const getReviewControllerIdentity = `-- name: GetReviewControllerIdentity :one
-select sandbox_name,ownership_nonce
-from dorf.review_resources
-where run_id=$1
-`
-
-type GetReviewControllerIdentityRow struct {
-	SandboxName    string
-	OwnershipNonce string
-}
-
-func (q *Queries) GetReviewControllerIdentity(ctx context.Context, runID string) (GetReviewControllerIdentityRow, error) {
-	row := q.db.QueryRowContext(ctx, getReviewControllerIdentity, runID)
-	var i GetReviewControllerIdentityRow
-	err := row.Scan(&i.SandboxName, &i.OwnershipNonce)
-	return i, err
 }
 
 const getReviewRouteForCleanup = `-- name: GetReviewRouteForCleanup :one
@@ -328,9 +266,8 @@ func (q *Queries) GetReviewSandboxReceiptIdentity(ctx context.Context, arg GetRe
 }
 
 const getReviewWorkspaceReceiptIdentity = `-- name: GetReviewWorkspaceReceiptIdentity :one
-select ar.workspace,rr.revision
+select rr.revision
 from dorf.review_resources rr
-join dorf.agent_runs ar on ar.id=rr.run_id
 where rr.materialize_action_id=$1 and rr.run_id=$2
 `
 
@@ -339,16 +276,11 @@ type GetReviewWorkspaceReceiptIdentityParams struct {
 	RunID    string
 }
 
-type GetReviewWorkspaceReceiptIdentityRow struct {
-	Workspace sql.NullString
-	Revision  string
-}
-
-func (q *Queries) GetReviewWorkspaceReceiptIdentity(ctx context.Context, arg GetReviewWorkspaceReceiptIdentityParams) (GetReviewWorkspaceReceiptIdentityRow, error) {
+func (q *Queries) GetReviewWorkspaceReceiptIdentity(ctx context.Context, arg GetReviewWorkspaceReceiptIdentityParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, getReviewWorkspaceReceiptIdentity, arg.ActionID, arg.RunID)
-	var i GetReviewWorkspaceReceiptIdentityRow
-	err := row.Scan(&i.Workspace, &i.Revision)
-	return i, err
+	var revision string
+	err := row.Scan(&revision)
+	return revision, err
 }
 
 const getSetupActionForUpdate = `-- name: GetSetupActionForUpdate :one
@@ -373,12 +305,11 @@ func (q *Queries) GetSetupActionForUpdate(ctx context.Context, actionID string) 
 }
 
 const getUnscopedActionForUpdate = `-- name: GetUnscopedActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
-where job_id=$1 and kind=$2
-  and message_id is null and scope_key=''
+where job_id=$1 and kind=$2 and scope_key=''
 for update
 `
 
@@ -390,7 +321,6 @@ type GetUnscopedActionForUpdateParams struct {
 type GetUnscopedActionForUpdateRow struct {
 	ID              string
 	JobID           string
-	MessageID       string
 	Kind            spine.ActionKind
 	State           spine.ActionState
 	ExternalID      string
@@ -404,7 +334,6 @@ func (q *Queries) GetUnscopedActionForUpdate(ctx context.Context, arg GetUnscope
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
-		&i.MessageID,
 		&i.Kind,
 		&i.State,
 		&i.ExternalID,
@@ -412,17 +341,6 @@ func (q *Queries) GetUnscopedActionForUpdate(ctx context.Context, arg GetUnscope
 		&i.ScopeKey,
 	)
 	return i, err
-}
-
-const implementationSessionExists = `-- name: ImplementationSessionExists :one
-select exists(select 1 from dorf.sessions where native_session_id=$1)
-`
-
-func (q *Queries) ImplementationSessionExists(ctx context.Context, sessionID string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, implementationSessionExists, sessionID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const insertActionIfAbsent = `-- name: InsertActionIfAbsent :exec
@@ -439,51 +357,6 @@ type InsertActionIfAbsentParams struct {
 
 func (q *Queries) InsertActionIfAbsent(ctx context.Context, arg InsertActionIfAbsentParams) error {
 	_, err := q.db.ExecContext(ctx, insertActionIfAbsent, arg.ID, arg.JobID, arg.Kind)
-	return err
-}
-
-const insertMessageAction = `-- name: InsertMessageAction :exec
-insert into dorf.actions(id,job_id,message_id,kind,state)
-values($1,$2,$3,$4,'pending')
-`
-
-type InsertMessageActionParams struct {
-	ID        string
-	JobID     string
-	MessageID sql.NullString
-	Kind      spine.ActionKind
-}
-
-func (q *Queries) InsertMessageAction(ctx context.Context, arg InsertMessageActionParams) error {
-	_, err := q.db.ExecContext(ctx, insertMessageAction,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.Kind,
-	)
-	return err
-}
-
-const insertMessageActionIfAbsent = `-- name: InsertMessageActionIfAbsent :exec
-insert into dorf.actions(id,job_id,message_id,kind,state)
-values($1,$2,$3,$4,'pending')
-on conflict do nothing
-`
-
-type InsertMessageActionIfAbsentParams struct {
-	ID        string
-	JobID     string
-	MessageID sql.NullString
-	Kind      spine.ActionKind
-}
-
-func (q *Queries) InsertMessageActionIfAbsent(ctx context.Context, arg InsertMessageActionIfAbsentParams) error {
-	_, err := q.db.ExecContext(ctx, insertMessageActionIfAbsent,
-		arg.ID,
-		arg.JobID,
-		arg.MessageID,
-		arg.Kind,
-	)
 	return err
 }
 
@@ -514,7 +387,7 @@ func (q *Queries) InsertScopedAction(ctx context.Context, arg InsertScopedAction
 }
 
 const listActions = `-- name: ListActions :many
-select a.id,coalesce(a.message_id,'') as message_id,a.kind,a.state,
+select a.id,a.kind,a.state,
        coalesce(a.external_id,'') as external_id,a.scope_key,
        coalesce(e.digest,'') as evidence_digest
 from dorf.actions a
@@ -525,7 +398,6 @@ order by a.created_at,a.id
 
 type ListActionsRow struct {
 	ID             string
-	MessageID      string
 	Kind           spine.ActionKind
 	State          spine.ActionState
 	ExternalID     string
@@ -544,7 +416,6 @@ func (q *Queries) ListActions(ctx context.Context, jobID string) ([]ListActionsR
 		var i ListActionsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.MessageID,
 			&i.Kind,
 			&i.State,
 			&i.ExternalID,
@@ -743,60 +614,6 @@ func (q *Queries) MarkReviewSandboxDeleted(ctx context.Context, runID string) (i
 	return result.RowsAffected()
 }
 
-const markRunActionFailed = `-- name: MarkRunActionFailed :exec
-update dorf.actions
-set state=case when exists(
-        select 1 from dorf.agent_runs ar
-        where ar.id=$1 and ar.native_turn_id is null
-    ) then 'uncertain' else 'failed' end,
-    external_outcome=$2
-where dorf.actions.id=$3
-`
-
-type MarkRunActionFailedParams struct {
-	RunID    string
-	Reason   sql.NullString
-	ActionID string
-}
-
-func (q *Queries) MarkRunActionFailed(ctx context.Context, arg MarkRunActionFailedParams) error {
-	_, err := q.db.ExecContext(ctx, markRunActionFailed, arg.RunID, arg.Reason, arg.ActionID)
-	return err
-}
-
-const markRunActionUncertain = `-- name: MarkRunActionUncertain :exec
-update dorf.actions
-set state='uncertain',external_outcome=$1
-where id=$2 and state<>'succeeded'
-`
-
-type MarkRunActionUncertainParams struct {
-	Reason   sql.NullString
-	ActionID string
-}
-
-func (q *Queries) MarkRunActionUncertain(ctx context.Context, arg MarkRunActionUncertainParams) error {
-	_, err := q.db.ExecContext(ctx, markRunActionUncertain, arg.Reason, arg.ActionID)
-	return err
-}
-
-const markTurnActionSucceeded = `-- name: MarkTurnActionSucceeded :exec
-update dorf.actions
-set state='succeeded',external_id=$1,external_outcome=$2
-where id=$3
-`
-
-type MarkTurnActionSucceededParams struct {
-	TurnID   sql.NullString
-	Outcome  sql.NullString
-	ActionID string
-}
-
-func (q *Queries) MarkTurnActionSucceeded(ctx context.Context, arg MarkTurnActionSucceededParams) error {
-	_, err := q.db.ExecContext(ctx, markTurnActionSucceeded, arg.TurnID, arg.Outcome, arg.ActionID)
-	return err
-}
-
 const reserveMainRoute = `-- name: ReserveMainRoute :execrows
 insert into dorf.routes(job_id,action_id,route_id,state)
 values($1,$2,$3,'pending')
@@ -835,43 +652,6 @@ type ReserveMainSandboxParams struct {
 
 func (q *Queries) ReserveMainSandbox(ctx context.Context, arg ReserveMainSandboxParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, reserveMainSandbox, arg.JobID, arg.ActionID, arg.IncusName)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const resetTurnActionForSubmission = `-- name: ResetTurnActionForSubmission :execrows
-update dorf.actions
-set state='pending'
-where id=(select ar.action_id from dorf.agent_runs ar where ar.id=$1)
-  and state in ('pending','uncertain')
-`
-
-func (q *Queries) ResetTurnActionForSubmission(ctx context.Context, runID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, resetTurnActionForSubmission, runID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const upsertImplementationSession = `-- name: UpsertImplementationSession :execrows
-insert into dorf.sessions(job_id,action_id,native_session_id)
-values($1,$2,$3)
-on conflict(job_id) do update
-set native_session_id=excluded.native_session_id,observed_at=clock_timestamp()
-where dorf.sessions.native_session_id=excluded.native_session_id
-`
-
-type UpsertImplementationSessionParams struct {
-	JobID     string
-	ActionID  string
-	SessionID string
-}
-
-func (q *Queries) UpsertImplementationSession(ctx context.Context, arg UpsertImplementationSessionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, upsertImplementationSession, arg.JobID, arg.ActionID, arg.SessionID)
 	if err != nil {
 		return 0, err
 	}

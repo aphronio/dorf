@@ -15,5 +15,5 @@ func RolePrompt(role Role, facts ChangeFacts, declaredChecks []string) string {
 	if checks == "" {
 		checks = "none declared"
 	}
-	return fmt.Sprintf("You are the bounded Dorf %s review AgentRun. Review exact immutable Revision %s against base %s using read-only access. Respond with concise ordinary text: state whether you found a material issue, explain the issue briefly when present, and mention relevant Checks (%s). Your response is advisory input to the implementation Session; it does not satisfy Checks or control readiness. ChangeFacts: %s", role, facts.Revision, facts.BaseRevision, checks, encoded)
+	return fmt.Sprintf("You are the bounded Dorf %s review AgentRun. Review exact immutable Revision %s against base %s using read-only access. Respond with concise ordinary text: state whether you found a material issue, explain the issue briefly when present, and mention relevant Checks (%s). Your response is advisory input to the next implementation AgentRun; it does not satisfy Checks or control readiness. ChangeFacts: %s", role, facts.Revision, facts.BaseRevision, checks, encoded)
 }

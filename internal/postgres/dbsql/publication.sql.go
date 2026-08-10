@@ -181,7 +181,7 @@ func (q *Queries) GetProposalCurrentRevision(ctx context.Context, jobID string) 
 }
 
 const getPublicationAction = `-- name: GetPublicationAction :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
@@ -197,7 +197,6 @@ type GetPublicationActionParams struct {
 type GetPublicationActionRow struct {
 	ID              string
 	JobID           string
-	MessageID       string
 	Kind            spine.ActionKind
 	State           spine.ActionState
 	ExternalID      string
@@ -211,7 +210,6 @@ func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationAc
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
-		&i.MessageID,
 		&i.Kind,
 		&i.State,
 		&i.ExternalID,
@@ -222,7 +220,7 @@ func (q *Queries) GetPublicationAction(ctx context.Context, arg GetPublicationAc
 }
 
 const getPublicationActionForUpdate = `-- name: GetPublicationActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
@@ -240,7 +238,6 @@ type GetPublicationActionForUpdateParams struct {
 type GetPublicationActionForUpdateRow struct {
 	ID              string
 	JobID           string
-	MessageID       string
 	Kind            spine.ActionKind
 	State           spine.ActionState
 	ExternalID      string
@@ -259,7 +256,6 @@ func (q *Queries) GetPublicationActionForUpdate(ctx context.Context, arg GetPubl
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
-		&i.MessageID,
 		&i.Kind,
 		&i.State,
 		&i.ExternalID,

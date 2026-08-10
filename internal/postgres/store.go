@@ -79,7 +79,6 @@ type NewMessage struct {
 
 type ActionView struct {
 	ID             string            `json:"id"`
-	MessageID      string            `json:"message_id,omitempty"`
 	Kind           spine.ActionKind  `json:"kind"`
 	State          spine.ActionState `json:"state"`
 	ExternalID     string            `json:"external_id,omitempty"`
@@ -233,16 +232,8 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	if initial.Sequence != 1 || initial.Input != input.Goal {
 		return spine.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
 	}
-	actionID := spine.TurnActionID(initial.ID)
-	if err := queries.InsertMessageActionIfAbsent(ctx, dbsql.InsertMessageActionIfAbsentParams{ID: actionID, JobID: id, MessageID: sql.NullString{String: initial.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
-		return spine.Job{}, false, err
-	}
-	actionID, err = queries.GetMessageActionID(ctx, dbsql.GetMessageActionIDParams{MessageID: sql.NullString{String: initial.ID, Valid: true}, Kind: spine.ActionTurnStart})
-	if err != nil {
-		return spine.Job{}, false, err
-	}
 	runID := spine.AgentRunID(initial.ID)
-	if err := queries.InsertInitialAgentRun(ctx, dbsql.InsertInitialAgentRunParams{ID: runID, JobID: id, MessageID: sql.NullString{String: initial.ID, Valid: true}, ActionID: actionID}); err != nil {
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID}); err != nil {
 		return spine.Job{}, false, err
 	}
 	if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
@@ -344,16 +335,16 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 		return spine.Message{}, false, fmt.Errorf("Job %s does not accept implementation Messages during workflow phase %s", input.JobID, job.WorkflowPhase)
 	}
 	var message spine.Message
-	role, sessionID := "implement", ""
+	role, harness, threadID := "implement", "", ""
 	if input.Intent == spine.MessageSteer {
 		active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular native turn")
+				return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular harness Turn")
 			}
 			return spine.Message{}, false, err
 		}
-		message.TargetTurnID, sessionID, role = active.NativeTurnID, active.SessionID, active.Role
+		message.TargetTurnID, harness, threadID, role = active.TurnID, active.Harness, active.ThreadID, active.Role
 	}
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
@@ -364,12 +355,17 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return spine.Message{}, false, err
 	}
-	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
-	if err := queries.InsertMessageAction(ctx, dbsql.InsertMessageActionParams{ID: actionID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
+	runID := spine.AgentRunID(message.ID)
+	if role != "implement" {
+		return spine.Message{}, false, fmt.Errorf("steer target AgentRun has unsupported role %s", role)
+	}
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID}); err != nil {
 		return spine.Message{}, false, err
 	}
-	if err := queries.InsertAgentRun(ctx, dbsql.InsertAgentRunParams{ID: runID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID, SessionID: sessionID, Role: role}); err != nil {
-		return spine.Message{}, false, err
+	if harness != "" || threadID != "" {
+		if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
+			return spine.Message{}, false, err
+		}
 	}
 	return message, true, nil
 }
@@ -408,12 +404,12 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		ProviderConnection: row.ProviderConnection,
 		Model:              row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
 		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, SandboxID: row.SandboxID, SandboxState: row.SandboxState,
-		RouteID: row.RouteID, RouteState: row.RouteState, SessionID: row.SessionID, WorkflowPhase: row.WorkflowPhase,
+		RouteID: row.RouteID, RouteState: row.RouteState, WorkflowPhase: row.WorkflowPhase,
 		WorkflowAttention: row.WorkflowAttention, CleanupAttention: row.CleanupAttention,
 	}, nil
 }
 
-// WithJobFence serializes native and other external mutation for one Job
+// WithJobFence serializes harness and other external mutation for one Job
 // independently of an expiring Absurd claim. Message admission intentionally
 // does not take this long-lived fence.
 func (s Store) WithJobFence(ctx context.Context, jobID string, fn func() error) error {
@@ -449,12 +445,12 @@ func messageFromValues(id, jobID string, fromKind spine.MessageFromKind, fromID 
 	return spine.Message{ID: id, JobID: jobID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
 }
 
-func actionFromValues(id, jobID, messageID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
-	return spine.Action{ID: id, JobID: jobID, MessageID: messageID, Kind: kind, State: state, ExternalID: externalID, Outcome: outcome, Scope: scope}
+func actionFromValues(id, jobID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
+	return spine.Action{ID: id, JobID: jobID, Kind: kind, State: state, ExternalID: externalID, Outcome: outcome, Scope: scope}
 }
 
-func agentRunFromValues(id, jobID, messageID, actionID, sessionID string, state spine.AgentRunState, baselineRecorded bool, baselineTurnID, nativeTurnID, nativeOutcome, attention, role string) spine.AgentRun {
-	return spine.AgentRun{ID: id, JobID: jobID, MessageID: messageID, ActionID: actionID, SessionID: sessionID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, NativeTurnID: nativeTurnID, NativeOutcome: nativeOutcome, Attention: attention, Role: role}
+func agentRunFromValues(id, jobID, messageID string, state spine.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role string) spine.AgentRun {
+	return spine.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role}
 }
 
 func checkFromValues(id, jobID, name, command, revision, state string, exitCode int32, evidenceID, evidenceDigest string, startedAt, finishedAt sql.NullTime) spine.Check {
@@ -501,7 +497,7 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 	if err != nil {
 		return spine.Action{}, err
 	}
-	action := actionFromValues(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
+	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
@@ -536,7 +532,7 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 	if err != nil {
 		return spine.Action{}, err
 	}
-	action := actionFromValues(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
+	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
@@ -552,8 +548,8 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if jobID == "" || retryID == "" {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry requires a Job ID and stable retry identity")
 	}
-	if len(retryID) > 239 || strings.HasPrefix(retryID, "dorf:") {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity must be at most 239 characters and must not use the reserved dorf: prefix")
+	if len(retryID) > 239 || strings.HasPrefix(retryID, "dorf:") || strings.HasPrefix(retryID, "review:") {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity must be at most 239 characters and must not use a reserved dorf: or review: prefix")
 	}
 	// The workflow owns this durable wake. Keep its stable retry identity in
 	// FromID, while avoiding the human namespace used by public callers.
@@ -574,7 +570,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositorySetup, retryID)
 	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
 	if err == nil {
-		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.MessageID, existingRow.Kind, existingRow.State, existingRow.ExternalID, existingRow.ExternalOutcome, existingRow.ScopeKey)
+		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ExternalID, existingRow.ExternalOutcome, existingRow.ScopeKey)
 		message, _, messageErr := admitMessageTx(ctx, tx, messageInput)
 		if messageErr != nil {
 			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
@@ -678,8 +674,8 @@ func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spin
 	queries := dbsql.New(tx)
 	err := queries.InsertEvidence(ctx, dbsql.InsertEvidenceParams{
 		ID: evidence.ID, JobID: jobID, Digest: evidence.Digest, ByteSize: evidence.ByteSize,
-		MediaType: evidence.MediaType, Producer: evidence.Producer, Provenance: evidence.Provenance,
-		Kind: evidence.Kind, ActionID: evidence.ActionID, CheckID: evidence.CheckID, Revision: evidence.Revision,
+		MediaType: evidence.MediaType, Producer: evidence.Producer,
+		Kind: evidence.Kind, ActionID: evidence.ActionID, CheckID: evidence.CheckID, AgentRunID: evidence.AgentRunID, Revision: evidence.Revision,
 		StartedAt: nullableTime(evidence.StartedAt), FinishedAt: nullableTime(evidence.FinishedAt),
 	})
 	if err != nil {
@@ -689,7 +685,7 @@ func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spin
 	if err != nil {
 		return err
 	}
-	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Provenance != evidence.Provenance || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.CheckID != evidence.CheckID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
+	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.CheckID != evidence.CheckID || stored.AgentRunID != evidence.AgentRunID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
 		return fmt.Errorf("Evidence identity %s conflicts with immutable retained metadata or content", evidence.ID)
 	}
 	return nil
@@ -779,7 +775,7 @@ func (s Store) RecordRevision(ctx context.Context, jobID, runID string, observat
 		return false, err
 	}
 	if locked.Revision != observation.ComparisonBase || locked.Branch != observation.Branch || locked.WorkflowPhase != "implementing" && locked.WorkflowPhase != "review-feedback" ||
-		evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.CheckID != "" || evidence.Revision != observation.Revision ||
+		evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.CheckID != "" || evidence.AgentRunID != "" || evidence.Revision != observation.Revision ||
 		!ValidRevision(observation.ComparisonBase) || !ValidRevision(observation.Revision) || !ValidRevision(observation.Tree) || observation.Revision == observation.ComparisonBase {
 		return false, fmt.Errorf("Git Revision observation conflicts with durable comparison base, branch, AgentRun, or Evidence")
 	}
@@ -949,11 +945,8 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent}); err != nil {
 		return spine.Message{}, false, err
 	}
-	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
-	if err := queries.InsertMessageAction(ctx, dbsql.InsertMessageActionParams{ID: actionID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
-		return spine.Message{}, false, err
-	}
-	if err := expectOneRows(queries.InsertAgentRunFromImplementationSession(ctx, dbsql.InsertAgentRunFromImplementationSessionParams{ID: runID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID})); err != nil {
+	runID := spine.AgentRunID(message.ID)
+	if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID})); err != nil {
 		return spine.Message{}, false, err
 	}
 	if err := expectOneRows(queries.ReturnFailedCheckToImplementation(ctx, dbsql.ReturnFailedCheckToImplementationParams{JobID: check.JobID, Revision: check.Revision})); err != nil {
@@ -1049,41 +1042,6 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			break
 		}
 		err = expectOneRows(queries.MarkMainRouteActive(ctx, dbsql.MarkMainRouteActiveParams{JobID: jobID, ActionID: id, RouteID: receipt.ExternalID}))
-	case spine.ActionSessionStart:
-		if scope != "" {
-			if strings.TrimSpace(receipt.ExternalID) == "" || strings.TrimSpace(receipt.Outcome) == "" {
-				err = fmt.Errorf("review app-server or Session receipt is empty")
-				break
-			}
-			var inherited bool
-			if inherited, err = queries.ImplementationSessionExists(ctx, receipt.ExternalID); err == nil && inherited {
-				err = fmt.Errorf("review AgentRun %s cannot inherit the implementation Session", scope)
-			}
-			if err != nil {
-				break
-			}
-			var identity dbsql.GetReviewControllerIdentityRow
-			if identity, err = queries.GetReviewControllerIdentity(ctx, scope); err == nil && receipt.Outcome != spine.ReviewControllerID(scope, identity.SandboxName, identity.OwnershipNonce) {
-				err = fmt.Errorf("review logical controller identity conflicts with its host-owned Sandbox")
-			}
-			if err != nil {
-				break
-			}
-			if err = expectOneRows(queries.BindReviewAppServer(ctx, dbsql.BindReviewAppServerParams{AppServerID: sql.NullString{String: receipt.Outcome, Valid: true}, RunID: scope})); err == nil {
-				err = expectOneRows(queries.BindReviewAgentRunSession(ctx, dbsql.BindReviewAgentRunSessionParams{SessionID: sql.NullString{String: receipt.ExternalID, Valid: true}, RunID: scope}))
-			}
-			break
-		}
-		var affected int64
-		affected, err = queries.UpsertImplementationSession(ctx, dbsql.UpsertImplementationSessionParams{JobID: jobID, ActionID: id, SessionID: receipt.ExternalID})
-		if err == nil {
-			if affected != 1 {
-				err = fmt.Errorf("native Session binding conflicts with the recorded Session for Job %s", jobID)
-			}
-		}
-		if err == nil {
-			err = queries.BindImplementationAgentRunSessions(ctx, dbsql.BindImplementationAgentRunSessionsParams{SessionID: sql.NullString{String: receipt.ExternalID, Valid: true}, JobID: jobID})
-		}
 	case spine.ActionRouteRevoke:
 		if scope != "" {
 			var routeID sql.NullString
@@ -1124,15 +1082,15 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 			err = expectOneRows(queries.MarkMainSandboxDeleted(ctx, dbsql.MarkMainSandboxDeletedParams{JobID: jobID, IncusName: expectedSandbox}))
 		}
 	case spine.ActionReviewWorkspaceCreate:
-		var identity dbsql.GetReviewWorkspaceReceiptIdentityRow
-		if identity, err = queries.GetReviewWorkspaceReceiptIdentity(ctx, dbsql.GetReviewWorkspaceReceiptIdentityParams{ActionID: id, RunID: scope}); err == nil && receipt.ExternalID != identity.Workspace.String {
-			err = fmt.Errorf("review workspace receipt conflicts with its exact path")
+		var expectedRevision string
+		if expectedRevision, err = queries.GetReviewWorkspaceReceiptIdentity(ctx, dbsql.GetReviewWorkspaceReceiptIdentityParams{ActionID: id, RunID: scope}); err == nil && strings.TrimSpace(receipt.ExternalID) == "" {
+			err = fmt.Errorf("review workspace receipt has no materialized path")
 		}
 		if err == nil {
 			var tree string
 			var observedRevision string
 			observedRevision, tree, err = parseReviewStateOutcome(receipt.Outcome)
-			if err == nil && observedRevision != identity.Revision {
+			if err == nil && observedRevision != expectedRevision {
 				err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
 			}
 			if err == nil {
@@ -1150,7 +1108,7 @@ func (s Store) UncertainAction(ctx context.Context, id string) error {
 	return dbsql.New(s.DB).MarkActionUncertain(ctx, id)
 }
 
-func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spine.Delivery, error) {
+func (s Store) NextDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1161,7 +1119,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	if err != nil {
 		return nil, err
 	}
-	// A steer is a distinct priority lane aimed at the active native turn. It may
+	// A steer is a distinct priority lane aimed at the active harness Turn. It may
 	// overtake older queued follow-ups; the immutable sequence still records
 	// admission order, while follow-up turn starts remain FIFO.
 	row, err := queries.NextDeliveryCandidate(ctx, jobID)
@@ -1175,26 +1133,24 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 		ID: row.ID, JobID: row.JobID, FromKind: spine.MessageFromKind(row.FromKind), FromID: row.FromID,
 		Sequence: row.Sequence, Input: row.Input, Intent: spine.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID,
 	}
-	actionID := spine.TurnActionID(message.ID)
 	runID := spine.AgentRunID(message.ID)
-	if err := queries.InsertMessageActionIfAbsent(ctx, dbsql.InsertMessageActionIfAbsentParams{ID: actionID, JobID: jobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
+	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID}); err != nil {
 		return nil, err
-	}
-	if err := queries.InsertAgentRunIfAbsent(ctx, dbsql.InsertAgentRunIfAbsentParams{ID: runID, JobID: jobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID, SessionID: sessionID}); err != nil {
-		return nil, err
-	}
-	if sessionID != "" {
-		if err := queries.BindAgentRunSessionByMessage(ctx, dbsql.BindAgentRunSessionByMessageParams{SessionID: sql.NullString{String: sessionID, Valid: true}, MessageID: sql.NullString{String: message.ID, Valid: true}}); err != nil {
-			return nil, err
-		}
 	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
 		return nil, err
 	}
-	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.ActionID, runRow.SessionID, runRow.State, runRow.BaselineRecorded, runRow.BaselineNativeTurnID, runRow.NativeTurnID, runRow.NativeOutcome, runRow.Attention, runRow.Role)
-	if sessionID != "" && run.SessionID != sessionID {
-		return nil, fmt.Errorf("AgentRun %s is bound to native Session %s, not %s", run.ID, run.SessionID, sessionID)
+	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role)
+	bindings, err := queries.ListImplementationThreadBindings(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	for i, binding := range bindings {
+		if i > 0 && (binding.Harness != bindings[0].Harness || binding.ThreadID != bindings[0].ThreadID) ||
+			run.ThreadID != "" && (run.Harness != binding.Harness.String || run.ThreadID != binding.ThreadID.String) {
+			return nil, fmt.Errorf("Job %s implementation AgentRuns disagree on their harness Thread", jobID)
+		}
 	}
 	allowed := run.Role == "implement" && (workflowPhase == "setup" || workflowPhase == "implementing" || workflowPhase == "review-feedback")
 	if !allowed {
@@ -1213,30 +1169,32 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	return &spine.Delivery{Message: message, AgentRun: run}, nil
 }
 
-func (s Store) PrepareAgentRun(ctx context.Context, runID, baselineTurnID string) error {
+func (s Store) PrepareAgentRun(ctx context.Context, runID, harness, baselineTurnID string) error {
+	if strings.TrimSpace(harness) == "" {
+		return fmt.Errorf("AgentRun preparation requires a harness")
+	}
 	queries := dbsql.New(s.DB)
-	rows, err := queries.PrepareAgentRun(ctx, dbsql.PrepareAgentRunParams{BaselineTurnID: sql.NullString{String: baselineTurnID, Valid: true}, RunID: runID})
+	rows, err := queries.PrepareAgentRun(ctx, dbsql.PrepareAgentRunParams{Harness: sql.NullString{String: harness, Valid: true}, BaselineTurnID: sql.NullString{String: baselineTurnID, Valid: true}, RunID: runID})
 	if err != nil {
 		return err
 	}
 	if rows == 1 {
 		return nil
 	}
-	baseline, err := queries.GetAgentRunBaseline(ctx, runID)
+	prepared, err := queries.GetAgentRunPreparation(ctx, runID)
 	if err != nil {
 		return err
 	}
-	if !baseline.Recorded || baseline.BaselineTurnID != baselineTurnID {
-		return fmt.Errorf("AgentRun %s native baseline conflicts with durable baseline", runID)
+	if prepared.Harness != harness || !prepared.Recorded || prepared.BaselineTurnID != baselineTurnID {
+		return fmt.Errorf("AgentRun %s harness baseline conflicts with durable baseline", runID)
 	}
 	return nil
 }
 
-func (s Store) BeginTurnSubmission(ctx context.Context, runID string) error {
-	return expectOneRows(dbsql.New(s.DB).ResetTurnActionForSubmission(ctx, runID))
-}
-
-func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string) error {
+func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnID, status string) error {
+	if strings.TrimSpace(harness) == "" || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return fmt.Errorf("AgentRun binding requires harness, Thread ID, and Turn ID")
+	}
 	state := spine.AgentRunActive
 	outcome := ""
 	attention := ""
@@ -1248,7 +1206,7 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 		state, outcome = spine.AgentRunInterrupted, status
 	} else if status != "running" && status != "inProgress" {
 		state = spine.AgentRunUncertain
-		attention = fmt.Sprintf("native turn %s has unsupported status %q", turnID, status)
+		attention = fmt.Sprintf("harness Turn %s has unsupported status %q", turnID, status)
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -1256,22 +1214,56 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	actionID, err := queries.BindNativeTurn(ctx, dbsql.BindNativeTurnParams{TurnID: sql.NullString{String: turnID, Valid: true}, State: state, Outcome: outcome, Attention: attention, RunID: runID})
+	run, err := queries.GetAgentRunForBinding(ctx, runID)
 	if err != nil {
 		return err
 	}
-	if err := queries.MarkTurnActionSucceeded(ctx, dbsql.MarkTurnActionSucceededParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: sql.NullString{String: "submitted", Valid: true}, ActionID: actionID}); err != nil {
+	if run.Harness != "" && run.Harness != harness || run.ThreadID != "" && run.ThreadID != threadID || run.TurnID != "" && run.TurnID != turnID {
+		return fmt.Errorf("AgentRun %s harness Thread/Turn binding conflicts with its durable identity", runID)
+	}
+	if run.State == spine.AgentRunCompleted || run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted {
+		if run.State != state || run.TurnOutcome != outcome || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
+			return fmt.Errorf("AgentRun %s terminal outcome conflicts with observed harness status %q", runID, status)
+		}
+		return tx.Commit()
+	}
+	if run.State == spine.AgentRunPending {
+		return fmt.Errorf("AgentRun %s must be prepared before binding a harness Turn", runID)
+	}
+	if run.Role == "implement" {
+		bindings, err := queries.ListImplementationThreadBindings(ctx, run.JobID)
+		if err != nil {
+			return err
+		}
+		for _, binding := range bindings {
+			if binding.Harness.String != harness || binding.ThreadID.String != threadID {
+				return fmt.Errorf("AgentRun %s conflicts with Job %s implementation Thread", runID, run.JobID)
+			}
+		}
+	} else {
+		inherited, err := queries.ImplementationThreadExists(ctx, dbsql.ImplementationThreadExistsParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}})
+		if err != nil {
+			return err
+		}
+		if inherited {
+			return fmt.Errorf("review AgentRun %s cannot inherit an implementation Thread", runID)
+		}
+	}
+	if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
+		return err
+	}
+	if err := expectOneRows(queries.BindHarnessTurn(ctx, dbsql.BindHarnessTurnParams{TurnID: sql.NullString{String: turnID, Valid: true}, State: state, TurnOutcome: outcome, Attention: attention, RunID: runID, Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}})); err != nil {
 		return err
 	}
 	if outcome != "" {
-		if err := queries.PropagateNativeTurnOutcomeToSteers(ctx, dbsql.PropagateNativeTurnOutcomeToSteersParams{Outcome: sql.NullString{String: outcome, Valid: true}, RunID: runID, TurnID: sql.NullString{String: turnID, Valid: true}}); err != nil {
+		if err := queries.PropagateTurnOutcomeToSteers(ctx, dbsql.PropagateTurnOutcomeToSteersParams{TurnOutcome: sql.NullString{String: outcome, Valid: true}, RunID: runID, TurnID: sql.NullString{String: turnID, Valid: true}}); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func (s Store) BindNativeSteer(ctx context.Context, runID, turnID, status string) error {
+func (s Store) BindSteer(ctx context.Context, runID, turnID, status string) error {
 	outcome := ""
 	if status == "completed" || status == "failed" || status == "interrupted" {
 		outcome = status
@@ -1282,51 +1274,22 @@ func (s Store) BindNativeSteer(ctx context.Context, runID, turnID, status string
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	bound, err := queries.BindNativeSteer(ctx, dbsql.BindNativeSteerParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: outcome, RunID: runID})
+	bound, err := queries.BindSteer(ctx, dbsql.BindSteerParams{TurnID: sql.NullString{String: turnID, Valid: true}, TurnOutcome: outcome, RunID: runID})
 	if err != nil {
 		return err
 	}
-	if outcome != "" && bound.NativeOutcome != outcome {
-		return fmt.Errorf("AgentRun %s native outcome %s conflicts with observed %s", runID, bound.NativeOutcome, outcome)
-	}
-	if err := queries.MarkTurnActionSucceeded(ctx, dbsql.MarkTurnActionSucceededParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: sql.NullString{String: "steered", Valid: true}, ActionID: bound.ActionID}); err != nil {
-		return err
+	if outcome != "" && bound != outcome {
+		return fmt.Errorf("AgentRun %s outcome %s conflicts with observed %s", runID, bound, outcome)
 	}
 	return tx.Commit()
 }
 
 func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	actionID, err := queries.FailAgentRun(ctx, dbsql.FailAgentRunParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID})
-	if err != nil {
-		return err
-	}
-	if err := queries.MarkRunActionFailed(ctx, dbsql.MarkRunActionFailedParams{RunID: runID, Reason: sql.NullString{String: reason, Valid: true}, ActionID: actionID}); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return expectOneRows(dbsql.New(s.DB).FailAgentRun(ctx, dbsql.FailAgentRunParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
 func (s Store) UncertainAgentRun(ctx context.Context, runID, reason string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	actionID, err := queries.MarkAgentRunUncertain(ctx, dbsql.MarkAgentRunUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID})
-	if err != nil {
-		return err
-	}
-	if err := queries.MarkRunActionUncertain(ctx, dbsql.MarkRunActionUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, ActionID: actionID}); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return expectOneRows(dbsql.New(s.DB).MarkAgentRunUncertain(ctx, dbsql.MarkAgentRunUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
 func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) error {
@@ -1339,25 +1302,30 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 		return nil, err
 	}
 	var views []spine.MessageView
+	var roles []string
 	for _, row := range rows {
 		view := spine.MessageView{
 			Message:    messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
-			AgentRunID: row.AgentRunID, State: row.State, NativeTurnID: row.NativeTurnID,
-			NativeOutcome: row.NativeOutcome, Attention: row.Attention, Delivered: row.Delivered,
+			AgentRunID: row.AgentRunID, State: row.State, Harness: row.Harness, ThreadID: row.ThreadID, TurnID: row.TurnID,
+			TurnOutcome: row.TurnOutcome, Attention: row.Attention, Delivered: row.Delivered,
 		}
 		views = append(views, view)
+		roles = append(roles, row.Role)
 	}
 	var blocker *spine.MessageView
 	for i := range views {
 		view := &views[i]
-		if blocker != nil && !(view.Intent == spine.MessageSteer && blocker.State == spine.AgentRunActive && view.TargetTurnID == blocker.NativeTurnID) {
+		if roles[i] != "implement" {
+			continue
+		}
+		if blocker != nil && !(view.Intent == spine.MessageSteer && blocker.State == spine.AgentRunActive && view.TargetTurnID == blocker.TurnID) {
 			view.BlockingSeq = blocker.Sequence
 			view.BlockingReason = string(blocker.State)
 			if blocker.Attention != "" {
 				view.BlockingReason += ": " + blocker.Attention
 			}
 		}
-		turnStartActive := (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain) && (view.Intent == spine.MessageFollow || view.NativeTurnID != "" && view.NativeTurnID != view.TargetTurnID)
+		turnStartActive := (view.State == spine.AgentRunActive || view.State == spine.AgentRunUncertain) && (view.Intent == spine.MessageFollow || view.TurnID != "" && view.TurnID != view.TargetTurnID)
 		if blocker == nil && ((!view.Delivered && view.State != spine.AgentRunCompleted) || turnStartActive) {
 			blocker = view
 		}
@@ -1365,8 +1333,8 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 	return views, nil
 }
 
-func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
-	row, err := dbsql.New(s.DB).GetNativeMutationDelivery(ctx, jobID)
+func (s Store) HarnessMutationDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
+	row, err := dbsql.New(s.DB).GetHarnessMutationDelivery(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -1375,7 +1343,7 @@ func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine
 	}
 	delivery := spine.Delivery{
 		Message:  messageFromValues(row.MessageID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
-		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.ActionID, row.SessionID, row.State, row.BaselineRecorded, row.BaselineNativeTurnID, row.NativeTurnID, row.NativeOutcome, row.Attention, row.Role),
+		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.State, row.Harness, row.ThreadID, row.BaselineRecorded, row.BaselineTurnID, row.TurnID, row.TurnOutcome, row.Attention, row.Role),
 	}
 	return &delivery, nil
 }
@@ -1405,12 +1373,12 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if job.CleanupTaskID == "" {
 		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
 	}
-	nativeMutations, err := queries.CountImplementationNativeMutations(ctx, jobID)
+	harnessMutations, err := queries.CountImplementationHarnessMutations(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	if nativeMutations != 0 {
-		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation native mutations", nativeMutations)
+	if harnessMutations != 0 {
+		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation harness mutations", harnessMutations)
 	}
 	unsettled, err := queries.CountUnsettledReviewResources(ctx, jobID)
 	if err != nil {
@@ -1439,7 +1407,7 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) 
 	}
 	var actions []ActionView
 	for _, row := range rows {
-		actions = append(actions, ActionView{ID: row.ID, MessageID: row.MessageID, Kind: row.Kind, State: row.State, ExternalID: row.ExternalID, Scope: row.ScopeKey, EvidenceDigest: row.EvidenceDigest})
+		actions = append(actions, ActionView{ID: row.ID, Kind: row.Kind, State: row.State, ExternalID: row.ExternalID, Scope: row.ScopeKey, EvidenceDigest: row.EvidenceDigest})
 	}
 	return actions, nil
 }
@@ -1463,7 +1431,7 @@ func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, er
 	}
 	var records []spine.Evidence
 	for _, row := range rows {
-		records = append(records, spine.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Provenance: row.Provenance, Kind: row.Kind, ActionID: row.ActionID, CheckID: row.CheckID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
+		records = append(records, spine.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Kind: row.Kind, ActionID: row.ActionID, AgentRunID: row.AgentRunID, CheckID: row.CheckID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
 	}
 	return records, nil
 }

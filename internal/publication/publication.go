@@ -372,15 +372,18 @@ func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Che
 		lines = append(lines, fmt.Sprintf("- %s: %s (Evidence `%s`, sha256 `%s`)", check.Name, check.State, check.EvidenceID, digests[check.EvidenceID]))
 	}
 	lines = append(lines, "", "## Selected review", "")
-	selected := false
+	runsByID := make(map[string]spine.ReviewRunView, len(runs))
 	for _, run := range runs {
-		if run.Revision != job.Revision {
+		runsByID[run.ID] = run
+	}
+	for _, verification := range readiness.ReviewEvidence {
+		run, ok := runsByID[verification.AgentRunID]
+		if !ok || run.Revision != job.Revision {
 			continue
 		}
-		selected = true
-		lines = append(lines, fmt.Sprintf("- %s: feedback Message `%s` handled by the implementation Session (claim Evidence `%s`, sha256 `%s`; observed Evidence `%s`, sha256 `%s`)", run.Role, run.FeedbackMessageID, run.ClaimEvidenceID, digests[run.ClaimEvidenceID], run.ObservedEvidenceID, digests[run.ObservedEvidenceID]))
+		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, verification.ObservedEvidenceID, digests[verification.ObservedEvidenceID], run.FeedbackMessageID))
 	}
-	if !selected {
+	if len(readiness.ReviewEvidence) == 0 {
 		lines = append(lines, "- ReviewPolicy selected no agent review.")
 	}
 	attention := "none"

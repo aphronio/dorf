@@ -18,7 +18,7 @@ values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'pending',sqlc.arg(scope_key
 on conflict do nothing;
 
 -- name: GetPublicationActionForUpdate :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
@@ -26,7 +26,7 @@ where id=sqlc.arg(id) and job_id=sqlc.arg(job_id) and kind=sqlc.arg(kind) and sc
 for update;
 
 -- name: GetPublicationAction :one
-select id,job_id,coalesce(message_id,'') as message_id,kind,state,
+select id,job_id,kind,state,
        coalesce(external_id,'') as external_id,
        coalesce(external_outcome,'') as external_outcome,scope_key
 from dorf.actions
