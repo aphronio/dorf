@@ -8,8 +8,12 @@ import (
 func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	jobA := JobID("client-request-40")
 	jobB := JobID("client-request-40")
+	jobC := JobID("client-request-41")
 	if jobA != jobB || jobA == "" {
 		t.Fatalf("job identity is not stable: %q != %q", jobA, jobB)
+	}
+	if MainSandboxName(jobA) != MainSandboxName(jobB) || MainSandboxName(jobA) == MainSandboxName(jobC) {
+		t.Fatal("main Sandbox identity is not stable and Job-scoped")
 	}
 	if ActionID(jobA, ActionSandboxCreate) != ActionID(jobA, ActionSandboxCreate) {
 		t.Fatal("Sandbox Action identity is not stable")
