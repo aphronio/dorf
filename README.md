@@ -67,5 +67,7 @@ Preparation installs the pinned `sqlc` tool and converges the disposable Postgre
 The check command rejects stale generated query code, prepares every query against that live schema,
 then runs the Go test and vet suites. Regenerate private query code with
 `mise run sql:generate` after editing `internal/postgres/queries` or the baseline schema.
+Developers who already use mise can install the versioned Go, PostgreSQL, sqlc, and `absurdctl`
+toolchain with `mise install`; the preparation script remains the portable setup path.
 
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).
