@@ -63,20 +63,23 @@ DAG.
 - Admission records the complete goal before agent work begins and schedules the Job with a stable
   idempotency identity. If recording and scheduling cannot be made one transaction, recovery
   reconciles the two facts rather than assuming both happened.
-- Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. A pure,
-  coding-specific `CurrentWork` decision reads the product facts in order: Sandbox, clone, setup,
-  route, AgentRun delivery, Revision observation, Checks, selected review, exact-Revision push and
-  proposal, then proposal observation. `RunJob` executes that decision and recomputes it after each
-  recorded fact. Each
-  repeatable operation uses a
-  public Absurd Step with a stable name derived from its Action, AgentRun, Revision, or Check ID and
-  a small typed result. Absurd owns step, retry, lease, heartbeat, wait, and cancellation mechanics;
+- Deterministic coding sequencing is one explicit `workflow.RunJob` coordinator. Dorf loads one
+  concrete coding `Snapshot`; its disposable `Projection` derives readiness and a pure `CurrentWork`
+  decision in product order: Sandbox, clone, setup, route, AgentRun delivery, Revision observation,
+  Checks, selected review, exact-Revision push and proposal, then proposal observation. Execution,
+  human history, and structured inspection share that Snapshot. `RunJob` reloads it after each
+  recorded fact, while every mutation transactionally revalidates its exact owning fact. Each
+  external Action uses its own `dorf/action/v1/<ActionID>` public Absurd Step and
+  `ActionStepResultV1`; AgentRun, Revision, Check, and policy operations retain their own stable
+  versioned Step names and typed results. Absurd owns step, retry, lease, heartbeat, wait, and
+  cancellation mechanics;
   Dorf keeps only product facts and Action identity, scope, and settlement state. The spine exposes
   single operations to this
   coordinator; it does not own the whole coding loop or hold a long Job fence across external work.
   No Dorf-owned phase or next-work value is persisted. Publication is two direct main-task Steps
   backed by stable Actions. Absurd's public retry resumes that task after an operator resolves
-  attention.
+  attention. The application constructs one compile-time service boundary; runtime capability
+  assertions do not select coding behavior.
 - Judgment executes as an AgentRun consuming an exact durable Message, with a bounded Role, input
   Revision, capability envelope, Harness, Thread, Turn, and Turn outcome. The Message is its only
   durable text input. Evidence retained for a harness observation links directly to that AgentRun.
@@ -113,11 +116,12 @@ DAG.
   Proposal adds only pull-request identity and exact Revision; Outcome adds only the terminal external
   observation. Neither copies authority already owned by the preceding fact.
 
-The same facts produce a read-only workflow history for people. It overlays the expected dependency
-chain with chronological Message, Action, AgentRun, Revision-observation, Check, ReviewPlan,
-Proposal, Outcome, and cleanup facts, and marks the derived current work. It is not a stored event
-transcript. Product inspection does not copy Absurd attempts, claims, checkpoints, waits, or retry
-history; operators use `absurdctl` or Habitat for those mechanics.
+The same Snapshot produces a read-only workflow history for people. It overlays the expected
+dependency chain with chronological Message, Action, AgentRun, Revision, `git-revision` Evidence,
+Check, ReviewPlan, Proposal, Outcome, attention, and cleanup facts, and marks the derived current
+work. It is not a stored event transcript. Structured inspection may expose attached task
+correlation and terminal result, but it does not copy Absurd attempts, claims, checkpoints, waits,
+leases, or retry history; operators use `absurdctl` or Habitat for those mechanics.
 
 The fact-derived coordinator is deliberately not a reusable workflow framework. Do not replace the
 deleted phase with a persisted status enum, generic graph interpreter, configurable DSL,

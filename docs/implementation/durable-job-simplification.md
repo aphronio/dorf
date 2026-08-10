@@ -485,7 +485,7 @@ Goal: let retained product facts tell `RunJob` what comes next instead of a seco
       the input means unchanged; a different descendant also creates the next Revision. Do not add a
       second observation table or result enum for facts already carried by AgentRun and Evidence.
 - [x] Derive one non-durable, coding-specific `CurrentWork` in ordinary Go from owned resources,
-      Messages, AgentRuns, Revision observations, Revisions, Checks, ReviewPlans, Proposals, Outcomes,
+      Messages, AgentRuns, `git-revision` Evidence, Revisions, Checks, ReviewPlans, Proposals, Outcomes,
       and cleanup Actions. Keep its dependency order visible; do not hide it in one giant SQL query.
 - [x] Make `RunJob` execute `CurrentWork` and recompute it after each recorded fact. Inspection uses
       the same current-work decision rather than independently interpreting progress.
@@ -504,7 +504,7 @@ Goal: let retained product facts tell `RunJob` what comes next instead of a seco
       AgentRun, exact Evidence set, selected ReviewPlan, current Proposal, and absence of newer input.
       Do not replace the phase with another status matrix.
 - [x] Ensure natural product facts retain the timestamps needed to derive honest chronology, including
-      Action settlement and Revision observation, without adding a copied event-log table.
+      Action settlement, Revision, and `git-revision` Evidence, without adding a copied event-log table.
 - [x] Retain only the main and cleanup Absurd task handles while public cancellation and inspection
       require them; do not mirror task state.
 - [x] Remove `RunUntilIdle`, cycle results, and synthetic cycle checkpoints in Slice 2B.
@@ -554,34 +554,34 @@ Goal: finish with a small human surface and tests that protect promises rather t
 - [x] Make default `inspect` overlay the complete expected coding dependency chain with chronological
       product facts, mark current work or attention, and show the exact Revision, Proposal/Outcome,
       and cleanup. Repeated Revisions should make implementation/check/review loops obvious.
-- [x] Derive `WorkflowHistory` from natural Message, Action, AgentRun, Revision-observation, Check,
-      ReviewPlan, Proposal, Outcome, attention, and cleanup timestamps. Do not store a parallel event
-      transcript or use it as recovery authority.
-- [x] Keep deep machine facts under `inspect --json`; use `absurdctl` for task runs, attempts,
-      checkpoints, waits, and leases.
+- [x] Derive `WorkflowHistory` from natural Message, Action, AgentRun, Revision, `git-revision`
+      Evidence, Check, ReviewPlan, Proposal, Outcome, attention, and cleanup timestamps. Do not store
+      a parallel event transcript or use it as recovery authority.
+- [x] Keep deep product facts and attached task correlation/results under `inspect --json`; use
+      `absurdctl` for task runs, attempts, checkpoints, waits, and leases.
 - [x] Stop printing reviewer workspace, controller, token, task, and resource plumbing in normal human
       output.
-- [ ] Make feedback and delivery explanations derive only from Messages and AgentRuns; delete joined
+- [x] Make feedback and delivery explanations derive only from Messages and AgentRuns; delete joined
       `FeedbackMessageID`, role-specific AgentRun identity, and the second FIFO/blocking projection.
-- [ ] Replace runtime Store/External capability assertions with one compile-time service boundary after
+- [x] Replace runtime Store/External capability assertions with one compile-time service boundary after
       trimming methods the service does not call.
-- [ ] Remove copied read-model fields whose source facts are already loaded (`RevisionGeneration`, stale
-      flags, derived reviewer Route, and readiness status text).
-- [ ] Load one concrete inspection snapshot for CurrentWork, readiness, history, and JSON instead of
+- [x] Remove copied read-model fields when their source facts are already present in the Snapshot.
+- [x] Load one concrete inspection Snapshot for CurrentWork, readiness, history, and JSON instead of
       querying the same facts twice; do not turn it into a generic graph framework.
 - [ ] Keep compact PostgreSQL-backed stories for Message/Thread, Check feedback, review feedback,
       Proposal/Outcome, and exact cleanup/retry.
 - [ ] Keep pure policy/readiness tests, exact external-authority tests, and the production claim-loss
       fault tests.
-- [ ] Delete remaining private-helper, phase-transition, duplicated status-matrix, raw-row,
-      formatting, and inspect-prose tests.
+- [ ] Delete obsolete workflow-choreography, copied-state, duplicated status-matrix, raw-row, and
+      brittle inspect-prose tests. Retain focused pure helper and formatting tests when they protect
+      an external contract.
 - [ ] Delete matched obsolete tests during every earlier slice; leave only the final presentation and
       overlap sweep here.
 - [ ] Correct all setup and lifecycle examples to match automatic PR Outcome observation and cleanup.
 - [ ] Report final production/test/schema LOC and name any remaining complexity centers.
 
-Terminal: a user can understand a Job without reading implementation state, and the small test suite
-protects the same story shown by the workflow.
+Terminal: a user can understand a Job without reading implementation state, and the focused test
+suite protects the same story and external contracts shown by the workflow.
 
 ## Issue #94 closure gate
 

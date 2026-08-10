@@ -1104,14 +1104,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted workflow boundary — 2026-08-10; transitional phase removed by D061
 - **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
-  single spine operations in product order and gives each repeatable Action, AgentRun, Revision, and
-  Check operation a stable versioned Absurd Step name plus a small typed result. Absurd owns durable
-  execution mechanics; PostgreSQL remains authoritative for Job facts and Action settlement.
+  single spine operations in product order. `CurrentWork` selects the exact owning fact. Each external
+  Action runs in its own `dorf/action/v1/<ActionID>` Step and returns
+  `ActionStepResultV1{ActionID}`; AgentRun, Revision, Check, and policy operations retain their own
+  stable versioned Step names and typed results. Absurd owns durable execution mechanics; PostgreSQL
+  remains authoritative for Job facts and Action settlement.
 - **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
   Each code-owned external mutation reserves and reconciles its stable Action, performs a final
   claim check, records Action success, and then completes its Step. Each AgentRun instead reconciles
   its own Harness/Thread/Turn identity. D061 removes the transitional `workflow_phase`; the mixed
-  service-layer coordinator that interpreted it was already deleted.
+  service-layer coordinator that interpreted it was already deleted. The application constructs one
+  compile-time `ServiceStore` and `ServiceExternals` boundary; runtime capability assertions do not
+  select coding behavior.
 - **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
   durable runtime rather than a second Dorf-owned program counter.
 - **Reconsider when:** D061 absorbed the original trigger after review and publication became direct
@@ -1341,11 +1345,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted workflow-authority and inspection decision — 2026-08-10
 - **Decision:** Dorf does not persist `workflow_phase`, `next_work`, or another derived workflow
-  status. The coding workflow has one pure `CurrentWork` decision in Go. It reads authoritative Job,
-  Message, Action, AgentRun, Revision observation, Revision, Check, ReviewPlan, Proposal, Outcome, and
-  cleanup facts in visible dependency order. `RunJob` executes that decision and recomputes it after
-  each recorded fact. Absurd alone owns task eligibility, claims, named checkpoints, sleeps, waits,
-  retries, and cancellation.
+  status. It loads one concrete coding `Snapshot` and derives a disposable `Projection` containing
+  readiness and the pure `CurrentWork` decision. Execution, human history, and structured inspection
+  share that same Snapshot rather than loading or interpreting the facts independently. `RunJob`
+  reloads after each recorded fact, and every mutation transactionally revalidates its exact owner
+  before recording an effect. Absurd alone owns task eligibility, claims, named checkpoints, sleeps,
+  waits, retries, and cancellation.
 - **Missing recovery fact:** A completed implementation Turn does not prove that Dorf inspected its
   mutable checkout. Bind the implementation AgentRun to its input Revision, then retain the existing
   `git-revision` Evidence for both changed and unchanged clean observations with that AgentRun as its
@@ -1353,10 +1358,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Revision; equality records an unchanged result. This reuses one natural proof fact rather than
   adding a Revision-observation table or stored changed/unchanged enum, and replaces the only real
   information previously hidden in implementation/review handoff phases.
-- **Human view:** Inspection derives both the expected coding dependency chain and the chronological
-  facts that actually occurred, and marks the same `CurrentWork` used by execution. This read model is
-  disposable. Dorf does not copy product tables into an event log, and it does not copy Absurd task
-  attempts or checkpoints; `absurdctl` and Habitat remain the operational execution-history tools.
+- **Human view:** Inspection derives both the expected coding dependency chain and chronological
+  Message, Action, AgentRun, Revision, `git-revision` Evidence, Check, ReviewPlan, Proposal, Outcome,
+  attention, and cleanup facts from the same Snapshot, and marks the same `CurrentWork` used by
+  execution. This Projection is disposable. Structured inspection may show attached task correlation
+  and terminal result, but it does not copy Absurd attempts, checkpoints, waits, or leases;
+  `absurdctl` and Habitat remain the operational execution-history tools.
 - **Why:** One source of truth removes phase transitions and impossible phase/fact disagreements,
   makes recovery ask only which authoritative fact is missing, and puts the deterministic flow in one
   readable place. It also makes change local and composable: a new Check adds a Check fact, a selected
