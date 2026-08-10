@@ -1,0 +1,53 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "internal/postgres/migrations/001_baseline.sql"
+    queries: "internal/postgres/queries"
+    strict_function_checks: true
+    strict_order_by: true
+    database:
+      uri: "${DORF_TEST_DATABASE_URL}"
+    analyzer:
+      database: false
+    rules:
+      - sqlc/db-prepare
+    gen:
+      go:
+        package: "dbsql"
+        out: "internal/postgres/dbsql"
+        sql_package: "database/sql"
+        omit_unused_structs: true
+        initialisms:
+          - id
+          - url
+          - oid
+          - pr
+        overrides:
+          - column: "dorf.jobs.cleanup_state"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "CleanupState"
+          - column: "dorf.job_messages.from_kind"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "MessageFromKind"
+          - column: "dorf.job_messages.delivery_intent"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "MessageDeliveryIntent"
+          - column: "dorf.actions.kind"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "ActionKind"
+          - column: "dorf.actions.state"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "ActionState"
+          - column: "dorf.agent_runs.state"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "AgentRunState"
+          - column: "dorf.job_outcomes.outcome"
+            go_type:
+              import: "github.com/aphronio/dorf/internal/spine"
+              type: "JobOutcomeKind"

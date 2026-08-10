@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -26,60 +27,58 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
 	defer tx.Rollback()
-	var current, phase, repository, installation, base, head, clone, taskID string
-	var admissionOpen bool
-	var cleanupState spine.CleanupState
-	alreadyPublished := false
-	spawn := false
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,''),branch,repository,coalesce(publication_task_id,''),admission_open,cleanup_state from dorf.jobs where id=$1 for update`, jobID).Scan(&current, &phase, &repository, &installation, &base, &head, &clone, &taskID, &admissionOpen, &cleanupState); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetPublicationJobForUpdate(ctx, jobID)
+	if err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
-	if !admissionOpen || cleanupState != spine.CleanupPending {
+	alreadyPublished := false
+	spawn := false
+	if !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication cannot start after Job admission closes or cleanup begins")
 	}
-	if current != revision || !ValidRevision(revision) {
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication Revision %s conflicts with exact ready Revision %s", revision, current)
+	if locked.Revision != revision || !ValidRevision(revision) {
+		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication Revision %s conflicts with exact ready Revision %s", revision, locked.Revision)
 	}
-	if err := githubapi.ValidateAuthority(clone, repository, installation, base, head); err != nil {
+	if err := githubapi.ValidateAuthority(locked.Repository, locked.GithubRepository, locked.GithubInstallationID, locked.BaseBranch, locked.Branch); err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("publication authority unresolved: %w", err)
 	}
-	switch phase {
+	switch locked.WorkflowPhase {
 	case "ready":
 		spawn = true
 	case "publishing":
 		// An empty attachment is the recoverable window after the Dorf
 		// publication intent committed and before the public Absurd Spawn
 		// result was attached. The stable key decides create versus adopt.
-		spawn = taskID == ""
+		spawn = locked.PublicationTaskID == ""
 	case "published":
-		var proposed string
-		err := tx.QueryRowContext(ctx, `select proposed_revision from dorf.github_proposals where job_id=$1`, jobID).Scan(&proposed)
-		if err == nil && proposed == revision {
+		proposal, proposalErr := queries.GetProposal(ctx, jobID)
+		if proposalErr == nil && proposal.ProposedRevision == revision {
 			alreadyPublished = true
 			// The deterministic task may have won the Job fence and completed
 			// after Spawn but before its ID was attached. Re-adopt that same
 			// stable task without reopening publication.
-			spawn = taskID == ""
+			spawn = locked.PublicationTaskID == ""
 		} else {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("published Job is not stale at a later exact ready Revision")
 		}
 	case "publication-blocked":
 		// An attached failed task is retried only through Absurd RetryTask.
 		// The empty case is still the same Spawn/Attach recovery window.
-		spawn = taskID == ""
+		spawn = locked.PublicationTaskID == ""
 	default:
-		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", phase)
+		return spine.Job{}, spine.Action{}, spine.Action{}, false, fmt.Errorf("exact Revision readiness is required before publication (phase %s)", locked.WorkflowPhase)
 	}
-	if spawn && !alreadyPublished {
-		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=case when workflow_phase='ready' then 'publishing' else workflow_phase end,workflow_attention=case when workflow_phase='ready' then null else workflow_attention end where id=$1`, jobID); err != nil {
+	if spawn && !alreadyPublished && locked.WorkflowPhase == "ready" {
+		if err := expectOneRows(queries.StartPublicationIntent(ctx, dbsql.StartPublicationIntentParams{JobID: jobID, Revision: revision})); err != nil {
 			return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 		}
 	}
-	push, err := beginPublicationAction(ctx, tx, jobID, spine.ActionRepositoryPush, revision)
+	push, err := beginPublicationAction(ctx, queries, jobID, spine.ActionRepositoryPush, revision)
 	if err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
-	pull, err := beginPublicationAction(ctx, tx, jobID, spine.ActionGitHubPullRequest, revision)
+	pull, err := beginPublicationAction(ctx, queries, jobID, spine.ActionGitHubPullRequest, revision)
 	if err != nil {
 		return spine.Job{}, spine.Action{}, spine.Action{}, false, err
 	}
@@ -90,21 +89,26 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 	return job, push, pull, spawn, err
 }
 
-func beginPublicationAction(ctx context.Context, tx *sql.Tx, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {
+func beginPublicationAction(ctx context.Context, queries *dbsql.Queries, jobID string, kind spine.ActionKind, revision string) (spine.Action, error) {
 	id := spine.ScopedActionID(jobID, kind, revision)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, id, jobID, kind, revision); err != nil {
+	if err := queries.InsertPublicationAction(ctx, dbsql.InsertPublicationActionParams{ID: id, JobID: jobID, Kind: kind, ScopeKey: revision}); err != nil {
 		return spine.Action{}, err
 	}
-	var action spine.Action
-	err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and scope_key=$4 for update`, id, jobID, kind, revision).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
-	return action, err
+	row, err := queries.GetPublicationActionForUpdate(ctx, dbsql.GetPublicationActionForUpdateParams{ID: id, JobID: jobID, Kind: kind, ScopeKey: revision})
+	if err != nil {
+		return spine.Action{}, err
+	}
+	return publicationAction(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
 }
 
 func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (spine.Action, spine.Action, error) {
+	queries := dbsql.New(s.DB)
 	load := func(kind spine.ActionKind) (spine.Action, error) {
-		var action spine.Action
-		err := s.DB.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where job_id=$1 and kind=$2 and scope_key=$3`, jobID, kind, revision).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope)
-		return action, err
+		row, err := queries.GetPublicationAction(ctx, dbsql.GetPublicationActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
+		if err != nil {
+			return spine.Action{}, err
+		}
+		return publicationAction(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey), nil
 	}
 	push, err := load(spine.ActionRepositoryPush)
 	if err != nil {
@@ -115,15 +119,15 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 }
 
 func (s Store) AttachPublicationTask(ctx context.Context, jobID, revision, taskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set publication_task_id=coalesce(publication_task_id,$3) where id=$1 and revision=$2 and workflow_phase in ('publishing','publication-blocked','published') and (publication_task_id is null or publication_task_id=$3)`, jobID, revision, taskID))
+	return expectOneRows(dbsql.New(s.DB).AttachPublicationTaskID(ctx, dbsql.AttachPublicationTaskIDParams{TaskID: taskID, JobID: jobID, Revision: revision}))
 }
 
 func (s Store) ResumePublication(ctx context.Context, jobID, revision string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='publishing',workflow_attention=null where id=$1 and revision=$2 and publication_task_id is not null and workflow_phase in ('publishing','publication-blocked')`, jobID, revision))
+	return expectOneRows(dbsql.New(s.DB).ResumePublicationPhase(ctx, dbsql.ResumePublicationPhaseParams{JobID: jobID, Revision: revision}))
 }
 
 func (s Store) RecordPush(ctx context.Context, actionID, revision string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='remote-head-exact' where id=$1 and kind='repository-push' and scope_key=$2`, actionID, revision))
+	return expectOneRows(dbsql.New(s.DB).CompleteRepositoryPush(ctx, dbsql.CompleteRepositoryPushParams{Revision: revision, ActionID: actionID}))
 }
 
 func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spine.GitHubProposal) error {
@@ -135,44 +139,40 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 		return err
 	}
 	defer tx.Rollback()
-	var repository, installation, base, head, revision, phase string
-	if err := tx.QueryRowContext(ctx, `select github_repository,github_installation_id,base_branch,branch,revision,workflow_phase from dorf.jobs where id=$1 for update`, proposal.JobID).Scan(&repository, &installation, &base, &head, &revision, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetProposalAuthorityJobForUpdate(ctx, proposal.JobID)
+	if err != nil {
 		return err
 	}
-	if phase != "publishing" || repository != proposal.Repository || installation != proposal.InstallationID || base != proposal.BaseBranch || head != proposal.HeadBranch || revision != proposal.ProposedRevision {
+	if locked.WorkflowPhase != "publishing" || locked.GithubRepository != proposal.Repository || locked.GithubInstallationID != proposal.InstallationID || locked.BaseBranch != proposal.BaseBranch || locked.Branch != proposal.HeadBranch || locked.Revision != proposal.ProposedRevision {
 		return fmt.Errorf("proposal receipt conflicts with immutable Job authority or exact current Revision")
 	}
-	var pushState string
-	if err := tx.QueryRowContext(ctx, `select state from dorf.actions where job_id=$1 and kind='repository-push' and scope_key=$2`, proposal.JobID, revision).Scan(&pushState); err != nil || pushState != "succeeded" {
+	pushState, err := queries.GetRepositoryPushState(ctx, dbsql.GetRepositoryPushStateParams{JobID: proposal.JobID, Revision: locked.Revision})
+	if err != nil || pushState != "succeeded" {
 		return fmt.Errorf("proposal cannot be recorded before exact repository push success")
 	}
-	var existing spine.GitHubProposal
-	err = tx.QueryRowContext(ctx, `select repository,installation_id,base_branch,head_branch,pr_number from dorf.github_proposals where job_id=$1`, proposal.JobID).Scan(&existing.Repository, &existing.InstallationID, &existing.BaseBranch, &existing.HeadBranch, &existing.Number)
-	if err == nil && (existing.Number != proposal.Number || existing.Repository != proposal.Repository || existing.InstallationID != proposal.InstallationID || existing.BaseBranch != proposal.BaseBranch || existing.HeadBranch != proposal.HeadBranch) {
-		return fmt.Errorf("Job already owns conflicting GitHub proposal identity at pull request #%d", existing.Number)
+	existingRow, err := queries.GetProposal(ctx, proposal.JobID)
+	if err == nil {
+		existing := githubProposal(existingRow)
+		if existing.Number != proposal.Number || existing.Repository != proposal.Repository || existing.InstallationID != proposal.InstallationID || existing.BaseBranch != proposal.BaseBranch || existing.HeadBranch != proposal.HeadBranch {
+			return fmt.Errorf("Job already owns conflicting GitHub proposal identity at pull request #%d", existing.Number)
+		}
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `
-		insert into dorf.github_proposals(job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,proposed_revision,observed_remote_head,body_digest)
-		values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-		on conflict(job_id) do update set
-		  pr_url=excluded.pr_url,proposed_revision=excluded.proposed_revision,
-		  observed_remote_head=excluded.observed_remote_head,body_digest=excluded.body_digest,
-		  observed_at=clock_timestamp()
-		where dorf.github_proposals.repository=excluded.repository
-		  and dorf.github_proposals.installation_id=excluded.installation_id
-		  and dorf.github_proposals.base_branch=excluded.base_branch
-		  and dorf.github_proposals.head_branch=excluded.head_branch
-		  and dorf.github_proposals.pr_number=excluded.pr_number`, proposal.JobID, proposal.Repository, proposal.InstallationID, proposal.BaseBranch, proposal.HeadBranch, proposal.Number, proposal.URL, proposal.ProposedRevision, proposal.ObservedRemoteHead, proposal.BodyDigest)
-	if err != nil {
+	if err := expectOneRows(queries.UpsertProposal(ctx, dbsql.UpsertProposalParams{
+		JobID: proposal.JobID, Repository: proposal.Repository, InstallationID: proposal.InstallationID,
+		BaseBranch: proposal.BaseBranch, HeadBranch: proposal.HeadBranch, PRNumber: proposal.Number,
+		PRURL: proposal.URL, ProposedRevision: proposal.ProposedRevision,
+		ObservedRemoteHead: proposal.ObservedRemoteHead, BodyDigest: proposal.BodyDigest,
+	})); err != nil {
 		return err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=$3 where id=$1 and job_id=$4 and kind='github-pull-request' and scope_key=$5`, actionID, strconvFormat(proposal.Number), proposal.BodyDigest, proposal.JobID, proposal.ProposedRevision)); err != nil {
+	if err := expectOneRows(queries.CompleteProposalAction(ctx, dbsql.CompleteProposalActionParams{ExternalID: strconvFormat(proposal.Number), BodyDigest: proposal.BodyDigest, ActionID: actionID, JobID: proposal.JobID, ProposedRevision: proposal.ProposedRevision})); err != nil {
 		return err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='published',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='publishing'`, proposal.JobID, proposal.ProposedRevision)); err != nil {
+	if err := expectOneRows(queries.CompletePublication(ctx, dbsql.CompletePublicationParams{JobID: proposal.JobID, Revision: proposal.ProposedRevision})); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -185,22 +185,38 @@ func (s Store) BlockPublication(ctx context.Context, jobID, revision, reason str
 	if reason == "" {
 		reason = "GitHub publication needs operator attention"
 	}
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='publication-blocked',workflow_attention=$3 where id=$1 and revision=$2 and workflow_phase='publishing'`, jobID, revision, reason))
+	return expectOneRows(dbsql.New(s.DB).BlockPublicationPhase(ctx, dbsql.BlockPublicationPhaseParams{Reason: reason, JobID: jobID, Revision: revision}))
 }
 
 func (s Store) Proposal(ctx context.Context, jobID string) (*spine.GitHubProposal, error) {
-	var proposal spine.GitHubProposal
-	err := s.DB.QueryRowContext(ctx, `select job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,proposed_revision,observed_remote_head,body_digest from dorf.github_proposals where job_id=$1`, jobID).Scan(&proposal.JobID, &proposal.Repository, &proposal.InstallationID, &proposal.BaseBranch, &proposal.HeadBranch, &proposal.Number, &proposal.URL, &proposal.ProposedRevision, &proposal.ObservedRemoteHead, &proposal.BodyDigest)
+	queries := dbsql.New(s.DB)
+	row, err := queries.GetProposal(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var current string
-	if err := s.DB.QueryRowContext(ctx, `select revision from dorf.jobs where id=$1`, jobID).Scan(&current); err != nil {
+	proposal := githubProposal(row)
+	current, err := queries.GetProposalCurrentRevision(ctx, jobID)
+	if err != nil {
 		return nil, err
 	}
 	proposal.Stale = proposal.ProposedRevision != current || proposal.ObservedRemoteHead != current
 	return &proposal, nil
+}
+
+func publicationAction(id, jobID, messageID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
+	return spine.Action{
+		ID: id, JobID: jobID, MessageID: messageID, Kind: kind, State: state,
+		ExternalID: externalID, Outcome: outcome, Scope: scope,
+	}
+}
+
+func githubProposal(row dbsql.GetProposalRow) spine.GitHubProposal {
+	return spine.GitHubProposal{
+		JobID: row.JobID, Repository: row.Repository, InstallationID: row.InstallationID,
+		BaseBranch: row.BaseBranch, HeadBranch: row.HeadBranch, Number: row.PRNumber, URL: row.PRURL,
+		ProposedRevision: row.ProposedRevision, ObservedRemoteHead: row.ObservedRemoteHead, BodyDigest: row.BodyDigest,
+	}
 }

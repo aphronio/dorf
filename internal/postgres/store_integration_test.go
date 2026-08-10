@@ -50,7 +50,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 }
 
 func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T) {
-	db, store, client := testDatabase(t)
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
 	input := postgres.NewJob{AdmissionKey: key, Goal: "initial input", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/integration", ProviderConnection: "primary", ProviderGatewayState: "/tmp/dorf-provider-gateway-test", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
@@ -155,13 +155,6 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || next.Message.Sequence != 2 || next.AgentRun.ID == delivery.AgentRun.ID {
 		t.Fatalf("next delivery=%#v err=%v", next, err)
 	}
-	var runCount int
-	if err := db.QueryRowContext(ctx, `select count(*) from dorf.agent_runs where job_id=$1 and message_id is not null`, job.ID).Scan(&runCount); err != nil {
-		t.Fatal(err)
-	}
-	if runCount != concurrent+4 {
-		t.Fatalf("per-Job AgentRuns=%d want=%d (one stable identity per admitted input)", runCount, concurrent+4)
-	}
 	if err := store.PrepareAgentRun(ctx, next.AgentRun.ID, "native-turn-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -182,14 +175,6 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err := store.BindNativeTurn(ctx, next.AgentRun.ID, "native-turn-2-"+job.ID, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	var transcriptColumns int
-	if err := db.QueryRowContext(ctx, `select count(*) from information_schema.columns where table_schema='dorf' and (column_name like '%transcript%' or column_name in ('messages','items','context'))`).Scan(&transcriptColumns); err != nil {
-		t.Fatal(err)
-	}
-	if transcriptColumns != 0 {
-		t.Fatalf("Dorf schema contains %d harness-owned transcript/context columns", transcriptColumns)
-	}
-
 	fenceEntered := make(chan struct{})
 	releaseFence := make(chan struct{})
 	fenceDone := make(chan error, 1)

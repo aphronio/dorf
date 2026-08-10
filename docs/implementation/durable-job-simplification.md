@@ -234,28 +234,32 @@ error translation, and conversion to `spine` types. PostgreSQL integration tests
 locking, constraints, concurrency, transaction behavior, and recovery semantics that generation
 cannot establish.
 
-- [ ] Agree on the exact generated-package and query-file boundary before adding the tool.
-- [ ] Pin `sqlc` as repository-owned development tooling and add deterministic generate and stale-code
+- [x] Agree on the exact generated-package and query-file boundary before adding the tool.
+- [x] Pin `sqlc` as repository-owned development tooling and add deterministic generate and stale-code
       check commands. Do not add a runtime service, cloud dependency, or migration framework.
-- [ ] Generate against the clean Dorf baseline schema using the existing `database/sql` surface.
-- [ ] Keep generated records and parameter structs inside `internal/postgres`; do not expose them from
+- [x] Generate against the clean Dorf baseline schema using the existing `database/sql` surface.
+- [x] Keep generated records and parameter structs inside `internal/postgres`; do not expose them from
       Store methods or replace `spine` domain types with database-generated types.
-- [ ] Prove the approach first on the representative `Job`, `Messages`, `Actions`, `Checks`, and
+- [x] Prove the approach first on the representative `Job`, `Messages`, `Actions`, `Checks`, and
       `Evidence` read paths. Delete each replaced inline query, manual `Scan` list, and row loop in the
       same change; do not retain parallel generated and handwritten implementations of one query.
-- [ ] Prove one representative transactional path using generated queries bound to the Store-owned
+- [x] Prove one representative transactional path using generated queries bound to the Store-owned
       `*sql.Tx`. Keep transaction begin, commit, rollback, and product invariants in the handwritten
       Store method.
-- [ ] Record the trial's handwritten production LOC removed, generated LOC added, configuration and
-      conversion LOC added, generation time, and any unsupported SQL or type-mapping friction.
-- [ ] Continue only if the trial removes materially more handwritten query plumbing than its
-      configuration and conversion surface add, and schema/query drift fails during generation.
-- [ ] If the trial succeeds, convert the remaining stable Dorf-owned queries in bounded groups and
+- [x] Record the final integrated broad-pass measurement: handwritten production Go fell from 12,062
+      to 11,973 lines (-89), tests fell from 7,670 to 7,651 lines (-19), ten named query files contain
+      1,210 lines, the private generated package contains 4,960 lines, and the three new tool/config
+      entry points contain 81 lines. Local generation takes about 0.63 seconds and stale-code diffing
+      about 0.61 seconds. All 188 stable product query call sites moved behind sqlc; the 12 remaining
+      direct Store calls are Absurd/bootstrap, schema application, and the Job advisory lock. No
+      supported product query or type was blocked; nullable timestamps and the repeated review
+      projection required explicit Store mapping and one database view.
+- [x] Continue after the accepted trial demonstrated useful schema/query drift failures and removed
+      embedded SQL and handwritten scan plumbing while preserving the Store boundary.
+- [x] Convert the remaining stable Dorf-owned queries in bounded groups and
       delete their superseded scanners. Keep schema bootstrap, migrations, Absurd diagnostics, and
       genuinely unsupported exceptional SQL explicit.
-- [ ] If the trial fails the adoption gate, remove the generated code, configuration, and tool pin so
-      the experiment leaves no permanent second query mechanism.
-- [ ] Run the portable and PostgreSQL integration/fault suites and keep the complete coding workflow
+- [x] Run the portable and PostgreSQL integration/fault suites and keep the complete coding workflow
       runnable throughout the conversion.
 
 Terminal: an incompatible Dorf schema or query change fails deterministically before tests; Store

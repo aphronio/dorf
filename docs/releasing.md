@@ -6,8 +6,8 @@ that application. There is no Python package or package-index publication.
 From one clean source commit already available on GitHub:
 
 ```bash
-go test ./...
-go vet ./...
+scripts/dev/prepare.sh
+scripts/dev/check.sh
 scripts/build-release.sh dist/room-image
 
 PROVIDER_CONNECTION=personal-chatgpt \

@@ -6,12 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 func (s Store) Outcome(ctx context.Context, jobID string) (*spine.JobOutcome, error) {
-	return scanOutcome(s.DB.QueryRowContext(ctx, outcomeQuery, jobID))
+	row, err := dbsql.New(s.DB).GetOutcome(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	outcome := jobOutcome(row.JobID, row.Outcome, row.Repository, row.InstallationID, row.BaseBranch, row.HeadBranch, row.PRNumber, row.PRURL, row.ProposedRevision, row.ObservedHead, row.ObservedState, row.ObservedMerged, row.MergeCommitOID, row.ObservedAt)
+	return &outcome, nil
 }
 
 func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spine.JobOutcome, bool, error) {
@@ -23,74 +33,63 @@ func (s Store) RecordOutcome(ctx context.Context, receipt spine.JobOutcome) (spi
 		return spine.JobOutcome{}, false, err
 	}
 	defer tx.Rollback()
-	var currentRevision, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, receipt.JobID).Scan(&currentRevision, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetOutcomeJobForUpdate(ctx, receipt.JobID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return spine.JobOutcome{}, false, ErrNotFound
 		}
 		return spine.JobOutcome{}, false, err
 	}
-	existing, err := scanOutcome(tx.QueryRowContext(ctx, outcomeQuery, receipt.JobID))
-	if err != nil {
+	existingRow, err := queries.GetOutcome(ctx, receipt.JobID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return spine.JobOutcome{}, false, err
 	}
-	if existing != nil {
+	if err == nil {
+		existing := jobOutcome(existingRow.JobID, existingRow.Outcome, existingRow.Repository, existingRow.InstallationID, existingRow.BaseBranch, existingRow.HeadBranch, existingRow.PRNumber, existingRow.PRURL, existingRow.ProposedRevision, existingRow.ObservedHead, existingRow.ObservedState, existingRow.ObservedMerged, existingRow.MergeCommitOID, existingRow.ObservedAt)
 		if existing.Kind != receipt.Kind {
 			return spine.JobOutcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", receipt.JobID, existing.Kind, receipt.Kind)
 		}
-		return *existing, false, nil
+		return existing, false, nil
 	}
-	if phase != "published" || receipt.ProposedRevision != currentRevision {
+	if locked.WorkflowPhase != "published" || receipt.ProposedRevision != locked.Revision {
 		return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires the exact current published Revision")
 	}
-	var proposal spine.GitHubProposal
-	if err := tx.QueryRowContext(ctx, `select job_id,repository,installation_id,base_branch,head_branch,pr_number,pr_url,proposed_revision,observed_remote_head,body_digest from dorf.github_proposals where job_id=$1`, receipt.JobID).Scan(
-		&proposal.JobID, &proposal.Repository, &proposal.InstallationID, &proposal.BaseBranch, &proposal.HeadBranch, &proposal.Number, &proposal.URL, &proposal.ProposedRevision, &proposal.ObservedRemoteHead, &proposal.BodyDigest,
-	); err != nil {
+	proposalRow, err := queries.GetProposal(ctx, receipt.JobID)
+	if err != nil {
 		return spine.JobOutcome{}, false, fmt.Errorf("load exact GitHub proposal for outcome: %w", err)
 	}
+	proposal := githubProposal(proposalRow)
 	if receipt.Repository != proposal.Repository || receipt.InstallationID != proposal.InstallationID || receipt.BaseBranch != proposal.BaseBranch || receipt.HeadBranch != proposal.HeadBranch || receipt.Number != proposal.Number || receipt.URL != proposal.URL || receipt.ProposedRevision != proposal.ProposedRevision || receipt.ObservedHead != proposal.ProposedRevision || proposal.ObservedRemoteHead != proposal.ProposedRevision {
 		return spine.JobOutcome{}, false, fmt.Errorf("observed GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
 	}
-	_, err = tx.ExecContext(ctx, `
-		insert into dorf.job_outcomes(
-			job_id,outcome,repository,installation_id,base_branch,head_branch,pr_number,pr_url,
-			proposed_revision,observed_head,observed_state,observed_merged,merge_commit_oid,observed_at
-		) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,nullif($13,''),$14)`,
-		receipt.JobID, receipt.Kind, receipt.Repository, receipt.InstallationID, receipt.BaseBranch,
-		receipt.HeadBranch, receipt.Number, receipt.URL, receipt.ProposedRevision, receipt.ObservedHead,
-		receipt.ObservedState, receipt.ObservedMerged, receipt.MergeCommitOID, receipt.ObservedAt,
-	)
+	inserted, err := queries.InsertOutcome(ctx, dbsql.InsertOutcomeParams{
+		JobID: receipt.JobID, Outcome: receipt.Kind, Repository: receipt.Repository,
+		InstallationID: receipt.InstallationID, BaseBranch: receipt.BaseBranch, HeadBranch: receipt.HeadBranch,
+		PRNumber: receipt.Number, PRURL: receipt.URL, ProposedRevision: receipt.ProposedRevision,
+		ObservedHead: receipt.ObservedHead, ObservedState: receipt.ObservedState, ObservedMerged: receipt.ObservedMerged,
+		MergeCommitOID: receipt.MergeCommitOID, ObservedAt: receipt.ObservedAt,
+	})
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_attention=null where id=$1`, receipt.JobID); err != nil {
+	if err := expectOneRows(queries.ClearOutcomeAttention(ctx, dbsql.ClearOutcomeAttentionParams{JobID: receipt.JobID, Revision: receipt.ProposedRevision})); err != nil {
 		return spine.JobOutcome{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.JobOutcome{}, false, err
 	}
-	stored, err := s.Outcome(ctx, receipt.JobID)
-	if err != nil || stored == nil {
-		return spine.JobOutcome{}, false, err
-	}
-	return *stored, true, nil
+	stored := jobOutcome(inserted.JobID, inserted.Outcome, inserted.Repository, inserted.InstallationID, inserted.BaseBranch, inserted.HeadBranch, inserted.PRNumber, inserted.PRURL, inserted.ProposedRevision, inserted.ObservedHead, inserted.ObservedState, inserted.ObservedMerged, inserted.MergeCommitOID, inserted.ObservedAt)
+	return stored, true, nil
 }
 
-const outcomeQuery = `select job_id,outcome,repository,installation_id,base_branch,head_branch,
-	pr_number,pr_url,proposed_revision,observed_head,observed_state,observed_merged,
-	coalesce(merge_commit_oid,''),observed_at from dorf.job_outcomes where job_id=$1`
-
-func scanOutcome(row rowScanner) (*spine.JobOutcome, error) {
-	var outcome spine.JobOutcome
-	err := row.Scan(&outcome.JobID, &outcome.Kind, &outcome.Repository, &outcome.InstallationID,
-		&outcome.BaseBranch, &outcome.HeadBranch, &outcome.Number, &outcome.URL,
-		&outcome.ProposedRevision, &outcome.ObservedHead, &outcome.ObservedState,
-		&outcome.ObservedMerged, &outcome.MergeCommitOID, &outcome.ObservedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+func jobOutcome(jobID string, kind spine.JobOutcomeKind, repository, installationID, baseBranch, headBranch string, number int64, url, proposedRevision, observedHead, observedState string, observedMerged bool, mergeCommitOID string, observedAt time.Time) spine.JobOutcome {
+	return spine.JobOutcome{
+		JobID: jobID, Kind: kind, Repository: repository, InstallationID: installationID,
+		BaseBranch: baseBranch, HeadBranch: headBranch, Number: number, URL: url,
+		ProposedRevision: proposedRevision, ObservedHead: observedHead, ObservedState: observedState,
+		ObservedMerged: observedMerged, MergeCommitOID: mergeCommitOID, ObservedAt: observedAt,
 	}
-	return &outcome, err
 }
 
 func validateOutcomeReceipt(receipt spine.JobOutcome) error {

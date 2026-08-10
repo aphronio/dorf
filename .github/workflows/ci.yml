@@ -12,6 +12,22 @@ jobs:
   go:
     name: Go application
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: dorf_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dorf_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DORF_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/dorf_test?sslmode=disable
     steps:
       - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -24,12 +40,31 @@ jobs:
           cache: true
       - name: Download exact modules
         run: go mod download
+      - name: Install pinned SQL and durability tools
+        run: |
+          tool_dir="$RUNNER_TEMP/dorf-tools"
+          mkdir -p "$tool_dir"
+          curl -LsSf -o "$RUNNER_TEMP/sqlc.tar.gz" \
+            "https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz"
+          printf '%s  %s\n' \
+            '497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354' \
+            "$RUNNER_TEMP/sqlc.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/sqlc.tar.gz" -C "$tool_dir" sqlc
+          curl -LsSf -o "$tool_dir/absurdctl" \
+            "https://github.com/earendil-works/absurd/releases/download/0.5.0/absurdctl"
+          printf '%s  %s\n' \
+            'e9c37151bf3d1656fcc9b018dc90a2ac6972a31bda77329d8c929da34bb0724e' \
+            "$tool_dir/absurdctl" | sha256sum --check --strict
+          chmod 0755 "$tool_dir/absurdctl" "$tool_dir/sqlc"
+          echo "$tool_dir" >> "$GITHUB_PATH"
       - name: Validate repository setup script
         run: bash -n scripts/dev/*.sh
-      - name: Test
-        run: go test ./...
-      - name: Vet
-        run: go vet ./...
+      - name: Initialize fresh PostgreSQL schemas
+        run: |
+          absurdctl init -d "$DORF_TEST_DATABASE_URL"
+          DORF_DATABASE_URL="$DORF_TEST_DATABASE_URL" go run ./cmd/dorf migrate
+      - name: Check SQL generation and live behavior
+        run: scripts/dev/check.sh
       - name: Build supported release artifact
         run: scripts/build-release.sh dist/release
       - name: Smoke installed artifact

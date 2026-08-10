@@ -15,6 +15,7 @@ import (
 	"time"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -201,52 +202,54 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		return spine.Job{}, false, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `
-		insert into dorf.jobs(id,admission_key,goal,repository,revision,starting_revision,branch,provider_connection,provider_gateway_state,model,reasoning_effort,github_repository,github_installation_id,base_branch)
-		values($1,$2,$3,$4,$5,$5,$6,$7,$8,$9,$10,$11,$12,$13) on conflict(admission_key) do nothing`,
-		id, input.AdmissionKey, input.Goal, input.Repository, input.Revision, input.Branch,
-		input.ProviderConnection, input.ProviderGatewayState, input.Model, input.ReasoningEffort, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch)
+	queries := dbsql.New(s.DB).WithTx(tx)
+	rows, err := queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
+		ID: id, AdmissionKey: input.AdmissionKey, Goal: input.Goal, Repository: input.Repository,
+		Revision: input.Revision, Branch: input.Branch, ProviderConnection: input.ProviderConnection,
+		ProviderGatewayState: sql.NullString{String: input.ProviderGatewayState, Valid: true}, Model: input.Model,
+		ReasoningEffort: input.ReasoningEffort, GithubRepository: sql.NullString{String: input.GitHubRepository, Valid: true},
+		GithubInstallationID: sql.NullString{String: input.GitHubInstallation, Valid: true}, BaseBranch: sql.NullString{String: input.BaseBranch, Valid: true},
+	})
 	if err != nil {
 		return spine.Job{}, false, err
 	}
-	rows, err := result.RowsAffected()
+	storedRow, err := queries.GetAdmittedJobForUpdate(ctx, input.AdmissionKey)
 	if err != nil {
 		return spine.Job{}, false, err
 	}
-	var stored NewJob
-	var storedID string
-	if err := tx.QueryRowContext(ctx, `select id,admission_key,goal,repository,revision,branch,provider_connection,coalesce(provider_gateway_state,''),model,reasoning_effort,coalesce(github_repository,''),coalesce(github_installation_id,''),coalesce(base_branch,'') from dorf.jobs where admission_key=$1 for update`, input.AdmissionKey).Scan(
-		&storedID, &stored.AdmissionKey, &stored.Goal, &stored.Repository, &stored.Revision, &stored.Branch,
-		&stored.ProviderConnection, &stored.ProviderGatewayState, &stored.Model, &stored.ReasoningEffort, &stored.GitHubRepository, &stored.GitHubInstallation, &stored.BaseBranch); err != nil {
-		return spine.Job{}, false, err
+	stored := NewJob{
+		AdmissionKey: storedRow.AdmissionKey, Goal: storedRow.Goal, Repository: storedRow.Repository,
+		Revision: storedRow.Revision, Branch: storedRow.Branch, ProviderConnection: storedRow.ProviderConnection,
+		ProviderGatewayState: storedRow.ProviderGatewayState, Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
+		GitHubRepository: storedRow.GithubRepository, GitHubInstallation: storedRow.GithubInstallationID, BaseBranch: storedRow.BaseBranch,
 	}
-	if storedID != id || stored != input {
+	if storedRow.ID != id || stored != input {
 		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
 	}
 	messageID := spine.MessageID(id, "human", initialFromID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input) values($1,$2,'human',$3,1,$4) on conflict(job_id,from_kind,from_id) do nothing`, messageID, id, initialFromID, input.Goal); err != nil {
+	if err := queries.InsertInitialMessage(ctx, dbsql.InsertInitialMessageParams{ID: messageID, JobID: id, FromID: initialFromID, Input: input.Goal}); err != nil {
 		return spine.Job{}, false, err
 	}
-	var existingID, existingInput string
-	var sequence int64
-	if err := tx.QueryRowContext(ctx, `select id,sequence,input from dorf.job_messages where job_id=$1 and from_kind='human' and from_id=$2`, id, initialFromID).Scan(&existingID, &sequence, &existingInput); err != nil {
+	initial, err := queries.GetInitialMessage(ctx, dbsql.GetInitialMessageParams{JobID: id, FromID: initialFromID})
+	if err != nil {
 		return spine.Job{}, false, err
 	}
-	if sequence != 1 || existingInput != input.Goal {
+	if initial.Sequence != 1 || initial.Input != input.Goal {
 		return spine.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
 	}
-	actionID := spine.TurnActionID(existingID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending') on conflict do nothing`, actionID, id, existingID, spine.ActionTurnStart); err != nil {
+	actionID := spine.TurnActionID(initial.ID)
+	if err := queries.InsertMessageActionIfAbsent(ctx, dbsql.InsertMessageActionIfAbsentParams{ID: actionID, JobID: id, MessageID: sql.NullString{String: initial.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
 		return spine.Job{}, false, err
 	}
-	if err := tx.QueryRowContext(ctx, `select id from dorf.actions where message_id=$1 and kind=$2`, existingID, spine.ActionTurnStart).Scan(&actionID); err != nil {
+	actionID, err = queries.GetMessageActionID(ctx, dbsql.GetMessageActionIDParams{MessageID: sql.NullString{String: initial.ID, Valid: true}, Kind: spine.ActionTurnStart})
+	if err != nil {
 		return spine.Job{}, false, err
 	}
-	runID := spine.AgentRunID(existingID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,role,state) values($1,$2,$3,$4,'implement','pending') on conflict do nothing`, runID, id, existingID, actionID); err != nil {
+	runID := spine.AgentRunID(initial.ID)
+	if err := queries.InsertInitialAgentRun(ctx, dbsql.InsertInitialAgentRunParams{ID: runID, JobID: id, MessageID: sql.NullString{String: initial.ID, Valid: true}, ActionID: actionID}); err != nil {
 		return spine.Job{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,branch,generation) values($1,$2,$3,0) on conflict do nothing`, id, input.Revision, input.Branch); err != nil {
+	if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
 		return spine.Job{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -309,17 +312,17 @@ func normalizeMessage(input NewMessage) (NewMessage, error) {
 }
 
 func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Message, bool, error) {
-	var admissionOpen bool
-	var workflowPhase string
-	if err := tx.QueryRowContext(ctx, `select admission_open,workflow_phase from dorf.jobs where id=$1 for update`, input.JobID).Scan(&admissionOpen, &workflowPhase); err != nil {
+	queries := dbsql.New(tx)
+	job, err := queries.GetJobAdmissionForUpdate(ctx, input.JobID)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return spine.Message{}, false, ErrNotFound
 		}
 		return spine.Message{}, false, err
 	}
-	var message spine.Message
-	err := tx.QueryRowContext(ctx, `select id,job_id,from_kind,from_id,sequence,input,delivery_intent,coalesce(steer_target_turn_id,'') from dorf.job_messages where job_id=$1 and from_kind=$2 and from_id=$3`, input.JobID, input.FromKind, input.FromID).Scan(&message.ID, &message.JobID, &message.FromKind, &message.FromID, &message.Sequence, &message.Input, &message.Intent, &message.TargetTurnID)
+	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
+		message := messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID)
 		if message.Input != input.Input || message.Intent != input.Intent {
 			return spine.Message{}, false, fmt.Errorf("sender %s/%q is already bound to different complete message input or delivery intent", input.FromKind, input.FromID)
 		}
@@ -328,90 +331,80 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if !errors.Is(err, sql.ErrNoRows) {
 		return spine.Message{}, false, err
 	}
-	if !admissionOpen {
+	if !job.AdmissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
 	}
-	if workflowPhase != "setup" && workflowPhase != "implementing" && workflowPhase != "review-feedback" {
-		return spine.Message{}, false, fmt.Errorf("Job %s does not accept implementation Messages during workflow phase %s", input.JobID, workflowPhase)
+	if job.WorkflowPhase != "setup" && job.WorkflowPhase != "implementing" && job.WorkflowPhase != "review-feedback" {
+		return spine.Message{}, false, fmt.Errorf("Job %s does not accept implementation Messages during workflow phase %s", input.JobID, job.WorkflowPhase)
 	}
+	var message spine.Message
 	role, sessionID := "implement", ""
 	if input.Intent == spine.MessageSteer {
-		if err := tx.QueryRowContext(ctx, `select ar.native_turn_id,ar.session_id,ar.role from dorf.agent_runs ar where ar.job_id=$1 and ar.state='active' and ar.native_turn_id is not null and ar.role='implement' order by ar.started_at,ar.id limit 1`, input.JobID).Scan(&message.TargetTurnID, &sessionID, &role); err != nil {
+		active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular native turn")
 			}
 			return spine.Message{}, false, err
 		}
+		message.TargetTurnID, sessionID, role = active.NativeTurnID, active.SessionID, active.Role
 	}
-	message.Sequence, err = allocateMessageSequenceTx(ctx, tx, input.JobID)
+	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
 	message.ID = spine.MessageID(input.JobID, input.FromKind, input.FromID)
 	message.JobID, message.FromKind, message.FromID, message.Input, message.Intent = input.JobID, input.FromKind, input.FromID, input.Input, input.Intent
-	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input,delivery_intent,steer_target_turn_id) values($1,$2,$3,$4,$5,$6,$7,nullif($8,''))`, message.ID, message.JobID, message.FromKind, message.FromID, message.Sequence, message.Input, message.Intent, message.TargetTurnID); err != nil {
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent, SteerTargetTurnID: message.TargetTurnID}); err != nil {
 		return spine.Message{}, false, err
 	}
 	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, message.JobID, message.ID, spine.ActionTurnStart); err != nil {
+	if err := queries.InsertMessageAction(ctx, dbsql.InsertMessageActionParams{ID: actionID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
 		return spine.Message{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,nullif($5,''),$6,'pending')`, runID, message.JobID, message.ID, actionID, sessionID, role); err != nil {
+	if err := queries.InsertAgentRun(ctx, dbsql.InsertAgentRunParams{ID: runID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID, SessionID: sessionID, Role: role}); err != nil {
 		return spine.Message{}, false, err
 	}
 	return message, true, nil
 }
 
 func allocateMessageSequenceTx(ctx context.Context, tx *sql.Tx, jobID string) (int64, error) {
-	var sequence int64
-	err := tx.QueryRowContext(ctx, `select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1`, jobID).Scan(&sequence)
-	return sequence, err
+	return dbsql.New(tx).NextMessageSequence(ctx, jobID)
 }
 
 func ensureInputsTerminalForWorkflowTx(ctx context.Context, tx *sql.Tx, jobID string) error {
-	var sequence int64
-	var state, reason string
-	err := tx.QueryRowContext(ctx, `
-		select m.sequence,coalesce(ar.state,''),coalesce(ar.attention,'')
-		from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id
-		where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))
-		order by m.sequence limit 1`, jobID).Scan(&sequence, &state, &reason)
+	row, err := dbsql.New(tx).GetFirstUnsettledInput(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if reason != "" {
-		state += ": " + reason
+	state := string(row.State)
+	if row.Attention != "" {
+		state += ": " + row.Attention
 	}
-	return fmt.Errorf("FIFO sequence %d has not reached a terminal harness delivery (%s)", sequence, state)
+	return fmt.Errorf("FIFO sequence %d has not reached a terminal harness delivery (%s)", row.Sequence, state)
 }
 
 func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
-	var job spine.Job
-	err := s.DB.QueryRowContext(ctx, `
-		select j.id,j.admission_key,j.goal,j.repository,j.revision,coalesce(rv.generation,0),j.starting_revision,j.branch,
-		       coalesce(j.github_repository,''),coalesce(j.github_installation_id,''),coalesce(j.base_branch,''),coalesce(j.publication_task_id,''),
-		       j.provider_connection,coalesce(j.provider_gateway_state,''),j.model,j.reasoning_effort,j.admission_open,
-		       j.cleanup_state,coalesce(j.task_id,''),coalesce(j.cleanup_task_id,''),
-		       coalesce(sb.incus_name,''),coalesce(sb.state,''),coalesce(r.route_id,''),coalesce(r.state,''),coalesce(se.native_session_id,''),
-		       j.workflow_phase,coalesce(j.workflow_attention,''),coalesce(j.cleanup_attention,'')
-		from dorf.jobs j
-		left join dorf.sandboxes sb on sb.job_id=j.id
-		left join dorf.routes r on r.job_id=j.id
-		left join dorf.sessions se on se.job_id=j.id
-		left join dorf.revisions rv on rv.job_id=j.id and rv.oid=j.revision
-		where j.id=$1`, id).Scan(
-		&job.ID, &job.AdmissionKey, &job.Goal, &job.Repository, &job.Revision, &job.RevisionGeneration, &job.StartingRevision, &job.Branch,
-		&job.GitHubRepository, &job.GitHubInstallation, &job.BaseBranch, &job.PublicationTaskID,
-		&job.ProviderConnection, &job.ProviderGatewayState, &job.Model, &job.ReasoningEffort, &job.AdmissionOpen,
-		&job.CleanupState, &job.TaskID, &job.CleanupTaskID, &job.SandboxID, &job.SandboxState, &job.RouteID, &job.RouteState,
-		&job.SessionID, &job.WorkflowPhase, &job.WorkflowAttention, &job.CleanupAttention)
+	row, err := dbsql.New(s.DB).GetJob(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return spine.Job{}, ErrNotFound
 	}
-	return job, err
+	if err != nil {
+		return spine.Job{}, err
+	}
+	return spine.Job{
+		ID: row.ID, AdmissionKey: row.AdmissionKey, Goal: row.Goal, Repository: row.Repository,
+		Revision: row.Revision, RevisionGeneration: int(row.RevisionGeneration), StartingRevision: row.StartingRevision, Branch: row.Branch,
+		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
+		PublicationTaskID: row.PublicationTaskID, ProviderConnection: row.ProviderConnection, ProviderGatewayState: row.ProviderGatewayState,
+		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
+		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID, SandboxID: row.SandboxID, SandboxState: row.SandboxState,
+		RouteID: row.RouteID, RouteState: row.RouteState, SessionID: row.SessionID, WorkflowPhase: row.WorkflowPhase,
+		WorkflowAttention: row.WorkflowAttention, CleanupAttention: row.CleanupAttention,
+	}, nil
 }
 
 // WithJobFence serializes native and other external mutation for one Job
@@ -443,17 +436,38 @@ func acquireJobFenceTx(ctx context.Context, tx *sql.Tx, jobID string) error {
 // admitted for this Job. The deterministic Absurd idempotency key supplies
 // task identity; Dorf only compare-and-sets its cross-authority binding.
 func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set task_id=coalesce(task_id,$2) where id=$1 and admission_open and (task_id is null or task_id=$2)`, jobID, proposedTaskID))
+	return expectOneRows(dbsql.New(s.DB).AttachMessageTask(ctx, dbsql.AttachMessageTaskParams{JobID: jobID, TaskID: sql.NullString{String: proposedTaskID, Valid: true}}))
 }
 
-type rowScanner interface{ Scan(...any) error }
+func messageFromValues(id, jobID string, fromKind spine.MessageFromKind, fromID string, sequence int64, input string, intent spine.MessageDeliveryIntent, targetTurnID string) spine.Message {
+	return spine.Message{ID: id, JobID: jobID, FromKind: fromKind, FromID: fromID, Sequence: sequence, Input: input, Intent: intent, TargetTurnID: targetTurnID}
+}
+
+func actionFromValues(id, jobID, messageID string, kind spine.ActionKind, state spine.ActionState, externalID, outcome, scope string) spine.Action {
+	return spine.Action{ID: id, JobID: jobID, MessageID: messageID, Kind: kind, State: state, ExternalID: externalID, Outcome: outcome, Scope: scope}
+}
+
+func agentRunFromValues(id, jobID, messageID, actionID, sessionID string, state spine.AgentRunState, baselineRecorded bool, baselineTurnID, nativeTurnID, nativeOutcome, attention, role string) spine.AgentRun {
+	return spine.AgentRun{ID: id, JobID: jobID, MessageID: messageID, ActionID: actionID, SessionID: sessionID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, NativeTurnID: nativeTurnID, NativeOutcome: nativeOutcome, Attention: attention, Role: role}
+}
+
+func checkFromValues(id, jobID, name, command, revision, state string, exitCode int32, evidenceID, evidenceDigest string, startedAt, finishedAt sql.NullTime) spine.Check {
+	return spine.Check{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision, State: state, ExitCode: int(exitCode), EvidenceID: evidenceID, EvidenceDigest: evidenceDigest, StartedAt: timeValue(startedAt), FinishedAt: timeValue(finishedAt)}
+}
+
+func timeValue(value sql.NullTime) time.Time {
+	if !value.Valid {
+		return time.Time{}
+	}
+	return value.Time
+}
 
 func (s Store) CloseAdmission(ctx context.Context, jobID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set admission_open=false,workflow_attention=null where id=$1`, jobID))
+	return expectOneRows(dbsql.New(s.DB).CloseAdmission(ctx, jobID))
 }
 
 func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_task_id=coalesce(cleanup_task_id,$2),cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end where id=$1 and (cleanup_task_id is null or cleanup_task_id=$2)`, jobID, taskID))
+	return expectOneRows(dbsql.New(s.DB).SetCleanupTaskID(ctx, dbsql.SetCleanupTaskIDParams{CleanupTaskID: sql.NullString{String: taskID, Valid: true}, JobID: jobID}))
 }
 
 func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionKind) (spine.Action, error) {
@@ -463,31 +477,25 @@ func (s Store) BeginAction(ctx context.Context, jobID string, kind spine.ActionK
 		return spine.Action{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, kind); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: kind}); err != nil {
 		return spine.Action{}, err
 	}
 	switch kind {
 	case spine.ActionSandboxCreate:
-		if err := expectOne(tx.ExecContext(ctx, `
-			insert into dorf.sandboxes(job_id,action_id,incus_name,state) values($1,$2,$3,'pending')
-			on conflict(job_id) do update set action_id=dorf.sandboxes.action_id
-			where dorf.sandboxes.action_id=excluded.action_id and dorf.sandboxes.incus_name=excluded.incus_name`,
-			jobID, desiredID, spine.MainSandboxName(jobID))); err != nil {
+		if err := expectOneRows(queries.ReserveMainSandbox(ctx, dbsql.ReserveMainSandboxParams{JobID: jobID, ActionID: desiredID, IncusName: spine.MainSandboxName(jobID)})); err != nil {
 			return spine.Action{}, fmt.Errorf("reserve exact main Sandbox identity: %w", err)
 		}
 	case spine.ActionRouteCreate:
-		if err := expectOne(tx.ExecContext(ctx, `
-			insert into dorf.routes(job_id,action_id,route_id,state) values($1,$2,$3,'pending')
-			on conflict(job_id) do update set action_id=dorf.routes.action_id
-			where dorf.routes.action_id=excluded.action_id and dorf.routes.route_id=excluded.route_id`,
-			jobID, desiredID, spine.ProviderRouteID(desiredID))); err != nil {
+		if err := expectOneRows(queries.ReserveMainRoute(ctx, dbsql.ReserveMainRouteParams{JobID: jobID, ActionID: desiredID, RouteID: spine.ProviderRouteID(desiredID)})); err != nil {
 			return spine.Action{}, fmt.Errorf("reserve exact main provider route identity: %w", err)
 		}
 	}
-	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where job_id=$1 and kind=$2 and message_id is null and scope_key='' for update`, jobID, kind).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+	row, err := queries.GetUnscopedActionForUpdate(ctx, dbsql.GetUnscopedActionForUpdateParams{JobID: jobID, Kind: kind})
+	if err != nil {
 		return spine.Action{}, err
 	}
+	action := actionFromValues(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
@@ -503,24 +511,26 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 		return spine.Action{}, err
 	}
 	defer tx.Rollback()
+	queries := dbsql.New(s.DB).WithTx(tx)
 	desiredID := spine.ActionID(jobID, spine.ActionRepositorySetup)
-	var currentID string
-	if err := tx.QueryRowContext(ctx, `select coalesce(setup_action_id,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&currentID); err != nil {
+	currentID, err := queries.GetSetupActionIDForUpdate(ctx, jobID)
+	if err != nil {
 		return spine.Action{}, err
 	}
 	if currentID == "" {
-		if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state) values($1,$2,$3,'pending') on conflict do nothing`, desiredID, jobID, spine.ActionRepositorySetup); err != nil {
+		if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup}); err != nil {
 			return spine.Action{}, err
 		}
-		if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set setup_action_id=$2 where id=$1 and setup_action_id is null`, jobID, desiredID)); err != nil {
+		if err := expectOneRows(queries.SelectInitialSetupAction(ctx, dbsql.SelectInitialSetupActionParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID})); err != nil {
 			return spine.Action{}, err
 		}
 		currentID = desiredID
 	}
-	var action spine.Action
-	if err := tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3 and message_id is null for update`, currentID, jobID, spine.ActionRepositorySetup).Scan(&action.ID, &action.JobID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Outcome, &action.Scope); err != nil {
+	row, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: currentID, JobID: jobID, Kind: spine.ActionRepositorySetup})
+	if err != nil {
 		return spine.Action{}, err
 	}
+	action := actionFromValues(row.ID, row.JobID, row.MessageID, row.Kind, row.State, row.ExternalID, row.ExternalOutcome, row.ScopeKey)
 	if err := tx.Commit(); err != nil {
 		return spine.Action{}, err
 	}
@@ -550,15 +560,15 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 		return spine.Action{}, spine.Message{}, false, err
 	}
 	defer tx.Rollback()
-	var phase, currentID string
-	var admissionOpen bool
-	if err := tx.QueryRowContext(ctx, `select workflow_phase,coalesce(setup_action_id,''),admission_open from dorf.jobs where id=$1 for update`, jobID).Scan(&phase, &currentID, &admissionOpen); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetSetupRetryJobForUpdate(ctx, jobID)
+	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
 	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositorySetup, retryID)
-	var existing spine.Action
-	err = tx.QueryRowContext(ctx, `select id,job_id,coalesce(message_id,''),kind,state,coalesce(external_id,''),coalesce(external_outcome,''),scope_key from dorf.actions where id=$1 and job_id=$2 and kind=$3`, desiredID, jobID, spine.ActionRepositorySetup).Scan(&existing.ID, &existing.JobID, &existing.MessageID, &existing.Kind, &existing.State, &existing.ExternalID, &existing.Outcome, &existing.Scope)
+	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
 	if err == nil {
+		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.MessageID, existingRow.Kind, existingRow.State, existingRow.ExternalID, existingRow.ExternalOutcome, existingRow.ScopeKey)
 		message, _, messageErr := admitMessageTx(ctx, tx, messageInput)
 		if messageErr != nil {
 			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
@@ -571,31 +581,27 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if !errors.Is(err, sql.ErrNoRows) {
 		return spine.Action{}, spine.Message{}, false, err
 	}
-	if !admissionOpen {
+	if !locked.AdmissionOpen {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s admission is closed; repository setup cannot be retried", jobID)
 	}
-	if phase != "blocked" || currentID == "" {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s repository setup retry is not admissible during workflow phase %s", jobID, phase)
+	if locked.WorkflowPhase != "blocked" || locked.SetupActionID == "" {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s repository setup retry is not admissible during workflow phase %s", jobID, locked.WorkflowPhase)
 	}
-	var currentState spine.ActionState
-	if err := tx.QueryRowContext(ctx, `select state from dorf.actions where id=$1 and job_id=$2 and kind=$3 for update`, currentID, jobID, spine.ActionRepositorySetup).Scan(&currentState); err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	if currentState != spine.ActionFailed {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s is %s, not terminal failed", jobID, currentID, currentState)
-	}
-	result, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,kind,state,scope_key) values($1,$2,$3,'pending',$4) on conflict do nothing`, desiredID, jobID, spine.ActionRepositorySetup, retryID)
+	currentState, err := queries.GetActionStateForUpdate(ctx, dbsql.GetActionStateForUpdateParams{ID: locked.SetupActionID, JobID: jobID, Kind: spine.ActionRepositorySetup})
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
-	createdRows, err := result.RowsAffected()
+	if spine.ActionState(currentState) != spine.ActionFailed {
+		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s is %s, not terminal failed", jobID, locked.SetupActionID, currentState)
+	}
+	createdRows, err := queries.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup, ScopeKey: retryID})
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
 	if createdRows != 1 {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q was already used by another generation", retryID)
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set setup_action_id=$2,workflow_phase='setup',workflow_attention=null where id=$1 and setup_action_id=$3 and workflow_phase='blocked'`, jobID, desiredID, currentID)); err != nil {
+	if err := expectOneRows(queries.SelectSetupRetry(ctx, dbsql.SelectSetupRetryParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID, PreviousActionID: sql.NullString{String: locked.SetupActionID, Valid: true}})); err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
 	message, messageCreated, err := admitMessageTx(ctx, tx, messageInput)
@@ -613,17 +619,19 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 }
 
 func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (spine.AgentRun, bool, error) {
-	var unsettled int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and (ar.native_turn_id is null or ar.state not in ('completed','failed','interrupted'))`, jobID).Scan(&unsettled); err != nil {
+	queries := dbsql.New(tx)
+	unsettled, err := queries.CountUnsettledInputs(ctx, jobID)
+	if err != nil {
 		return spine.AgentRun{}, false, err
 	}
 	if unsettled != 0 {
 		return spine.AgentRun{}, false, nil
 	}
-	var run spine.AgentRun
-	if err := tx.QueryRowContext(ctx, `select ar.id,ar.job_id,ar.state,ar.role from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id where m.job_id=$1 and m.delivery_intent='follow' order by m.sequence desc limit 1`, jobID).Scan(&run.ID, &run.JobID, &run.State, &run.Role); err != nil {
+	row, err := queries.GetLatestFollowRun(ctx, jobID)
+	if err != nil {
 		return spine.AgentRun{}, false, err
 	}
+	run := spine.AgentRun{ID: row.ID, JobID: row.JobID, State: row.State, Role: row.Role}
 	if run.State != spine.AgentRunCompleted || run.Role != "implement" {
 		return spine.AgentRun{}, false, nil
 	}
@@ -640,15 +648,15 @@ func (s Store) RevisionCandidate(ctx context.Context, jobID, comparisonBase stri
 		return spine.AgentRun{}, false, err
 	}
 	defer tx.Rollback()
-	var revision, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase); err != nil {
+	locked, err := dbsql.New(s.DB).WithTx(tx).GetRevisionPhaseForUpdate(ctx, jobID)
+	if err != nil {
 		return spine.AgentRun{}, false, err
 	}
-	if revision != comparisonBase {
-		return spine.AgentRun{}, false, fmt.Errorf("Revision comparison base %s conflicts with current Revision %s", comparisonBase, revision)
+	if locked.Revision != comparisonBase {
+		return spine.AgentRun{}, false, fmt.Errorf("Revision comparison base %s conflicts with current Revision %s", comparisonBase, locked.Revision)
 	}
-	if phase != "implementing" && phase != "review-feedback" {
-		return spine.AgentRun{}, false, fmt.Errorf("Revision observation is not admissible during workflow phase %s", phase)
+	if locked.WorkflowPhase != "implementing" && locked.WorkflowPhase != "review-feedback" {
+		return spine.AgentRun{}, false, fmt.Errorf("Revision observation is not admissible during workflow phase %s", locked.WorkflowPhase)
 	}
 	run, ready, err := revisionCandidateTx(ctx, tx, jobID)
 	if err != nil {
@@ -661,32 +669,31 @@ func (s Store) RevisionCandidate(ctx context.Context, jobID, comparisonBase stri
 }
 
 func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spine.Evidence) error {
-	_, err := tx.ExecContext(ctx, `
-		insert into dorf.evidence(id,job_id,digest,byte_size,media_type,producer,provenance,kind,action_id,check_id,revision,started_at,finished_at)
-		values($1,$2,$3,$4,$5,$6,$7,$8,nullif($9,''),nullif($10,''),nullif($11,''),$12,$13)
-		on conflict(id) do nothing`, evidence.ID, jobID, evidence.Digest, evidence.ByteSize, evidence.MediaType,
-		evidence.Producer, evidence.Provenance, evidence.Kind, evidence.ActionID, evidence.CheckID,
-		evidence.Revision, nullableTime(evidence.StartedAt), nullableTime(evidence.FinishedAt))
+	queries := dbsql.New(tx)
+	err := queries.InsertEvidence(ctx, dbsql.InsertEvidenceParams{
+		ID: evidence.ID, JobID: jobID, Digest: evidence.Digest, ByteSize: evidence.ByteSize,
+		MediaType: evidence.MediaType, Producer: evidence.Producer, Provenance: evidence.Provenance,
+		Kind: evidence.Kind, ActionID: evidence.ActionID, CheckID: evidence.CheckID, Revision: evidence.Revision,
+		StartedAt: nullableTime(evidence.StartedAt), FinishedAt: nullableTime(evidence.FinishedAt),
+	})
 	if err != nil {
 		return err
 	}
-	var storedJobID, digest, mediaType, producer, provenance, kind, actionID, checkID, revision string
-	var size int64
-	var startedAt, finishedAt time.Time
-	if err := tx.QueryRowContext(ctx, `select job_id,digest,byte_size,media_type,producer,provenance,kind,coalesce(action_id,''),coalesce(check_id,''),coalesce(revision,''),started_at,finished_at from dorf.evidence where id=$1`, evidence.ID).Scan(&storedJobID, &digest, &size, &mediaType, &producer, &provenance, &kind, &actionID, &checkID, &revision, &startedAt, &finishedAt); err != nil {
+	stored, err := queries.GetEvidenceIdentity(ctx, evidence.ID)
+	if err != nil {
 		return err
 	}
-	if storedJobID != jobID || digest != evidence.Digest || size != evidence.ByteSize || mediaType != evidence.MediaType || producer != evidence.Producer || provenance != evidence.Provenance || kind != evidence.Kind || actionID != evidence.ActionID || checkID != evidence.CheckID || revision != evidence.Revision || !startedAt.Equal(evidence.StartedAt) || !finishedAt.Equal(evidence.FinishedAt) {
+	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Provenance != evidence.Provenance || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.CheckID != evidence.CheckID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
 		return fmt.Errorf("Evidence identity %s conflicts with immutable retained metadata or content", evidence.ID)
 	}
 	return nil
 }
 
-func nullableTime(value time.Time) any {
+func nullableTime(value time.Time) sql.NullTime {
 	if value.IsZero() {
-		return nil
+		return sql.NullTime{}
 	}
-	return value
+	return sql.NullTime{Time: value, Valid: true}
 }
 
 func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.Evidence, observation spine.CommandObservation, checks []spine.DeclaredCheck) error {
@@ -698,15 +705,15 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		return err
 	}
 	defer tx.Rollback()
-	var jobID, currentSetupID string
-	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `select a.job_id,a.kind,coalesce(j.setup_action_id,'') from dorf.actions a join dorf.jobs j on j.id=a.job_id where a.id=$1 for update of a,j`, actionID).Scan(&jobID, &kind, &currentSetupID); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	setup, err := queries.GetSetupActionForUpdate(ctx, actionID)
+	if err != nil {
 		return err
 	}
-	if kind != spine.ActionRepositorySetup || evidence.ActionID != actionID || currentSetupID != actionID {
+	if spine.ActionKind(setup.Kind) != spine.ActionRepositorySetup || evidence.ActionID != actionID || setup.SetupActionID != actionID {
 		return fmt.Errorf("setup Evidence does not match its Action")
 	}
-	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
+	if err := insertEvidence(ctx, tx, setup.JobID, evidence); err != nil {
 		return err
 	}
 	commands := append([]spine.DeclaredCheck{{Name: "prepare", Command: observation.Command}}, checks...)
@@ -714,11 +721,11 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		if command.Name != "prepare" && command.Name != "check" && command.Name != "smoke" || strings.TrimSpace(command.Command) == "" {
 			return fmt.Errorf("invalid pinned repository command %q", command.Name)
 		}
-		if _, err := tx.ExecContext(ctx, `insert into dorf.repository_commands(job_id,name,command) values($1,$2,$3) on conflict do nothing`, jobID, command.Name, command.Command); err != nil {
+		if err := queries.InsertRepositoryCommand(ctx, dbsql.InsertRepositoryCommandParams{JobID: setup.JobID, Name: command.Name, Command: command.Command}); err != nil {
 			return err
 		}
-		var storedCommand string
-		if err := tx.QueryRowContext(ctx, `select command from dorf.repository_commands where job_id=$1 and name=$2`, jobID, command.Name).Scan(&storedCommand); err != nil {
+		storedCommand, err := queries.GetRepositoryCommand(ctx, dbsql.GetRepositoryCommandParams{JobID: setup.JobID, Name: command.Name})
+		if err != nil {
 			return err
 		}
 		if storedCommand != command.Command {
@@ -730,31 +737,23 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 		state, phase = "failed", "blocked"
 		attention = fmt.Sprintf("repository setup failed with exit %d; Evidence %s", observation.ExitCode, evidence.Digest)
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=$2,external_id=$3,external_outcome=$4 where id=$1`, actionID, state, evidence.Digest, fmt.Sprintf("exit=%d", observation.ExitCode)); err != nil {
+	if err := queries.FinishSetupAction(ctx, dbsql.FinishSetupActionParams{State: spine.ActionState(state), ExternalID: sql.NullString{String: evidence.Digest, Valid: true}, ExternalOutcome: sql.NullString{String: fmt.Sprintf("exit=%d", observation.ExitCode), Valid: true}, ActionID: actionID}); err != nil {
 		return err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase=$2,workflow_attention=nullif($3,'') where id=$1 and workflow_phase in ('setup','blocked')`, jobID, phase, attention)); err != nil {
+	if err := expectOneRows(queries.SetWorkflowPhaseAfterSetup(ctx, dbsql.SetWorkflowPhaseAfterSetupParams{WorkflowPhase: phase, WorkflowAttention: attention, JobID: setup.JobID})); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s Store) DeclaredChecks(ctx context.Context, jobID string) ([]spine.DeclaredCheck, error) {
-	rows, err := s.DB.QueryContext(ctx, `select name,command from dorf.repository_commands where job_id=$1 and name in ('check','smoke') order by case name when 'check' then 1 else 2 end`, jobID)
+	rows, err := dbsql.New(s.DB).ListDeclaredChecks(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var checks []spine.DeclaredCheck
-	for rows.Next() {
-		var check spine.DeclaredCheck
-		if err := rows.Scan(&check.Name, &check.Command); err != nil {
-			return nil, err
-		}
-		checks = append(checks, check)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	for _, row := range rows {
+		checks = append(checks, spine.DeclaredCheck{Name: row.Name, Command: row.Command})
 	}
 	if len(checks) == 0 {
 		return nil, fmt.Errorf("pinned repository contract has no Checks")
@@ -768,11 +767,12 @@ func (s Store) RecordRevision(ctx context.Context, jobID, runID string, observat
 		return false, err
 	}
 	defer tx.Rollback()
-	var currentRevision, branch, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,branch,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &branch, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetRevisionJobForUpdate(ctx, jobID)
+	if err != nil {
 		return false, err
 	}
-	if currentRevision != observation.ComparisonBase || branch != observation.Branch || phase != "implementing" && phase != "review-feedback" ||
+	if locked.Revision != observation.ComparisonBase || locked.Branch != observation.Branch || locked.WorkflowPhase != "implementing" && locked.WorkflowPhase != "review-feedback" ||
 		evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.CheckID != "" || evidence.Revision != observation.Revision ||
 		!ValidRevision(observation.ComparisonBase) || !ValidRevision(observation.Revision) || !ValidRevision(observation.Tree) || observation.Revision == observation.ComparisonBase {
 		return false, fmt.Errorf("Git Revision observation conflicts with durable comparison base, branch, AgentRun, or Evidence")
@@ -787,15 +787,22 @@ func (s Store) RecordRevision(ctx context.Context, jobID, runID string, observat
 	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
 		return false, err
 	}
-	var generation int
-	if err := tx.QueryRowContext(ctx, `select coalesce(max(generation),0)+1 from dorf.revisions where job_id=$1`, jobID).Scan(&generation); err != nil {
+	generation, err := queries.NextRevisionGeneration(ctx, jobID)
+	if err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.revisions(job_id,oid,comparison_base_oid,tree_oid,branch,generation,evidence_id) values($1,$2,$3,$4,$5,$6,$7)`, jobID, observation.Revision, observation.ComparisonBase, observation.Tree, observation.Branch, generation, evidence.ID); err != nil {
+	if err := queries.InsertRevision(ctx, dbsql.InsertRevisionParams{
+		JobID: jobID, OID: observation.Revision, ComparisonBaseOID: observation.ComparisonBase,
+		TreeOID: observation.Tree, Branch: observation.Branch, Generation: generation, EvidenceID: evidence.ID,
+	}); err != nil {
 		return false, err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set revision=$2,workflow_phase='checking',workflow_attention=null where id=$1 and revision=$3`, jobID, observation.Revision, observation.ComparisonBase)); err != nil {
+	updated, err := queries.AdvanceJobRevision(ctx, dbsql.AdvanceJobRevisionParams{JobID: jobID, Revision: observation.Revision, ComparisonBaseOID: observation.ComparisonBase})
+	if err != nil {
 		return false, err
+	}
+	if updated != 1 {
+		return false, ErrNotFound
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
@@ -816,12 +823,13 @@ func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase
 		return false, err
 	}
 	defer tx.Rollback()
-	var revision, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&revision, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetRevisionPhaseForUpdate(ctx, jobID)
+	if err != nil {
 		return false, err
 	}
-	if revision != comparisonBase || phase != "implementing" && phase != "review-feedback" {
-		return false, fmt.Errorf("no-Revision result conflicts with current Revision %s or workflow phase %s", revision, phase)
+	if locked.Revision != comparisonBase || locked.WorkflowPhase != "implementing" && locked.WorkflowPhase != "review-feedback" {
+		return false, fmt.Errorf("no-Revision result conflicts with current Revision %s or workflow phase %s", locked.Revision, locked.WorkflowPhase)
 	}
 	candidate, ready, err := revisionCandidateTx(ctx, tx, jobID)
 	if err != nil {
@@ -830,7 +838,7 @@ func (s Store) BlockNoRevision(ctx context.Context, jobID, runID, comparisonBase
 	if !ready || candidate.ID != runID {
 		return false, nil
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1 and revision=$3 and workflow_phase in ('implementing','review-feedback')`, jobID, reason, comparisonBase)); err != nil {
+	if err := expectOneRows(queries.BlockNoRevision(ctx, dbsql.BlockNoRevisionParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID, Revision: comparisonBase})); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -846,18 +854,21 @@ func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command st
 		return spine.Check{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `insert into dorf.checks(id,job_id,name,command,revision,state) values($1,$2,$3,$4,$5,'running') on conflict do nothing`, id, jobID, name, command, revision); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	if err := queries.InsertCheck(ctx, dbsql.InsertCheckParams{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision}); err != nil {
 		return spine.Check{}, err
 	}
-	var check spine.Check
-	if err := tx.QueryRowContext(ctx, `select id,job_id,name,command,revision,state,coalesce(exit_code,0),coalesce(evidence_id,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch') from dorf.checks where id=$1`, id).Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.StartedAt, &check.FinishedAt); err != nil {
+	row, err := queries.GetCheck(ctx, id)
+	if err != nil {
 		return spine.Check{}, err
 	}
+	check := checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, "", row.StartedAt, row.FinishedAt)
 	if check.Command != command {
 		return spine.Check{}, fmt.Errorf("Check %s command conflicts at Revision %s", name, revision)
 	}
 	if check.EvidenceID != "" {
-		if err := tx.QueryRowContext(ctx, `select digest from dorf.evidence where id=$1`, check.EvidenceID).Scan(&check.EvidenceDigest); err != nil {
+		check.EvidenceDigest, err = queries.GetEvidenceDigest(ctx, check.EvidenceID)
+		if err != nil {
 			return spine.Check{}, err
 		}
 	}
@@ -873,21 +884,22 @@ func (s Store) RecordCheck(ctx context.Context, check spine.Check, evidence spin
 		return err
 	}
 	defer tx.Rollback()
-	var jobID, revision, command string
-	if err := tx.QueryRowContext(ctx, `select job_id,revision,command from dorf.checks where id=$1 for update`, check.ID).Scan(&jobID, &revision, &command); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetCheckForUpdate(ctx, check.ID)
+	if err != nil {
 		return err
 	}
-	if jobID != check.JobID || revision != check.Revision || command != observation.Command || evidence.CheckID != check.ID || evidence.Revision != revision {
+	if locked.JobID != check.JobID || locked.Revision != check.Revision || locked.Command != observation.Command || evidence.CheckID != check.ID || evidence.Revision != locked.Revision {
 		return fmt.Errorf("Check observation conflicts with its exact Revision or command")
 	}
-	if err := insertEvidence(ctx, tx, jobID, evidence); err != nil {
+	if err := insertEvidence(ctx, tx, locked.JobID, evidence); err != nil {
 		return err
 	}
 	state := "passed"
 	if observation.ExitCode != 0 {
 		state = "failed"
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.checks set state=$2,exit_code=$3,evidence_id=$4,started_at=$5,finished_at=$6 where id=$1`, check.ID, state, observation.ExitCode, evidence.ID, observation.StartedAt, observation.FinishedAt); err != nil {
+	if err := queries.CompleteCheck(ctx, dbsql.CompleteCheckParams{State: state, ExitCode: sql.NullInt32{Int32: int32(observation.ExitCode), Valid: true}, EvidenceID: sql.NullString{String: evidence.ID, Valid: true}, StartedAt: nullableTime(observation.StartedAt), FinishedAt: nullableTime(observation.FinishedAt), ID: check.ID}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -899,13 +911,14 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 		return spine.Message{}, false, err
 	}
 	defer tx.Rollback()
-	var revision, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, check.JobID).Scan(&revision, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetRevisionPhaseForUpdate(ctx, check.JobID)
+	if err != nil {
 		return spine.Message{}, false, err
 	}
-	var existing spine.Message
-	err = tx.QueryRowContext(ctx, `select id,job_id,from_kind,from_id,sequence,input,delivery_intent from dorf.job_messages where job_id=$1 and from_kind='workflow' and from_id=$2`, check.JobID, check.ID).Scan(&existing.ID, &existing.JobID, &existing.FromKind, &existing.FromID, &existing.Sequence, &existing.Input, &existing.Intent)
+	existingRow, err := queries.GetCheckMessage(ctx, dbsql.GetCheckMessageParams{JobID: check.JobID, FromID: check.ID})
 	if err == nil {
+		existing := messageFromValues(existingRow.ID, existingRow.JobID, existingRow.FromKind, existingRow.FromID, existingRow.Sequence, existingRow.Input, existingRow.DeliveryIntent, existingRow.SteerTargetTurnID)
 		if err := tx.Commit(); err != nil {
 			return spine.Message{}, false, err
 		}
@@ -914,7 +927,7 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	if !errors.Is(err, sql.ErrNoRows) {
 		return spine.Message{}, false, err
 	}
-	if phase != "checking" || revision != check.Revision || check.State != "failed" {
+	if locked.WorkflowPhase != "checking" || locked.Revision != check.Revision || check.State != "failed" {
 		return spine.Message{}, false, fmt.Errorf("failed Check Message is not admissible for the current Check")
 	}
 	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, check.JobID); err != nil {
@@ -926,17 +939,17 @@ func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.
 	}
 	input := fmt.Sprintf("The deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and observed Evidence digest is %s. Resolve the failure if code changes are warranted, keep the checkout clean, and return control so Dorf can observe either a new Revision or an unchanged HEAD before rerunning verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceDigest)
 	message := spine.Message{ID: spine.MessageID(check.JobID, spine.MessageFromWorkflow, check.ID), JobID: check.JobID, FromKind: spine.MessageFromWorkflow, FromID: check.ID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input) values($1,$2,$3,$4,$5,$6)`, message.ID, message.JobID, message.FromKind, message.FromID, message.Sequence, message.Input); err != nil {
+	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent}); err != nil {
 		return spine.Message{}, false, err
 	}
 	actionID, runID := spine.TurnActionID(message.ID), spine.AgentRunID(message.ID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending')`, actionID, message.JobID, message.ID, spine.ActionTurnStart); err != nil {
+	if err := queries.InsertMessageAction(ctx, dbsql.InsertMessageActionParams{ID: actionID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
 		return spine.Message{}, false, err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) select $1,$2,$3,$4,native_session_id,'implement','pending' from dorf.sessions where job_id=$2`, runID, message.JobID, message.ID, actionID)); err != nil {
+	if err := expectOneRows(queries.InsertAgentRunFromImplementationSession(ctx, dbsql.InsertAgentRunFromImplementationSessionParams{ID: runID, JobID: message.JobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID})); err != nil {
 		return spine.Message{}, false, err
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='implementing',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, check.JobID, check.Revision)); err != nil {
+	if err := expectOneRows(queries.ReturnFailedCheckToImplementation(ctx, dbsql.ReturnFailedCheckToImplementationParams{JobID: check.JobID, Revision: check.Revision})); err != nil {
 		return spine.Message{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -951,55 +964,43 @@ func (s Store) MarkReady(ctx context.Context, jobID, revision string, verifiedEv
 		return err
 	}
 	defer tx.Rollback()
-	var currentRevision, phase string
-	if err := tx.QueryRowContext(ctx, `select revision,workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&currentRevision, &phase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	locked, err := queries.GetRevisionPhaseForUpdate(ctx, jobID)
+	if err != nil {
 		return err
 	}
-	if currentRevision != revision || phase != "checking" {
-		return fmt.Errorf("Revision %s cannot become ready from phase %s at Revision %s", revision, phase, currentRevision)
+	if locked.Revision != revision || locked.WorkflowPhase != "checking" {
+		return fmt.Errorf("Revision %s cannot become ready from phase %s at Revision %s", revision, locked.WorkflowPhase, locked.Revision)
 	}
-	rows, err := tx.QueryContext(ctx, `select c.evidence_id from dorf.repository_commands r join dorf.checks c on c.job_id=r.job_id and c.name=r.name and c.command=r.command and c.revision=$2 where r.job_id=$1 and r.name in ('check','smoke') and c.state='passed' and c.exit_code=0 order by r.name`, jobID, revision)
+	rows, err := queries.ListPassingCheckEvidence(ctx, dbsql.ListPassingCheckEvidenceParams{Revision: revision, JobID: jobID})
 	if err != nil {
 		return err
 	}
 	var proving []string
-	for rows.Next() {
-		var id sql.NullString
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
+	for _, id := range rows {
 		if !id.Valid || id.String == "" {
-			rows.Close()
 			return fmt.Errorf("Revision %s has a passing Check without Evidence", revision)
 		}
 		proving = append(proving, id.String)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	var declared int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.repository_commands where job_id=$1 and name in ('check','smoke')`, jobID).Scan(&declared); err != nil {
+	declared, err := queries.CountDeclaredChecks(ctx, jobID)
+	if err != nil {
 		return err
 	}
 	sort.Strings(proving)
 	verified := append([]string(nil), verifiedEvidenceIDs...)
 	sort.Strings(verified)
-	if declared == 0 || len(proving) != declared || !slices.Equal(proving, verified) {
+	if declared == 0 || int64(len(proving)) != declared || !slices.Equal(proving, verified) {
 		return fmt.Errorf("Revision %s is not ready: verified Evidence does not exactly match %d declared Checks", revision, declared)
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='ready',workflow_attention=null where id=$1 and revision=$2 and workflow_phase='checking'`, jobID, revision)); err != nil {
+	if err := expectOneRows(queries.MarkReady(ctx, dbsql.MarkReadyParams{JobID: jobID, Revision: revision})); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s Store) BlockWorkflow(ctx context.Context, jobID, reason string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1`, jobID, reason))
+	return expectOneRows(dbsql.New(s.DB).BlockWorkflow(ctx, dbsql.BlockWorkflowParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID}))
 }
 
 func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Receipt) error {
@@ -1008,38 +1009,39 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 		return err
 	}
 	defer tx.Rollback()
-	var jobID, scope string
-	var kind spine.ActionKind
-	if err := tx.QueryRowContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome=nullif($3,'') where id=$1 returning job_id,kind,scope_key`, id, receipt.ExternalID, receipt.Outcome).Scan(&jobID, &kind, &scope); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	completed, err := queries.CompleteAction(ctx, dbsql.CompleteActionParams{ExternalID: sql.NullString{String: receipt.ExternalID, Valid: true}, ExternalOutcome: receipt.Outcome, ID: id})
+	if err != nil {
 		return err
 	}
+	jobID, kind, scope := completed.JobID, completed.Kind, completed.ScopeKey
 	switch kind {
 	case spine.ActionSandboxCreate:
 		if scope != "" {
-			var expected, revision string
-			if err = tx.QueryRowContext(ctx, `select sandbox_name,revision from dorf.review_resources where run_id=$1 and sandbox_create_action_id=$2`, scope, id).Scan(&expected, &revision); err == nil && (receipt.ExternalID != expected || receipt.Outcome != revision) {
+			var identity dbsql.GetReviewSandboxReceiptIdentityRow
+			if identity, err = queries.GetReviewSandboxReceiptIdentity(ctx, dbsql.GetReviewSandboxReceiptIdentityParams{RunID: scope, ActionID: id}); err == nil && (receipt.ExternalID != identity.SandboxName || receipt.Outcome != identity.Revision) {
 				err = fmt.Errorf("review Sandbox receipt conflicts with its host-owned identity")
 			}
 			if err == nil {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set sandbox_state='created' where run_id=$1 and sandbox_state in ('pending','created')`, scope))
+				err = expectOneRows(queries.MarkReviewSandboxCreated(ctx, scope))
 			}
 			break
 		}
-		err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='created',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and incus_name=$3 and state in ('pending','created')`, jobID, id, receipt.ExternalID))
+		err = expectOneRows(queries.MarkMainSandboxCreated(ctx, dbsql.MarkMainSandboxCreatedParams{JobID: jobID, ActionID: id, IncusName: receipt.ExternalID}))
 	case spine.ActionRouteCreate:
 		if scope != "" {
 			var expectedSandbox string
-			if err = tx.QueryRowContext(ctx, `select sandbox_name from dorf.review_resources where run_id=$1 and route_create_action_id=$2`, scope, id).Scan(&expectedSandbox); err != nil {
+			if expectedSandbox, err = queries.GetReviewRouteSandbox(ctx, dbsql.GetReviewRouteSandboxParams{RunID: scope, ActionID: id}); err != nil {
 				break
 			}
 			if strings.TrimSpace(receipt.ExternalID) == "" || receipt.Outcome != expectedSandbox {
 				err = fmt.Errorf("review provider route receipt is empty")
 			} else {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set route_id=coalesce(route_id,$2),route_state='active' where run_id=$1 and sandbox_state='created' and route_state in ('pending','active') and (route_id is null or route_id=$2)`, scope, receipt.ExternalID))
+				err = expectOneRows(queries.MarkReviewRouteActive(ctx, dbsql.MarkReviewRouteActiveParams{RouteID: sql.NullString{String: receipt.ExternalID, Valid: true}, RunID: scope}))
 			}
 			break
 		}
-		err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='active',observed_at=clock_timestamp() where job_id=$1 and action_id=$2 and route_id=$3 and state in ('pending','active')`, jobID, id, receipt.ExternalID))
+		err = expectOneRows(queries.MarkMainRouteActive(ctx, dbsql.MarkMainRouteActiveParams{JobID: jobID, ActionID: id, RouteID: receipt.ExternalID}))
 	case spine.ActionSessionStart:
 		if scope != "" {
 			if strings.TrimSpace(receipt.ExternalID) == "" || strings.TrimSpace(receipt.Outcome) == "" {
@@ -1047,89 +1049,87 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 				break
 			}
 			var inherited bool
-			if err = tx.QueryRowContext(ctx, `select exists(select 1 from dorf.sessions where native_session_id=$1)`, receipt.ExternalID).Scan(&inherited); err == nil && inherited {
+			if inherited, err = queries.ImplementationSessionExists(ctx, receipt.ExternalID); err == nil && inherited {
 				err = fmt.Errorf("review AgentRun %s cannot inherit the implementation Session", scope)
 			}
 			if err != nil {
 				break
 			}
-			var sandboxName, ownershipNonce string
-			if err = tx.QueryRowContext(ctx, `select sandbox_name,ownership_nonce from dorf.review_resources where run_id=$1`, scope).Scan(&sandboxName, &ownershipNonce); err == nil && receipt.Outcome != spine.ReviewControllerID(scope, sandboxName, ownershipNonce) {
+			var identity dbsql.GetReviewControllerIdentityRow
+			if identity, err = queries.GetReviewControllerIdentity(ctx, scope); err == nil && receipt.Outcome != spine.ReviewControllerID(scope, identity.SandboxName, identity.OwnershipNonce) {
 				err = fmt.Errorf("review logical controller identity conflicts with its host-owned Sandbox")
 			}
 			if err != nil {
 				break
 			}
-			if err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set app_server_id=coalesce(app_server_id,$2) where run_id=$1 and sandbox_state='created' and route_state='active' and checkout_state='verified' and (app_server_id is null or app_server_id=$2)`, scope, receipt.Outcome)); err == nil {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where id=$1 and (session_id is null or session_id=$2)`, scope, receipt.ExternalID))
+			if err = expectOneRows(queries.BindReviewAppServer(ctx, dbsql.BindReviewAppServerParams{AppServerID: sql.NullString{String: receipt.Outcome, Valid: true}, RunID: scope})); err == nil {
+				err = expectOneRows(queries.BindReviewAgentRunSession(ctx, dbsql.BindReviewAgentRunSessionParams{SessionID: sql.NullString{String: receipt.ExternalID, Valid: true}, RunID: scope}))
 			}
 			break
 		}
-		var result sql.Result
-		result, err = tx.ExecContext(ctx, `insert into dorf.sessions(job_id,action_id,native_session_id) values($1,$2,$3) on conflict(job_id) do update set native_session_id=excluded.native_session_id,observed_at=clock_timestamp() where dorf.sessions.native_session_id=excluded.native_session_id`, jobID, id, receipt.ExternalID)
+		var affected int64
+		affected, err = queries.UpsertImplementationSession(ctx, dbsql.UpsertImplementationSessionParams{JobID: jobID, ActionID: id, SessionID: receipt.ExternalID})
 		if err == nil {
-			var affected int64
-			affected, err = result.RowsAffected()
-			if err == nil && affected != 1 {
+			if affected != 1 {
 				err = fmt.Errorf("native Session binding conflicts with the recorded Session for Job %s", jobID)
 			}
 		}
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `update dorf.agent_runs set session_id=$2,updated_at=clock_timestamp() where job_id=$1 and role='implement' and (session_id is null or session_id=$2)`, jobID, receipt.ExternalID)
+			err = queries.BindImplementationAgentRunSessions(ctx, dbsql.BindImplementationAgentRunSessionsParams{SessionID: sql.NullString{String: receipt.ExternalID, Valid: true}, JobID: jobID})
 		}
 	case spine.ActionRouteRevoke:
 		if scope != "" {
 			var routeID sql.NullString
-			if err = tx.QueryRowContext(ctx, `select route_id from dorf.review_resources where run_id=$1 and route_revoke_action_id=$2`, scope, id).Scan(&routeID); err == nil && receipt.Outcome != "revoked" {
+			if routeID, err = queries.GetReviewRouteForCleanup(ctx, dbsql.GetReviewRouteForCleanupParams{RunID: scope, ActionID: id}); err == nil && receipt.Outcome != "revoked" {
 				err = fmt.Errorf("review route cleanup receipt is invalid")
 			}
 			if err == nil && receipt.ExternalID != "absent" && (!routeID.Valid || receipt.ExternalID != routeID.String) {
 				err = fmt.Errorf("review route cleanup receipt conflicts with its exact route")
 			}
 			if err == nil {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set route_state='revoked',route_revoked_at=coalesce(route_revoked_at,clock_timestamp()) where run_id=$1 and route_state in ('pending','active','revoked')`, scope))
+				err = expectOneRows(queries.MarkReviewRouteRevoked(ctx, scope))
 			}
 			break
 		}
 		var expectedRoute string
-		if err = tx.QueryRowContext(ctx, `select route_id from dorf.routes where job_id=$1`, jobID).Scan(&expectedRoute); err == nil && (receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != expectedRoute)) {
+		if expectedRoute, err = queries.GetMainRouteID(ctx, jobID); err == nil && (receipt.Outcome != "revoked" || (receipt.ExternalID != "absent" && receipt.ExternalID != expectedRoute)) {
 			err = fmt.Errorf("main route cleanup receipt conflicts with its persisted exact route ID")
 		}
 		if err == nil {
-			err = expectOne(tx.ExecContext(ctx, `update dorf.routes set state='revoked',observed_at=clock_timestamp() where job_id=$1 and route_id=$2 and state in ('pending','active','revoked')`, jobID, expectedRoute))
+			err = expectOneRows(queries.MarkMainRouteRevoked(ctx, dbsql.MarkMainRouteRevokedParams{JobID: jobID, RouteID: expectedRoute}))
 		}
 	case spine.ActionSandboxDelete:
 		if scope != "" {
 			var expected string
-			if err = tx.QueryRowContext(ctx, `select sandbox_name from dorf.review_resources where run_id=$1 and sandbox_delete_action_id=$2`, scope, id).Scan(&expected); err == nil && (receipt.ExternalID != expected || receipt.Outcome != "deleted") {
+			if expected, err = queries.GetReviewSandboxForCleanup(ctx, dbsql.GetReviewSandboxForCleanupParams{RunID: scope, ActionID: id}); err == nil && (receipt.ExternalID != expected || receipt.Outcome != "deleted") {
 				err = fmt.Errorf("review Sandbox cleanup receipt conflicts with its host-owned identity")
 			}
 			if err == nil {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set sandbox_state='deleted',sandbox_deleted_at=coalesce(sandbox_deleted_at,clock_timestamp()) where run_id=$1 and route_state='revoked' and sandbox_state in ('pending','created','deleted')`, scope))
+				err = expectOneRows(queries.MarkReviewSandboxDeleted(ctx, scope))
 			}
 			break
 		}
 		var expectedSandbox string
-		if err = tx.QueryRowContext(ctx, `select incus_name from dorf.sandboxes where job_id=$1`, jobID).Scan(&expectedSandbox); err == nil && (receipt.ExternalID != expectedSandbox || receipt.Outcome != "deleted") {
+		if expectedSandbox, err = queries.GetMainSandboxName(ctx, jobID); err == nil && (receipt.ExternalID != expectedSandbox || receipt.Outcome != "deleted") {
 			err = fmt.Errorf("main Sandbox cleanup receipt conflicts with its persisted exact Incus name")
 		}
 		if err == nil {
-			err = expectOne(tx.ExecContext(ctx, `update dorf.sandboxes set state='deleted',observed_at=clock_timestamp() where job_id=$1 and incus_name=$2 and state in ('pending','created','deleted')`, jobID, expectedSandbox))
+			err = expectOneRows(queries.MarkMainSandboxDeleted(ctx, dbsql.MarkMainSandboxDeletedParams{JobID: jobID, IncusName: expectedSandbox}))
 		}
 	case spine.ActionReviewWorkspaceCreate:
-		var path, revision string
-		if err = tx.QueryRowContext(ctx, `select ar.workspace,rr.revision from dorf.review_resources rr join dorf.agent_runs ar on ar.id=rr.run_id where rr.materialize_action_id=$1 and rr.run_id=$2`, id, scope).Scan(&path, &revision); err == nil && receipt.ExternalID != path {
+		var identity dbsql.GetReviewWorkspaceReceiptIdentityRow
+		if identity, err = queries.GetReviewWorkspaceReceiptIdentity(ctx, dbsql.GetReviewWorkspaceReceiptIdentityParams{ActionID: id, RunID: scope}); err == nil && receipt.ExternalID != identity.Workspace.String {
 			err = fmt.Errorf("review workspace receipt conflicts with its exact path")
 		}
 		if err == nil {
 			var tree string
 			var observedRevision string
 			observedRevision, tree, err = parseReviewStateOutcome(receipt.Outcome)
-			if err == nil && observedRevision != revision {
+			if err == nil && observedRevision != identity.Revision {
 				err = fmt.Errorf("review workspace receipt conflicts with its exact Revision")
 			}
 			if err == nil {
-				err = expectOne(tx.ExecContext(ctx, `update dorf.review_resources set checkout_state='verified',revision_tree=coalesce(revision_tree,$2),checkout_verified_at=coalesce(checkout_verified_at,clock_timestamp()) where run_id=$1 and sandbox_state='created' and checkout_state in ('pending','verified') and (revision_tree is null or revision_tree=$2)`, scope, tree))
+				err = expectOneRows(queries.MarkReviewCheckoutVerified(ctx, dbsql.MarkReviewCheckoutVerifiedParams{Tree: sql.NullString{String: tree, Valid: true}, RunID: scope}))
 			}
 		}
 	}
@@ -1140,8 +1140,7 @@ func (s Store) CompleteAction(ctx context.Context, id string, receipt spine.Rece
 }
 
 func (s Store) UncertainAction(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `update dorf.actions set state='uncertain' where id=$1 and state<>'succeeded'`, id)
-	return err
+	return dbsql.New(s.DB).MarkActionUncertain(ctx, id)
 }
 
 func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spine.Delivery, error) {
@@ -1150,72 +1149,53 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 		return nil, err
 	}
 	defer tx.Rollback()
-	var workflowPhase string
-	if err := tx.QueryRowContext(ctx, `select workflow_phase from dorf.jobs where id=$1 for update`, jobID).Scan(&workflowPhase); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	workflowPhase, err := queries.GetWorkflowPhaseForUpdate(ctx, jobID)
+	if err != nil {
 		return nil, err
 	}
-	var message spine.Message
 	// A steer is a distinct priority lane aimed at the active native turn. It may
 	// overtake older queued follow-ups; the immutable sequence still records
 	// admission order, while follow-up turn starts remain FIFO.
-	err = tx.QueryRowContext(ctx, `
-		with current_turn_start as (
-			select m.id as message_id,ar.native_turn_id,ar.state
-			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-			where m.job_id=$1 and ar.native_turn_id is not null
-			  and (m.delivery_intent='follow' or ar.native_turn_id<>m.steer_target_turn_id)
-			  and ar.state in ('active','uncertain')
-			order by m.sequence limit 1
-		), candidate as (
-			select steer.id as message_id,0 as priority,steer.sequence
-			from current_turn_start active
-			join dorf.job_messages steer on steer.job_id=$1 and steer.delivery_intent='steer'
-			  and steer.steer_target_turn_id=active.native_turn_id
-			join dorf.agent_runs steer_run on steer_run.message_id=steer.id
-			where active.state='active' and steer_run.native_turn_id is null
-			union all
-			select message_id,1,0 from current_turn_start
-			union all
-			select m.id,2,m.sequence
-			from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-			where m.job_id=$1 and ar.native_turn_id is null and not exists(select 1 from current_turn_start)
-		)
-		select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,'')
-		from candidate c join dorf.job_messages m on m.id=c.message_id
-	order by c.priority,c.sequence limit 1`, jobID).Scan(&message.ID, &message.JobID, &message.FromKind, &message.FromID, &message.Sequence, &message.Input, &message.Intent, &message.TargetTurnID)
+	row, err := queries.NextDeliveryCandidate(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	message := spine.Message{
+		ID: row.ID, JobID: row.JobID, FromKind: spine.MessageFromKind(row.FromKind), FromID: row.FromID,
+		Sequence: row.Sequence, Input: row.Input, Intent: spine.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID,
+	}
 	actionID := spine.TurnActionID(message.ID)
 	runID := spine.AgentRunID(message.ID)
-	if _, err := tx.ExecContext(ctx, `insert into dorf.actions(id,job_id,message_id,kind,state) values($1,$2,$3,$4,'pending') on conflict do nothing`, actionID, jobID, message.ID, spine.ActionTurnStart); err != nil {
+	if err := queries.InsertMessageActionIfAbsent(ctx, dbsql.InsertMessageActionIfAbsentParams{ID: actionID, JobID: jobID, MessageID: sql.NullString{String: message.ID, Valid: true}, Kind: spine.ActionTurnStart}); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `insert into dorf.agent_runs(id,job_id,message_id,action_id,session_id,role,state) values($1,$2,$3,$4,nullif($5,''),'implement','pending') on conflict do nothing`, runID, jobID, message.ID, actionID, sessionID); err != nil {
+	if err := queries.InsertAgentRunIfAbsent(ctx, dbsql.InsertAgentRunIfAbsentParams{ID: runID, JobID: jobID, MessageID: sql.NullString{String: message.ID, Valid: true}, ActionID: actionID, SessionID: sessionID}); err != nil {
 		return nil, err
 	}
 	if sessionID != "" {
-		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set session_id=coalesce(session_id,$2),updated_at=clock_timestamp() where message_id=$1 and (session_id is null or session_id=$2)`, message.ID, sessionID); err != nil {
+		if err := queries.BindAgentRunSessionByMessage(ctx, dbsql.BindAgentRunSessionByMessageParams{SessionID: sql.NullString{String: sessionID, Valid: true}, MessageID: sql.NullString{String: message.ID, Valid: true}}); err != nil {
 			return nil, err
 		}
 	}
-	run, err := scanAgentRun(tx.QueryRowContext(ctx, `select id,job_id,message_id,action_id,coalesce(session_id,''),state,baseline_native_turn_id is not null,coalesce(baseline_native_turn_id,''),coalesce(native_turn_id,''),coalesce(native_outcome,''),coalesce(attention,''),role from dorf.agent_runs where message_id=$1`, message.ID))
+	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
 		return nil, err
 	}
+	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.ActionID, runRow.SessionID, runRow.State, runRow.BaselineRecorded, runRow.BaselineNativeTurnID, runRow.NativeTurnID, runRow.NativeOutcome, runRow.Attention, runRow.Role)
 	if sessionID != "" && run.SessionID != sessionID {
 		return nil, fmt.Errorf("AgentRun %s is bound to native Session %s, not %s", run.ID, run.SessionID, sessionID)
 	}
 	allowed := run.Role == "implement" && (workflowPhase == "setup" || workflowPhase == "implementing" || workflowPhase == "review-feedback")
 	if !allowed {
 		reason := fmt.Sprintf("preserved admission sequence %d as attention: %s AgentRun cannot start during workflow phase %s", message.Sequence, run.Role, workflowPhase)
-		if _, err := tx.ExecContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 and state not in ('completed','failed','interrupted')`, run.ID, reason); err != nil {
+		if err := queries.BlockAgentRunDelivery(ctx, dbsql.BlockAgentRunDeliveryParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: run.ID}); err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `update dorf.jobs set workflow_phase='blocked',workflow_attention=$2 where id=$1`, jobID, reason); err != nil {
+		if err := queries.BlockDelivery(ctx, dbsql.BlockDeliveryParams{Reason: sql.NullString{String: reason, Valid: true}, JobID: jobID}); err != nil {
 			return nil, err
 		}
 		run.State, run.Attention = spine.AgentRunUncertain, reason
@@ -1226,38 +1206,27 @@ func (s Store) NextDelivery(ctx context.Context, jobID, sessionID string) (*spin
 	return &spine.Delivery{Message: message, AgentRun: run}, nil
 }
 
-func scanAgentRun(row *sql.Row) (spine.AgentRun, error) {
-	var run spine.AgentRun
-	err := row.Scan(&run.ID, &run.JobID, &run.MessageID, &run.ActionID, &run.SessionID, &run.State,
-		&run.BaselineRecorded, &run.BaselineTurnID, &run.NativeTurnID, &run.NativeOutcome, &run.Attention, &run.Role)
-	return run, err
-}
-
 func (s Store) PrepareAgentRun(ctx context.Context, runID, baselineTurnID string) error {
-	result, err := s.DB.ExecContext(ctx, `update dorf.agent_runs set state='submitting',baseline_native_turn_id=$2,attention=null,started_at=coalesce(started_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1 and state='pending'`, runID, baselineTurnID)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
+	queries := dbsql.New(s.DB)
+	rows, err := queries.PrepareAgentRun(ctx, dbsql.PrepareAgentRunParams{BaselineTurnID: sql.NullString{String: baselineTurnID, Valid: true}, RunID: runID})
 	if err != nil {
 		return err
 	}
 	if rows == 1 {
 		return nil
 	}
-	var recorded bool
-	var baseline string
-	if err := s.DB.QueryRowContext(ctx, `select baseline_native_turn_id is not null,coalesce(baseline_native_turn_id,'') from dorf.agent_runs where id=$1`, runID).Scan(&recorded, &baseline); err != nil {
+	baseline, err := queries.GetAgentRunBaseline(ctx, runID)
+	if err != nil {
 		return err
 	}
-	if !recorded || baseline != baselineTurnID {
+	if !baseline.Recorded || baseline.BaselineTurnID != baselineTurnID {
 		return fmt.Errorf("AgentRun %s native baseline conflicts with durable baseline", runID)
 	}
 	return nil
 }
 
 func (s Store) BeginTurnSubmission(ctx context.Context, runID string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.actions set state='pending' where id=(select action_id from dorf.agent_runs where id=$1) and state in ('pending','uncertain')`, runID))
+	return expectOneRows(dbsql.New(s.DB).ResetTurnActionForSubmission(ctx, runID))
 }
 
 func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string) error {
@@ -1279,23 +1248,16 @@ func (s Store) BindNativeTurn(ctx context.Context, runID, turnID, status string)
 		return err
 	}
 	defer tx.Rollback()
-	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state=$3,native_outcome=nullif($4,''),attention=nullif($5,''),finished_at=case when $3 in ('completed','failed','interrupted') then coalesce(finished_at,clock_timestamp()) else finished_at end,updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id`, runID, turnID, state, outcome, attention).Scan(&actionID); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	actionID, err := queries.BindNativeTurn(ctx, dbsql.BindNativeTurnParams{TurnID: sql.NullString{String: turnID, Valid: true}, State: state, Outcome: outcome, Attention: attention, RunID: runID})
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='submitted' where id=$1`, actionID, turnID); err != nil {
+	if err := queries.MarkTurnActionSucceeded(ctx, dbsql.MarkTurnActionSucceededParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: sql.NullString{String: "submitted", Valid: true}, ActionID: actionID}); err != nil {
 		return err
 	}
 	if outcome != "" {
-		if _, err := tx.ExecContext(ctx, `
-			update dorf.agent_runs accepted
-			set native_outcome=$3,updated_at=clock_timestamp()
-			from dorf.job_messages message,dorf.agent_runs source
-			where source.id=$1 and accepted.id<>source.id
-			  and accepted.job_id=source.job_id and accepted.session_id=source.session_id
-			  and accepted.message_id=message.id and message.delivery_intent='steer'
-			  and message.steer_target_turn_id=$2 and accepted.native_turn_id=$2
-			  and accepted.state='completed' and accepted.native_outcome is null`, runID, turnID, outcome); err != nil {
+		if err := queries.PropagateNativeTurnOutcomeToSteers(ctx, dbsql.PropagateNativeTurnOutcomeToSteersParams{Outcome: sql.NullString{String: outcome, Valid: true}, RunID: runID, TurnID: sql.NullString{String: turnID, Valid: true}}); err != nil {
 			return err
 		}
 	}
@@ -1312,14 +1274,15 @@ func (s Store) BindNativeSteer(ctx context.Context, runID, turnID, status string
 		return err
 	}
 	defer tx.Rollback()
-	var actionID, persistedOutcome string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set native_turn_id=coalesce(native_turn_id,$2),state='completed',native_outcome=coalesce(native_outcome,nullif($3,'')),attention=null,finished_at=coalesce(finished_at,clock_timestamp()),updated_at=clock_timestamp() where id=$1 and (native_turn_id is null or native_turn_id=$2) returning action_id,coalesce(native_outcome,'')`, runID, turnID, outcome).Scan(&actionID, &persistedOutcome); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	bound, err := queries.BindNativeSteer(ctx, dbsql.BindNativeSteerParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: outcome, RunID: runID})
+	if err != nil {
 		return err
 	}
-	if outcome != "" && persistedOutcome != outcome {
-		return fmt.Errorf("AgentRun %s native outcome %s conflicts with observed %s", runID, persistedOutcome, outcome)
+	if outcome != "" && bound.NativeOutcome != outcome {
+		return fmt.Errorf("AgentRun %s native outcome %s conflicts with observed %s", runID, bound.NativeOutcome, outcome)
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='succeeded',external_id=$2,external_outcome='steered' where id=$1`, actionID, turnID); err != nil {
+	if err := queries.MarkTurnActionSucceeded(ctx, dbsql.MarkTurnActionSucceededParams{TurnID: sql.NullString{String: turnID, Valid: true}, Outcome: sql.NullString{String: "steered", Valid: true}, ActionID: bound.ActionID}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1331,11 +1294,12 @@ func (s Store) FailAgentRun(ctx context.Context, runID, reason string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='failed',native_outcome=case when native_turn_id is null then null else 'failed' end,attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	actionID, err := queries.FailAgentRun(ctx, dbsql.FailAgentRunParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID})
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state=case when exists(select 1 from dorf.agent_runs where id=$1 and native_turn_id is null) then 'uncertain' else 'failed' end,external_outcome=$2 where id=$3`, runID, reason, actionID); err != nil {
+	if err := queries.MarkRunActionFailed(ctx, dbsql.MarkRunActionFailedParams{RunID: runID, Reason: sql.NullString{String: reason, Valid: true}, ActionID: actionID}); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1347,44 +1311,34 @@ func (s Store) UncertainAgentRun(ctx context.Context, runID, reason string) erro
 		return err
 	}
 	defer tx.Rollback()
-	var actionID string
-	if err := tx.QueryRowContext(ctx, `update dorf.agent_runs set state='uncertain',attention=$2,updated_at=clock_timestamp() where id=$1 returning action_id`, runID, reason).Scan(&actionID); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	actionID, err := queries.MarkAgentRunUncertain(ctx, dbsql.MarkAgentRunUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID})
+	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `update dorf.actions set state='uncertain',external_outcome=$2 where id=$1 and state<>'succeeded'`, actionID, reason); err != nil {
+	if err := queries.MarkRunActionUncertain(ctx, dbsql.MarkRunActionUncertainParams{Reason: sql.NullString{String: reason, Valid: true}, ActionID: actionID}); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) error {
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.agent_runs set attention=$2,updated_at=clock_timestamp() where id=$1`, runID, reason))
+	return expectOneRows(dbsql.New(s.DB).SetAgentRunAttention(ctx, dbsql.SetAgentRunAttentionParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
 func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,''),
-		       coalesce(ar.id,''),coalesce(ar.state,''),coalesce(ar.native_turn_id,''),
-		       coalesce(ar.native_outcome,''),coalesce(ar.attention,''),
-		       ar.native_turn_id is not null
-		from dorf.job_messages m left join dorf.agent_runs ar on ar.message_id=m.id
-		where m.job_id=$1 order by m.sequence`, jobID)
+	rows, err := dbsql.New(s.DB).ListMessages(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var views []spine.MessageView
-	for rows.Next() {
-		var view spine.MessageView
-		if err := rows.Scan(&view.ID, &view.JobID, &view.FromKind, &view.FromID, &view.Sequence, &view.Input, &view.Intent, &view.TargetTurnID,
-			&view.AgentRunID, &view.State, &view.NativeTurnID, &view.NativeOutcome, &view.Attention,
-			&view.Delivered); err != nil {
-			return nil, err
+	for _, row := range rows {
+		view := spine.MessageView{
+			Message:    messageFromValues(row.ID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
+			AgentRunID: row.AgentRunID, State: row.State, NativeTurnID: row.NativeTurnID,
+			NativeOutcome: row.NativeOutcome, Attention: row.Attention, Delivered: row.Delivered,
 		}
 		views = append(views, view)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	var blocker *spine.MessageView
 	for i := range views {
@@ -1405,25 +1359,16 @@ func (s Store) Messages(ctx context.Context, jobID string) ([]spine.MessageView,
 }
 
 func (s Store) NativeMutationDelivery(ctx context.Context, jobID string) (*spine.Delivery, error) {
-	var delivery spine.Delivery
-	err := s.DB.QueryRowContext(ctx, `
-		select m.id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.delivery_intent,coalesce(m.steer_target_turn_id,''),
-		       ar.id,ar.job_id,ar.message_id,ar.action_id,coalesce(ar.session_id,''),ar.state,
-		       ar.baseline_native_turn_id is not null,coalesce(ar.baseline_native_turn_id,''),
-		       coalesce(ar.native_turn_id,''),coalesce(ar.native_outcome,''),coalesce(ar.attention,''),ar.role
-		from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-		where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
-		order by m.sequence limit 1`, jobID).Scan(
-		&delivery.Message.ID, &delivery.Message.JobID, &delivery.Message.FromKind, &delivery.Message.FromID, &delivery.Message.Sequence, &delivery.Message.Input, &delivery.Message.Intent, &delivery.Message.TargetTurnID,
-		&delivery.AgentRun.ID, &delivery.AgentRun.JobID, &delivery.AgentRun.MessageID, &delivery.AgentRun.ActionID,
-		&delivery.AgentRun.SessionID, &delivery.AgentRun.State, &delivery.AgentRun.BaselineRecorded,
-		&delivery.AgentRun.BaselineTurnID, &delivery.AgentRun.NativeTurnID, &delivery.AgentRun.NativeOutcome,
-		&delivery.AgentRun.Attention, &delivery.AgentRun.Role)
+	row, err := dbsql.New(s.DB).GetNativeMutationDelivery(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	delivery := spine.Delivery{
+		Message:  messageFromValues(row.MessageID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
+		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.ActionID, row.SessionID, row.State, row.BaselineRecorded, row.BaselineNativeTurnID, row.NativeTurnID, row.NativeOutcome, row.Attention, row.Role),
 	}
 	return &delivery, nil
 }
@@ -1433,7 +1378,7 @@ func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) er
 	if len(detail) > 4096 {
 		detail = detail[:4096]
 	}
-	return expectOne(s.DB.ExecContext(ctx, `update dorf.jobs set cleanup_attention=nullif($2,'') where id=$1 and cleanup_state<>'complete'`, jobID, detail))
+	return expectOneRows(dbsql.New(s.DB).SetCleanupAttention(ctx, dbsql.SetCleanupAttentionParams{Detail: detail, JobID: jobID}))
 }
 
 func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
@@ -1442,121 +1387,82 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var admissionOpen bool
-	var cleanupState, cleanupTaskID, workflowAttention string
-	if err := tx.QueryRowContext(ctx, `select admission_open,cleanup_state,coalesce(cleanup_task_id,''),coalesce(workflow_attention,'') from dorf.jobs where id=$1 for update`, jobID).Scan(&admissionOpen, &cleanupState, &cleanupTaskID, &workflowAttention); err != nil {
+	queries := dbsql.New(s.DB).WithTx(tx)
+	job, err := queries.GetCleanupJobForUpdate(ctx, jobID)
+	if err != nil {
 		return err
 	}
-	if admissionOpen || cleanupState != string(spine.CleanupScheduled) || workflowAttention != "" {
+	if job.AdmissionOpen || job.CleanupState != spine.CleanupScheduled || job.WorkflowAttention != "" {
 		return fmt.Errorf("cleanup cannot complete while admission, workflow attention, or cleanup scheduling remains unsettled")
 	}
-	if cleanupTaskID == "" {
+	if job.CleanupTaskID == "" {
 		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
 	}
-	var nativeMutations int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.agent_runs where job_id=$1 and role='implement' and state in ('submitting','active','uncertain')`, jobID).Scan(&nativeMutations); err != nil {
+	nativeMutations, err := queries.CountImplementationNativeMutations(ctx, jobID)
+	if err != nil {
 		return err
 	}
 	if nativeMutations != 0 {
 		return fmt.Errorf("cleanup cannot complete with %d unsettled implementation native mutations", nativeMutations)
 	}
-	var unsettled int
-	if err := tx.QueryRowContext(ctx, `select count(*) from dorf.review_resources where job_id=$1 and (route_state<>'revoked' or sandbox_state<>'deleted')`, jobID).Scan(&unsettled); err != nil {
+	unsettled, err := queries.CountUnsettledReviewResources(ctx, jobID)
+	if err != nil {
 		return err
 	}
 	if unsettled != 0 {
 		return fmt.Errorf("cleanup cannot complete with %d retained reviewer resource sets", unsettled)
 	}
-	var sandboxState, routeState string
-	if err := tx.QueryRowContext(ctx, `select coalesce((select state from dorf.sandboxes where job_id=$1),''),coalesce((select state from dorf.routes where job_id=$1),'')`, jobID).Scan(&sandboxState, &routeState); err != nil {
+	resources, err := queries.GetMainResourceStates(ctx, jobID)
+	if err != nil {
 		return err
 	}
-	if (sandboxState != "" && sandboxState != "deleted") || (routeState != "" && routeState != "revoked") {
+	if (resources.SandboxState != "" && resources.SandboxState != "deleted") || (resources.RouteState != "" && resources.RouteState != "revoked") {
 		return fmt.Errorf("cleanup cannot complete before exact Sandbox deletion and route revocation are observed")
 	}
-	if err := expectOne(tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='complete',cleanup_attention=null,workflow_attention=null,cleaned_at=coalesce(cleaned_at,clock_timestamp()) where id=$1 and cleanup_state='scheduled'`, jobID)); err != nil {
+	if err := expectOneRows(queries.CompleteCleanup(ctx, jobID)); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s Store) Actions(ctx context.Context, jobID string) ([]ActionView, error) {
-	rows, err := s.DB.QueryContext(ctx, `select a.id,coalesce(a.message_id,''),a.kind,a.state,coalesce(a.external_id,''),a.scope_key,coalesce(e.digest,'') from dorf.actions a left join dorf.evidence e on e.action_id=a.id where a.job_id=$1 order by a.created_at,a.id`, jobID)
+	rows, err := dbsql.New(s.DB).ListActions(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var actions []ActionView
-	for rows.Next() {
-		var action ActionView
-		if err := rows.Scan(&action.ID, &action.MessageID, &action.Kind, &action.State, &action.ExternalID, &action.Scope, &action.EvidenceDigest); err != nil {
-			return nil, err
-		}
-		actions = append(actions, action)
+	for _, row := range rows {
+		actions = append(actions, ActionView{ID: row.ID, MessageID: row.MessageID, Kind: row.Kind, State: row.State, ExternalID: row.ExternalID, Scope: row.ScopeKey, EvidenceDigest: row.EvidenceDigest})
 	}
-	return actions, rows.Err()
+	return actions, nil
 }
 
 func (s Store) Checks(ctx context.Context, jobID string) ([]spine.Check, error) {
-	rows, err := s.DB.QueryContext(ctx, `select c.id,c.job_id,c.name,c.command,c.revision,c.state,coalesce(c.exit_code,0),coalesce(c.evidence_id,''),coalesce(e.digest,''),coalesce(c.started_at,'epoch'),coalesce(c.finished_at,'epoch') from dorf.checks c left join dorf.evidence e on e.id=c.evidence_id where c.job_id=$1 order by c.started_at nulls last,c.id`, jobID)
+	rows, err := dbsql.New(s.DB).ListChecks(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var checks []spine.Check
-	for rows.Next() {
-		var check spine.Check
-		if err := rows.Scan(&check.ID, &check.JobID, &check.Name, &check.Command, &check.Revision, &check.State, &check.ExitCode, &check.EvidenceID, &check.EvidenceDigest, &check.StartedAt, &check.FinishedAt); err != nil {
-			return nil, err
-		}
-		checks = append(checks, check)
+	for _, row := range rows {
+		checks = append(checks, checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.EvidenceDigest, row.StartedAt, row.FinishedAt))
 	}
-	return checks, rows.Err()
+	return checks, nil
 }
 
 func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, error) {
-	rows, err := s.DB.QueryContext(ctx, `select id,digest,byte_size,media_type,producer,provenance,kind,coalesce(action_id,''),coalesce(check_id,''),coalesce(revision,''),coalesce(started_at,'epoch'),coalesce(finished_at,'epoch') from dorf.evidence where job_id=$1 order by created_at,id`, jobID)
+	rows, err := dbsql.New(s.DB).ListEvidence(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var records []spine.Evidence
-	for rows.Next() {
-		var record spine.Evidence
-		if err := rows.Scan(&record.ID, &record.Digest, &record.ByteSize, &record.MediaType, &record.Producer, &record.Provenance, &record.Kind, &record.ActionID, &record.CheckID, &record.Revision, &record.StartedAt, &record.FinishedAt); err != nil {
-			return nil, err
-		}
-		records = append(records, record)
+	for _, row := range rows {
+		records = append(records, spine.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Provenance: row.Provenance, Kind: row.Kind, ActionID: row.ActionID, CheckID: row.CheckID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
 	}
-	return records, rows.Err()
+	return records, nil
 }
 
 func (s Store) NextWakeSequence(ctx context.Context, jobID string) (int64, error) {
-	var sequence int64
-	err := s.DB.QueryRowContext(ctx, `
-		select coalesce(
-			(
-				select m.sequence
-				from dorf.jobs j
-				join dorf.actions a on a.id=j.setup_action_id
-				join dorf.job_messages m on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
-				where j.id=$1 and j.workflow_phase='setup' and a.kind='repository-setup'
-				  and a.scope_key<>'' and a.state in ('pending','uncertain')
-			),
-			(
-				select min(m.sequence)
-				from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
-				where m.job_id=$1 and m.sequence>1 and ar.native_turn_id is null
-				  and not exists (
-					select 1
-					from dorf.job_messages earlier join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
-					where earlier.job_id=m.job_id and earlier.sequence<m.sequence
-					  and (earlier_run.native_turn_id is null or earlier_run.state not in ('completed','failed','interrupted'))
-				  )
-			),
-			(select coalesce(max(sequence),0)+1 from dorf.job_messages where job_id=$1)
-		)`, jobID).Scan(&sequence)
-	return sequence, err
+	return dbsql.New(s.DB).NextWakeSequence(ctx, jobID)
 }
 
 func expectOne(result sql.Result, err error) error {
@@ -1564,6 +1470,16 @@ func expectOne(result sql.Result, err error) error {
 		return err
 	}
 	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func expectOneRows(rows int64, err error) error {
 	if err != nil {
 		return err
 	}

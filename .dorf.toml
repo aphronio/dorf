@@ -1,6 +1,6 @@
 [commands]
 prepare = "scripts/dev/prepare.sh"
-check = "go test ./... && go vet ./..."
+check = "scripts/dev/check.sh"
 smoke = "mkdir -p .dorf/bin && go build -o .dorf/bin/dorf ./cmd/dorf && .dorf/bin/dorf version && go version -m .dorf/bin/dorf"
 
 [agent.codex]

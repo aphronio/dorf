@@ -265,6 +265,48 @@ create table dorf.review_resources (
     sandbox_deleted_at timestamptz
 );
 
+create view dorf.review_run_projection as
+select
+    ar.id,
+    ar.job_id,
+    coalesce(ar.message_id,'') as message_id,
+    ar.action_id,
+    coalesce(ar.session_id,'') as session_id,
+    ar.state,
+    (ar.baseline_native_turn_id is not null)::boolean as baseline_recorded,
+    coalesce(ar.baseline_native_turn_id,'') as baseline_turn_id,
+    coalesce(ar.native_turn_id,'') as native_turn_id,
+    coalesce(ar.native_outcome,'') as native_outcome,
+    coalesce(ar.attention,'') as attention,
+    ar.role,
+    coalesce(ar.revision,'') as revision,
+    coalesce(ar.capability,'') as capability,
+    coalesce(ar.workspace,'') as workspace,
+    coalesce(ar.input_contract,'') as input_contract,
+    coalesce(ar.claim_evidence_id,'') as claim_evidence_id,
+    coalesce(ar.observed_evidence_id,'') as observed_evidence_id,
+    ar.started_at,
+    ar.finished_at,
+    ar.input_tokens,
+    ar.cached_input_tokens,
+    ar.output_tokens,
+    ar.cost_microusd,
+    ar.usage_available,
+    ar.yield_count,
+    coalesce(rr.sandbox_name,'') as reviewer_sandbox_id,
+    coalesce(rr.route_id,'') as reviewer_route_id,
+    coalesce(rr.app_server_id,'') as reviewer_app_server,
+    coalesce(rr.ownership_nonce,'') as reviewer_owner_nonce,
+    coalesce(rr.submission_nonce,'') as submission_nonce,
+    coalesce(rr.input_digest,'') as input_digest,
+    coalesce(rr.revision_tree,'') as revision_tree,
+    coalesce(rr.sandbox_state,'') as reviewer_sandbox_state,
+    coalesce(rr.route_state,'') as reviewer_route_state,
+    coalesce(rr.checkout_state,'') as checkout_state,
+    coalesce(rr.post_review_state,'') as post_review_state
+from dorf.agent_runs ar
+left join dorf.review_resources rr on rr.run_id=ar.id;
+
 alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
 
 create table dorf.github_proposals (

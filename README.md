@@ -54,13 +54,18 @@ task state, GitHub proposal/outcome facts, and cleanup state.
 
 ## Development
 
-The repository contract is Go-only:
+The product remains one Go application; its repository contract also compiles dedicated PostgreSQL
+query files:
 
 ```bash
 scripts/dev/prepare.sh
-go test ./...
-go vet ./...
+scripts/dev/check.sh
 scripts/build-release.sh dist/release
 ```
+
+Preparation installs the pinned `sqlc` tool and converges the disposable PostgreSQL database.
+The check command rejects stale generated query code, prepares every query against that live schema,
+then runs the Go test and vet suites. Regenerate private query code with
+`mise run sql:generate` after editing `internal/postgres/queries` or the baseline schema.
 
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).

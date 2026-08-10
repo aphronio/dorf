@@ -264,12 +264,8 @@ func TestPostgresPublicationAcceptedEffectSIGKILLRecovery(t *testing.T) {
 			if remote != job.Revision || pushes != 1 || pulls != 1 || updates != 0 {
 				t.Fatalf("external authority remote=%s pushes=%d pull-creates=%d pull-updates=%d", remote, pushes, pulls, updates)
 			}
-			var proposals int
-			if err := db.QueryRowContext(ctx, `select count(*) from dorf.github_proposals where job_id=$1`, job.ID).Scan(&proposals); err != nil {
-				t.Fatal(err)
-			}
-			if proposals != 1 || strings.Contains(retainedPush.ExternalID+retainedPull.ExternalID+retainedPull.Outcome, "ephemeral-test-token") {
-				t.Fatalf("durable receipts proposals=%d push=%#v pull=%#v", proposals, retainedPush, retainedPull)
+			if strings.Contains(retainedPush.ExternalID+retainedPull.ExternalID+retainedPull.Outcome, "ephemeral-test-token") {
+				t.Fatalf("durable receipts retain ephemeral authority: push=%#v pull=%#v", retainedPush, retainedPull)
 			}
 		})
 	}

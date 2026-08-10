@@ -5,6 +5,8 @@ readonly GO_VERSION="1.26.5"
 readonly GO_SHA256="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
 readonly ABSURD_VERSION="0.5.0"
 readonly ABSURDCTL_SHA256="e9c37151bf3d1656fcc9b018dc90a2ac6972a31bda77329d8c929da34bb0724e"
+readonly SQLC_VERSION="1.31.1"
+readonly SQLC_SHA256="497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354"
 readonly DEFAULT_TEST_DATABASE_URL="postgresql:///dorf_test?host=/var/run/postgresql"
 
 temporary_directory=""
@@ -84,6 +86,19 @@ install_absurdctl() {
   hash -r
 }
 
+install_sqlc() {
+  if command -v sqlc >/dev/null 2>&1 && [[ "$(sqlc version)" == "v$SQLC_VERSION" ]]; then
+    return
+  fi
+  local archive="$temporary_directory/sqlc.tar.gz"
+  curl -LsSf -o "$archive" \
+    "https://github.com/sqlc-dev/sqlc/releases/download/v$SQLC_VERSION/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+  printf '%s  %s\n' "$SQLC_SHA256" "$archive" | sha256sum --check --strict
+  tar -xzf "$archive" -C "$temporary_directory" sqlc
+  as_root install -m 0755 "$temporary_directory/sqlc" /usr/local/bin/sqlc
+  hash -r
+}
+
 run_as_postgres() {
   if [[ "$(id -u)" -eq 0 ]] && command -v runuser >/dev/null 2>&1; then
     runuser -u postgres -- "$@"
@@ -125,6 +140,7 @@ temporary_directory="$(mktemp -d)"
 install_system_packages
 install_go
 install_absurdctl
+install_sqlc
 
 if [[ -z "${DORF_TEST_DATABASE_URL:-}" ]]; then
   ensure_local_test_database
@@ -147,10 +163,12 @@ if ! grep -Eq '(^|[[:space:]])0\.5\.0($|[[:space:]])' <<<"$schema_version"; then
 fi
 
 go mod download
+DORF_DATABASE_URL="$test_database_url" go run ./cmd/dorf migrate
 
 printf '%s\n' \
   "Dorf repository preparation complete." \
   "  Go: $(go version)" \
   "  Absurd schema: $ABSURD_VERSION" \
+  "  sqlc: $(sqlc version)" \
   "  PostgreSQL: $(psql --version)" \
   "  DORF_TEST_DATABASE_URL=$test_database_url"

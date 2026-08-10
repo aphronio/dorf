@@ -73,8 +73,8 @@ Use the GitHub CLI (`gh`) for GitHub operations such as viewing, closing, or upd
 When creating or editing GitHub issue or PR bodies that contain Markdown backticks, write the body to a temporary file and pass it with `gh --body-file` or `gh ... --body-file`. Do not put backticked Markdown directly inside a shell command string; the shell will treat backticks as command substitution.
 
 ```bash
-go test ./...
-go vet ./...
+scripts/dev/prepare.sh
+scripts/dev/check.sh
 go build -o .dorf/bin/dorf ./cmd/dorf
 .dorf/bin/dorf version
 ```
