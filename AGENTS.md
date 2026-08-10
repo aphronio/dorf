@@ -32,7 +32,7 @@ Keep this file as the compact operating guide. Read deeper context only when the
   official latest-validated Codex image, guided Incus installation, convergent setup, and
   agent-readable diagnostics; read before changing host setup, image distribution, default
   deployment configuration, or setup troubleshooting.
-- [sqlc Working Guide](docs/implementation/sqlc.md): stable query, transaction, type-mapping, generation,
+- [sqlc Working Guide](docs/project/sqlc.md): stable query, transaction, type-mapping, generation,
   and verification patterns; read before changing the PostgreSQL schema, named queries, generated
   query package, or `postgres.Store` mappings.
 - [Incus Image](docs/implementation/incus-image.md): local VM provisioning and ChatGPT-subscription authentication;

@@ -8,7 +8,7 @@
 | Understand product vocabulary | [North Star](project/north-star.md) |
 | Understand durable authority and recovery | [Greenfield architecture](project/architecture.md) |
 | Understand accepted choices | [Decision log](project/decisions.md) |
-| Change PostgreSQL queries safely | [sqlc working guide](implementation/sqlc.md) |
+| Change PostgreSQL queries safely | [sqlc working guide](project/sqlc.md) |
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
 | Build the credential-free Incus image | [Incus image](implementation/incus-image.md) |
 
