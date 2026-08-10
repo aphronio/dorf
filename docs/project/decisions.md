@@ -1194,7 +1194,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   idempotent reaction endpoint and a stable invisible completion marker make replay safe without a
   new core fact. Merge records acceptance, close without merge records rejection, and explicit Dorf
   abandonment remains available. Dorf stores Messages, Proposal, and Outcome, but does not mirror a
-  comment cursor or mutable pull-request state.
+  comment cursor or mutable pull-request state. Every durable wake or timeout performs a fresh
+  reconciliation pass; no in-memory poll counter or checkpointed GitHub observation is part of the
+  workflow contract.
 - **Why:** Push, propose, wait, and continue are one product story. Giving publication its own durable
   scheduler duplicated retry and attachment mechanics already owned by Absurd. Treating GitHub input
   like any other Message also lets the original implementation Session decide whether to act without

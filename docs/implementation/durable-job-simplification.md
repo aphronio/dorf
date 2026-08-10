@@ -284,6 +284,7 @@ Goal: make an exact-Revision Proposal the direct successor of readiness.
 - [x] Consolidate duplicate publication adoption tests around Action and Proposal invariants.
 - [x] Turn trusted owner/collaborator pull-request comments into idempotent human Messages.
 - [x] Acknowledge accepted feedback and reconcile one exact-Revision completion reply at the GitHub edge.
+- [x] Re-observe GitHub after each durable wake or timeout without a second poll counter or observation Step.
 - [x] Observe merge as acceptance and close without merge as rejection.
 - [x] Dogfood comment feedback and a terminal pull-request outcome through one real Dorf Job.
 

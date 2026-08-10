@@ -47,8 +47,6 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
-		pollRevision := ""
-		poll := 0
 		for {
 			disposition, err := RunJob(ctx, service, store, proposal, params.JobID)
 			if err != nil {
@@ -62,14 +60,10 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 				return Result{}, err
 			}
 			if job.WorkflowPhase == "published" {
-				if pollRevision != job.Revision {
-					pollRevision, poll = job.Revision, 0
-				}
-				observation, err := observeProposalStep(ctx, proposal, job.ID, job.Revision, poll)
+				observation, err := observeProposal(ctx, proposal, job.ID, job.Revision)
 				if err != nil {
 					return Result{}, err
 				}
-				poll++
 				if observation.Outcome != "" {
 					task := absurd.MustTaskContext(ctx)
 					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
@@ -87,7 +81,7 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
 			if job.WorkflowPhase == "published" {
-				options.StepName = fmt.Sprintf("dorf/proposal-wake/v1/%s/%020d", job.Revision, poll-1)
+				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", job.Revision, sequence)
 				options.Timeout = proposal.PollInterval
 			}
 			wake, err := absurd.AwaitEvent[Wake](ctx, WakeEvent(params.JobID, sequence), options)
@@ -118,18 +112,15 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func observeProposalStep(ctx context.Context, proposal ProposalRuntime, jobID, revision string, poll int) (ProposalObservationResultV1, error) {
-	name := fmt.Sprintf("dorf/proposal-observe/v1/%s/%s/%020d", jobID, revision, poll)
-	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (ProposalObservationResultV1, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (ProposalObservationResultV1, error) {
-			return proposal.Observe(workCtx, jobID, revision, poll)
-		})
+func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revision string) (ProposalObservationResultV1, error) {
+	result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (ProposalObservationResultV1, error) {
+		return proposal.Observe(workCtx, jobID, revision)
 	})
 	if err != nil {
 		return ProposalObservationResultV1{}, err
 	}
-	if result.Revision != revision || result.Poll != poll {
-		return ProposalObservationResultV1{}, fmt.Errorf("proposal observation conflicts with Revision %s poll %d", revision, poll)
+	if result.Revision != revision {
+		return ProposalObservationResultV1{}, fmt.Errorf("proposal observation conflicts with Revision %s", revision)
 	}
 	return result, nil
 }

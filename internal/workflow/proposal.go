@@ -35,12 +35,11 @@ type ProposalRuntime struct {
 
 type ProposalObservationResultV1 struct {
 	Revision    string               `json:"revision"`
-	Poll        int                  `json:"poll"`
 	Outcome     spine.JobOutcomeKind `json:"outcome,omitempty"`
 	NewMessages int                  `json:"new_messages"`
 }
 
-func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string, poll int) (ProposalObservationResultV1, error) {
+func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (ProposalObservationResultV1, error) {
 	job, err := r.Store.Job(ctx, jobID)
 	if err != nil {
 		return ProposalObservationResultV1{}, err
@@ -63,7 +62,7 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string, po
 	if err := validateExactProposal(*proposal, pull); err != nil {
 		return ProposalObservationResultV1{}, err
 	}
-	result := ProposalObservationResultV1{Revision: job.Revision, Poll: poll}
+	result := ProposalObservationResultV1{Revision: job.Revision}
 	if pull.State == "closed" {
 		result.Outcome = spine.OutcomeRejected
 		if pull.Merged {
