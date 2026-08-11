@@ -1,40 +1,60 @@
 # Dorf
 
-Dorf is a local-first control plane that carries one coding goal durably through an isolated
-Incus Sandbox to an exact-Revision GitHub pull-request proposal.
+**Dorf is the open-source control plane for durable agent Jobs on infrastructure you control.**
 
-The supported product is one Go application. PostgreSQL stores Dorf facts, Absurd schedules
-durable work, Codex app-server performs bounded agent work, and Git/GitHub remain authoritative for
-the proposal. Dorf does not use Python, SQLite, a hosted durability account, or the host Docker
-socket.
+Dorf uses code for predictable work and isolated agents for judgment. Jobs can run in the
+background, recover from failure, and show evidence of what happened.
+
+Today, Dorf supports one coding workflow: a Job starts with a goal and ends with a verified pull
+request.
+
+```text
+Coding Job
+    |
+    v
++------------------------------------------------------------+
+|                    Dorf coding workflow                    |
+|                                                            |
+|  Isolate -> Implement -> Verify -> Review -> Pull request  |
+|                                                            |
+|       Durable recovery and evidence across every step      |
++------------------------------------------------------------+
+```
+
+| Direction | Works today |
+| --- | --- |
+| Many kinds of Jobs | Coding Job to PR |
+| Choice of agent | Codex |
+| Choice of Sandbox | Local Incus on x86_64 Linux |
+| Many ways to start Jobs | CLI |
 
 ## Build
 
-Dorf currently supports x86_64 Linux hosts with a local Incus daemon. macOS cannot host the local
-Incus VM daemon and is not a supported Dorf host.
+Dorf currently runs on x86_64 Linux with local Incus. macOS is not supported as a host.
 
 ```bash
 go build -o ./bin/dorf ./cmd/dorf
 ./bin/dorf version
 ```
 
-Release archives contain the same static x86_64 Linux binary. See
+Releases contain the same x86_64 Linux binary. See
 [Getting started](docs/getting-started.md) for PostgreSQL, Incus, the credential-free Codex image,
 Provider Gateway, GitHub App, and repository preparation.
 
 ## Product model
 
 ```text
-A Job changes code in a Sandbox.
-Actions and Checks do deterministic work.
-AgentRuns do judgment.
-Evidence retains observed proof.
+A client starts a Job with a clear goal.
+Code handles predictable steps.
+Agents handle judgment inside an isolated Sandbox.
+Dorf records evidence and cleans up resources.
 ```
 
-One admitted Job owns its implementation Sandbox and clone, branch, resumable implementation Thread,
-any selected review Sandboxes, an exact Proposal when published, explicit Outcome, and observable cleanup. Client and
-worker processes may disappear; stable identities and external reconciliation prevent duplicate
-turns, Sandboxes, pushes, and pull requests.
+Each coding Job gets its own Sandbox, clone, branch, checks, review, and pull request. Dorf can resume
+the Job without repeating completed work.
+
+Coding is the first workflow, not the final limit. A second real workflow, such as research, will
+show which parts should become a shared API.
 
 The main commands are:
 
@@ -49,26 +69,17 @@ dorf abandon JOB
 dorf cleanup JOB
 ```
 
-`inspect` shows the current work and separates agent claims from observed Actions, Checks,
-Revision-pinned Evidence, GitHub proposal/outcome facts, and cleanup state. Use `absurdctl list-tasks`
-and `absurdctl dump-task` for task attempts, checkpoints, waits, and leases.
+`inspect` shows what happened, what is running, what needs attention, and what still needs cleanup.
+Use `absurdctl list-tasks` and `absurdctl dump-task` for scheduler details.
 
 ## Development
 
-The product remains one Go application; its repository contract also compiles dedicated PostgreSQL
-query files:
+The project is one Go application with generated PostgreSQL query code:
 
 ```bash
 scripts/dev/prepare.sh
 scripts/dev/check.sh
 scripts/build-release.sh dist/release
 ```
-
-Preparation installs the pinned `sqlc` tool and converges the disposable PostgreSQL database.
-The check command rejects stale generated query code, prepares every query against that live schema,
-then runs the Go test and vet suites. Regenerate private query code with
-`mise run sql:generate` after editing `internal/postgres/queries` or the baseline schema.
-Developers who already use mise can install the versioned Go, PostgreSQL, sqlc, and `absurdctl`
-toolchain with `mise install`; the preparation script remains the portable setup path.
 
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).

@@ -5,6 +5,8 @@ build/
 .dorf/
 .firecrawl/
 .reference/
+__pycache__/
+*.py[cod]
 
 # Local credentials and environment overrides
 .env

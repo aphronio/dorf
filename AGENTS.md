@@ -1,6 +1,8 @@
 # Dorf Guidance
 
-Dorf is a local-first control plane for durable coding Jobs in isolated Sandboxes.
+Dorf is the open-source control plane for durable agent Jobs on infrastructure its owner controls.
+Coding-to-PR is the first verified workflow; common workflow-authoring seams must be earned by a
+materially different second implementation.
 
 ## Context Map
 
@@ -10,9 +12,9 @@ Keep this file as the compact operating guide. Read deeper context only when the
   introducing a new abstraction, backend, workflow, or managed-repo integration, and before scoping
   or declaring complete any implementation slice. Its vertical-slice rule defines what counts as a
   terminal.
-- [North Star](docs/project/north-star.md): accepted greenfield product vocabulary, deterministic/agentic
-  boundary, coding-Job experience, and high-level flow. Read for product direction and DX taste; not an API
-  spec or backlog.
+- [North Star](docs/project/north-star.md): accepted durable-Job product vocabulary,
+  deterministic/agentic boundary, workflow examples, current verified slice, and high-level
+  experience. Read for product direction and DX taste; not an API spec or backlog.
 - [Greenfield Architecture](docs/project/architecture.md): accepted Go, Absurd, and PostgreSQL boundaries,
   authority model, recovery rules, local/hosted shape, and Python cutover constraints. Read before changing
   runtime storage, durable sequencing, service composition, or the replacement strategy.
@@ -47,9 +49,13 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 
 ## Working Rules
 
-- The coding-to-PR workflow is the only current requirements driver. Clients compose the same application
-  boundary rather than creating a second Dorf workflow. Do not add
-  support for hypothetical research, app-builder, deployment, swarm, provider, or other workflows.
+- Coding-to-PR is the only currently verified workflow and remains the implementation requirements
+  driver until a bounded issue deliberately begins a materially different second vertical slice.
+  Research is the candidate next proof, not permission to prebuild a generic workflow API. Add its
+  natural facts first and extract only behavior genuinely shared with coding.
+- Trusted clients such as the CLI or Agent0 compose the same application boundary. CI, HTTP,
+  webhooks, MCP, schedules, Slack, and user interfaces are trigger or presentation adapters, not
+  workflow authorities.
 - The Provider Gateway is a sibling application subsystem, not a provider registry in the durable
   Job core. The ChatGPT-to-Codex route and scoped client routes are its current implementation
   drivers; validate each later provider and wire dialect before claiming support.
@@ -60,7 +66,8 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
   spending agent context. Keep Dorf integration at the development-tooling seam and out of
   managed product code.
 - Incus is the first Sandbox provider. Codex app-server is the first Agent runner;
-  tmux and SSH remain break-glass observation and takeover tools.
+  tmux and SSH remain break-glass observation and takeover tools. Describe multiple Harnesses and
+  Sandboxes as product direction until a real second implementation proves each seam.
 - The Go and Absurd replacement has no compatibility or old-data requirement. Do not add SQLite/PostgreSQL
   dual writes, migrations, Python facades, deprecated CLI paths, or tests that preserve superseded behavior.
 
@@ -83,3 +90,5 @@ go build -o .dorf/bin/dorf ./cmd/dorf
 ```
 
 Do not add broad abstractions without a concrete second implementation or an observed workflow need.
+Workflow evaluations belong to each workflow contract from its first real slice; a public authoring
+API, plugin system, or marketplace requires further external proof.
