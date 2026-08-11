@@ -19,6 +19,18 @@ nullable copies of coding fields are not evidence of a common API.
 This is the building-block posture, not a promise to build every possible workflow. Make one Job
 trustworthy, then let real workflows compose those simple blocks into larger useful machinery.
 
+## Build from conviction, not competitor parity
+
+Competitors are evidence about the market, not a specification for Dorf. Study them to understand
+user expectations, constraints, and failure modes. Do not turn their feature lists, categories, or
+architecture into our roadmap.
+
+Dorf must earn its existence through a clear point of view: owner-controlled durable custody for
+bounded agent Jobs, with deterministic mechanics, isolated judgment, observed evidence, and honest
+recovery. Build the smallest useful expression of that belief, then let dogfood and real users reveal
+what comes next. If a proposed feature only makes Dorf resemble another agent platform, that is not
+a reason to build it.
+
 ## Durable Jobs, replaceable processes, isolated Sandboxes
 
 A Job is the durable unit of user intent. Its initiating client, controller, task-executor process, and
@@ -167,3 +179,7 @@ His [approach to building large technical
 projects](https://mitchellh.com/writing/building-large-technical-projects) frames execution: choose
 small problems with visible results, solve only enough to reach the next runnable demonstration,
 adopt the software early, and let dogfood reveal what to build next.
+
+Jason Fried's [advice on building in a competitive
+market](https://x.com/jasonfried/status/2087213055881236927) frames competitive posture: learn from
+the market without letting competitors define what Dorf should become or why it should exist.
