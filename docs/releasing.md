@@ -1,43 +1,34 @@
-# Releasing Dorf to Python package indexes
+# Releasing Dorf
 
-Dorf publishes verified Python distributions from GitHub Actions with PyPI Trusted Publishing.
-Maintainers do not create or store long-lived PyPI API tokens.
+Dorf releases one x86_64 Linux Go application and the credential-free Incus VM image proven with
+that application. There is no Python package or package-index publication.
 
-## One-time account and repository setup
-
-1. Create separate accounts on [PyPI](https://pypi.org/account/register/) and
-   [TestPyPI](https://test.pypi.org/account/register/). Verify each primary email, enable two-factor
-   authentication, and store the recovery codes securely.
-2. Rename the GitHub repository to `aphronio/dorf` and make it public.
-3. Create GitHub environments named `testpypi` and `pypi`. Protect the production environment as
-   appropriate for the repository's maintainer model.
-4. On TestPyPI, register a pending Trusted Publisher with project `dorf`, owner `aphronio`,
-   repository `dorf`, workflow `publish-python.yml`, and environment `testpypi`.
-5. On PyPI, register the same pending publisher with environment `pypi`.
-
-A pending Trusted Publisher can create the project on first publication, but it does not reserve
-the project name. Do not create the project or an API token manually.
-
-## Rehearsal and release
-
-Before tagging, run the local package gate:
+From one clean source commit already available on GitHub:
 
 ```bash
-scripts/verify-python-package.sh dist
+scripts/dev/prepare.sh
+scripts/dev/check.sh
+scripts/build-release.sh dist/room-image
+
+PROVIDER_CONNECTION=personal-chatgpt \
+GITHUB_INSTALLATION_ID=INSTALLATION_ID \
+  scripts/incus/publish-dorf-codex-release.sh
 ```
 
-The script builds the wheel and source distribution, applies strict metadata checks, and
-clean-installs both artifacts.
+The local publisher retains the owner's provider credential on the host. It builds a fresh image,
+checks the credential boundary, admits a real Go Job against the exact source commit, completes a
+real Codex turn, proves exact cleanup, builds the static Go archive/checksum, creates one complete
+draft containing all four assets, and publishes it once. GitHub release immutability and `gh
+release verify[-asset]` are required.
 
-Run the `Publish Python package` workflow manually to publish the current revision to TestPyPI.
-Install and exercise that exact TestPyPI version before production publication.
+Release tags are exactly `v` plus `internal/version.Version`. The assets are:
 
-For production, set the version in `pyproject.toml` and `src/dorf/__init__.py`, merge the release
-commit, and publish a GitHub release whose tag is exactly `v` followed by that version, such as
-`v0.1.2`. The local Room-image publisher creates the complete draft with the credential-free Incus
-archive and compatibility manifest, then publishes it once; that publication triggers this trusted
-Python workflow. The workflow rejects a release tag that does not match the package metadata.
+```text
+dorf_VERSION_linux_x86_64.tar.gz
+dorf_VERSION_checksums.txt
+dorf-codex-incus-vm-v4-x86_64.tar.gz
+dorf-codex-incus-vm-v4-x86_64.json
+```
 
-See PyPI's documentation for
-[Trusted Publishing from GitHub Actions](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
-and [creating a project through OIDC](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
+Do not publish from a dirty checkout, retag a different Revision, upload provider state, or publish
+the draft before the real Go terminal and cleanup pass.

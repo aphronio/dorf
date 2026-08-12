@@ -18,7 +18,7 @@ BUILD_VM="dorf-codex-build-$BUILD_ID"
 PROBE_VM="dorf-codex-probe-$BUILD_ID"
 VALIDATION_VM="dorf-coder-workstation-proof-$BUILD_ID"
 METADATA_PATH="$OUTPUT_DIR/image.json"
-ARCHIVE_BASENAME="dorf-codex-incus-vm-v3-x86_64"
+ARCHIVE_BASENAME="dorf-codex-incus-vm-v4-x86_64"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
 EVIDENCE_DIR="$OUTPUT_DIR/workstation-evidence"
 EVIDENCE_POLICY="${EVIDENCE_POLICY:-retain}"
@@ -27,6 +27,8 @@ if [[ "$EVIDENCE_POLICY" != "retain" && "$EVIDENCE_POLICY" != "remove" ]]; then
   echo "EVIDENCE_POLICY must be retain or remove." >&2
   exit 2
 fi
+
+mkdir -p "$OUTPUT_DIR"
 
 cleanup() {
   if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
@@ -44,13 +46,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/validate-dorf-codex-image.py" \
-  --provider-connection "$PROVIDER_CONNECTION" \
-  --network "$NETWORK" \
-  --preflight-only
+go -C "$PROJECT_ROOT" build -o "$OUTPUT_DIR/dorf-release-proof" ./cmd/dorf
+"$OUTPUT_DIR/dorf-release-proof" doctor --provider "$PROVIDER_CONNECTION"
 
-mkdir -p "$OUTPUT_DIR"
 rm -f "$METADATA_PATH" "$ARCHIVE_PATH" \
   "$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
 
@@ -77,6 +75,10 @@ incus exec "$PROBE_VM" -- rm -f /tmp/assert-dorf-codex-credential-free.sh
 incus exec "$PROBE_VM" -- bash -lc '
   test -x "$(command -v codex)"
   test -x "$(command -v git)"
+  test -x "$(command -v go)"
+  test -x "$(command -v gofmt)"
+  test "$(go version | awk '\''{print $3}'\'')" = "$(sed -n '\''s/.*\"go\": \"\([^\"]*\)\".*/\1/p'\'' /usr/local/share/dorf/image.json)"
+  gofmt </dev/null >/dev/null
   test -x "$(command -v node)"
   ! command -v npm >/dev/null
   test -x "$(command -v uv)"
@@ -93,17 +95,15 @@ if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 rm -rf -- "$EVIDENCE_DIR"
-uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/validate-dorf-coding-workstation.py" \
-  --image "$CANDIDATE_ALIAS" \
-  --image-fingerprint "$CANDIDATE_FINGERPRINT" \
-  --provider-connection "$PROVIDER_CONNECTION" \
-  --source-commit "$SOURCE_COMMIT" \
-  --proof-id "$BUILD_ID" \
-  --project-root "$PROJECT_ROOT" \
-  --evidence-dir "$EVIDENCE_DIR" \
-  --network "$NETWORK" \
-  --root-disk-size "$ROOT_DISK_SIZE"
+"$SCRIPT_DIR/validate-dorf-coding-workstation.sh" \
+  "$CANDIDATE_ALIAS" \
+  "$CANDIDATE_FINGERPRINT" \
+  "$PROVIDER_CONNECTION" \
+  "$SOURCE_COMMIT" \
+  "$BUILD_ID" \
+  "$EVIDENCE_DIR" \
+  "$NETWORK" \
+  "$ROOT_DISK_SIZE"
 
 if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
   rm -rf -- "$EVIDENCE_DIR"
@@ -122,21 +122,19 @@ if [[ -z "$CODEX_VERSION" ]]; then
   echo "Candidate metadata did not contain a Codex version." >&2
   exit 1
 fi
-PACKAGE_VERSION="$(
-  uv run --project "$PROJECT_ROOT" python -c \
-    'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])'
-)"
-RELEASE_TAG="${RELEASE_TAG:-v$PACKAGE_VERSION}"
+PRODUCT_VERSION="$("$OUTPUT_DIR/dorf-release-proof" version | awk '{print $2}')"
+RELEASE_TAG="${RELEASE_TAG:-v$PRODUCT_VERSION}"
 VALIDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-uv run --project "$PROJECT_ROOT" python \
-  "$SCRIPT_DIR/create-dorf-codex-manifest.py" \
+"$OUTPUT_DIR/dorf-release-proof" release-manifest \
   --archive "$ARCHIVE_PATH" \
   --image-metadata "$METADATA_PATH" \
   --release-tag "$RELEASE_TAG" \
   --source-commit "$SOURCE_COMMIT" \
   --validated-at "$VALIDATED_AT" \
   --output "$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
+
+rm -f "$OUTPUT_DIR/dorf-release-proof"
 
 printf '%s\n' \
   "Candidate ready: $RELEASE_TAG" \

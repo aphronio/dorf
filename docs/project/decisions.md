@@ -108,7 +108,7 @@ issues rather than here.
 
 ## D009 — Coding workflow is the only requirements driver
 
-- **Status:** Accepted — 2026-07-22
+- **Status:** Accepted — 2026-07-22; second-workflow gate refined by D062 — 2026-08-11
 - **Decision:** Extract and dogfood the runtime through coding-to-PR before selecting another workflow,
   environment provider, or interactive agent.
 - **Why:** A dependable building block emerges from real pressure, not speculative generality.
@@ -214,7 +214,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D021 — Situation-first inspection with explicit provenance
 
-- **Status:** Accepted — 2026-07-26
+- **Status:** Accepted — 2026-07-26; product-history shape refined by D061 — 2026-08-10
 - **Decision:** `inspect` defaults to a read-only Job pulse built from Dorf-owned lifecycle and
   run facts plus a fresh Room availability observation. Worker claims are a separate provenance
   channel and remain explicitly absent until a structured self-report boundary exists; Dorf
@@ -288,8 +288,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D024 — Controller-mediated Job context and validated Worker reports
 
-- **Status:** Accepted after ecosystem research and human design review — 2026-07-26; reporting
-  scope fenced by Assignment under D025 — 2026-07-27
+- **Status:** Superseded by the Go core in D047, Message/AgentRun boundary in D052, and derived product
+  history in D061 — 2026-08-10
 - **Decision:** Project approved Job context into the Room as a detached copy with no write-back path;
   never mount the external Job directory writable. Give the Worker a Room-local `dorf-report`
   command, described through harness-level runtime capability guidance that contains no task or
@@ -662,21 +662,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   posture changes; Dorf becomes remote or multi-user (add OIDC-style sandbox identity); or the
   Droid-leg validation produces contradicting evidence.
 
-## D036 — Shared Provider Gateway for trusted clients and Dorf Rooms
+## D036 — Shared Provider Gateway for trusted clients and Dorf Sandboxes
 
-- **Status:** Accepted direction — 2026-07-29
-- **Decision:** Add `dorf.provider_gateway` as a sibling application subsystem, outside
-  `dorf.runtime`. Its programmatic `ProviderGateway` facade manages durable upstream Provider
+- **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08
+- **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
+  Job core. Its programmatic boundary manages durable upstream Provider
   Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
-  Dorf composes it for Room routes; trusted host applications may import the same facade for their
+  Dorf composes it for Sandbox routes; trusted host applications may use the same authority for their
   own model routes. Connecting through either surface reaches one backing authority, so upstream
-  subscription or API credentials are never copied into clients or Rooms. CLIProxyAPI is the first
+  subscription or API credentials are never copied into clients or Sandboxes. CLIProxyAPI is the first
   concrete daemon backend; D035 is the first validated ChatGPT-to-Codex route.
+- **Location authority:** Deployment configuration resolves one Gateway data directory using
+  `XDG_DATA_HOME` (falling back to `~/.local/share`) or an explicit operator override. Provider setup,
+  doctor, admission, and task executors use that same adapter. Admission checks the named connection
+  before creating a durable Job; the Job stores only the connection name, never a host path.
 - **Local and remote posture:** The current broker has one concrete bind address. Host-only use may
-  bind loopback; Codex Room composition binds the selected private Incus bridge address so both the
-  host and attached Rooms can reach it, never a wildcard or LAN address. An interface-scoped
+  bind loopback; Codex Sandbox composition binds the selected private Incus bridge address so both the
+  host and attached Sandboxes can reach it, never a wildcard or LAN address. An interface-scoped
   firewall rule admits the gateway port only from the bridge. Connection and route semantics do not
-  depend on that location. A real remote Room may use the same route shape through a private
+  depend on that location. A real remote Sandbox may use the same route shape through a private
   authenticated transport, but remote exposure, workload identity, and multi-user authority remain
   unimplemented until a concrete deployment requires them.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
@@ -684,17 +688,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
   concurrency behavior before advertising it. Do not add automatic pooling, fallback, quota
   scheduling, or a speculative capability matrix.
-- **Why:** Host applications and Dorf Rooms are distinct consumers of the same model-provider
+- **Why:** Host applications and Dorf Sandboxes are distinct consumers of the same model-provider
   connection. Sharing a typed facade and broker authority gives them login-once behavior without
-  coupling provider state to Worker or Job semantics, duplicating credentials, or forcing model
-  streams through the Python runtime.
+  coupling provider state to Job semantics, duplicating credentials, or forcing model streams
+  through the durable Job worker.
 - **Reconsider when:** A second broker backend proves a smaller shared interface; an actual remote
   deployment requires a network authority; a provider cannot fit connection-plus-route semantics
   without distortion; or observed multi-account pressure justifies routing policy.
 
 ## D037 — New core Rooms use a global deployment profile, never a repository contract
 
-- **Status:** Accepted and implemented for core configuration slice #172 — 2026-07-30
+- **Status:** Superseded by D047 — 2026-08-08
 - **Decision:** New caller-managed Rooms use one host-local deployment profile under the XDG config
   boundary. The profile selects the built-in Environment configuration and names the default
   Provider Connection; it contains no provider credential, route key, Room lifecycle, or Job state.
@@ -714,49 +718,48 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Provider Connections require an interactive default chooser, or a remote/multi-user authority
   makes a per-host XDG profile the wrong ownership boundary.
 
-## D038 — Official Room images are immutable GitHub Release assets
+## D038 — Official Sandbox images are immutable GitHub Release assets
 
 - **Status:** Accepted and implemented — 2026-07-31; local-first and combined product-release
-  boundaries revised during public activation — 2026-08-04
+  boundaries revised during public activation — 2026-08-04; Go artifact boundary at D047 cutover
+  — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08
 - **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
-  exactly one Incus archive and one compatibility manifest for that architecture. One repo-owned
+  exactly one Go x86_64 Linux archive/checksum and one Incus archive/compatibility manifest. One repo-owned
   local command builds from an immutable base fingerprint, selects and records the current Codex npm
   release, proves the credential boundary, and completes the real coding tracer from clone and
   repo-owned preparation through an implementation turn, checks, scoped routing,
-  content-addressed evidence, and exact cleanup. The image includes Git, uv, and the Pi tool used by
-  the separate DeepSeek diff role but removes build-only npm. The command exports the untouched candidate and
+  content-addressed evidence, and exact cleanup. The image includes Git, Go, Node, uv, and Codex but
+  removes build-only npm. The command exports the untouched candidate and
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
 - **Artifact identity:** Attach the image to the normal immutable `vX.Y.Z` Dorf product release
-  instead of creating machine-only releases in the human-facing release feed. Manifest schema 3
-  uses the x86_64 assets `dorf-codex-incus-vm-v3-x86_64.tar.gz` and
-  `dorf-codex-incus-vm-v3-x86_64.json`; it requires `environment: incus`, the complete Git, Node,
-  and uv coding-workstation inventory, and the verified pinned uv release-archive digest. The
-  schema-3 installer selects only that asset channel and rejects earlier lean image schemas. The
-  immutable v0.1.1 client continues selecting its unversioned schema-2 assets until v0.1.2 publishes
-  the new channel and package together, so both sides of the release-publication window retain a
-  valid public image without compatibility parsing. The two activation-time `room-image-*`
-  bootstrap releases are removable only after the combined release passes anonymous consumption;
-  they were removed after that `v0.1.1` terminal passed on 2026-08-04.
+  instead of creating machine-only releases in the human-facing release feed. Manifest schema 4
+  uses the x86_64 assets `dorf-codex-incus-vm-v4-x86_64.tar.gz` and
+  `dorf-codex-incus-vm-v4-x86_64.json`; it requires `environment: incus`, the complete Git, Go, Node,
+  and uv coding-workstation inventory, and verified pinned Go and uv release-archive digests. Its
+  candidate proof executes `go`, `gofmt`, and the repository's declared preparation in a fresh
+  Sandbox. Issue #38 dogfood showed that the historical schema-3 image could reach a Go repository
+  without Go installed, so the Go installer accepts only schema 4. Old pre-cutover clients and image
+  schemas are not a compatibility target.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
   enabled before the first image is promoted. The publisher records that reviewed repository
   setting in an explicit variable, requires a clean source commit already available from GitHub,
-  creates a complete draft, publishes it once, and verifies its release attestation and both assets.
+  creates a complete draft, publishes it once, and verifies its release attestation and all assets.
   The owner's provider credential remains in the local Provider Gateway; only a scoped route enters
-  a disposable validation Room, and neither enters the image or GitHub.
+  a disposable validation Sandbox, and neither enters the image or GitHub.
 - **Why:** GitHub Releases reuse the project's source authority, provide static anonymous HTTPS
   downloads, protected tags and assets, release attestations, and API-visible SHA-256 digests
   without operating a public Incus daemon or a separate image-index service. Verifying every layer
   keeps the friendly alias out of the trust boundary and lets setup converge idempotently on one
   exact local fingerprint.
 - **Why local publication:** A GitHub-hosted runner would require moving or recreating a provider
-  credential to complete the real Worker terminal, while a persistent self-hosted runner adds a
+  credential to complete the real Job terminal, while a persistent self-hosted runner adds a
   needless public-repository execution surface. The current manual release cadence does not justify
   either cost. The version-controlled command retains deterministic CI-style proof without moving
   the owner's ChatGPT subscription boundary.
 - **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
-  installer module are pre-release implementation details. Existing Rooms remain bound to the image
+  installer module are pre-release implementation details. Existing Sandboxes remain bound to the image
   they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
   for another architecture or Environment.
 - **Reconsider when:** Release size or bandwidth makes GitHub unsuitable, a second architecture
@@ -764,9 +767,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   cannot preserve the required immutability/digest guarantees, or a concrete remote Environment
   requires a different image authority. Reconsider unattended publication when a scoped
   non-personal provider credential and isolated ephemeral runner make it safer without weakening the
-  real Worker terminal.
+  real Job terminal.
 
-## D039 — Initial core setup supports only the official Room image
+## D039 — Initial core setup supports only the official Sandbox image
 
 - **Status:** Accepted for initial open-source setup — 2026-07-31
 - **Decision:** The guided core setup uses only the Dorf-published credential-free Room image.
@@ -781,36 +784,35 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D040 — Rename the product and complete namespace to Dorf
 
-- **Status:** Accepted for initial open-source distribution — 2026-08-03
-- **Decision:** Rename the product to Dorf and use `dorf` consistently for the PyPI distribution,
-  Python import package, CLI command, repository contract, local configuration and state paths,
+- **Status:** Accepted for initial open-source distribution — 2026-08-03; Python distribution
+  portion superseded by D047 — 2026-08-08
+- **Decision:** Rename the product to Dorf and use `dorf` consistently for the Go application,
+  CLI command, repository contract, local configuration and state paths,
   environment-variable prefix, image and release artifacts, and repository identity. Do not retain
   compatibility aliases or migrate private dogfood state from the former pre-release namespace.
-  The exact `dorf` distribution name was unregistered on PyPI when this decision was made; recheck
-  it immediately before the first upload because only publication reserves it.
-- **Why:** The former distribution name is owned by another PyPI organization, and the selected
-  replacement should be one coherent product identity rather than a permanent split between the
-  install name and every surface a user or integrator encounters. The project has no public release
-  or third-party compatibility commitment, so this is the least costly point for a clean cutover.
+- **Why:** The selected identity should remain coherent across the installed artifact and every
+  user-facing surface. The cutover has no old package compatibility obligation.
 - **Compatibility:** This intentionally breaks private source imports, commands, configuration,
   state paths, environment variables, image names, and integrations that used the former namespace.
   Existing dogfood resources must be ended or recreated explicitly; Dorf does not guess ownership
   of or mutate the old namespace. The `dorf` identity becomes a public compatibility concern only
   after the first release.
-- **Reconsider when:** PyPI rejects or reserves `dorf` or a credible developer-tool naming conflict
-  is discovered before publication. After publication, require a deliberate migration decision.
+- **Reconsider when:** A credible developer-tool naming conflict is discovered. After publication,
+  require a deliberate migration decision.
 
 ## D041 — Host setup is capability-first with narrow native-package recipes
 
-- **Status:** Accepted for initial open-source setup — 2026-08-04
+- **Status:** Accepted for initial open-source setup — 2026-08-04; automatic recipe narrowed to the
+  proven Ubuntu 24.04 cutover host — 2026-08-08
 - **Decision:** Accept any x86_64 Linux host whose local Incus daemon is already usable, but perform
   automatic package, service, and root-equivalent group mutations only through exact clean-host
-  validated recipes. The initial recipes are Arch Linux and Ubuntu 24.04 LTS; both use native
-  distribution packages, systemd's `incus.service`, and `incus-admin`, while all pristine daemons
+  validated recipes. The Go cutover retains Ubuntu 24.04 LTS as the automatic clean-machine recipe;
+  it uses native distribution packages, systemd's `incus.service`, and `incus-admin`, while pristine daemons
   delegate storage and private-network creation to `incus admin init --minimal`. Setup reinspects
-  real state on every run, detects a local client/daemon version mismatch left by a package update,
-  and requests approval before restarting the service. Unsupported distributions receive the
-  upstream Incus installation path and may rerun the same command afterward.
+  real state on every run and requests approval before package, service, or group mutation. Arch and
+  other distributions remain capability-first: their operator follows the upstream/native Incus
+  installation path and reruns the same readiness command afterward. This narrows the support claim
+  rather than carrying a deleted Python host recipe into the Go product.
 - **Storage default:** Retain Incus's directory-backed minimal default for the first stranger path.
   In a clean nested Ubuntu 24.04 host, three cached-VM guest-readiness samples had a 15.490-second
   median on `dir` and a 12.425-second median on a disposable loop-backed Btrfs pool. That gain does
@@ -827,7 +829,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D042 — Issue-backed coding delegation has one disposable admission proof
 
-- **Status:** Accepted for the coding-to-PR AFK slice — 2026-08-05
+- **Status:** Superseded by D047 — 2026-08-08
 - **Decision:** Before an issue-backed `start` or `afk` invocation may reserve AFK ownership, create
   a coding Job or branch, or provision a durable Worker Room, run one workflow-owned proof against
   the exact repository head and issue. Aggregate independently discoverable repository, GitHub App,
@@ -850,7 +852,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D043 — Coding acceptance is pinned at admission and proven from retained observations
 
-- **Status:** Accepted for the coding-to-PR workflow — 2026-08-05
+- **Status:** Evidence authority retained by D047; Python AFK checklist/dossier mechanics
+  superseded — 2026-08-08
 - **Decision:** Compile the pinned issue acceptance criteria plus configured repository check and
   smoke obligations into a small workflow-owned checklist when a
   coding Job is reserved. The checklist remains explicitly human-correctable as a draft until the
@@ -877,7 +880,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D044 — Missing repository authority pauses inside the original delegation
 
-- **Status:** Accepted for the GitHub App HITL slice — 2026-08-05
+- **Status:** Superseded by D047's explicit Go readiness/admission boundary — 2026-08-08
 - **Decision:** When the exact issue-backed admission proof receives GitHub's not-found response
   before it can resolve the target branch, treat that one result as absent repository selection on
   the already configured Dorf GitHub App installation. Retain one deterministic, non-secret
@@ -940,25 +943,31 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D047 — Replace the Python runtime with a greenfield Go and Absurd system
 
-- **Status:** Accepted greenfield direction — 2026-08-06
+- **Status:** Accepted foundation — 2026-08-06; review-request and Absurd-usage clauses superseded
+  by D048 — 2026-08-09; commit ownership clarified by D050 — 2026-08-10; review handoff and unknown
+  review selection superseded by D052 — 2026-08-10; harness execution vocabulary clarified by
+  D055 — 2026-08-10
 - **Decision:** Replace the current Python and SQLite implementation with a Go application using
   Absurd on PostgreSQL for durable execution. Dorf-owned PostgreSQL tables retain product facts;
   Absurd owns task claims, checkpoints, retries, waits, and wake events. Keep external-effect
   reconciliation in Dorf because no workflow engine can atomically commit an Incus, agent, Git, or
   GitHub effect together with its own checkpoint. Incus remains the first Sandbox, Codex app-server
-  the first Agent runner, and GitHub pull requests the first acceptance surface.
+  the first agent Harness, and GitHub pull requests the first acceptance surface.
 - **Product vocabulary:** A coding request is a `Job`; its isolated execution body is a `Sandbox`;
-  a bounded invocation of an agent in a named `Role` is an `AgentRun`; resumable native context is a
-  `Session`. `Action`, `Check`, `Revision`, and `Evidence` name deterministic work and proof. Do not
+  a bounded invocation of an agent in a named `Role` is an `AgentRun`. A `Harness` hosts agents, a
+  `Thread` is its continuing conversation context, and a
+  `Turn` is one request/response cycle. `Action`, `Check`, `Revision`, and `Evidence` name
+  deterministic work and proof. Do not
   create a durable `Worker` identity until a real product requirement needs personality or memory
   across Jobs. Do not introduce `Assignment` or `RoleRun` as aliases for facts that these names
   already express.
-- **Review policy:** Start with a pure deterministic classifier over observed change facts. Mandatory
-  rules select security, browser, performance, or other bounded review Roles when their explicit
-  conditions match; documentation-only changes with green Checks may select none. An implementation
-  AgentRun may request more review. Only an unknown classification may invoke one bounded semantic
-  triage AgentRun. The durable Job coordinates mechanics, so there is no default Coordinator Agent
-  and no review-after-every-change ritual.
+- **Review policy (superseded by D048):** Start with a pure deterministic classifier over observed
+  change facts. Mandatory rules select security, browser, performance, or other bounded review Roles
+  when their explicit conditions match; documentation-only changes with green Checks may select
+  none. Only an unknown classification may invoke one bounded semantic triage AgentRun.
+  Implementation prose is not a policy input, and there is no optional-request mechanism. The
+  durable Job coordinates mechanics, so there is no default Coordinator Agent and no
+  review-after-every-change ritual.
 - **Replacement strategy:** Build vertical slices on a `greenfield` integration branch. Each slice
   must reach the smallest real Incus, Codex, repository, and GitHub terminal it claims, then delete
   the Python component and implementation-coupled tests it replaces. The old implementation is
@@ -996,5 +1005,425 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   reproducible cross-host build graph; direct repo-owned commands are simpler for the first system.
 - **Reconsider when:** Absurd cannot survive the real crash and redelivery terminals, its evolution
   or license makes self-hosting unsuitable, multi-region or high-volume hosted operation requires a
-  more mature distributed control plane, a second concrete language or Agent runner proves a
-  smaller stable seam, or a real cross-Job identity requirement earns `Worker`.
+  more mature distributed control plane, a second concrete language or agent Harness proves a
+  smaller stable seam, a real cross-Job identity requirement earns `Worker`, or repeated dogfood
+  identifies a concrete authoritative input that deterministic facts plus bounded triage cannot
+  express and that justifies a structured additional-review contract rather than parsing agent
+  prose.
+
+## D048 — Simplify the post-cutover core around Absurd and explicit workflow semantics
+
+- **Status:** Accepted audit correction — 2026-08-09
+- **Durable sequencing:** Use Absurd's public task, named-step, event, cancellation, and inspection
+  surfaces for generic execution mechanics. Dorf retains Job and Revision facts, deterministic
+  policy, stable external Action identity, scope, settlement state, and reconciliation because those are product
+  semantics or cross-system uncertainty. Production behavior and authority must not query or mutate
+  Absurd's raw internal tables or mirror its checkpoints, retries, leases, task state, or recovery
+  controller into Dorf-owned schema. Version-pinned white-box tests and operator diagnostics may
+  inspect those tables without making them product authority.
+- **Message order:** Every accepted message keeps a monotonic Job-local admission sequence. Follow-up
+  Turns are FIFO. A `steer` is an explicit priority lane for the active harness Turn and may overtake
+  queued follow-ups. Default text and structured inspection, command help, and the admission
+  acknowledgement must expose its intent, target, original sequence, and priority effect; an
+  architecture document alone is not adequate observability.
+- **Review composition (superseded by D052):** Deterministic policy supplies the mandatory Role floor. An implementation
+  AgentRun may additionally make a structured, bounded request for an allowlisted Role and optional
+  focus. The request cannot remove mandatory review, change capabilities, grant authority, create a
+  Role, or authorize recursive or unbounded work. Each selected Role receives its own disposable
+  Sandbox and scoped provider route, including read-only review, and those live resources are
+  reclaimed after the Role's Evidence is retained.
+- **Greenfield schema:** Before the first release, replace the prototype migration chain with one
+  clean baseline schema; there is no data or upgrade path to preserve. Defer `sqlc` until after the
+  Absurd realignment and schema squash. Generated type-safe query wrappers can remove scan
+  boilerplate, but they do not simplify the state model, perform migrations, or replace behavioral
+  PostgreSQL tests. Reconsider only if substantial repetitive query plumbing remains in the smaller
+  store.
+- **Verification:** Agents run deterministic unit and PostgreSQL integration tests locally before
+  pushing relevant changes. CI repeats those portable suites as an independent merge gate. Real
+  Incus, Codex, provider, and GitHub terminals remain targeted dogfood for changes to those
+  authorities rather than simulated requirements for every CI run.
+- **Cutover correction:** The final acceptance proposal remains blocked until the audited functional
+  gaps are closed: private-repository clone authority, exact initial-turn identity, lease-safe
+  mutation ownership, human-requested same-Job revisions, explicit pre-proposal terminal outcome,
+  and prompt reviewer-resource cleanup. The correction must preserve the proven exact-Revision,
+  Action-reconciliation, publication, outcome, and zero-ghost properties while materially reducing
+  the application-owned durable state machine.
+- **Why:** The greenfield implementation proved the complete shape, but the proof also exposed that
+  Dorf rebuilt generic durable mechanics beside Absurd and accumulated prototype schema and
+  implementation narration. Returning those mechanics to the chosen library leaves Dorf's code
+  focused on product facts and unavoidable external-system boundaries. Explicit steer and review
+  request semantics preserve useful intentional behavior without hiding it behind an inaccurate
+  FIFO or prose-policy description.
+- **Reconsider when:** Absurd's public APIs cannot express a proven recovery terminal without losing
+  required evidence, measured reviewer isolation cost justifies a different model, or the smaller
+  post-realignment store still contains enough repetitive typed query plumbing for `sqlc` to remove
+  more code than its generator and generated surface add.
+
+## D049 — Repositories own their development-tool setup
+
+- **Status:** Accepted setup boundary — 2026-08-09
+- **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
+  inspection needs. Keep the existing schema-4 image and release assets unchanged. Dorf's declared
+  `commands.prepare` invokes a repository-owned script that installs missing pinned tools,
+  converges a disposable local database and Absurd schema, and downloads modules. Installation and
+  initialization are deterministic Actions; no AgentRun decides or performs them conversationally.
+- **Cost:** Every fresh Sandbox may pay package-download and initialization time. That cost is
+  accepted now because the setup remains visible, editable with the repository, and independent of
+  a Dorf-wide image release.
+- **Why:** Different repositories need different toolchains. Encoding all of them in one shared
+  image couples repository evolution to image publication and grows a supposedly reusable base.
+  A repository contract is the simplest correct ownership boundary while there are no measured
+  startup constraints.
+- **Reconsider when:** Repeated measurements show setup materially dominates Job latency or network
+  reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
+  successfully prepared repository environment behind the same `commands.prepare` contract.
+
+## D050 — Implementation AgentRuns own commits
+
+- **Status:** Accepted workflow correction — 2026-08-10; terminology clarified by D052 and D055
+- **Decision:** An implementation AgentRun owns the code change and, when it changes
+  code, creates one or many commits in the Job checkout. Its successful change contract requires a clean
+  checkout and a final `HEAD` that is a proper descendant of the AgentRun's input Revision. Dorf
+  validates those facts and records the observed `HEAD` as the next exact Revision; it does not
+  manufacture, squash, or amend the agent's commits. A follow-up Message may instead be handled with
+  a clean unchanged `HEAD`; that creates no new Revision.
+- **Action boundary:** An Action is a code-owned external mutation such as creating a Sandbox or
+  route, pushing Git, or publishing a pull request. An AgentRun owns submission and recovery of its
+  harness Turn directly; it is not paired with an Action. Tool calls and commits made inside that
+  AgentRun are also not separate Actions. Their transcript remains harness-owned, their commits
+  remain Git-owned, and Dorf retains the observed Revision and Revision-pinned Evidence it needs.
+- **Why:** Commit structure is part of implementation judgment and may naturally require more than
+  one commit. Treating commit creation as a later deterministic Dorf step both erases that judgment
+  and misstates the recovery boundary. Validating clean descendant Git state gives the workflow an
+  exact handoff without making Dorf the author of the change.
+- **Reconsider when:** A supported harness cannot reliably commit inside the Sandbox, or a concrete
+  acceptance surface requires a separately reviewed normalization step that preserves authorship
+  and exact source-Revision provenance.
+
+## D051 — One explicit coding coordinator uses stable Absurd Steps
+
+- **Status:** Accepted workflow boundary — 2026-08-10; transitional phase removed by D061
+- **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
+  single spine operations in product order. `CurrentWork` selects the exact owning fact. Each external
+  Action runs in its own `dorf/action/v1/<ActionID>` Step and returns
+  `ActionStepResultV1{ActionID}`; AgentRun, Revision, Check, and policy operations retain their own
+  stable versioned Step names and typed results. Absurd owns durable execution mechanics; PostgreSQL
+  remains authoritative for Job facts and Action settlement.
+- **Boundary:** Ordinary Incus, Git, Codex, and command work is not held under one long Job fence.
+  Each code-owned external mutation reserves and reconciles its stable Action, performs a final
+  claim check, records Action success, and then completes its Step. Each AgentRun instead reconciles
+  its own Harness/Thread/Turn identity. D061 removes the transitional `workflow_phase`; the mixed
+  service-layer coordinator that interpreted it was already deleted. The application constructs one
+  compile-time `ServiceStore` and `ServiceExternals` boundary; runtime capability assertions do not
+  select coding behavior.
+- **Why:** The flow is understandable in one place, and interruption recovery comes from the chosen
+  durable runtime rather than a second Dorf-owned program counter.
+- **Reconsider when:** D061 absorbed the original trigger after review and publication became direct
+  fact-ordered operations. Reconsider this remaining boundary only when real dogfood shows that a stable
+  Step identity or local fact guard cannot represent recovery truthfully.
+
+## D052 — Feedback is a Message to the implementation AgentRun path
+
+- **Status:** Accepted workflow simplification — 2026-08-10
+- **Decision:** User text, Check output, ReviewPolicy prompts, and reviewer text use the same durable
+  `Message` primitive. Every AgentRun consumes exactly one Message. ReviewPolicy creates the stable
+  workflow Message consumed by a selected review AgentRun; reviewer output is an ordinary agent
+  Message consumed through the implementation AgentRun path. Dorf does not parse a universal
+  `ReviewResult`, classify findings, or create separate respond-to-review, respond-to-check, or
+  repair AgentRun types.
+- **Message identity:** A Message records text, Job-local sequence, `FromKind`, and `FromID`.
+  `FromKind` names the sender: human, agent, or workflow. `FromID` retains the exact request, AgentRun,
+  or Check that caused the Message, and the consuming AgentRun points back to the Message. A Check or
+  observation does not send a Message; the workflow turns its result into one. `Feedback` is a use of
+  Message, not another stored type. Do not add reply or thread fields until an outward-response
+  feature needs them.
+- **Review selection:** Deterministic policy selects known specialist Roles. Unknown risk selects one
+  bounded general read-only reviewer rather than a triage AgentRun whose prose must be parsed to route
+  more work. Role, Revision, and capability envelope specialize an AgentRun; its prompt is the input
+  Message. The adapter supplies its Sandbox workspace without persisting that path on the run. These
+  inputs do not create a new execution primitive.
+- **Outcome:** The implementation agent decides whether to act, ignore, or explain. Dorf observes the
+  resulting Git state. A committed descendant becomes a new Revision and loops through Checks and
+  policy. A clean unchanged checkout means the Message was handled without a code change. A failed
+  mandatory Check still blocks readiness until it passes, but it reaches the agent through the same
+  Message mechanism.
+- **Authority:** Reviewer prose is an advisory Message, not Evidence. The Message is the durable
+  handoff between agent Threads. One observed Evidence record proves the review AgentRun's harness
+  execution; the prose is not duplicated as Evidence. Git remains authoritative for commits,
+  and deterministic Checks remain authoritative for their results.
+- **Why:** This matches ordinary human collaboration: one worker receives feedback from different
+  people and tools, decides what it means, and either changes the work or explains why not. One
+  AgentRun mechanism, one inbox, and opaque text remove parsers and review-specific state without
+  weakening deterministic gates.
+- **Reconsider when:** A concrete acceptance surface requires a machine-readable reviewer decision, or
+  dogfood proves that ordinary text cannot safely carry a specific cross-agent contract.
+
+## D053 — Compile stable PostgreSQL queries with sqlc
+
+- **Status:** Accepted persistence-tooling boundary — 2026-08-10
+- **Decision:** Use repository-pinned `sqlc` 1.31.1 to compile stable Dorf-owned PostgreSQL queries
+  into a committed private `database/sql` package. Keep the baseline schema and named query files as
+  generator inputs. `postgres.Store` remains the application boundary: handwritten Store methods own
+  transactions, compare-and-set expectations, product invariants, error translation, and explicit
+  conversion to `spine` types. Generated records and parameter structs do not cross that boundary.
+- **Type boundary:** Narrow column overrides may reuse existing non-null `spine` scalar types for
+  cleanup, Message sender and intent, Action kind and state, AgentRun state, and Job outcome. This is
+  an inward adapter dependency and does not make generated records into domain types. Nullable values,
+  projections, and timestamps continue to be mapped explicitly.
+- **Tooling and verification:** Generation and stale-code comparison use the local schema analyzer and
+  do not require a database. Strict function and `ORDER BY` checks are enabled. The repository check
+  also runs `sqlc vet` with `sqlc/db-prepare` against the already migrated disposable PostgreSQL
+  database, followed by the live PostgreSQL Go suite and `go vet`. CI starts a fresh PostgreSQL
+  service and initializes the pinned Absurd and Dorf schemas before running the same check. No sqlc
+  Cloud project, token, `push`, `verify`, managed database, migration ownership, or runtime service is
+  introduced. This follows sqlc's official [CI guidance](https://docs.sqlc.dev/en/stable/howto/ci-cd.html),
+  [configuration reference](https://docs.sqlc.dev/en/stable/reference/config.html), and
+  [override guidance](https://docs.sqlc.dev/en/stable/howto/overrides.html) while keeping all committed
+  paths repository-relative.
+- **Why:** The trial removed embedded SQL and manual scan plumbing from representative reads, made
+  schema/query drift fail during generation, and kept the transaction and domain boundaries readable.
+  The fixed configuration and generated volume are accepted because generated code is mechanically
+  maintained; the decision is based on safer refactoring and a faster compiler-like feedback loop,
+  not on counting generated lines as handwritten maintenance.
+- **Measurement:** The integrated broad pass reduced handwritten production Go from 12,062 to 11,973
+  lines (-89) and tests from 7,670 to 7,651 lines (-19). Ten named query files contain 1,210 lines;
+  the committed private generated package contains 4,960 lines; and the three new tool/config entry
+  points contain 81 lines. Local generation and stale-code diffing each take about 0.6 seconds. All
+  188 stable product query call sites moved behind sqlc. The 12 remaining direct Store calls are the
+  explicit Absurd/bootstrap, schema-application, and Job advisory-lock exceptions.
+- **Reconsider when:** A supported query cannot be expressed without retaining a parallel handwritten
+  implementation, generator churn repeatedly obscures review, or future measurements show the
+  handwritten configuration and conversion surface outweighs the query plumbing it replaces without
+  delivering useful drift failures.
+
+## D054 — The main Job task publishes and observes the exact proposal
+
+- **Status:** Accepted workflow simplification — 2026-08-10
+- **Decision:** The main Job task runs two direct, Revision-scoped Steps: push the exact Revision, then
+  create or adopt its exact pull request. Stable Actions reconcile Git and GitHub before an uncertain
+  effect repeats. There is no publication child task, attachment field, custom retry command, or
+  mirrored task state; operators use Absurd's public retry after resolving publication attention.
+- **Acceptance UI:** The same task observes the exact pull request. A comment from the repository
+  `OWNER` or `COLLABORATOR` becomes one idempotent human Message whose `FromID` is the GitHub comment
+  identity. Dorf acknowledges it with an eyes reaction. Once the same implementation flow has handled
+  the Message and republished, Dorf posts one completion comment naming the exact Revision. GitHub's
+  idempotent reaction endpoint and a stable invisible completion marker make replay safe without a
+  new core fact. Merge records acceptance, close without merge records rejection, and explicit Dorf
+  abandonment remains available. Dorf stores Messages, Proposal, and Outcome, but does not mirror a
+  comment cursor or mutable pull-request state. Every durable wake or timeout performs a fresh
+  reconciliation pass; no in-memory poll counter or checkpointed GitHub observation is part of the
+  workflow contract.
+- **Why:** Push, propose, wait, and continue are one product story. Giving publication its own durable
+  scheduler duplicated retry and attachment mechanics already owned by Absurd. Treating GitHub input
+  like any other Message also lets the next implementation AgentRun decide whether to act without
+  a new review-result or response type.
+- **Reconsider when:** GitHub polling is measurably wasteful enough to justify a webhook wake-up. A
+  webhook should wake the same observer; it must not create a second workflow authority.
+
+## D055 — AgentRun owns its harness execution binding
+
+- **Status:** Accepted execution simplification — 2026-08-10
+- **Decision:** `AgentRun` is Dorf's complete durable delivery record for one durable Message.
+  Submitting, reconciling, waiting for, and recording the harness Turn are its lifecycle, not a
+  paired `Action`. Every AgentRun consumes exactly one durable Message; every Message selected for
+  agent delivery has exactly one AgentRun. The AgentRun retains the Message identity, Harness,
+  Thread, Turn, Role, Revision, capability, Turn outcome, recovery baseline, and the nonces required
+  to prove ownership and submission. Implementation continuity comes from reusing the Thread bound
+  to prior implementation AgentRuns; there is no separate Thread row or binding on Job. A follow
+  normally creates a new Turn; a steer normally binds to its target Turn and creates a new Turn only
+  on terminal-target fallback.
+- **Vocabulary:** A Harness is software that hosts an agent and exposes Threads and Turns; Codex
+  app-server is the first Harness. A Thread is a continuing harness conversation that one or more
+  AgentRuns may use. A Turn is one request/response cycle inside a Thread. These known terms replace
+  ambiguous session/execution vocabulary without leaking Codex protocol types into the core.
+- **Action boundary:** Actions record code-owned external mutations such as creating or destroying a
+  Sandbox or route, pushing Git, and publishing a pull request. Agent execution has one durable
+  identity and state machine: AgentRun. There is no turn-start Action, separate
+  `codex-session-start` Action, or Action/AgentRun synchronization.
+- **Evidence and feedback:** Agent prose is advisory text carried by Message. Evidence for a harness
+  observation links directly to the AgentRun whose Harness/Thread/Turn binding and Turn outcome it
+  records. A completed review retains one such observed Evidence record; its prose is delivered as
+  the exact feedback Message through the implementation AgentRun path and is not copied into
+  Evidence. Atomic feedback recording makes the completed AgentRun, observed Evidence, and exact
+  Message one idempotent handoff.
+- **Review input:** Deterministic ReviewPolicy creates one stable workflow Message for each selected
+  Role. The review AgentRun consumes that Message like any other AgentRun, and review prompt text is
+  stored only on the Message. This keeps future reviewer follow-up and Thread reuse inside the same
+  Message-to-AgentRun model. The current coding workflow routes ordinary follow-ups only to the
+  implementation Role; adding reviewer follow-up later is a routing decision, not a new durable
+  primitive or table.
+- **Adapter boundary:** The Harness adapter owns app-server protocol, transcript, tool items, and the
+  transient Sandbox workspace and controller process. Dorf does not persist adapter-owned workspace
+  paths, derived input digests or controller identities, or unused token, cost, and yield telemetry.
+  Adding another Harness should implement the same narrow execution boundary; it does not justify a
+  registry or speculative portability layer.
+- **Why:** One agent delivery previously had overlapping AgentRun, turn-start Action, and
+  `codex-session-start` Action state. Recovery had to synchronize records that described the same
+  work, while review copied input text onto AgentRun and output prose into Evidence beside the
+  Messages that could carry both. One input Message, one AgentRun, one observed fact and, for review,
+  one output Message state the product story directly.
+- **Reconsider when:** A second concrete Harness cannot express a resumable Thread and bounded Turn,
+  or dogfood proves that one AgentRun cannot retain enough identity to reconcile uncertain
+  submission without a distinct durable effect record.
+
+## D056 — Jobs own Sandbox lifetimes and Sandboxes identify Provider Routes
+
+- **Status:** Accepted resource-lifecycle simplification — 2026-08-10
+- **Decision:** The Job is the aggregate and lifetime owner of every Sandbox created for the coding
+  task, including isolated review Sandboxes. Each Sandbox deterministically identifies its one scoped
+  Provider Route, so Dorf does not store a second Route row. AgentRuns use a Sandbox and record that
+  binding, but do not own infrastructure. Cleanup walks Job → Sandboxes and records each Route revoke
+  before Sandbox deletion as an immutable Action success. There is no polymorphic owner kind/id.
+- **Why:** Ownership follows the longest relevant lifetime, keeps database relationships concrete,
+  permits AgentRun retries and follow-ups to reuse a Sandbox, and gives one cleanup inventory without
+  copied reviewer-resource state or role-specific cleanup algorithms.
+- **Reconsider when:** A concrete workflow requires resources to outlive their Job, or a Sandbox must
+  be shared safely by multiple Jobs; either case would require an explicit new aggregate and custody
+  rules rather than a polymorphic owner shortcut.
+
+## D057 — Ordinary external Actions target one exact Sandbox
+
+- **Status:** Accepted Action-scope simplification — 2026-08-10
+- **Decision:** Sandbox creation, repository clone, provider-route creation and revocation, exact
+  review checkout preparation, and Sandbox deletion use one Sandbox-scoped Action path. Setup keeps
+  its generation-aware operation and publication keeps its exact-Revision operations; there is no
+  generic Job-Action API or polymorphic target abstraction. The first reconciled Action success is
+  immutable and an identical retry is a no-op. Exact external-result validation belongs to the
+  adapter before that success is recorded.
+- **Why:** These ordinary mutations all change or serve one exact Sandbox. A generic Job path hid a
+  redirect to the main Sandbox and created a category with only repository clone as a real member.
+  Explicit Sandbox scope makes Action identity, Absurd Step identity, reconciliation, and cleanup
+  tell the same story while preserving the crash boundary between execution and external truth.
+- **Reconsider when:** A second ordinary external mutation genuinely targets only the Job aggregate,
+  or an external system returns a non-Sandbox identity that cannot live in its natural product fact.
+
+## D058 — Action success is the external lifecycle authority
+
+- **Status:** Accepted lifecycle-authority simplification — 2026-08-10
+- **Decision:** Sandbox rows retain only durable identity, Job ownership, and the nonce required to
+  attest the exact external resource. Sandbox and Provider Route lifecycle is read from immutable
+  Sandbox-scoped Action success. Dorf does not persist parallel pending/created/deleted or
+  pending/active/revoked state machines. Provider Route identity is derived from the Sandbox's stable
+  route-create Action identity rather than stored in a separate row.
+- **Why:** The copied states could only agree with their Actions, so every completion, cleanup query,
+  inspection view, and test had to synchronize two descriptions of the same event. One authority makes
+  retries and cleanup easier to read: revoke Action succeeded, then delete Action succeeded.
+- **Reconsider when:** A provider returns a non-deterministic Route identity or a lifecycle fact exists
+  independently of any Dorf Action and has a concrete product consumer.
+
+## D059 — Actions retain settlement, not generic result strings
+
+- **Status:** Accepted Action-result simplification — 2026-08-10
+- **Decision:** An Action retains its stable identity, kind, scope, and settlement state: unsettled,
+  succeeded, or failed. The external adapter validates exact identity and authority before recording
+  success. Durable facts returned by an operation live in their natural typed owner: setup output in
+  Evidence, pull-request identity in Proposal, terminal disposition in Outcome, and exact Sandbox or
+  Revision targets in Action scope. Dorf does not copy those facts into generic `external_id` or
+  `external_outcome` Action strings.
+- **Why:** Generic result strings repeated facts already known from Action scope or a typed product
+  record, forced central parsing of adapter-specific formats, and made inspection look authoritative
+  in two places. Settlement plus the natural owner states the same recovery story directly.
+- **Reconsider when:** A concrete external mutation returns a stable, non-derivable fact required for
+  reconciliation that has no honest typed product owner.
+
+## D060 — GitHub authority is stored once
+
+- **Status:** Accepted Proposal/Outcome simplification — 2026-08-10
+- **Decision:** The Job owns immutable GitHub repository, installation, base branch, and head branch
+  authority. Proposal retains only pull-request number, URL, exact proposed Revision, and body digest.
+  Outcome retains disposition and observation time. Accepted and rejected Outcomes additionally retain
+  the exact terminal pull-request observation and optional merge commit. Explicit abandonment is its own
+  human authority: it may precede Proposal and therefore retains no invented GitHub state; when a Proposal
+  already exists, Dorf still verifies its exact identity and refuses a merged pull request. Publication and
+  observation join these facts instead of copying authority or an already-validated remote head. Merge and
+  close are observed automatically; `dorf abandon JOB` is the only manual Outcome command.
+- **Why:** Proposal and Outcome repeated facts fixed by their Job and predecessor, creating comparison
+  code, larger schemas, and inconsistent states that had no product meaning. One owner per fact makes
+  publication, inspection, and terminal recovery read in the same order as the workflow.
+- **Reconsider when:** A Proposal must survive independently of its Job, one Job can own multiple live
+  GitHub authorities, or a terminal authority contains a new fact that has no current owner.
+
+## D061 — One fact-derived coding flow replaces the durable program counter
+
+- **Status:** Accepted workflow-authority and inspection decision — 2026-08-10
+- **Decision:** Dorf does not persist `workflow_phase`, `next_work`, or another derived workflow
+  status. It loads one concrete coding `Snapshot` and derives a disposable `Projection` containing
+  readiness and the pure `CurrentWork` decision. Execution, human history, and structured inspection
+  share that same Snapshot rather than loading or interpreting the facts independently. `RunJob`
+  reloads after each recorded fact, and every mutation transactionally revalidates its exact owner
+  before recording an effect. Absurd alone owns task eligibility, claims, named checkpoints, sleeps,
+  waits, retries, and cancellation.
+- **Missing recovery fact:** A completed implementation Turn does not prove that Dorf inspected its
+  mutable checkout. Bind the implementation AgentRun to its input Revision, then retain the existing
+  `git-revision` Evidence for both changed and unchanged clean observations with that AgentRun as its
+  owner and observed `HEAD` as its Revision. A changed observation also creates the next immutable
+  Revision; equality records an unchanged result. This reuses one natural proof fact rather than
+  adding a Revision-observation table or stored changed/unchanged enum, and replaces the only real
+  information previously hidden in implementation/review handoff phases.
+- **Human view:** Inspection derives both the expected coding dependency chain and chronological
+  Message, Action, AgentRun, Revision, `git-revision` Evidence, Check, ReviewPlan, Proposal, Outcome,
+  attention, and cleanup facts from the same Snapshot, and marks the same `CurrentWork` used by
+  execution. This Projection is disposable. Structured inspection may show attached task correlation
+  and terminal result, but it does not copy Absurd attempts, checkpoints, waits, or leases;
+  `absurdctl` and Habitat remain the operational execution-history tools.
+- **Why:** One source of truth removes phase transitions and impossible phase/fact disagreements,
+  makes recovery ask only which authoritative fact is missing, and puts the deterministic flow in one
+  readable place. It also makes change local and composable: a new Check adds a Check fact, a selected
+  reviewer adds a Message and AgentRun, and another feedback source adds a Message instead of changing
+  a schema enum and transition matrix across admission, readiness, publication, inspection, and
+  tests. Reordering or extending the coding flow changes explicit dependencies rather than synchronized
+  status machinery.
+- **Constraint:** This is not permission to build a general DAG engine, configurable workflow DSL,
+  generic step registry, persisted status projection, copied event-sourcing layer, or giant SQL
+  `next_work` query. Keep the concrete coding decision small and visible in Go. Add a new durable fact
+  only for an observed product or recovery need, and keep product chronology derived from natural fact
+  timestamps.
+- **Reconsider when:** A second real workflow proves that a smaller shared decision primitive exists,
+  or measured fact reconstruction becomes a material bottleneck that cannot be addressed by ordinary
+  read projections without creating another authority.
+
+## D062 — Dorf is a durable agent-Job control plane proven through concrete workflows
+
+- **Status:** Accepted product direction — 2026-08-11; no public workflow API accepted
+- **Positioning:** Dorf is the open-source control plane for durable agent Jobs on infrastructure its
+  owner controls. Workflows use deterministic code for knowable work and isolated agents for
+  judgment, with recovery and Evidence built in. The supported claim remains transparent: Codex,
+  Incus, and coding-to-PR are verified today; multiple Harnesses, Sandboxes, workflows, and trigger
+  surfaces are direction until real implementations prove them.
+- **Product boundary:** A trusted client owns personal context, priorities, and composition across
+  Jobs. A workflow owns the semantics, policy, evaluation, and Outcome of one bounded Job. Dorf owns
+  durable custody: admission, Messages, AgentRuns, Sandbox lifetime, stable external-effect
+  reconciliation, observed Evidence, attention, recovery, and cleanup. A software factory, personal
+  assistant, or agent organization may compose Dorf Jobs, but none becomes Dorf's core metaphor.
+- **Next proof:** Coding-to-PR remains the only implementation requirements driver until a bounded
+  research-to-report issue deliberately begins. Research is the candidate second workflow because it
+  needs the same durable custody while owning no branch, Revision, Proposal, or GitHub Outcome. Agent0
+  should first invoke it through the existing same-host structured CLI boundary. Do not add HTTP or
+  embed the Go runtime merely to integrate the first trusted client.
+- **Extraction gate:** Add the research workflow's natural facts and explicit coordinator before
+  changing the coding schema into generic payloads or nullable fields. After coding and research
+  work, extract only duplicated behavior with the same authority and recovery meaning into an
+  internal application API. Exercise that API through another small workflow or external author
+  before declaring a public workflow-authoring compatibility promise.
+- **Authoring and evaluation:** The intended shareable unit is ordinary versioned workflow source
+  plus typed input and Outcomes, capability and connection requirements, deterministic operations,
+  bounded AgentRun judgment, budgets, terminal conditions, and evaluation cases. Evals begin with
+  the workflow rather than arriving after the SDK. Agents may author reviewable workflow code,
+  manifests, tests, and evals, but may not activate new powers or production versions silently.
+- **Clients and distribution:** CLI and Agent0 come first. CI/GitHub is the likely first public
+  trigger; HTTP/webhooks and MCP follow real remote-client needs; native Slack and scheduling remain
+  later adapters. Share pinned Git-hosted workflow bundles before building a registry or marketplace.
+  Triggers translate external events into idempotent admission and never become workflow authority.
+- **Why:** The Go rebuild proved durable coding behavior and removed speculative Worker, Room, phase,
+  and framework abstractions. It also left coding facts near records that look reusable. Returning to
+  a broad framework now would repeat the same mistake. A materially different second workflow is the
+  smallest visible result that can prove the building-block thesis while preserving Mitchell
+  Hashimoto's posture: make simple dependable pieces, adopt them early, and let real composition earn
+  public seams.
+- **Refines:** D009's single-driver gate, D047's coding-shaped Go foundation, and D061's explicit
+  fact-derived coordinator. It does not weaken their current coding invariants or authorize a generic
+  DAG, plugin registry, provider matrix, or compatibility layer.
+- **Reconsider when:** Research fails to reuse the proposed custody semantics, another second
+  workflow offers a smaller proof, a remote Agent0 deployment justifies network transport, an
+  external workflow author exposes a different API boundary, or repeated workflow evidence shows
+  that the durable custody model does not reduce attention or improve trustworthy outcomes.

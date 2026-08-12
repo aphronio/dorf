@@ -1,7 +1,7 @@
 [commands]
-prepare = "UV_CACHE_DIR=.dorf/uv-cache uv sync --frozen --all-groups"
-check = "UV_CACHE_DIR=.dorf/uv-cache uv run pytest && UV_CACHE_DIR=.dorf/uv-cache uv run ruff check ."
-smoke = "UV_CACHE_DIR=.dorf/uv-cache uv run dorf --help"
+prepare = "scripts/dev/prepare.sh"
+check = "scripts/dev/check.sh"
+smoke = "mkdir -p .dorf/bin && go build -o .dorf/bin/dorf ./cmd/dorf && .dorf/bin/dorf version && go version -m .dorf/bin/dorf"
 
 [agent.codex]
 model = "gpt-5.6-sol"

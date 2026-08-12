@@ -37,7 +37,7 @@ The more of a job that is verifiable, the more of it can be approved after the f
 supervised live. Verification capacity, not model quality, is the practical ceiling on detached
 work.
 
-Core capability: claim/observed provenance on state and Evidence.
+Core capability: Message provenance for claims and Evidence for observed facts.
 
 ## Calibrated isolated verification roles
 
@@ -63,18 +63,18 @@ A plausible first execution shape is not a mandatory order:
 implementation commit ──┼─ diff correctness AgentRun ─────────┼─ findings and Evidence
                          └─ simplification AgentRun (optional) ┘          │
                                                                        ▼
-                                                         implementation Session
+                                                         implementation Thread
 ```
 
 Give each selected Role a bounded AgentRun against the exact Revision, with role-appropriate tools,
-a scoped provider route, and explicit cleanup. Use a separate disposable Sandbox only when the Role
-needs executable isolation or mutable tools; a read-only reviewer may consume an immutable checkout
-or diff without paying Sandbox startup cost. Reconsider either posture from measured independence,
-evidence quality, concurrency safety, defect yield, latency, and cost rather than ritual.
+a scoped provider route, and explicit cleanup. The first product gives every selected Role its own
+disposable Sandbox, including read-only reviewers. That uniform isolation boundary is an intentional
+simplicity trade: one Role, one environment, one route, one pair of cleanup Actions. Reconsider shared or
+Sandbox-free review only when measured startup cost or latency outweighs the clarity and isolation.
 
 The original coding Job, branch, and proposal remain authoritative. A verifier AgentRun is attached
-to one Revision, not another Job, branch, or proposal. Its feedback returns to the implementation
-Session. Agent conclusions remain claims;
+to one Revision, not another Job, branch, or proposal. Its feedback returns through an ordinary
+Message to the implementation Thread. Agent conclusions remain claims;
 workflow-observed commands, interactions, measurements, and retained artifacts become facts.
 
 Promote a role through evidence rather than enthusiasm:
@@ -119,8 +119,8 @@ seeing what an agent claims but knowing what claims from that configuration have
 worth. That calibration helps the orchestrator and human allocate attention without inventing a
 cross-Job Worker identity.
 
-Core capability: self-estimates and outcomes recorded as ordinary timeline entries; computing and
-displaying calibration is workflow work.
+Core capability: naturally typed self-estimate and outcome facts projected into the derived product
+history; computing and displaying calibration is workflow work.
 
 ## Coding attention semantics
 
@@ -130,9 +130,10 @@ choice is a ping. Review requests batch to the human's schedule.
 
 At publish time the evidence pack is projected into the PR (body, comments, checks) so review
 happens where reviewing already lives. GitHub gets the story at the moment it matters; the job
-record keeps the full history.
+facts retain the full story and inspection derives its history.
 
-Core capability: the state/attention two-channel contract, the inbox, and artifacts with provenance.
+Core capability: explicit attention, the inbox, and typed facts and artifacts with provenance. The
+coding workflow derives current work and history without storing a second state channel.
 
 ## Dogfood bar: the phone-only week
 

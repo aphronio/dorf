@@ -1,17 +1,14 @@
-# Contributing to Dorf
+# Contributing
 
-Thanks for your interest in contributing. Dorf is licensed under the
-[Apache License 2.0](LICENSE).
-
-## Development setup
+Dorf's supported product is the Go application in `cmd/dorf` and `internal`. Use Go 1.25 or newer.
 
 ```bash
-uv run dorf --help
-uv run pytest
-uv run ruff check .
+scripts/dev/prepare.sh
+scripts/dev/check.sh
+go build -o .dorf/bin/dorf ./cmd/dorf
+.dorf/bin/dorf version
+go version -m .dorf/bin/dorf
 ```
-
-Run the tests and linter before opening a pull request.
 
 ## DCO sign-off
 
@@ -23,32 +20,35 @@ to submit it under the project's Apache 2.0 license.
 Sign off every commit with the `-s` flag:
 
 ```bash
-git commit -s -m "your message"
+git commit -s
 ```
 
-This appends a line like:
+The commit message must include a trailer matching your repository-local author identity:
 
-```
+```text
 Signed-off-by: Jane Doe <jane@example.com>
 ```
 
-Use your real name and a reachable email address (the identity from `git config
-user.name` / `user.email`). Pull requests with commits missing the sign-off cannot be
-merged; the DCO status check will fail. If you forgot to sign off, fix existing commits
-with:
-
-```bash
-git rebase --signoff main
-git push --force-with-lease
-```
+Pull requests with an unsigned commit fail the DCO status check. Amend a single unsigned commit
+with `git commit --amend --signoff --no-edit`; use an interactive rebase when several commits need
+repair.
 
 ## Licensing of contributions
 
-Contributions are submitted under the same Apache 2.0 license, per the DCO and
-section 5 of the Apache License. You retain the copyright on your contributions.
+Contributions are submitted under the same Apache 2.0 license, per the DCO and section 5 of the
+Apache License. You retain the copyright on your contributions.
 
-## Pull requests
+The coding-to-PR workflow is the only requirements driver. Keep deterministic setup, Git,
+verification, evidence, publication, retry, and cleanup in code; reserve AgentRuns for judgment.
+Do not add a compatibility facade, a second workflow, a plugin system, a provider registry, a
+generic durability interface, or host Docker access.
 
-- Open an issue first for anything larger than a small fix.
-- Keep PRs focused: one concern per PR.
-- Make sure `uv run pytest` and `uv run ruff check .` pass before pushing.
+Changes touching architecture, durable authority, setup, image distribution, Provider Gateway, or
+release behavior must read the corresponding documents linked from [AGENTS.md](AGENTS.md). Prefer a
+small runnable vertical slice and delete superseded code and tests once its real terminal works.
+
+Run one broad suite at a time on small development machines. Repository preparation installs the
+pinned Go, Absurd, and `sqlc` tools plus PostgreSQL when the VM does not already have them, then
+converges a disposable `dorf_test` database. `scripts/dev/check.sh` rejects stale generated SQL,
+prepares every query against that live schema, and runs the Go test and vet suites. PostgreSQL
+integration tests run only when `DORF_TEST_DATABASE_URL` names that disposable database.
