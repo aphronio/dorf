@@ -196,6 +196,20 @@ prove_harness() {
   JOB_ID=""
 }
 
+verify_release_attestation() {
+  local tag="$1"
+  local deadline=$((SECONDS + 600))
+
+  until gh release verify "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      echo "Timed out waiting for GitHub's signed release attestation for $tag." >&2
+      return 1
+    fi
+    sleep 5
+  done
+  gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+}
+
 prove_harness codex
 prove_harness pi
 unset DORF_HARNESS
@@ -265,7 +279,7 @@ gh release create "$RELEASE_TAG" \
   "$ARCHIVE_PATH" \
   "$MANIFEST_PATH"
 gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+verify_release_attestation "$RELEASE_TAG"
 for asset in \
   "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz" \
   "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt" \
