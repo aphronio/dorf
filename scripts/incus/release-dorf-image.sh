@@ -23,8 +23,8 @@ readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/incus-image}"
-readonly NETWORK="${NETWORK:-incusbr0}"
-readonly ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
+readonly CANDIDATE_NETWORK="${NETWORK:-incusbr0}"
+readonly CANDIDATE_ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
 readonly SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
 readonly BUILD_ID="$(date -u +%Y%m%d%H%M%S)"
 readonly CANDIDATE_ALIAS="dorf-candidate-$BUILD_ID"
@@ -97,8 +97,8 @@ go -C "$PROJECT_ROOT" build -o "$BINARY" ./cmd/dorf
 
 IMAGE_ALIAS="$CANDIDATE_ALIAS" \
 BUILD_VM="$CANDIDATE_BUILD_VM" \
-NETWORK="$NETWORK" \
-ROOT_DISK_SIZE="$ROOT_DISK_SIZE" \
+NETWORK="$CANDIDATE_NETWORK" \
+ROOT_DISK_SIZE="$CANDIDATE_ROOT_DISK_SIZE" \
 IMAGE_METADATA_PATH="$METADATA_PATH" \
   "$SCRIPT_DIR/build-dorf-image.sh"
 
@@ -109,8 +109,8 @@ if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 
 export DORF_INCUS_IMAGE="$CANDIDATE_ALIAS"
-export DORF_INCUS_NETWORK="$NETWORK"
-export DORF_INCUS_DISK_SIZE="$ROOT_DISK_SIZE"
+export DORF_INCUS_NETWORK="$CANDIDATE_NETWORK"
+export DORF_INCUS_DISK_SIZE="$CANDIDATE_ROOT_DISK_SIZE"
 "$BINARY" doctor --provider "$PROVIDER_CONNECTION"
 mkdir -p "$EVIDENCE_DIR"
 
