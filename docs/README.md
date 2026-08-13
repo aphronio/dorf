@@ -13,4 +13,5 @@
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
 | Build the credential-free Incus image | [Incus image](implementation/incus-image.md) |
 
-Material under `docs/research/` is archival ecosystem research, not a supported Dorf path.
+Material under `docs/research/` is archival ecosystem research. Material under `docs/history/` is
+completed implementation history. Neither is a source of current Dorf requirements.

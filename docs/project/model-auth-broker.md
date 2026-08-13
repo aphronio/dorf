@@ -1,17 +1,15 @@
 # Brokered Model Authentication for Sandboxes
 
-- **Status:** Accepted 2026-07-29 (decision D035; supersedes D008 for the Codex leg)
-- **Resolves:** the Codex half of [#117](https://github.com/aphronio/dorf/issues/117)
-- **Evidence:** `docs/research/codex-auth-multi-sandbox.md`, section "Validation experiment:
-  CLIProxyAPI as model-plane broker (2026-07-29)", plus the #117 comment thread
-- **Shared boundary:** `docs/project/provider-gateway.md` and decision D036
+- **Status:** Historical decision evidence from 2026-07-29
+- **Current authority:** [Provider Gateway](provider-gateway.md) and decisions D035–D036
+- **Research evidence:** `docs/research/codex-auth-multi-sandbox.md` and issue #117
 
-This page separates what is chosen from what was rejected with evidence and what remains parked
-research. Implementation work is tracked in GitHub issues, not here.
+This page preserves the experiment and rejected alternatives that led to the current boundary. It is
+not an implementation, version, or operator authority.
 
 ## Chosen
 
-One host-side Provider Gateway broker per user machine (pinned, vendored CLIProxyAPI) holds the only
+At the time of the decision, one host-side Provider Gateway broker per user machine held the only
 ChatGPT OAuth bundle and is the single writer for token refresh. Every sandbox runs a real
 `codex app-server` (D003 unchanged) whose *model plane* points at the broker. Nothing refreshable
 and no OpenAI credential ever enters a sandbox. D036 names the shared programmatic facade,
@@ -68,8 +66,8 @@ Concrete choices:
 7. **Explicit failure vocabulary.** Startup auth probe per sandbox; stale auth fails fast as
    `needs-human` with a reconnect remediation naming the Provider Connection. Broker errors are
    translated into Dorf vocabulary; the string "CLIProxyAPI" never reaches users.
-8. **Pin and deliberate upgrades.** The broker's upstream is an undocumented endpoint; track the
-   vendored project's releases deliberately rather than auto-updating.
+8. **Pin and deliberate upgrades.** The broker's upstream is an undocumented endpoint; upgrades
+   require deliberate validation rather than automatic adoption.
 
 ## Validated properties (2026-07-29 experiment)
 
@@ -120,9 +118,9 @@ Each was exercised live against codex-cli 0.138.0 and 0.146.0 with an isolated, 
   Kimi Code, Grok, OpenRouter, or another consumer/provider dialect. See D036 for the capability
   posture.
 
-## Accepted residual risk
+## Accepted residual risk at the time
 
-The broker's upstream remains the undocumented `chatgpt.com/backend-api/codex/responses` path, and
+The broker's upstream used the undocumented `chatgpt.com/backend-api/codex/responses` path, and
 OpenAI may change or block it. This is the same risk class Amp accepted commercially for its
 linked-subscription feature. Mitigation: pinned broker version, explicit failure vocabulary, and
 the exit ramps above (Enterprise tokens; future official individual paths). If the upstream breaks,

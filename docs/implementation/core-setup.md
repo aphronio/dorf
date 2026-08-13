@@ -1,45 +1,17 @@
-# Go application setup
+# Core setup implementation
 
-The supported setup path is the x86_64 Linux Go application described in
-[Getting started](../getting-started.md). It converges native PostgreSQL and Absurd, a local Incus
-daemon and credential-free Codex image, the pinned Provider Gateway, GitHub App authority, and a
-repository contract. It does not create setup state, run a workflow engine, contact a cloud
-durability service, use the host Docker socket, or invoke Python.
+Operator installation and diagnosis live in [Getting started](../getting-started.md) and
+[Support](../support.md). This page maps setup behavior to its code authorities.
 
-## Boundaries
+- Host package and service convergence: [`internal/hostsetup`](../../internal/hostsetup)
+- PostgreSQL and durable-runtime initialization: [`cmd/dorf/main.go`](../../cmd/dorf/main.go) and
+  [`internal/postgres`](../../internal/postgres)
+- Readiness observations and remediation: [`internal/doctor`](../../internal/doctor)
+- Provider installation and connection: [`internal/gateway`](../../internal/gateway) and the
+  [Provider Gateway boundary](../project/provider-gateway.md)
+- Image installation and verification: [`internal/release`](../../internal/release) and the
+  [Incus image authority map](incus-image.md)
 
-- `dorf setup --provider NAME` initializes the pinned Absurd schema when necessary, applies Dorf's
-  PostgreSQL schema, and runs direct readiness checks.
-- `dorf provider connect chatgpt --name NAME` installs the verified CLIProxyAPI 7.2.104 x86_64
-  binary under the Provider Gateway state directory, binds it to the exact private Incus bridge,
-  completes device authentication, and enables the Responses WebSocket capability used by Codex.
-- `dorf image install --manifest FILE --archive FILE` verifies and imports the release's
-  credential-free x86_64 Incus VM.
-- `dorf doctor` reports bounded facts and remediation for PostgreSQL, Absurd, Incus, the image,
-  Provider Gateway, optional repository contract, and optional GitHub repository authority.
-
-Host package installation remains an explicit administrator operation. Ubuntu 24.04 is the proven
-recipe; operators with an already usable local Incus daemon need no distribution mutation. Setup
-does not commandeer partially configured Incus storage or networking.
-
-## Exact support posture
-
-The official artifact and Incus image are x86_64 Linux only. macOS cannot host the local Incus VM
-daemon and is unsupported; Dorf does not invent a remote-Sandbox mode to claim parity. Another
-Linux distribution is supported only at the capability boundary after its operator installs a
-working local Incus daemon.
-
-## Diagnosis
-
-Readiness checks are observations, not completion flags. Rerunning setup rechecks current state and
-performs only idempotent PostgreSQL/Absurd initialization. Failures retain separate ownership and
-one concrete remediation. No raw provider credential, scoped route key, GitHub private key, Codex
-control capability, transcript, or arbitrary environment dump is rendered.
-
-## Clean-machine proof limit
-
-The historical Ubuntu 24.04 Incus/image/provider terminals remain evidence for the native
-dependencies. Issue #38's repository proof can establish the static Go artifact, schema bootstrap,
-unit behavior, and bounded diagnostics in this VM. A fresh nested Incus host, live ChatGPT device
-authorization, and GitHub App authority are infrastructure/external boundaries and must be recorded
-by the final orchestrator rather than inferred from tests.
+Setup must remain convergent and observational: rerunning it rechecks current authorities and only
+performs idempotent initialization. It must not commandeer operator-owned Incus configuration,
+persist derived readiness flags, expose credentials, or infer external proof from unit tests.

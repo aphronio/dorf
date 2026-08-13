@@ -1,4 +1,9 @@
-# Durable Job simplification checklist
+# Historical: Durable Job simplification checklist
+
+This completed implementation checklist is retained as historical evidence. It is not a source of
+current requirements, architecture, versions, or operating procedure. Use
+[`docs/project/architecture.md`](../../project/architecture.md),
+[`docs/project/decisions.md`](../../project/decisions.md), and executable code for current authority.
 
 Status: implemented and verified.
 

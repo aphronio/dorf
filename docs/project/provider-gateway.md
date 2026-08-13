@@ -4,11 +4,12 @@ The Provider Gateway is a sibling application subsystem. It owns durable upstrea
 Connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
 Sandbox lifecycle, transcripts, review, or repository policy.
 
-The supported route is ChatGPT subscription to Codex Responses WebSockets through pinned
-CLIProxyAPI 7.2.104. `dorf provider connect chatgpt` installs the checksum-verified x86_64 Linux
-broker, binds it to the selected private Incus bridge rather than wildcard/LAN, completes one
-device login, and records protected connection metadata. The broker is the sole upstream credential
-and refresh writer. Each Sandbox receives only a scoped broker route and Codex configuration.
+The supported route is ChatGPT subscription to Codex Responses WebSockets through the pinned broker.
+`dorf provider connect chatgpt` installs its checksum-verified artifact, binds it to the selected
+private Incus bridge rather than wildcard/LAN, completes one device login, and records protected
+connection metadata. Executable code owns the exact broker version and artifact integrity. The broker
+is the sole upstream credential and refresh writer. Each Sandbox receives only a scoped broker route
+and Codex configuration.
 
 The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
 route configuration and keys, and the broker executable live under the configured

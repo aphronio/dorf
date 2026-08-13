@@ -17,8 +17,8 @@ Read only the authority relevant to the task:
 - [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and dogfood operations.
 - [Release Process](docs/releasing.md): release operator entry point.
 
-Material under `docs/research/` is archival and non-normative. Read it only for an explicit ecosystem
-comparison; it is not a source of Dorf requirements.
+Material under `docs/research/` and `docs/history/` is archival and non-normative. Read research only
+for an explicit ecosystem comparison; neither directory is a source of Dorf requirements.
 
 ## Operating Rules
 
