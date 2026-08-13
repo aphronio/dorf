@@ -1540,7 +1540,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D066 — One credential-free image carries both verified Harnesses
 
-- **Status:** Accepted packaging direction; same-fingerprint dual-Harness release proof required — 2026-08-13
+- **Status:** Accepted and proven by the immutable v0.2.0 release — 2026-08-14
 - **Decision:** Publish one Debian 13 Incus image containing exact Codex and Pi npm packages over the
   shared workstation baseline. `DORF_HARNESS` selects one runtime adapter; it does not select another
   image. The image contains no Harness authentication, Provider Route key, session, or configuration.
@@ -1551,6 +1551,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   no-change coding Jobs, including exact native Thread/Turn binding, Revision Evidence, route
   revocation, and Sandbox cleanup, before publication. The repository release command is the only
   procedure authority for that proof and publication.
+- **Proof:** The immutable v0.2.0 release targets source commit
+  `c9d597f21068bacf5650939781b5f2ad8d3b854d`; its signed GitHub
+  attestation binds the manifest and archive, and the manifest records combined-image fingerprint
+  `ea537b1b6d5aa503eb5a1728988f31d05ce37984635303f1eae5bf3640748781`. Separate
+  Codex and Pi Jobs completed against that fingerprint with exact Revision Evidence, route
+  revocation, and Sandbox cleanup before publication.
 - **Why:** The shared Debian and cross-repository toolchain dominate image size. Duplicating that
   baseline for two small Harness packages increases release, download, storage, rollback, and
   operator-selection surface without adding isolation: the Job-owned Sandbox and scoped Provider
