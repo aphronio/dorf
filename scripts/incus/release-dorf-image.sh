@@ -39,6 +39,11 @@ readonly PROOF_ROOT="$(mktemp -d)"
 readonly BINARY="$PROOF_ROOT/dorf"
 JOB_ID=""
 
+if [[ -z "${DORF_DATABASE_URL:-}" && -f "$PROJECT_ROOT/.dorf/test-database-url" ]]; then
+  IFS= read -r DORF_DATABASE_URL <"$PROJECT_ROOT/.dorf/test-database-url"
+  export DORF_DATABASE_URL
+fi
+
 cleanup() {
   if [[ -n "$JOB_ID" ]]; then
     "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || true
