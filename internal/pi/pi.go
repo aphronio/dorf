@@ -3,6 +3,7 @@ package pi
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -17,6 +18,12 @@ const (
 	sessionDir = "/root/.pi/agent/sessions/dorf"
 	routeKey   = "/root/.config/dorf/provider-route.key"
 	modelsFile = "/root/.pi/agent/models.json"
+	rpcDir     = "/run/dorf/pi-rpc"
+	rpcInput   = rpcDir + "/input"
+	rpcEvents  = rpcDir + "/events.jsonl"
+	rpcErrors  = rpcDir + "/stderr"
+	rpcConfig  = rpcDir + "/config.sha256"
+	rpcUnit    = "dorf-pi-rpc.service"
 )
 
 type Agent struct {
@@ -49,7 +56,8 @@ func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, mode
 }
 
 func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "rm", "-f", routeKey, modelsFile)
+	script := "set -eu; systemctl stop " + rpcUnit + " >/dev/null 2>&1 || true; rm -f " + rpcInput + " " + rpcEvents + " " + rpcErrors + " " + rpcConfig + " " + routeKey + " " + modelsFile + "; rmdir " + rpcDir + " >/dev/null 2>&1 || true"
+	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script)
 	if err != nil {
 		return err
 	}
@@ -59,9 +67,9 @@ func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
 	return nil
 }
 
-func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, _ string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
 	threadID := sandboxName
-	if err := a.runTurn(ctx, sandboxName, workspace, threadID, input, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, sandboxName, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
 		return spine.HarnessBinding{}, err
 	}
 	return a.latestBinding(ctx, sandboxName, threadID)
@@ -75,12 +83,12 @@ func (a Agent) ReadTurns(ctx context.Context, sandboxName, threadID string) (spi
 	return a.readHistory(ctx, sandboxName, threadID, false)
 }
 
-func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, _ string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
 	before, err := a.readHistory(ctx, sandboxName, threadID, false)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, sandboxName, workspace, threadID, input, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, sandboxName, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
 		return spine.HarnessBinding{}, err
 	}
 	after, err := a.readHistory(ctx, sandboxName, threadID, false)
@@ -93,28 +101,53 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, 
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: after.Turns[len(after.Turns)-1]}, nil
 }
 
-func (Agent) SteerTurn(context.Context, string, string, string, string, string) (string, error) {
-	return "", fmt.Errorf("Pi active-Turn steering is not yet supported")
+func (a Agent) SteerTurn(ctx context.Context, sandboxName, _ string, targetTurnID, agentRunID, input string) (string, error) {
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	response, err := a.rpcCommand(ctx, sandboxName, agentRunID, "steer", input)
+	if err != nil {
+		return "", err
+	}
+	if !response.Success {
+		return "", fmt.Errorf("Pi RPC steer rejected: %s", response.Error)
+	}
+	return targetTurnID, nil
 }
 
 func (a Agent) WaitTurn(ctx context.Context, sandboxName, threadID, turnID string) (spine.HarnessBinding, error) {
-	history, err := a.readHistory(ctx, sandboxName, threadID, false)
-	if err != nil {
-		return spine.HarnessBinding{}, err
-	}
-	for _, turn := range history.Turns {
-		if turn.ID == turnID {
-			return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
+	ctx, cancel := a.timeoutContext(ctx)
+	defer cancel()
+	for {
+		history, err := a.readHistory(ctx, sandboxName, threadID, false)
+		if err != nil {
+			return spine.HarnessBinding{}, err
+		}
+		found := false
+		for _, turn := range history.Turns {
+			if turn.ID != turnID {
+				continue
+			}
+			found = true
+			if turn.Status != "running" && turn.Status != "inProgress" {
+				return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
+			}
+		}
+		if !found {
+			return spine.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
+		}
+		select {
+		case <-ctx.Done():
+			return spine.HarnessBinding{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return spine.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, _ string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce string, input, model, effort string) (spine.HarnessBinding, error) {
 	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, sandboxName, workspace, sandboxName, input, model, effort, true); err != nil {
+	if err := a.runTurn(ctx, sandboxName, workspace, sandboxName, submissionNonce, input, model, effort, true); err != nil {
 		return spine.HarnessBinding{}, err
 	}
 	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
@@ -148,22 +181,138 @@ func (a Agent) latestBinding(ctx context.Context, sandboxName, threadID string) 
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) runTurn(ctx context.Context, sandboxName, workspace, threadID, input, model, effort string, readOnly bool) error {
+func (a Agent) runTurn(ctx context.Context, sandboxName, workspace, threadID, requestID, input, model, effort string, readOnly bool) error {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	tools := "read,bash,edit,write,grep,find,ls"
 	if readOnly {
 		tools = "read,grep,find,ls"
 	}
-	script := "set -eu; IFS= read -r DORF_PROVIDER_ROUTE_KEY < " + routeKey + "; export DORF_PROVIDER_ROUTE_KEY; cd \"$1\"; exec pi --offline --mode json --session-id \"$2\" --session-dir " + sessionDir + " --provider dorf --model \"$3\" --thinking \"$4\" --tools \"$5\" --approve"
-	result, err := a.Sandbox.Exec(ctx, sandboxName, []byte(input), "bash", "-lc", script, "dorf-pi", workspace, threadID, model, effort, tools)
+	before, err := a.readHistory(ctx, sandboxName, threadID, true)
+	if err != nil {
+		return err
+	}
+	if err := a.ensureRPC(ctx, sandboxName, workspace, threadID, model, effort, tools); err != nil {
+		return err
+	}
+	response, err := a.rpcCommand(ctx, sandboxName, requestID, "prompt", input)
+	if err != nil {
+		return err
+	}
+	if !response.Success {
+		return &rpcRejectionError{reason: "Pi RPC prompt rejected before submission: " + response.Error}
+	}
+	for {
+		after, err := a.readHistory(ctx, sandboxName, threadID, true)
+		if err != nil {
+			return err
+		}
+		if len(after.Turns) == len(before.Turns)+1 {
+			return nil
+		}
+		if len(after.Turns) > len(before.Turns)+1 {
+			return fmt.Errorf("Pi RPC prompt created more than one native Turn")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func (a Agent) ensureRPC(ctx context.Context, sandboxName, workspace, threadID, model, effort, tools string) error {
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{workspace, threadID, model, effort, tools}, "\x00"))))
+	script := `set -eu
+root=$1; expected=$2; workspace=$3; thread=$4; model=$5; effort=$6; tools=$7
+if systemctl is-active --quiet ` + rpcUnit + `; then
+  test "$(cat ` + rpcConfig + `)" = "$expected"
+  exit 0
+fi
+systemctl reset-failed ` + rpcUnit + ` >/dev/null 2>&1 || true
+install -d -m 700 "$root"
+rm -f ` + rpcInput + ` ` + rpcEvents + ` ` + rpcErrors + `
+mkfifo -m 600 ` + rpcInput + `
+: > ` + rpcEvents + `
+: > ` + rpcErrors + `
+printf '%s\n' "$expected" > ` + rpcConfig + `
+systemd-run --unit=` + rpcUnit + ` --collect --quiet \
+  bash -lc 'set -eu; workspace=$1; thread=$2; model=$3; effort=$4; tools=$5; root=$6; IFS= read -r DORF_PROVIDER_ROUTE_KEY < ` + routeKey + `; export DORF_PROVIDER_ROUTE_KEY; cd "$workspace"; exec 3<>"$root/input"; exec pi --offline --mode rpc --session-id "$thread" --session-dir ` + sessionDir + ` --provider dorf --model "$model" --thinking "$effort" --tools "$tools" --approve <&3 >>"$root/events.jsonl" 2>>"$root/stderr"' \
+  dorf-pi-rpc "$workspace" "$thread" "$model" "$effort" "$tools" "$root"
+for _ in $(seq 1 50); do
+  systemctl is-active --quiet ` + rpcUnit + ` && exit 0
+  sleep 0.1
+done
+cat ` + rpcErrors + ` >&2
+exit 1`
+	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script, "dorf-pi-rpc-start", rpcDir, digest, workspace, threadID, model, effort, tools)
 	if err != nil {
 		return err
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("run Pi Turn: %s", strings.TrimSpace(result.Stderr))
+		return fmt.Errorf("start Pi RPC controller: %s", strings.TrimSpace(result.Stderr))
 	}
 	return nil
+}
+
+type rpcResponse struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+}
+
+type rpcRejectionError struct{ reason string }
+
+func (e *rpcRejectionError) Error() string        { return e.reason }
+func (*rpcRejectionError) DefiniteNoSubmit() bool { return true }
+
+func (a Agent) rpcCommand(ctx context.Context, sandboxName, requestID, command, message string) (rpcResponse, error) {
+	request, err := json.Marshal(map[string]string{"id": requestID, "type": command, "message": message})
+	if err != nil {
+		return rpcResponse{}, err
+	}
+	request = append(request, '\n')
+	result, err := a.Sandbox.Exec(ctx, sandboxName, request, "bash", "-lc", "set -eu; cat > "+rpcInput)
+	if err != nil {
+		return rpcResponse{}, err
+	}
+	if result.ExitCode != 0 {
+		return rpcResponse{}, fmt.Errorf("send Pi RPC %s: %s", command, strings.TrimSpace(result.Stderr))
+	}
+	return a.waitRPCResponse(ctx, sandboxName, requestID, command)
+}
+
+func (a Agent) waitRPCResponse(ctx context.Context, sandboxName, requestID, command string) (rpcResponse, error) {
+	for {
+		result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "cat", rpcEvents)
+		if err != nil {
+			return rpcResponse{}, err
+		}
+		if result.ExitCode != 0 {
+			return rpcResponse{}, fmt.Errorf("read Pi RPC events: %s", strings.TrimSpace(result.Stderr))
+		}
+		scanner := bufio.NewScanner(strings.NewReader(result.Stdout))
+		for scanner.Scan() {
+			var response rpcResponse
+			if json.Unmarshal(scanner.Bytes(), &response) != nil || response.Type != "response" || response.ID != requestID {
+				continue
+			}
+			if response.Command != command {
+				return rpcResponse{}, fmt.Errorf("Pi RPC request %s returned command %q", requestID, response.Command)
+			}
+			return response, nil
+		}
+		if err := scanner.Err(); err != nil {
+			return rpcResponse{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return rpcResponse{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func (a Agent) readHistory(ctx context.Context, sandboxName, threadID string, allowMissing bool) (spine.HarnessHistory, error) {

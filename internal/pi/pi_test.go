@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aphronio/dorf/internal/incus"
 )
@@ -15,16 +16,74 @@ type recordingRunner struct {
 	calls  int
 }
 
-type scriptedRunner struct {
-	results []incus.Result
-	args    [][]string
+type rejectedRPCPromptRunner struct{}
+
+func (*rejectedRPCPromptRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
+	command := strings.Join(args, " ")
+	if strings.Contains(command, "events.jsonl") {
+		return incus.Result{Stdout: `{"id":"run-1","type":"response","command":"prompt","success":false,"error":"prompt rejected"}`}, nil
+	}
+	if strings.Contains(command, sessionDir) {
+		return incus.Result{Stdout: `{"type":"session","version":3,"id":"sandbox"}`}, nil
+	}
+	return incus.Result{}, nil
 }
 
-func (r *scriptedRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
-	r.args = append(r.args, append([]string(nil), args...))
-	result := r.results[0]
-	r.results = r.results[1:]
-	return result, nil
+type acceptedRPCPromptRunner struct {
+	before    string
+	after     string
+	requestID string
+	submitted bool
+}
+
+type progressingHistoryRunner struct {
+	reads int
+}
+
+type acceptedRPCSteerRunner struct {
+	request []byte
+}
+
+func (r *acceptedRPCSteerRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
+	if len(input) > 0 {
+		r.request = append([]byte(nil), input...)
+		return incus.Result{}, nil
+	}
+	if strings.Join(args, " ") == "exec sandbox -- cat "+rpcEvents {
+		return incus.Result{Stdout: `{"id":"run-steer","type":"response","command":"steer","success":true}`}, nil
+	}
+	return incus.Result{}, nil
+}
+
+func (r *progressingHistoryRunner) Run(_ context.Context, _ string, _ []byte, _ ...string) (incus.Result, error) {
+	r.reads++
+	stopReason := "toolUse"
+	content := `[{"type":"toolCall","id":"call-1","name":"read","arguments":{}}]`
+	if r.reads > 1 {
+		stopReason = "stop"
+		content = `[{"type":"text","text":"done"}]`
+	}
+	return incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-job"}
+{"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"inspect"}}
+{"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":` + content + `,"stopReason":"` + stopReason + `"}}`}, nil
+}
+
+func (r *acceptedRPCPromptRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
+	command := strings.Join(args, " ")
+	if strings.Contains(string(input), `"type":"prompt"`) {
+		r.submitted = true
+		return incus.Result{}, nil
+	}
+	if command == "exec sandbox -- cat "+rpcEvents {
+		return incus.Result{Stdout: `{"id":"` + r.requestID + `","type":"response","command":"prompt","success":true}`}, nil
+	}
+	if strings.Contains(command, "ambiguous Pi session identity") {
+		if r.submitted {
+			return incus.Result{Stdout: r.after}, nil
+		}
+		return incus.Result{Stdout: r.before}, nil
+	}
+	return incus.Result{}, nil
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
@@ -104,26 +163,59 @@ func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
 	twoTurns := oneTurn + `
 {"type":"message","id":"user0002","parentId":"assist01","message":{"role":"user","content":"second"}}
 {"type":"message","id":"assist02","parentId":"user0002","message":{"role":"assistant","content":[{"type":"text","text":"second done"}],"stopReason":"stop"}}`
-	runner := &scriptedRunner{results: []incus.Result{{Stdout: oneTurn}, {}, {Stdout: twoTurns}}}
+	runner := &acceptedRPCPromptRunner{before: oneTurn, after: twoTurns, requestID: "run-2"}
 	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
 
 	binding, err := agent.StartTurn(context.Background(), "sandbox", "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.args) != 3 || binding.Harness != Harness || binding.ThreadID != "dorf-job" {
-		t.Fatalf("calls=%d binding=%#v", len(runner.args), binding)
+	if binding.Harness != Harness || binding.ThreadID != "dorf-job" {
+		t.Fatalf("binding=%#v", binding)
 	}
 	if binding.Turn.ID != "user0002" || binding.Turn.Status != "completed" || binding.Turn.Output != "second done" {
 		t.Fatalf("follow-up Turn=%#v", binding.Turn)
 	}
-	if !strings.Contains(strings.Join(runner.args[1], " "), `--session-id "$2"`) {
-		t.Fatalf("follow-up did not target the bound Pi session: %q", runner.args[1])
+}
+
+func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
+	runner := &acceptedRPCSteerRunner{}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+
+	accepted, err := agent.SteerTurn(context.Background(), "sandbox", "thread", "turn-active", "run-steer", "change direction")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted != "turn-active" {
+		t.Fatalf("accepted Turn=%q", accepted)
+	}
+	if !strings.Contains(string(runner.request), `"id":"run-steer"`) || !strings.Contains(string(runner.request), `"type":"steer"`) || !strings.Contains(string(runner.request), `"message":"change direction"`) {
+		t.Fatalf("RPC request=%s", runner.request)
 	}
 }
 
-func TestActiveTurnSteerIsExplicitlyUnsupported(t *testing.T) {
-	if _, err := (Agent{}).SteerTurn(context.Background(), "sandbox", "thread", "turn", "run", "input"); err == nil || !strings.Contains(err.Error(), "not yet supported") {
-		t.Fatalf("steer error=%v", err)
+func TestInitialTurnReportsRPCPreflightRejectionAsDefinitelyNotSubmitted(t *testing.T) {
+	agent := Agent{Sandbox: incus.Sandbox{Runner: &rejectedRPCPromptRunner{}}}
+
+	_, err := agent.StartInitialTurn(context.Background(), "sandbox", "/workspace/job", "run-1", "inspect", "gpt-test", "low")
+	if err == nil || !strings.Contains(err.Error(), "prompt rejected") {
+		t.Fatalf("initial Turn error=%v", err)
+	}
+	definite, ok := err.(interface{ DefiniteNoSubmit() bool })
+	if !ok || !definite.DefiniteNoSubmit() {
+		t.Fatalf("preflight rejection is not definite-no-submit: %T %v", err, err)
+	}
+}
+
+func TestWaitTurnObservesExactNativeTurnUntilTerminal(t *testing.T) {
+	runner := &progressingHistoryRunner{}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}, Timeout: time.Second}
+
+	binding, err := agent.WaitTurn(context.Background(), "sandbox", "dorf-job", "user0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.reads != 2 || binding.ThreadID != "dorf-job" || binding.Turn.ID != "user0001" || binding.Turn.Status != "completed" || binding.Turn.Output != "done" {
+		t.Fatalf("reads=%d binding=%#v", runner.reads, binding)
 	}
 }
