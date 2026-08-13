@@ -16,9 +16,12 @@ Read only the authority relevant to the task:
 - [Incus Image](docs/implementation/incus-image.md): image construction, release, and installation authorities.
 - [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and dogfood operations.
 - [Release Process](docs/releasing.md): release operator entry point.
+- [Sandbox and VM Watchlist](docs/research/sandbox-vm-watchlist.md): non-normative candidates and
+  current evaluation priority; consult when discussing or selecting Sandbox or VM providers.
 
 Material under `docs/research/` and `docs/history/` is archival and non-normative. Read research only
-for an explicit ecosystem comparison; neither directory is a source of Dorf requirements.
+for an explicit ecosystem comparison, including any Sandbox or VM provider discussion; neither
+directory is a source of Dorf requirements.
 
 ## Operating Rules
 
