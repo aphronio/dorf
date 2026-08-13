@@ -6,26 +6,9 @@ GitHub issues own temporary implementation scope.
 
 ## Build a small thing that composes
 
-Dorf is the open-source control plane for running agent harnesses on infrastructure you control:
-your agents, your infrastructure, one API. The direction is to carry a verified Harness
-configuration, its skills, extensions or plugins, project instructions, workspace setup, and
-vendor-supported connection into compatible isolated infrastructure without rebuilding the agent
-system in a new framework.
-
-Dorf is not a universal agent organization, model or tool harness, or generic automation canvas.
-Its control-plane guarantees span accepted intent, AgentRuns, Sandbox custody, external-effect
-reconciliation, recovery, Evidence, durable attachment of the workflow-defined Outcome, and cleanup.
-Harness-native session durability is an input to that contract, not Dorf's main differentiator.
-
-Coding-to-PR is the first verified Core dogfood workflow. Native workflows should compose the same
-intended Core contract that ordinary clients and other products may later embed, using deterministic
-code, Checks, budgets, approvals, Evidence, and explicit Outcomes. They must not receive a privileged
-hidden path. Transport, SDK, and public compatibility promises remain uncommitted until real
-portability implementations and external-client use prove them. Dynamic agent-authored recipes are
-a later experience layer.
-
-This is the building-block posture, not a promise to build every possible workflow. Make one Job
-trustworthy, then let real workflows compose those simple blocks into larger useful machinery.
+Product direction and vocabulary live in the [North Star](north-star.md). Build the smallest
+reliable control-plane primitive required by a proven workflow, then let real use earn broader seams.
+Do not turn possible Harnesses, Sandboxes, clients, or workflows into speculative abstractions.
 
 ## Build from conviction, not competitor parity
 

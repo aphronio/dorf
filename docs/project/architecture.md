@@ -153,28 +153,8 @@ admission and render the same facts; they are not separate workflow engines.
 
 ## Native workflow composition
 
-Native workflows are Core dogfood. They should compose AgentRuns with deterministic code, Checks,
-budgets, approvals, Evidence, and explicit Outcomes through the same intended Core contract that
-ordinary clients and other products may later embed. They must not depend on a privileged internal
-path. Transport, SDK, and public compatibility promises remain uncommitted until real portability
-implementations and external-client use prove them.
-
-The desired authoring unit is ordinary versioned source plus a small machine-readable contract:
-
-- typed input and workflow-specific outcomes;
-- required Harness, Sandbox, provider connections, secrets, and capabilities;
-- deterministic operations and bounded AgentRun judgment;
-- budgets and attention boundaries;
-- per-run Checks and offline evaluation cases; and
-- provenance, immutable version, promotion, rollback, and upgrade policy.
-
-Agent-friendly authoring means scaffolding, examples, schemas, deterministic fixtures, local
-evaluation, and diagnostics that another agent can use. Agents propose reviewable source changes;
-they do not activate new powers, credentials, or production workflow versions without policy and
-human approval.
-
-Dynamic agent-authored recipes are a later UX layer. They do not justify a generic automation
-canvas, graph framework, agent builder, model/tool Harness, registry, or marketplace.
+Native workflows must use the same application boundary as other clients rather than a privileged
+internal path. Their product and authoring direction lives in the [North Star](north-star.md).
 
 ## Current coding composition
 
@@ -221,24 +201,15 @@ product requirements; they are not implied by choosing Absurd.
 Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
 
-## Harness and Sandbox portability
+## Harness and Sandbox adapters
 
-Incus is the only verified Sandbox provider and Codex the only verified Harness. Their
-adapters should not leak vendor protocol into workflow facts, but interfaces alone do not justify an
-agnostic support claim.
-
-A verified profile covers the Harness version and configuration, skills, extensions or plugins,
-project instructions, workspace image or setup and dependencies, vendor-supported credential or
-subscription connection, host constraints, tools, isolation, recovery, interruption, and terminal
-observation. Connection custody does not imply copying raw user secrets into the Sandbox; scoped
-routing or injection remains adapter- and profile-specific. Common consumer and workflow code must
-have no Harness- or Sandbox-specific branches beyond profile selection and capability admission.
-D063 records the current proof order. Mac-like environments and sensitive enterprise experimentation
-are motivating future scenarios, not verified capabilities.
+Incus is the only verified Sandbox provider and Codex the only verified Harness. Their adapters must
+not leak vendor protocol into workflow facts. Support direction and proof order live in the
+[North Star](north-star.md).
 
 Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
-workflow authoring need makes that boundary materially smaller. It consumes a dedicated queue through
-a small versioned contract and may not leak vendor types into core Job authority.
+workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small
+versioned contract and may not leak vendor types into core Job authority.
 
 ## Dependency budget
 

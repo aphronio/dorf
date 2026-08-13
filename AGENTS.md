@@ -45,11 +45,6 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 
 ## Working Rules
 
-- Coding-to-PR is the only currently verified workflow. Core portability is the next proof: add a
-  second supported Harness on Incus, then Codex on a second Sandbox provider, then cross the second
-  Harness and provider. Common client and workflow code must not branch beyond profile selection and
-  capability admission. General workflow authoring follows that proof and does not authorize a
-  generic workflow API.
 - Trusted clients such as the CLI or Agent0 compose the same application boundary. CI, HTTP,
   webhooks, MCP, schedules, Slack, and user interfaces are trigger or presentation adapters, not
   workflow authorities.
@@ -63,8 +58,7 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
   spending agent context. Keep Dorf integration at the development-tooling seam and out of
   managed product code.
 - Incus is the first Sandbox provider. Codex app-server is the first Agent runner;
-  tmux and SSH remain break-glass observation and takeover tools. Describe multiple Harnesses and
-  Sandboxes as product direction until a real second implementation proves each seam.
+  tmux and SSH remain break-glass observation and takeover tools.
 - The Go and Absurd replacement has no compatibility or old-data requirement. Do not add SQLite/PostgreSQL
   dual writes, migrations, Python facades, deprecated CLI paths, or tests that preserve superseded behavior.
 
