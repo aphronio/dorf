@@ -57,6 +57,15 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			})
 		case WorkDeliverMessage:
 			err = runDeliveryStep(ctx, service, store, job, work)
+		case WorkObserveAgent:
+			terminal, observeErr := observeAgentRun(ctx, service, job, snapshot, work)
+			if observeErr != nil {
+				return Work{}, observeErr
+			}
+			if terminal {
+				continue
+			}
+			return work, nil
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
 		case WorkRunChecks:
@@ -83,6 +92,20 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 			return Work{}, err
 		}
 	}
+}
+
+func observeAgentRun(ctx context.Context, service spine.Service, job spine.Job, snapshot Snapshot, work Work) (bool, error) {
+	for i := range snapshot.Deliveries {
+		run := snapshot.Deliveries[i].AgentRun
+		if run.ID != work.FactID {
+			continue
+		}
+		if run.JobID != job.ID || run.Role != "implement" || run.State != spine.AgentRunActive {
+			return false, fmt.Errorf("AgentRun observation changed from exact active implementation AgentRun %s", work.FactID)
+		}
+		return service.ObserveAgentRun(ctx, job, run)
+	}
+	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
 }
 
 func runSetupStep(ctx context.Context, service spine.Service, store postgres.Store, job spine.Job, work Work) error {

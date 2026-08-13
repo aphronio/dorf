@@ -88,6 +88,10 @@ needed to reconcile uncertain delivery. Harness transcript and workspace details
 their adapters. Retrying uncertain delivery reconciles the same AgentRun; it does not silently
 create another judgment attempt.
 
+Once an implementation Turn is durably bound as active, read-only harness observation is separate
+from Message delivery. The workflow alternates observation with an interruptible durable wait, so
+an accepted steer can wake and overtake polling without another controller path or duplicate Turn.
+
 Thread reuse is a workflow choice. Coding may reuse an implementation Thread and isolate reviewers;
 research may choose a different pattern. That choice does not create a second durable conversation
 primitive.

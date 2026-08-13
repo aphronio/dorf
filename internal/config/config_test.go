@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadUsesSetupOwnedXDGAppJSON(t *testing.T) {
@@ -61,5 +62,36 @@ func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
 	}
 	if want := filepath.Join(dataHome, "dorf", "provider-gateway"); cfg.GatewayStatePath != want {
 		t.Fatalf("gateway state=%q want=%q", cfg.GatewayStatePath, want)
+	}
+}
+
+func TestLoadSelectsOneConcreteHarnessProfile(t *testing.T) {
+	t.Setenv("DORF_HARNESS", "pi")
+	t.Setenv("DORF_INCUS_IMAGE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness != "pi" || cfg.IncusImage != "dorf-pi" {
+		t.Fatalf("profile harness=%q image=%q", cfg.Harness, cfg.IncusImage)
+	}
+}
+
+func TestLoadRejectsUnknownHarness(t *testing.T) {
+	t.Setenv("DORF_HARNESS", "speculative")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected unknown harness to be rejected")
+	}
+}
+
+func TestLoadUsesHarnessIndependentTurnTimeout(t *testing.T) {
+	t.Setenv("DORF_HARNESS", "pi")
+	t.Setenv("DORF_TURN_TIMEOUT", "90s")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TurnTimeout != 90*time.Second {
+		t.Fatalf("turn timeout=%s want=1m30s", cfg.TurnTimeout)
 	}
 }

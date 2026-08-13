@@ -234,11 +234,14 @@ func (c agentRunContract) bindAndSettle(ctx context.Context, run AgentRun, bindi
 		return HarnessTurn{}, err
 	}
 	run.Harness, run.ThreadID, run.TurnID = binding.Harness, binding.ThreadID, binding.Turn.ID
-	if terminalHarness(binding.Turn.Status) || c.wait == nil || !activeHarness(binding.Turn.Status) {
+	if terminalHarness(binding.Turn.Status) || !activeHarness(binding.Turn.Status) {
 		return binding.Turn, nil
 	}
 	if err := c.reach(ctx, BarrierHarnessActive); err != nil {
 		return HarnessTurn{}, err
+	}
+	if c.wait == nil {
+		return binding.Turn, nil
 	}
 	waited, err := c.wait(ctx, run, binding.Turn.ID)
 	if err != nil {

@@ -342,9 +342,6 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
 			return s.externals.AgentTurns(ctx, job, run.ThreadID)
 		},
-		wait: func(ctx context.Context, run AgentRun, turnID string) (HarnessBinding, error) {
-			return s.externals.AgentWait(ctx, job, run.ThreadID, turnID)
-		},
 		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
 			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
@@ -366,6 +363,33 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 	}
 	_, err := contract.execute(ctx)
 	return err
+}
+
+// ObserveAgentRun reconciles one already-bound implementation Turn without
+// submitting or waiting. The workflow can therefore alternate exact harness
+// inspection with durable message wakes while the Turn remains active.
+func (s Service) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bool, error) {
+	if run.JobID != job.ID || run.Role != "implement" || run.ThreadID == "" || run.TurnID == "" {
+		return false, fmt.Errorf("AgentRun %s is not an exact bound implementation Turn for Job %s", run.ID, job.ID)
+	}
+	contract := agentRunContract{
+		store:   s.store,
+		run:     run,
+		harness: s.externals.Harness(),
+		label:   "harness",
+		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+			return s.externals.AgentTurns(ctx, job, run.ThreadID)
+		},
+		beforeRecord: s.requireClaim,
+		onReadError: func(ctx context.Context, runID string, err error) {
+			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
+		},
+	}
+	turn, err := contract.execute(ctx)
+	if err != nil {
+		return false, err
+	}
+	return terminalHarness(turn.Status), nil
 }
 
 func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {

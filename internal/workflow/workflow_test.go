@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -37,6 +38,16 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	}
 	if WakeEvent("job-a", 2) == WakeEvent("job-a", 3) {
 		t.Fatal("distinct FIFO positions share an immutable Absurd event")
+	}
+}
+
+func TestActiveAgentObservationUsesInterruptiblePoll(t *testing.T) {
+	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2, 30*time.Second)
+	if options.StepName != "dorf/agent-run-wake/v1/run-1/00000000000000000002" {
+		t.Fatalf("active AgentRun wake step = %q", options.StepName)
+	}
+	if options.Timeout != time.Second {
+		t.Fatalf("active AgentRun poll = %s, want 1s", options.Timeout)
 	}
 }
 

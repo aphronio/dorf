@@ -55,6 +55,58 @@ func TestAgentRunPersistsHarnessBeforeFirstSubmission(t *testing.T) {
 	}
 }
 
+func TestAgentRunReturnsAfterDurablyBindingActiveTurn(t *testing.T) {
+	store := &agentRunTestStore{run: AgentRun{ID: "run-1", State: AgentRunPending}}
+	activeBarriers := 0
+	contract := agentRunContract{
+		store:        store,
+		run:          store.run,
+		harness:      "pi",
+		beforeRecord: allowAgentRunRecord,
+		reachBarrier: func(_ context.Context, point string, _ Delivery) error {
+			if point == BarrierHarnessActive {
+				activeBarriers++
+			}
+			return nil
+		},
+		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
+			return HarnessBinding{Harness: "pi", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "running"}}, nil
+		},
+	}
+
+	turn, err := contract.execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.Status != "running" || store.run.State != AgentRunActive {
+		t.Fatalf("active submission returned turn=%#v run=%#v", turn, store.run)
+	}
+	if activeBarriers != 1 {
+		t.Fatalf("active submission barriers=%d, want 1", activeBarriers)
+	}
+}
+
+func TestAgentRunObservationSettlesExactBoundTurn(t *testing.T) {
+	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "pi", ThreadID: "thread-1", TurnID: "turn-1", State: AgentRunActive, BaselineRecorded: true}}
+	contract := agentRunContract{
+		store:        store,
+		run:          store.run,
+		harness:      "pi",
+		beforeRecord: allowAgentRunRecord,
+		history: func(context.Context, AgentRun) (HarnessHistory, error) {
+			return HarnessHistory{Harness: "pi", ThreadID: "thread-1", Turns: []HarnessTurn{{ID: "turn-1", Status: "completed"}}}, nil
+		},
+	}
+
+	turn, err := contract.execute(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.ID != "turn-1" || turn.Status != "completed" || store.run.State != AgentRunCompleted {
+		t.Fatalf("observation returned turn=%#v run=%#v", turn, store.run)
+	}
+}
+
 func TestAgentRunReconcilesLostBoundSubmissionAcknowledgement(t *testing.T) {
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", ThreadID: "thread-1", State: AgentRunSubmitting, BaselineRecorded: true, BaselineTurnID: "before"}}
 	history := HarnessHistory{Harness: "codex", ThreadID: "thread-1", Turns: []HarnessTurn{{ID: "before", Status: "completed"}}}

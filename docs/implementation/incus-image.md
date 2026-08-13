@@ -3,7 +3,7 @@
 Dorf's official Sandbox image is a credential-free Incus VM. Managed repositories own their project
 dependencies and deterministic setup.
 
-- Image construction authority: [`scripts/incus/build-dorf-codex-image.sh`](../../scripts/incus/build-dorf-codex-image.sh)
+- Image construction authority: [`scripts/incus/build-dorf-image.sh`](../../scripts/incus/build-dorf-image.sh)
 - Candidate proof and publication authority: [`scripts/incus/release-dorf-codex-image.sh`](../../scripts/incus/release-dorf-codex-image.sh)
 - Manifest validation and installation contract: [`internal/release/image.go`](../../internal/release/image.go)
 - Operator release commands: [`docs/releasing.md`](../releasing.md)

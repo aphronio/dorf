@@ -22,6 +22,7 @@ const (
 	WorkSetupRepository WorkKind = "setup-repository"
 	WorkRunReviewer     WorkKind = "run-reviewer"
 	WorkDeliverMessage  WorkKind = "deliver-message"
+	WorkObserveAgent    WorkKind = "observe-agent-run"
 	WorkObserveRevision WorkKind = "observe-revision"
 	WorkRunChecks       WorkKind = "run-checks"
 	WorkChooseReview    WorkKind = "choose-review"
@@ -68,6 +69,8 @@ func (w Work) Description() string {
 		return "Run selected reviewer"
 	case WorkDeliverMessage:
 		return "Deliver Message to implementation agent"
+	case WorkObserveAgent:
+		return "Observe active implementation agent"
 	case WorkObserveRevision:
 		return "Inspect implementation checkout"
 	case WorkRunChecks:
@@ -347,16 +350,23 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	}
 	latestInput, latestTurnStart := latestImplementationRuns(f)
 	if latestInput != nil && latestInput.State != spine.AgentRunCompleted {
-		// A failed steer may have no Turn identity when its terminal-target
-		// fallback failed before binding. It is still the latest accepted input
-		// and must not be skipped in favor of an older observed Turn.
-		return work(WorkAttention, latestInput.ID, attentionDetail(f.Job, latestInput.ID, agentRunAttention(*latestInput)))
+		if latestTurnStart != nil && latestInput.ID == latestTurnStart.ID && latestInput.State == spine.AgentRunActive {
+			// The active turn-starting input is observed below. A later unsettled
+			// steer remains attention unless it is selected for delivery above.
+		} else {
+			// A failed steer may have no Turn identity when its terminal-target
+			// fallback failed before binding. It is still the latest accepted input
+			// and must not be skipped in favor of an older observed Turn.
+			return work(WorkAttention, latestInput.ID, attentionDetail(f.Job, latestInput.ID, agentRunAttention(*latestInput)))
+		}
 	}
 	if latestTurnStart != nil && latestTurnStart.State != spine.AgentRunCompleted {
-		// Pending and active Runs normally appear as DeliveryCandidate. If any
-		// nonterminal Run does not, there is no safe delivery operation to
-		// execute from these facts. In particular, a submitting Run must be
-		// reconciled rather than letting Checks race its harness submission.
+		if latestTurnStart.State == spine.AgentRunActive {
+			return work(WorkObserveAgent, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, ""))
+		}
+		// A pending or submitting Run without a delivery candidate cannot be
+		// executed safely. In particular, submission must be reconciled rather
+		// than letting Checks race its harness mutation.
 		return work(WorkAttention, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, agentRunAttention(*latestTurnStart)))
 	}
 

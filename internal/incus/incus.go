@@ -140,7 +140,7 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 		}
 		s.sleep(250 * time.Millisecond)
 	}
-	credentialCheck, err := s.Exec(ctx, metadata.SandboxID, nil, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml")
+	credentialCheck, err := s.Exec(ctx, metadata.SandboxID, nil, "bash", "-lc", "test ! -e /root/.codex/auth.json && test ! -e /root/.pi/agent/auth.json && test ! -e /root/.config/dorf/provider-route.key && test ! -e /root/.codex/config.toml && test ! -e /root/.pi/agent/models.json")
 	if err != nil {
 		return err
 	}
