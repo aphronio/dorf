@@ -1511,8 +1511,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   OpenAI Responses provider. Dorf does not copy Pi or ChatGPT OAuth bundles into the image or
   Sandbox.
 - **Proof boundary:** The accepted evidence currently covers image construction, route creation, one
-  clean initial no-change AgentRun, native Thread and Turn observation, route revocation, and Sandbox
-  cleanup. Controller-loss recovery, follow-up Messages, active-Turn steering, isolated review, and
+  clean initial no-change AgentRun, native Thread and Turn observation, and SIGKILL recovery after
+  submission but before durable binding with exactly one native user Turn, followed by route
+  revocation and Sandbox cleanup. Follow-up Messages, active-Turn steering, isolated review, and
   coding-to-PR remain separate vertical slices; Pi is not a fully supported profile until those
   terminals are proven or explicitly narrowed.
 - **Why:** Pi exposes a small CLI/session boundary, supports the required OpenAI Responses transport,

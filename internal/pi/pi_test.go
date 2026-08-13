@@ -9,14 +9,17 @@ import (
 )
 
 type recordingRunner struct {
-	input []byte
-	args  []string
+	input  []byte
+	args   []string
+	result incus.Result
+	calls  int
 }
 
 func (r *recordingRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
+	r.calls++
 	r.input = append([]byte(nil), input...)
 	r.args = append([]string(nil), args...)
-	return incus.Result{}, nil
+	return r.result, nil
 }
 
 func TestInstallRouteUsesScopedGatewayKeyWithResponsesAPI(t *testing.T) {
@@ -58,5 +61,26 @@ func TestParseSessionRejectsASecondPromptBeforeSettlement(t *testing.T) {
 {"type":"message","id":"user0002","parentId":"user0001","message":{"role":"user","content":"second"}}`
 	if _, _, err := parseSession(raw); err == nil {
 		t.Fatal("expected unsettled prior Turn to be rejected")
+	}
+}
+
+func TestReadInitialTurnsAdoptsNativeTurnAfterLostBinding(t *testing.T) {
+	runner := &recordingRunner{result: incus.Result{Stdout: `{"type":"session","version":3,"id":"dorf-job"}
+{"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"inspect"}}
+{"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}`}}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+
+	history, err := agent.ReadInitialTurns(context.Background(), "dorf-job", "/workspace/job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 1 || history.Harness != Harness || history.ThreadID != "dorf-job" || len(history.Turns) != 1 {
+		t.Fatalf("calls=%d history=%#v", runner.calls, history)
+	}
+	if turn := history.Turns[0]; turn.ID != "user0001" || turn.Status != "completed" || turn.Output != "done" {
+		t.Fatalf("recovered Turn=%#v", turn)
+	}
+	if strings.Contains(strings.Join(runner.args, " "), "exec pi") {
+		t.Fatalf("read-only recovery attempted a Pi submission: %q", runner.args)
 	}
 }
