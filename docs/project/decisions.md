@@ -1062,19 +1062,24 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D049 — Repositories own their development-tool setup
 
 - **Status:** Accepted setup boundary — 2026-08-09; fixed image-inventory sentence superseded by
-  D064 and D066 while repository ownership remains accepted — 2026-08-13
+  D064 and D066 while repository ownership remains accepted — 2026-08-13; PostgreSQL installation
+  changed from a Mise source build to the native distribution package — 2026-08-14
 - **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
   inspection needs. D064 and D066 own the current shared image profile. Dorf's declared
-  `commands.prepare` invokes a repository-owned script that installs missing pinned tools,
-  converges a disposable local database and Absurd schema, and downloads modules. Installation and
-  initialization are deterministic Actions; no AgentRun decides or performs them conversationally.
+  `commands.prepare` invokes a repository-owned script that installs missing pinned repository
+  tools through Mise and installs PostgreSQL from the native distribution package when a local
+  database is needed. The supported Debian workload uses its package-managed cluster; development
+  hosts may instead provide `DORF_TEST_DATABASE_URL`. The script converges the disposable database
+  and Absurd schema and downloads modules. Installation and initialization are deterministic
+  Actions; no AgentRun decides or performs them conversationally.
 - **Cost:** Every fresh Sandbox may pay package-download and initialization time. That cost is
   accepted now because the setup remains visible, editable with the repository, and independent of
   a Dorf-wide image release.
 - **Why:** Different repositories need different toolchains. Encoding all of them in one shared
   image couples repository evolution to image publication and grows a supposedly reusable base.
-  A repository contract is the simplest correct ownership boundary while there are no measured
-  startup constraints.
+  A repository contract is the simplest correct ownership boundary. PostgreSQL's Mise backends
+  compile upstream source, while the supported Sandbox distribution supplies a maintained binary
+  package; using that package removes repeated compilation without coupling PostgreSQL to the image.
 - **Reconsider when:** Repeated measurements show setup materially dominates Job latency or network
   reliability. First add a content-addressed package cache; if that is insufficient, snapshot a
   successfully prepared repository environment behind the same `commands.prepare` contract.

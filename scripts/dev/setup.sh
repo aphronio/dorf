@@ -6,7 +6,9 @@ readonly MISE_VERSION="2026.8.5"
 readonly MISE_SHA256="ee362b6d96c648e27325a8bc7ee866bde4fffc20c88c777c5eb5c3b5c6f3e226"
 readonly MISE="$PROJECT_ROOT/.dorf/bin/mise"
 readonly MISE_BINARY="$PROJECT_ROOT/.dorf/mise/bin/mise"
-readonly DEFAULT_DATABASE_DIR="$PROJECT_ROOT/.dorf/postgres"
+readonly OS_ID="$(. /etc/os-release; printf '%s' "${ID:-}")"
+readonly POSTGRES_MAJOR="17"
+readonly POSTGRES_SOCKET="/var/run/postgresql"
 
 as_root() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -23,14 +25,18 @@ as_root() {
 
 ensure_bootstrap_packages() {
   local missing=false
-  for command in bison curl flex gcc make perl pkg-config runuser sha256sum useradd; do
+  for command in curl sha256sum psql; do
     if ! command -v "$command" >/dev/null 2>&1; then
       missing=true
     fi
   done
-  if command -v pkg-config >/dev/null 2>&1; then
-    for library in openssl readline uuid zlib; do
-      if ! pkg-config --exists "$library"; then
+  if [[ -z "${DORF_TEST_DATABASE_URL:-}" ]]; then
+    if [[ "$OS_ID" != "debian" ]]; then
+      echo "Automatic PostgreSQL setup requires a Debian workload; set DORF_TEST_DATABASE_URL on $OS_ID." >&2
+      exit 1
+    fi
+    for command in createdb createuser pg_ctlcluster pg_isready runuser; do
+      if ! command -v "$command" >/dev/null 2>&1; then
         missing=true
       fi
     done
@@ -39,14 +45,18 @@ ensure_bootstrap_packages() {
     return
   fi
   if ! command -v apt-get >/dev/null 2>&1; then
-    echo "Missing bootstrap tools and no supported apt-get package manager was found." >&2
+    echo "Missing bootstrap tools and no supported apt package manager was found." >&2
     exit 1
+  fi
+  local packages=(ca-certificates coreutils curl postgresql-client)
+  if [[ -z "${DORF_TEST_DATABASE_URL:-}" ]]; then
+    packages+=(postgresql util-linux)
   fi
   as_root env DEBIAN_FRONTEND=noninteractive \
     apt-get -o DPkg::Lock::Timeout=120 update
   as_root env DEBIAN_FRONTEND=noninteractive \
     apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends \
-      bison build-essential ca-certificates curl flex libreadline-dev libssl-dev passwd pkg-config util-linux uuid-dev zlib1g-dev
+      "${packages[@]}"
 }
 
 install_mise() {
@@ -89,47 +99,24 @@ mise_exec() {
   mise_run exec -- "$@"
 }
 
-ensure_postgres_user() {
-  if [[ "$(id -u)" -eq 0 ]] && ! id dorf-postgres >/dev/null 2>&1; then
-    useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin dorf-postgres
-  fi
+postgres_admin() {
+  as_root runuser -u postgres -- "$@"
 }
 
-postgres_exec() {
-  local command=$1
-  shift
-  if [[ "$(id -u)" -ne 0 ]]; then
-    mise_exec "$command" "$@"
-    return
+converge_debian_database() {
+  if ! pg_isready -q -h "$POSTGRES_SOCKET"; then
+    as_root pg_ctlcluster "$POSTGRES_MAJOR" main start
   fi
-  ensure_postgres_user
-  local executable
-  executable="$(mise_run which "$command")"
-  runuser -u dorf-postgres -- "$executable" "$@"
-}
-
-converge_local_database() {
-  local data="$DEFAULT_DATABASE_DIR/data"
-  local socket="$DEFAULT_DATABASE_DIR/socket"
-  local log="$DEFAULT_DATABASE_DIR/postgres.log"
-  mkdir -p "$socket"
-  if [[ "$(id -u)" -eq 0 ]]; then
-    ensure_postgres_user
-    chown -R dorf-postgres:nogroup "$DEFAULT_DATABASE_DIR"
+  local database_user
+  database_user="$(id -un)"
+  if ! psql -d postgres -Atqc 'select 1' 2>/dev/null | grep -qx 1; then
+    postgres_admin createuser "$database_user"
   fi
-  if [[ ! -s "$data/PG_VERSION" ]]; then
-    postgres_exec initdb -D "$data" --auth=trust --no-locale >&2
-  fi
-  if ! postgres_exec pg_ctl -D "$data" status >/dev/null 2>&1; then
-    postgres_exec pg_ctl -D "$data" -l "$log" -o "-k $socket" -w start >&2
-  fi
-  local url="postgresql://dorf-postgres@/dorf_test?host=$socket"
-  local admin_url="postgresql://dorf-postgres@/postgres?host=$socket"
-  if ! postgres_exec psql "$admin_url" -Atqc \
+  if ! postgres_admin psql -d postgres -Atqc \
     "select 1 from pg_database where datname='dorf_test'" | grep -qx 1; then
-    postgres_exec createdb -h "$socket" -U dorf-postgres dorf_test >&2
+    postgres_admin createdb --owner="$database_user" dorf_test
   fi
-  printf '%s\n' "$url"
+  printf 'postgresql:///dorf_test?host=%s\n' "$POSTGRES_SOCKET"
 }
 
 ensure_bootstrap_packages
@@ -141,12 +128,12 @@ mise_run install --locked -y
 
 test_database_url="${DORF_TEST_DATABASE_URL:-}"
 if [[ -z "$test_database_url" ]]; then
-  test_database_url="$(converge_local_database)"
+  test_database_url="$(converge_debian_database)"
 fi
 mkdir -p "$PROJECT_ROOT/.dorf"
 printf '%s\n' "$test_database_url" > "$PROJECT_ROOT/.dorf/test-database-url"
 
-if ! mise_exec psql "$test_database_url" -Atqc 'select 1' | grep -qx 1; then
+if ! psql "$test_database_url" -Atqc 'select 1' | grep -qx 1; then
   echo "Cannot connect to the disposable Dorf test database: $test_database_url" >&2
   exit 1
 fi
@@ -162,6 +149,6 @@ printf '%s\n' \
   "  Mise: $($MISE version)" \
   "  Go: $(mise_exec go version)" \
   "  sqlc: $(mise_exec sqlc version)" \
-  "  PostgreSQL: $(mise_exec psql --version)" \
+  "  PostgreSQL: $(psql --version)" \
   "  DORF_TEST_DATABASE_URL=$test_database_url" \
   "Run checks with: .dorf/bin/mise run check"

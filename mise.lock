@@ -20,13 +20,6 @@ backend = "core:go"
 checksum = "sha256:5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
 url = "https://dl.google.com/go/go1.26.5.linux-amd64.tar.gz"
 
-[[tools.postgres]]
-version = "17.10"
-backend = "vfox:mise-plugins/vfox-postgres"
-
-[tools.postgres."platforms.linux-x64"]
-url = "https://ftp.postgresql.org/pub/source/v17.10/postgresql-17.10.tar.gz"
-
 [[tools.sqlc]]
 version = "1.31.1"
 backend = "aqua:sqlc-dev/sqlc"
