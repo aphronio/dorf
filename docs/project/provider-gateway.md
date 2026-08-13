@@ -4,12 +4,13 @@ The Provider Gateway is a sibling application subsystem. It owns durable upstrea
 Connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
 Sandbox lifecycle, transcripts, review, or repository policy.
 
-The supported route is ChatGPT subscription to Codex Responses WebSockets through the pinned broker.
-`dorf provider connect chatgpt` installs its checksum-verified artifact, binds it to the selected
-private Incus bridge rather than wildcard/LAN, completes one device login, and records protected
-connection metadata. Executable code owns the exact broker version and artifact integrity. The broker
-is the sole upstream credential and refresh writer. Each Sandbox receives only a scoped broker route
-and Codex configuration.
+The supported Connection is a ChatGPT subscription through the pinned broker. Codex consumes its
+scoped route through Responses WebSockets; Pi consumes the same scoped route as an OpenAI Responses
+provider. `dorf provider connect chatgpt` installs the checksum-verified broker artifact, binds it to
+the selected private Incus bridge rather than wildcard/LAN, completes one device login, and records
+protected connection metadata. Executable code owns the exact broker version and artifact integrity.
+The broker is the sole upstream credential and refresh writer. Each Sandbox receives only a scoped
+route and its selected Harness configuration.
 
 The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
 route configuration and keys, and the broker executable live under the configured
@@ -24,9 +25,10 @@ identity derivation and Action settlement state needed for reconciliation.
 - Route creation and revocation use stable Action identities and authenticated management calls.
 - Missing, ambiguous, stale, or non-WebSocket authentication fails before Sandbox mutation.
 - Cleanup is incomplete until the exact Sandbox route is revoked or attention remains observable.
-- Logs and CLI output never render upstream, management, guard, route, GitHub, or Codex control
+- Logs and CLI output never render upstream, management, guard, route, GitHub, or Harness control
   credentials.
 
 Do not add provider pooling, fallback, quotas, a registry, another broker, or a wire dialect until a
-concrete validated consumer requires it. D036 remains the governing decision; D047 changes the
-control plane from Python to Go, not this connection/route authority model.
+concrete validated consumer requires it. D036 remains the governing Gateway decision; D065 records
+Pi's reuse of the route. D047 changes the control plane from Python to Go, not this connection/route
+authority model.

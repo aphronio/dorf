@@ -1435,8 +1435,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted product direction — 2026-08-13
 - **Positioning:** Dorf is the open-source control plane for running agent Harnesses on infrastructure
   its owner controls: your agents, your infrastructure, one API. Core is the product. Whole-setup
-  portability is direction; Codex with local Incus coding-to-PR on the supported host remains the
-  current verified claim.
+  portability is direction; Codex and Pi with local Incus coding-to-PR on the supported host are the
+  current verified Harness claims. D065 records the completed second-Harness proof.
 - **Profile contract:** A verified profile covers the supported Harness version and configuration,
   skills, extensions or plugins, project instructions, workspace image or setup and dependencies,
   vendor-supported credential or subscription connection, host constraints, tools, isolation,
@@ -1452,8 +1452,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   implementations and external-client use prove them. Dynamic agent-authored recipes remain a later
   UX layer; Dorf is not a generic automation canvas, graph framework, agent builder, or model/tool
   Harness.
-- **Proof order:** Starting from Codex on Incus, prove a second supported Harness on Incus, then Codex
-  on a second Sandbox provider, then cross the second Harness and provider. The mechanical oracle is
+- **Proof order:** Starting from Codex on Incus, D065 proves Pi as the second supported Harness on
+  Incus. Next prove Codex on a second Sandbox provider, then cross Pi and that provider. The
+  mechanical oracle is
   that common consumer and workflow code has no Harness- or Sandbox-specific branches beyond profile
   selection and capability admission.
 - **Supersedes and refines:** Supersedes D062's research-workflow-first proof order. It also refines

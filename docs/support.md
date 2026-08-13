@@ -19,12 +19,12 @@ credential-free image, Provider Gateway, repository contract, and GitHub authori
 Ownership guide:
 
 - a minimal Incus command failing outside Dorf is an Incus or host-distribution problem;
-- the official image failing credential or Codex checks is a Dorf image or Codex compatibility
+- the official image failing credential or Harness checks is a Dorf image or Harness compatibility
   problem;
 - broker authentication failing independently is Provider Gateway/upstream provider work;
 - incorrect durable facts, duplicate effects, leaked secrets, or incomplete cleanup are Dorf bugs;
 - absent KVM or disabled virtualization is host configuration;
 - another OS or architecture is unsupported, not silently equivalent.
 
-Never attach Provider Gateway state, credentials, environment dumps, or Codex transcript contents
+Never attach Provider Gateway state, credentials, environment dumps, or Harness transcript contents
 to a report. `dorf inspect JOB` contains stable IDs and bounded observed facts suitable for triage.
