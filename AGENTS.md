@@ -1,9 +1,5 @@
 # Dorf Guidance
 
-Dorf Core is the open-source control plane for running supported agent Harnesses on infrastructure its
-owner controls. Coding-to-PR with Codex on local Incus is the verified baseline. Prove a second
-Harness on Incus, then Codex on a second Sandbox provider, before general workflow authoring.
-
 ## Context Map
 
 Keep this file as the compact operating guide. Read deeper context only when the task touches it:

@@ -9,18 +9,12 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 
 ## Product and implementation scope
 
-Dorf Core is the open-source control plane for running supported agent Harnesses on infrastructure
-its owner controls. The portability direction covers a verified Harness version and configuration,
-skills, extensions or plugins, project instructions, workspace image or setup and dependencies,
-vendor-supported connection, host constraints, tools, isolation, recovery, and observation. Dorf
-owns accepted intent, AgentRun and Sandbox custody, external-effect reconciliation, recovery,
-Evidence, durable attachment of the workflow-defined Outcome, and cleanup. Harness-native session
-durability remains authoritative behind its adapter.
+Product direction and vocabulary live in the [North Star](north-star.md).
 
-The verified implementation is deliberately narrower: one Go application, one coding-to-PR
-workflow, PostgreSQL, Absurd, local Incus on the supported host, Codex, Git, and GitHub. This
-architecture must keep that real path clear without treating its coding-specific records as the
-permanent public workflow API.
+The verified implementation is deliberately narrow: one Go application, one coding-to-PR workflow,
+PostgreSQL, Absurd, local Incus on the supported host, Codex, Git, and GitHub. This architecture must
+keep that real path clear without treating its coding-specific records as the permanent public
+workflow API.
 
 ## System shape
 
