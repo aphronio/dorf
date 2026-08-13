@@ -62,10 +62,10 @@ func Load() (Config, error) {
 	if !filepath.IsAbs(cfg.EvidenceRoot) {
 		return Config{}, fmt.Errorf("DORF_EVIDENCE_ROOT must be an absolute deployment-owned path")
 	}
-	if raw := strings.TrimSpace(os.Getenv("DORF_CODEX_TURN_TIMEOUT")); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv("DORF_TURN_TIMEOUT")); raw != "" {
 		duration, err := time.ParseDuration(raw)
 		if err != nil || duration <= 0 {
-			return Config{}, fmt.Errorf("DORF_CODEX_TURN_TIMEOUT must be a positive Go duration")
+			return Config{}, fmt.Errorf("DORF_TURN_TIMEOUT must be a positive Go duration")
 		}
 		cfg.TurnTimeout = duration
 	}
