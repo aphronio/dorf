@@ -1496,3 +1496,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   tool has no cross-repository consumer, Debian prevents a real managed-repository terminal, or
   repository preparation repeatedly needs another tool whose inclusion is cheaper and safer than a
   content-addressed setup cache.
+
+## D065 — Pi is the second Harness and reuses Dorf's scoped Provider Gateway
+
+- **Status:** Accepted implementation direction; initial no-change AgentRun proven — 2026-08-13
+- **Decision:** Pi, distributed as `@earendil-works/pi-coding-agent`, is the deliberately selected
+  second Harness for the D063 portability sequence. Its Incus profile uses the shared Debian 13
+  baseline with Pi instead of Codex, runs Pi's non-interactive JSON mode, and maps the native Pi
+  session to a Dorf Thread and each native user-message entry to a Dorf Turn. Profile selection is a
+  startup choice; common workflow and consumer code remain Harness-independent.
+- **Connection custody:** Existing named Provider Connections, including the owner's ChatGPT
+  subscription connection, remain under Dorf's Provider Gateway. The Pi Sandbox receives only the
+  same Job- and Sandbox-scoped route credential used by Codex profiles and addresses that route as an
+  OpenAI Responses provider. Dorf does not copy Pi or ChatGPT OAuth bundles into the image or
+  Sandbox.
+- **Proof boundary:** The accepted evidence currently covers image construction, route creation, one
+  clean initial no-change AgentRun, native Thread and Turn observation, route revocation, and Sandbox
+  cleanup. Controller-loss recovery, follow-up Messages, active-Turn steering, isolated review, and
+  coding-to-PR remain separate vertical slices; Pi is not a fully supported profile until those
+  terminals are proven or explicitly narrowed.
+- **Why:** Pi exposes a small CLI/session boundary, supports the required OpenAI Responses transport,
+  and lets Dorf test Harness portability without adding another provider-custody system. A separate
+  image keeps each profile credential-free and avoids a speculative multi-Harness runtime image.
+- **Reconsider when:** Pi cannot preserve no-duplicate recovery or required intervention semantics,
+  its native session format cannot remain authoritative for observation, or a smaller supported
+  integration proves the portability boundary with less profile-specific machinery.

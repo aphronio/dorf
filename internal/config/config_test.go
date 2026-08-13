@@ -63,3 +63,22 @@ func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
 		t.Fatalf("gateway state=%q want=%q", cfg.GatewayStatePath, want)
 	}
 }
+
+func TestLoadSelectsOneConcreteHarnessProfile(t *testing.T) {
+	t.Setenv("DORF_HARNESS", "pi")
+	t.Setenv("DORF_INCUS_IMAGE", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Harness != "pi" || cfg.IncusImage != "dorf-pi" {
+		t.Fatalf("profile harness=%q image=%q", cfg.Harness, cfg.IncusImage)
+	}
+}
+
+func TestLoadRejectsUnknownHarness(t *testing.T) {
+	t.Setenv("DORF_HARNESS", "speculative")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected unknown harness to be rejected")
+	}
+}

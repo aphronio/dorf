@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/repository"
@@ -18,10 +17,10 @@ import (
 type Externals struct {
 	Sandbox incus.Sandbox
 	Gateway gateway.Gateway
-	Agent   codex.Agent
+	Agent   Harness
 }
 
-func (Externals) Harness() string { return codex.Harness }
+func (e Externals) Harness() string { return e.Agent.Name() }
 
 func (e Externals) repository() repository.Manager {
 	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
@@ -240,7 +239,7 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	if route.ID != expected.ID {
 		return fmt.Errorf("provider Gateway returned a foreign Route identity")
 	}
-	if err := e.Sandbox.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey); err != nil {
+	if err := e.Agent.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey, job.Model); err != nil {
 		return err
 	}
 	return nil
@@ -289,7 +288,7 @@ func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine
 		return presentErr
 	}
 	if present {
-		if err := e.Sandbox.RemoveRoute(ctx, sandbox.ID); err != nil {
+		if err := e.Agent.RemoveRoute(ctx, sandbox.ID); err != nil {
 			return err
 		}
 	}

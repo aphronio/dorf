@@ -37,6 +37,16 @@ type Agent struct {
 
 const Harness = "codex"
 
+func (a Agent) Name() string { return Harness }
+
+func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, _ string) error {
+	return a.Sandbox.InstallRoute(ctx, sandboxName, baseURL, key)
+}
+
+func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
+	return a.Sandbox.RemoveRoute(ctx, sandboxName)
+}
+
 type TurnOutcome = spine.HarnessTurn
 
 type RejectedError struct{ Method string }

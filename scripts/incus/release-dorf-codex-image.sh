@@ -103,7 +103,7 @@ BUILD_VM="$BUILD_VM" \
 NETWORK="$NETWORK" \
 ROOT_DISK_SIZE="$ROOT_DISK_SIZE" \
 IMAGE_METADATA_PATH="$METADATA_PATH" \
-  "$SCRIPT_DIR/build-dorf-codex-image.sh"
+  "$SCRIPT_DIR/build-dorf-image.sh"
 
 CANDIDATE_FINGERPRINT="$(incus image info "$CANDIDATE_ALIAS" | sed -n 's/^Fingerprint: //p')"
 if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then

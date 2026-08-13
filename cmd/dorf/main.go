@@ -26,6 +26,7 @@ import (
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
+	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	"github.com/aphronio/dorf/internal/publication"
@@ -129,7 +130,16 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 		return nil, err
 	}
 	sandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
-	agent := codex.Agent{Sandbox: sandbox, Port: cfg.AppServerPort, Timeout: cfg.TurnTimeout}
+	var agent terminal.Harness
+	switch cfg.Harness {
+	case codex.Harness:
+		agent = codex.Agent{Sandbox: sandbox, Port: cfg.AppServerPort, Timeout: cfg.TurnTimeout}
+	case piagent.Harness:
+		agent = piagent.Agent{Sandbox: sandbox, Timeout: cfg.TurnTimeout}
+	default:
+		client.Close()
+		return nil, fmt.Errorf("unsupported harness %q", cfg.Harness)
+	}
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
 		client.Close()

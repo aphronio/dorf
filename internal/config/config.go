@@ -16,6 +16,7 @@ const (
 
 type Config struct {
 	DatabaseURL      string
+	Harness          string
 	IncusImage       string
 	IncusNetwork     string
 	IncusDiskSize    string
@@ -34,9 +35,14 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve user home for provider gateway state: %w", err)
 	}
+	harness := value("DORF_HARNESS", "codex")
+	if harness != "codex" && harness != "pi" {
+		return Config{}, fmt.Errorf("DORF_HARNESS must be codex or pi")
+	}
 	cfg := Config{
 		DatabaseURL:      value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
-		IncusImage:       value("DORF_INCUS_IMAGE", "dorf-codex"),
+		Harness:          harness,
+		IncusImage:       value("DORF_INCUS_IMAGE", "dorf-"+harness),
 		IncusNetwork:     value("DORF_INCUS_NETWORK", "incusbr0"),
 		IncusDiskSize:    value("DORF_INCUS_DISK_SIZE", "40GiB"),
 		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
