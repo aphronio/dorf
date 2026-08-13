@@ -6,30 +6,39 @@ GitHub issues own temporary implementation scope.
 
 ## Build a small thing that composes
 
-Dorf is the open-source control plane for durable agent Jobs on infrastructure its owner controls.
-It is not a universal agent organization or a generic automation canvas. Workflows use deterministic
-code for knowable work and isolated agents for judgment, with recovery and evidence built in.
+Dorf is the open-source control plane for running agent harnesses on infrastructure you control:
+your agents, your infrastructure, one API. The direction is to carry a verified Harness
+configuration, its skills, extensions or plugins, project instructions, workspace setup, and
+vendor-supported connection into compatible isolated infrastructure without rebuilding the agent
+system in a new framework.
 
-Coding-to-PR is the first verified workflow and remains the current implementation requirements
-driver. The product direction is broader: trusted clients such as a personal assistant, CLI, CI
-adapter, or later network client may delegate bounded Jobs whose workflow returns a different honest
-outcome. A seam becomes public only when two concrete workflows need it; hypothetical consumers and
-nullable copies of coding fields are not evidence of a common API.
+Dorf is not a universal agent organization, model or tool harness, or generic automation canvas.
+Its control-plane guarantees span accepted intent, AgentRuns, Sandbox custody, external-effect
+reconciliation, recovery, Evidence, durable attachment of the workflow-defined Outcome, and cleanup.
+Harness-native session durability is an input to that contract, not Dorf's main differentiator.
+
+Coding-to-PR is the first verified Core dogfood workflow. Native workflows should compose the same
+intended Core contract that ordinary clients and other products may later embed, using deterministic
+code, Checks, budgets, approvals, Evidence, and explicit Outcomes. They must not receive a privileged
+hidden path. Transport, SDK, and public compatibility promises remain uncommitted until real
+portability implementations and external-client use prove them. Dynamic agent-authored recipes are
+a later experience layer.
 
 This is the building-block posture, not a promise to build every possible workflow. Make one Job
 trustworthy, then let real workflows compose those simple blocks into larger useful machinery.
 
 ## Build from conviction, not competitor parity
 
-Competitors are evidence about the market, not a specification for Dorf. Study them to understand
-user expectations, constraints, and failure modes. Do not turn their feature lists, categories, or
-architecture into our roadmap.
+Competitors are evidence about the market, not a specification for Dorf. Inspect an adjacent product
+when choosing a protocol or dependency, solving a concrete problem Dorf has encountered, or
+substantiating a public comparison. Do not turn feature lists, categories, or architecture into our
+roadmap.
 
-Dorf must earn its existence through a clear point of view: owner-controlled durable custody for
-bounded agent Jobs, with deterministic mechanics, isolated judgment, observed evidence, and honest
-recovery. Build the smallest useful expression of that belief, then let dogfood and real users reveal
-what comes next. If a proposed feature only makes Dorf resemble another agent platform, that is not
-a reason to build it.
+Dorf earns its identity through consistent choices: supported existing harnesses, owner-chosen
+isolated infrastructure, explicit capability admission, and control-plane custody across each Job.
+Build the smallest useful expression of that belief, then let dogfood and real users reveal what
+comes next. If a proposed feature only makes Dorf resemble another agent platform, that is not a
+reason to build it.
 
 ## Durable Jobs, replaceable processes, isolated Sandboxes
 
@@ -121,9 +130,12 @@ must remain useful to humans and CI; Dorf-specific coupling in product code is a
 
 ## Boring before fancy
 
-Prove the direct Incus and Codex coding path before adding another Sandbox provider, agent harness,
-language-specific executor, cache, scheduler, or plugin mechanism. Prefer a small concrete implementation over
-a registry or framework whose second member does not exist.
+Prove one concrete portability axis at a time before generalizing. A profile is a verified Harness
+and Sandbox combination, not a claim that every Harness works everywhere. D063 records the current
+proof order and mechanical oracle.
+
+Prefer a small concrete implementation over a registry or framework whose second member does not
+exist. Do not generalize workflow authoring before Core portability is proved.
 
 ## Vertical slices, deletion, and no compatibility tax
 
