@@ -1,8 +1,8 @@
 # Dorf Guidance
 
-Dorf is the open-source control plane for durable agent Jobs on infrastructure its owner controls.
-Coding-to-PR is the first verified workflow; common workflow-authoring seams must be earned by a
-materially different second implementation.
+Dorf Core is the open-source control plane for running supported agent Harnesses on infrastructure its
+owner controls. Coding-to-PR with Codex on local Incus is the verified baseline. Prove a second
+Harness on Incus, then Codex on a second Sandbox provider, before general workflow authoring.
 
 ## Context Map
 
@@ -12,7 +12,7 @@ Keep this file as the compact operating guide. Read deeper context only when the
   introducing a new abstraction, backend, workflow, or managed-repo integration, and before scoping
   or declaring complete any implementation slice. Its vertical-slice rule defines what counts as a
   terminal.
-- [North Star](docs/project/north-star.md): accepted durable-Job product vocabulary,
+- [North Star](docs/project/north-star.md): accepted Core product vocabulary,
   deterministic/agentic boundary, workflow examples, current verified slice, and high-level
   experience. Read for product direction and DX taste; not an API spec or backlog.
 - [Greenfield Architecture](docs/project/architecture.md): accepted Go, Absurd, and PostgreSQL boundaries,
@@ -49,10 +49,11 @@ requires ecosystem comparison; it is not a source of Dorf requirements.
 
 ## Working Rules
 
-- Coding-to-PR is the only currently verified workflow and remains the implementation requirements
-  driver until a bounded issue deliberately begins a materially different second vertical slice.
-  Research is the candidate next proof, not permission to prebuild a generic workflow API. Add its
-  natural facts first and extract only behavior genuinely shared with coding.
+- Coding-to-PR is the only currently verified workflow. Core portability is the next proof: add a
+  second supported Harness on Incus, then Codex on a second Sandbox provider, then cross the second
+  Harness and provider. Common client and workflow code must not branch beyond profile selection and
+  capability admission. General workflow authoring follows that proof and does not authorize a
+  generic workflow API.
 - Trusted clients such as the CLI or Agent0 compose the same application boundary. CI, HTTP,
   webhooks, MCP, schedules, Slack, and user interfaces are trigger or presentation adapters, not
   workflow authorities.

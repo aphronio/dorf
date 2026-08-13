@@ -9,22 +9,26 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 
 ## Product and implementation scope
 
-Dorf's product direction is an open-source control plane for durable agent Jobs on infrastructure
-its owner controls. A workflow combines deterministic code for knowable work with isolated agents
-for judgment, while Dorf owns durable custody, recovery, evidence, external-effect reconciliation,
-and cleanup.
+Dorf Core is the open-source control plane for running supported agent Harnesses on infrastructure
+its owner controls. The portability direction covers a verified Harness version and configuration,
+skills, extensions or plugins, project instructions, workspace image or setup and dependencies,
+vendor-supported connection, host constraints, tools, isolation, recovery, and observation. Dorf
+owns accepted intent, AgentRun and Sandbox custody, external-effect reconciliation, recovery,
+Evidence, durable attachment of the workflow-defined Outcome, and cleanup. Harness-native session
+durability remains authoritative behind its adapter.
 
 The verified implementation is deliberately narrower: one Go application, one coding-to-PR
-workflow, PostgreSQL, Absurd, Incus, Codex app-server, Git, and GitHub. This architecture must keep
-that real path clear without treating its coding-specific records as the permanent public workflow
-API. A second concrete workflow is required before extracting the common authoring surface.
+workflow, PostgreSQL, Absurd, local Incus on the supported host, Codex, Git, and GitHub. This
+architecture must keep that real path clear without treating its coding-specific records as the
+permanent public workflow API.
 
 ## System shape
 
 ```mermaid
 flowchart LR
-    Client["CLI or trusted client"] --> Workflow["Concrete workflow"]
-    Workflow --> Custody["Dorf durable custody"]
+    Client["Client or external product"] --> Core["Dorf Core"]
+    Workflow["Native Dorf workflow"] --> Core
+    Core --> Custody["Job-wide custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
     Absurd --> Edge["Actions · Checks · AgentRuns"]
@@ -153,11 +157,13 @@ contract. HTTP is justified when a real remote or untrusted client needs it. CI,
 MCP, schedules, Slack, and user interfaces are adapters that translate events into idempotent Job
 admission and render the same facts; they are not separate workflow engines.
 
-## Workflow authoring direction
+## Native workflow composition
 
-Workflow authoring remains internal until coding and one materially different workflow prove a
-smaller shared surface. An internal API may then be extracted and exercised by another small
-workflow or external author before it becomes a compatibility promise.
+Native workflows are Core dogfood. They should compose AgentRuns with deterministic code, Checks,
+budgets, approvals, Evidence, and explicit Outcomes through the same intended Core contract that
+ordinary clients and other products may later embed. They must not depend on a privileged internal
+path. Transport, SDK, and public compatibility promises remain uncommitted until real portability
+implementations and external-client use prove them.
 
 The desired authoring unit is ordinary versioned source plus a small machine-readable contract:
 
@@ -173,9 +179,8 @@ evaluation, and diagnostics that another agent can use. Agents propose reviewabl
 they do not activate new powers, credentials, or production workflow versions without policy and
 human approval.
 
-Share pinned workflow bundles from source control before building a registry. A marketplace is not
-accepted until installation, capability review, provenance, evaluation reporting, and update trust
-have been proven with real shared workflows.
+Dynamic agent-authored recipes are a later UX layer. They do not justify a generic automation
+canvas, graph framework, agent builder, model/tool Harness, registry, or marketplace.
 
 ## Current coding composition
 
@@ -213,24 +218,29 @@ The first product is local-first. PostgreSQL, Dorf executors, Incus, the Provide
 and agent services run on infrastructure controlled by the owner. The ordinary supported path
 requires no Dorf-hosted durability account or host Docker socket.
 
-"Infrastructure you control" may later include a local machine, an on-premise executor, or a
-deliberately selected managed Sandbox or database provider. The authority and Job protocol should
-remain the same. Multi-tenant authentication, billing, quotas, hosted secrets, and untrusted
-extension execution are separate product requirements; they are not implied by choosing Absurd.
+"Infrastructure you control" may later include a local machine, bring-your-own-cloud or on-premise
+execution, or a deliberately selected managed Sandbox provider. Support is expressed through
+verified profiles, not a promise that every Harness works on every provider. Multi-tenant
+authentication, billing, quotas, hosted secrets, and untrusted extension execution are separate
+product requirements; they are not implied by choosing Absurd.
 
 Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
 
 ## Harness and Sandbox portability
 
-Incus is the only verified Sandbox provider and Codex app-server the only verified Harness. Their
+Incus is the only verified Sandbox provider and Codex the only verified Harness. Their
 adapters should not leak vendor protocol into workflow facts, but interfaces alone do not justify an
 agnostic support claim.
 
-A second Sandbox must be meaningfully different—such as remote managed compute, a Mac environment,
-or GPU-backed execution—and complete a real workflow terminal. A second Harness must prove actual
-authentication, context recovery, tool behavior, interruption, and terminal observation. Only then
-should selection, configuration, or packaging seams become public.
+A verified profile covers the Harness version and configuration, skills, extensions or plugins,
+project instructions, workspace image or setup and dependencies, vendor-supported credential or
+subscription connection, host constraints, tools, isolation, recovery, interruption, and terminal
+observation. Connection custody does not imply copying raw user secrets into the Sandbox; scoped
+routing or injection remains adapter- and profile-specific. Common consumer and workflow code must
+have no Harness- or Sandbox-specific branches beyond profile selection and capability admission.
+D063 records the current proof order. Mac-like environments and sensitive enterprise experimentation
+are motivating future scenarios, not verified capabilities.
 
 Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
 workflow authoring need makes that boundary materially smaller. It consumes a dedicated queue through
@@ -282,5 +292,5 @@ The Go replacement is proven only when a clean supported host can complete one r
 9. reconcile cleanup to an observable terminal.
 
 This terminal must run without Python in the critical path. Feature parity with the deleted Python
-implementation is not required. A future research terminal must be specified and proven separately;
-it does not weaken this coding proof.
+implementation is not required. Future portability terminals and any later non-coding workflow must
+be specified and proven separately; they do not weaken this coding proof.

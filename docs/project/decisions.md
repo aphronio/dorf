@@ -1384,7 +1384,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D062 — Dorf is a durable agent-Job control plane proven through concrete workflows
 
-- **Status:** Accepted product direction — 2026-08-11; no public workflow API accepted
+- **Status:** Superseded by D063 — 2026-08-13
 - **Positioning:** Dorf is the open-source control plane for durable agent Jobs on infrastructure its
   owner controls. Workflows use deterministic code for knowable work and isolated agents for
   judgment, with recovery and Evidence built in. The supported claim remains transparent: Codex,
@@ -1427,3 +1427,38 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   workflow offers a smaller proof, a remote Agent0 deployment justifies network transport, an
   external workflow author exposes a different API boundary, or repeated workflow evidence shows
   that the durable custody model does not reduce attention or improve trustworthy outcomes.
+
+## D063 — Dorf Core portability precedes general workflow authoring
+
+- **Status:** Accepted product direction — 2026-08-13
+- **Positioning:** Dorf is the open-source control plane for running agent Harnesses on infrastructure
+  its owner controls: your agents, your infrastructure, one API. Core is the product. Whole-setup
+  portability is direction; Codex with local Incus coding-to-PR on the supported host remains the
+  current verified claim.
+- **Profile contract:** A verified profile covers the supported Harness version and configuration,
+  skills, extensions or plugins, project instructions, workspace image or setup and dependencies,
+  vendor-supported credential or subscription connection, host constraints, tools, isolation,
+  recovery, interruption, and observation. Connection custody never implies copying raw user secrets
+  into a Sandbox; scoped routing or injection remains adapter- and profile-specific.
+- **Authority:** Workflows own Job semantics, policy, evaluation, and what an Outcome means. Core owns
+  accepted intent, Messages, AgentRuns, Sandbox custody, external-effect reconciliation, recovery,
+  Evidence, durable attachment and recording of that workflow-defined Outcome, and cleanup. A
+  Harness remains authoritative for its native session, transcript, and tool protocol.
+- **Composition:** Native workflows are Core dogfood and should use the same intended Core contract
+  that ordinary clients and other products may later embed. They receive no privileged hidden path.
+  Transport, SDK, and public compatibility promises remain uncommitted until real portability
+  implementations and external-client use prove them. Dynamic agent-authored recipes remain a later
+  UX layer; Dorf is not a generic automation canvas, graph framework, agent builder, or model/tool
+  Harness.
+- **Proof order:** Starting from Codex on Incus, prove a second supported Harness on Incus, then Codex
+  on a second Sandbox provider, then cross the second Harness and provider. The mechanical oracle is
+  that common consumer and workflow code has no Harness- or Sandbox-specific branches beyond profile
+  selection and capability admission.
+- **Supersedes and refines:** Supersedes D062's research-workflow-first proof order. It also refines
+  older second-workflow extraction gates, including D009, D047, and D061: a later workflow still adds
+  its natural facts before common authoring seams are extracted, but workflow generality is not the
+  next product proof. It does not authorize a generic API, provider matrix, plugin system, or
+  marketplace.
+- **Reconsider when:** A supported Harness cannot fit the AgentRun boundary, a second Sandbox cannot
+  preserve the Job authority model, or real external-client use shows that profile selection and
+  capability admission do not keep common code independent of Harness and Sandbox.
