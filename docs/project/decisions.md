@@ -1513,9 +1513,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Proof boundary:** The accepted evidence currently covers image construction, route creation, one
   clean initial no-change AgentRun, native Thread and Turn observation, and SIGKILL recovery after
   submission but before durable binding with exactly one native user Turn, followed by route
-  revocation and Sandbox cleanup. Follow-up Messages, active-Turn steering, isolated review, and
-  coding-to-PR remain separate vertical slices; Pi is not a fully supported profile until those
-  terminals are proven or explicitly narrowed.
+  revocation and Sandbox cleanup. One follow-up Message is also proven to append exactly one native
+  user Turn to the same Pi session. Active-Turn steering is explicitly outside this profile: the
+  simple non-interactive Pi invocation returns a binding only after the Turn is terminal, while Dorf
+  admits steer only against an exact active Turn. Adding a resident process solely to manufacture
+  that window is not justified by dogfood. Isolated review and coding-to-PR remain separate vertical
+  slices; Pi is not a fully supported profile until those terminals are proven or explicitly
+  narrowed.
 - **Why:** Pi exposes a small CLI/session boundary, supports the required OpenAI Responses transport,
   and lets Dorf test Harness portability without adding another provider-custody system. A separate
   image keeps each profile credential-free and avoids a speculative multi-Harness runtime image.

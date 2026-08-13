@@ -15,6 +15,18 @@ type recordingRunner struct {
 	calls  int
 }
 
+type scriptedRunner struct {
+	results []incus.Result
+	args    [][]string
+}
+
+func (r *scriptedRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
+	r.args = append(r.args, append([]string(nil), args...))
+	result := r.results[0]
+	r.results = r.results[1:]
+	return result, nil
+}
+
 func (r *recordingRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
 	r.calls++
 	r.input = append([]byte(nil), input...)
@@ -82,5 +94,36 @@ func TestReadInitialTurnsAdoptsNativeTurnAfterLostBinding(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(runner.args, " "), "exec pi") {
 		t.Fatalf("read-only recovery attempted a Pi submission: %q", runner.args)
+	}
+}
+
+func TestStartTurnAppendsExactlyOneNativeTurn(t *testing.T) {
+	oneTurn := `{"type":"session","version":3,"id":"dorf-job"}
+{"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"first"}}
+{"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[{"type":"text","text":"first done"}],"stopReason":"stop"}}`
+	twoTurns := oneTurn + `
+{"type":"message","id":"user0002","parentId":"assist01","message":{"role":"user","content":"second"}}
+{"type":"message","id":"assist02","parentId":"user0002","message":{"role":"assistant","content":[{"type":"text","text":"second done"}],"stopReason":"stop"}}`
+	runner := &scriptedRunner{results: []incus.Result{{Stdout: oneTurn}, {}, {Stdout: twoTurns}}}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+
+	binding, err := agent.StartTurn(context.Background(), "sandbox", "/workspace/job", "dorf-job", "run-2", "second", "gpt-test", "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.args) != 3 || binding.Harness != Harness || binding.ThreadID != "dorf-job" {
+		t.Fatalf("calls=%d binding=%#v", len(runner.args), binding)
+	}
+	if binding.Turn.ID != "user0002" || binding.Turn.Status != "completed" || binding.Turn.Output != "second done" {
+		t.Fatalf("follow-up Turn=%#v", binding.Turn)
+	}
+	if !strings.Contains(strings.Join(runner.args[1], " "), `--session-id "$2"`) {
+		t.Fatalf("follow-up did not target the bound Pi session: %q", runner.args[1])
+	}
+}
+
+func TestActiveTurnSteerIsExplicitlyUnsupported(t *testing.T) {
+	if _, err := (Agent{}).SteerTurn(context.Background(), "sandbox", "thread", "turn", "run", "input"); err == nil || !strings.Contains(err.Error(), "not yet supported") {
+		t.Fatalf("steer error=%v", err)
 	}
 }
