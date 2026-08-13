@@ -27,7 +27,7 @@ Coding Job
 | Direction | Works today |
 | --- | --- |
 | Many kinds of Jobs | Coding Job to PR |
-| Choice of agent | Codex |
+| Choice of agent | Codex or Pi |
 | Choice of Sandbox | Local Incus on x86_64 Linux |
 | Many ways to start Jobs | CLI |
 
@@ -41,7 +41,7 @@ go build -o ./bin/dorf ./cmd/dorf
 ```
 
 Releases contain the same x86_64 Linux binary. See
-[Getting started](docs/getting-started.md) for PostgreSQL, Incus, the credential-free Codex image,
+[Getting started](docs/getting-started.md) for PostgreSQL, Incus, the credential-free Sandbox image,
 Provider Gateway, GitHub App, and repository preparation.
 
 ## Product model

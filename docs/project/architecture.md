@@ -12,9 +12,9 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 Product direction and vocabulary live in the [North Star](north-star.md).
 
 The verified implementation is deliberately narrow: one Go application, one coding-to-PR workflow,
-PostgreSQL, Absurd, local Incus on the supported host, Codex, Git, and GitHub. This architecture must
-keep that real path clear without treating its coding-specific records as the permanent public
-workflow API.
+PostgreSQL, Absurd, local Incus on the supported host, Codex and Pi, Git, and GitHub. This
+architecture must keep that real path clear without treating its coding-specific records as the
+permanent public workflow API.
 
 ## System shape
 
@@ -207,9 +207,9 @@ connection and provider identities, not controller filesystem paths or copied se
 
 ## Harness and Sandbox adapters
 
-Incus is the only verified Sandbox provider and Codex the only verified Harness. Their adapters must
-not leak vendor protocol into workflow facts. Support direction and proof order live in the
-[North Star](north-star.md).
+Incus is the only verified Sandbox provider. Codex and Pi are the verified Harnesses for that
+provider. Their adapters must not leak vendor protocol into workflow facts. Support direction and
+proof order live in the [North Star](north-star.md).
 
 Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
 workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small

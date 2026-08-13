@@ -17,8 +17,8 @@ workflow-defined Outcome, and cleanup. A Harness may provide its own durable ses
 compete by duplicating them.
 
 This is the product and experience direction. It is not an API inventory, schema, package plan, or
-issue backlog. The currently verified product is narrower: one coding-to-PR workflow using Codex in
-local Incus on the supported host, with Git and GitHub as deliverable authorities. Multiple
+issue backlog. The currently verified product is narrower: one coding-to-PR workflow using Codex or
+Pi in local Incus on the supported host, with Git and GitHub as deliverable authorities. Additional
 Harnesses, Sandbox providers, and workflow-authoring surfaces remain direction until real
 implementations validate their seams.
 
@@ -202,9 +202,9 @@ automation canvas, graph framework, agent builder, or model/tool Harness.
 ## Current verified slice
 
 The supported product today is one Go application using PostgreSQL and Absurd, one coding workflow,
-local Incus on the supported host as its Sandbox provider, Codex as its Harness, and Git/GitHub as
-proposal and acceptance authorities. This narrow support claim is evidence, not the permanent
-product boundary.
+local Incus on the supported host as its Sandbox provider, Codex and Pi as its verified Harness
+profiles, and Git/GitHub as proposal and acceptance authorities. This narrow support claim is
+evidence, not the permanent product boundary.
 
 The current coding implementation may contain repository, Revision, review, and GitHub fields in
 records that look core-shaped. Do not preserve or make them optional merely to claim generality. A
