@@ -28,7 +28,7 @@ readonly ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
 readonly SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
 readonly BUILD_ID="$(date -u +%Y%m%d%H%M%S)"
 readonly CANDIDATE_ALIAS="dorf-candidate-$BUILD_ID"
-readonly BUILD_VM="dorf-build-$BUILD_ID"
+readonly CANDIDATE_BUILD_VM="dorf-build-$BUILD_ID"
 readonly ARCHIVE_BASENAME="dorf-incus-vm-v5-x86_64"
 readonly ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
 readonly MANIFEST_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
@@ -96,7 +96,7 @@ rm -f "$METADATA_PATH" "$ARCHIVE_PATH" "$MANIFEST_PATH"
 go -C "$PROJECT_ROOT" build -o "$BINARY" ./cmd/dorf
 
 IMAGE_ALIAS="$CANDIDATE_ALIAS" \
-BUILD_VM="$BUILD_VM" \
+BUILD_VM="$CANDIDATE_BUILD_VM" \
 NETWORK="$NETWORK" \
 ROOT_DISK_SIZE="$ROOT_DISK_SIZE" \
 IMAGE_METADATA_PATH="$METADATA_PATH" \
