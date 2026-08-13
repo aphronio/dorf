@@ -1499,7 +1499,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D065 — Pi is the second Harness and reuses Dorf's scoped Provider Gateway
 
-- **Status:** Accepted implementation direction; implementation-session terminals proven — 2026-08-13
+- **Status:** Accepted implementation direction; isolated review terminal proven — 2026-08-13
 - **Decision:** Pi, distributed as `@earendil-works/pi-coding-agent`, is the deliberately selected
   second Harness for the D063 portability sequence. Its Incus profile uses the shared Debian 13
   baseline with Pi instead of Codex. A Sandbox-resident Pi RPC process owns the live native session;
@@ -1523,8 +1523,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   duplicate prompt. Active-Turn steering is proven to wake the durable workflow, acknowledge the
   exact target Turn, persist its queued native user entry inside that logical Turn, settle both the
   target and steer AgentRuns, and retain an unchanged exact-Revision observation before route and
-  Sandbox cleanup. Isolated review and coding-to-PR remain later slices. Pi is not a fully supported
-  profile until those terminals are proven or explicitly narrowed.
+  Sandbox cleanup. Isolated review is proven on a committed exact Revision: deterministic policy
+  selected one general Role, its dedicated Sandbox ran Pi with only `read`, `grep`, `find`, and `ls`,
+  the checkout remained clean and immutable, review-observation Evidence was retained, and ordinary
+  feedback returned to and settled through the implementation Thread. Coding-to-PR remains the next
+  terminal. Pi is not a fully supported profile until it is proven or explicitly narrowed.
 - **Why:** Pi's documented RPC mode is its headless JSON protocol for embedding from a non-TypeScript
   control plane. It supports the required OpenAI Responses transport and lets Dorf test Harness
   portability without adding a TypeScript SDK sidecar or another provider-custody system. A separate

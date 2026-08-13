@@ -44,6 +44,21 @@ type acceptedRPCSteerRunner struct {
 	request []byte
 }
 
+type emptyStrictReviewRunner struct {
+	owner incus.ReviewMetadata
+}
+
+func (r *emptyStrictReviewRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (incus.Result, error) {
+	command := strings.Join(args, " ")
+	if command == "list --format=json" {
+		return incus.Result{Stdout: `[{"name":"dorf-review-owned","config":{"user.dorf.owner":"review","user.dorf.job":"` + r.owner.JobID + `","user.dorf.agent_run":"` + r.owner.AgentRunID + `","user.dorf.revision":"` + r.owner.Revision + `","user.dorf.ownership_nonce":"` + r.owner.OwnershipNonce + `"}}]`}, nil
+	}
+	if strings.Contains(command, "ambiguous Pi session identity") {
+		return incus.Result{}, nil
+	}
+	return incus.Result{}, nil
+}
+
 func (r *acceptedRPCSteerRunner) Run(_ context.Context, _ string, input []byte, args ...string) (incus.Result, error) {
 	if len(input) > 0 {
 		r.request = append([]byte(nil), input...)
@@ -197,6 +212,19 @@ func TestActiveTurnSteerAcknowledgesExactTarget(t *testing.T) {
 	}
 	if !strings.Contains(string(runner.request), `"id":"run-steer"`) || !strings.Contains(string(runner.request), `"type":"steer"`) || !strings.Contains(string(runner.request), `"message":"change direction"`) {
 		t.Fatalf("RPC request=%s", runner.request)
+	}
+}
+
+func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testing.T) {
+	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: &emptyStrictReviewRunner{owner: owner}}}
+
+	binding, err := agent.RecoverStrictReviewTurn(context.Background(), "dorf-review-owned", "/workspace/job", owner, strings.Repeat("a", 64), "review", "gpt-test", "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.Harness != "" || binding.ThreadID != "" || binding.Turn.ID != "" || binding.ControllerID != "" {
+		t.Fatalf("empty strict review recovery binding=%#v", binding)
 	}
 }
 

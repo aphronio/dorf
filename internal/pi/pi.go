@@ -160,7 +160,14 @@ func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, _ strin
 	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return a.latestBinding(ctx, sandboxName, sandboxName)
+	history, err := a.readHistory(ctx, sandboxName, sandboxName, true)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	if len(history.Turns) == 0 {
+		return spine.HarnessBinding{}, nil
+	}
+	return spine.HarnessBinding{Harness: Harness, ThreadID: sandboxName, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
 func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, _ string, owner incus.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (spine.HarnessBinding, error) {
