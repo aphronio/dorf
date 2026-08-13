@@ -160,11 +160,12 @@ prove_harness() {
     --model gpt-5.6-sol \
     --reasoning low)"
   JOB_ID="$(jq -er .job_id <<<"$admission")"
-  inspection="$(drive_job_until "$JOB_ID" '.observed_facts.messages | any(.sequence == 1 and .turn_outcome != null)' "$harness turn")"
+  inspection="$(drive_job_until "$JOB_ID" '.observed_facts.agent_runs | any(.message_id != null and .turn_outcome != null)' "$harness turn")"
   jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$inspection" >/dev/null
-  jq -e --arg harness "$harness" '.observed_facts.messages | map(select(.sequence == 1 and .harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
+  jq -e --arg harness "$harness" '.observed_facts.agent_runs | map(select(.harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
   jq -e --arg source "$SOURCE_COMMIT" '
-    (.observed_facts.messages | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
+    (.observed_facts.messages | map(select(.sequence == 1)) | .[0].id) as $message_id |
+    (.observed_facts.agent_runs | map(select(.message_id == $message_id)) | .[0].id) as $agent_run_id |
     .job.revision == $source and
     (.observed_facts.revisions | length == 1) and
     (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and
