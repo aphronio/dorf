@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	RunTaskName     = postgres.MessageTaskName
-	CleanupTaskName = "dorf-job-cleanup-v3"
+	RunTaskName             = postgres.MessageTaskName
+	CleanupTaskName         = "dorf-job-cleanup-v3"
+	activeAgentPollInterval = time.Second
 )
 
 type Params struct {
@@ -79,15 +80,11 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			if err != nil {
 				return TaskResultV1{}, err
 			}
-			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
-			if work.Kind == WorkObserveProposal {
-				options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
-				options.Timeout = proposal.PollInterval
-			}
+			options := wakeOptions(work, sequence, proposal.PollInterval)
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if work.Kind == WorkObserveProposal && errors.As(err, &timeout) {
+				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
 					continue
 				}
 				return TaskResultV1{}, err
@@ -108,6 +105,19 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
+	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
+	switch work.Kind {
+	case WorkObserveProposal:
+		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
+		options.Timeout = proposalPollInterval
+	case WorkObserveAgent:
+		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
+		options.Timeout = activeAgentPollInterval
+	}
+	return options
 }
 
 func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revision string) (ProposalObservationResultV1, error) {

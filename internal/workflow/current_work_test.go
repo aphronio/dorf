@@ -258,7 +258,7 @@ func TestLatestImplementationInputStateCannotFallThrough(t *testing.T) {
 	}{
 		{name: "pending without delivery candidate", state: spine.AgentRunPending, want: WorkAttention},
 		{name: "submitting", state: spine.AgentRunSubmitting, want: WorkAttention},
-		{name: "active without delivery candidate", state: spine.AgentRunActive, want: WorkAttention},
+		{name: "active without delivery candidate", state: spine.AgentRunActive, want: WorkKind("observe-agent-run")},
 		{name: "failed", state: spine.AgentRunFailed, want: WorkAttention},
 		{name: "interrupted", state: spine.AgentRunInterrupted, want: WorkAttention},
 		{name: "uncertain", state: spine.AgentRunUncertain, want: WorkAttention},

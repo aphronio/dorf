@@ -246,6 +246,9 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	if err := store.BindAgentRun(ctx, active.AgentRun.ID, "codex", threadID, activeTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
+	if candidate, err := store.DeliveryCandidate(ctx, job.ID); err != nil || candidate != nil {
+		t.Fatalf("active Turn delivery candidate=%#v err=%v, want observation outside delivery lane", candidate, err)
+	}
 
 	steerInput := postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: spine.MessageSteer}
 	steer, created, err := store.AdmitMessage(ctx, steerInput)
@@ -276,8 +279,8 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("steer deliveries=%#v err=%v", deliveries, err)
 	}
 	next, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || next == nil || next.Message.ID != active.Message.ID || next.AgentRun.TurnID != activeTurnID {
-		t.Fatalf("active follow after steer=%#v err=%v", next, err)
+	if err != nil || next != nil {
+		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
 	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: other.ID, FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: spine.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
@@ -405,8 +408,8 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
 	}
 	active, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || active == nil || active.Message.ID != steer.ID || active.AgentRun.TurnID != actualTurnID {
-		t.Fatalf("active fallback selection=%#v err=%v", active, err)
+	if err != nil || active != nil {
+		t.Fatalf("active fallback delivery=%#v err=%v, want observation outside delivery lane", active, err)
 	}
 	deliveries, err := store.Deliveries(ctx, job.ID)
 	if err != nil || len(deliveries) != 3 {
@@ -450,8 +453,8 @@ func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 				t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 			}
 			stillActive, err := store.NextDelivery(ctx, job.ID)
-			if err != nil || stillActive == nil || stillActive.Message.ID != first.Message.ID {
-				t.Fatalf("FIFO crossed active turn: delivery=%#v err=%v", stillActive, err)
+			if err != nil || stillActive != nil {
+				t.Fatalf("delivery crossed active Turn: delivery=%#v err=%v", stillActive, err)
 			}
 			if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, turnID, status); err != nil {
 				t.Fatal(err)

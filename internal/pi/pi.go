@@ -392,7 +392,11 @@ func parseSession(raw string) (string, []spine.HarnessTurn, error) {
 		switch message.Role {
 		case "user":
 			if len(turns) > 0 && turns[len(turns)-1].Status == "running" {
-				return "", nil, fmt.Errorf("Pi session starts a new Turn before the prior Turn settled")
+				// Pi persists a queued RPC steer as another native user entry after
+				// the current tool phase. Dorf is the sole RPC controller, so an
+				// entry before settlement belongs to that active Dorf Turn; only a
+				// user entry after settlement starts a follow-up Turn.
+				continue
 			}
 			turns = append(turns, spine.HarnessTurn{ID: entry.ID, Status: "running"})
 		case "assistant":

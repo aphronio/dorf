@@ -126,12 +126,18 @@ func TestParseSessionMapsOnePromptToOneHarnessTurn(t *testing.T) {
 	}
 }
 
-func TestParseSessionRejectsASecondPromptBeforeSettlement(t *testing.T) {
+func TestParseSessionKeepsQueuedSteerInsideActiveHarnessTurn(t *testing.T) {
 	raw := `{"type":"session","version":3,"id":"dorf-job"}
 {"type":"message","id":"user0001","parentId":null,"message":{"role":"user","content":"first"}}
-{"type":"message","id":"user0002","parentId":"user0001","message":{"role":"user","content":"second"}}`
-	if _, _, err := parseSession(raw); err == nil {
-		t.Fatal("expected unsettled prior Turn to be rejected")
+	{"type":"message","id":"assist01","parentId":"user0001","message":{"role":"assistant","content":[],"stopReason":"toolUse"}}
+	{"type":"message","id":"user0002","parentId":"assist01","message":{"role":"user","content":"steer active work"}}
+	{"type":"message","id":"assist02","parentId":"user0002","message":{"role":"assistant","content":[{"type":"text","text":"steered result"}],"stopReason":"stop"}}`
+	_, turns, err := parseSession(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turns) != 1 || turns[0].ID != "user0001" || turns[0].Status != "completed" || turns[0].Output != "steered result" {
+		t.Fatalf("steered Turns=%#v", turns)
 	}
 }
 

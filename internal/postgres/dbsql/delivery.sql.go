@@ -30,7 +30,7 @@ with current_turn_start as (
     where active.state='active' and steer_run.role='implement'
       and steer_run.state in ('pending','submitting') and steer_run.turn_id is null
     union all
-    select message_id,1,0 from current_turn_start
+    select message_id,1,0 from current_turn_start where state='uncertain'
     union all
     select m.id,2,m.sequence
     from dorf.job_messages m join dorf.agent_runs ar on ar.message_id=m.id
