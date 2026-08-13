@@ -44,10 +44,30 @@ if [[ -z "${DORF_DATABASE_URL:-}" && -f "$PROJECT_ROOT/.dorf/test-database-url" 
   export DORF_DATABASE_URL
 fi
 
+drive_job_until() {
+  local job_id="$1"
+  local predicate="$2"
+  local description="$3"
+  local deadline=$((SECONDS + 3600))
+  local inspection=""
+
+  while ((SECONDS < deadline)); do
+    "$BINARY" worker --once >/dev/null
+    inspection="$("$BINARY" inspect --json "$job_id")"
+    if jq -e "$predicate" <<<"$inspection" >/dev/null; then
+      printf '%s\n' "$inspection"
+      return
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for $description on Job $job_id." >&2
+  return 1
+}
+
 cleanup() {
   if [[ -n "$JOB_ID" ]]; then
     "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || true
-    "$BINARY" worker --once >/dev/null 2>&1 || true
+    drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "cleanup" >/dev/null 2>&1 || true
   fi
   if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
     rm -rf -- "$EVIDENCE_DIR"
@@ -140,8 +160,7 @@ prove_harness() {
     --model gpt-5.6-sol \
     --reasoning low)"
   JOB_ID="$(jq -er .job_id <<<"$admission")"
-  "$BINARY" worker --once
-  inspection="$($BINARY inspect --json "$JOB_ID")"
+  inspection="$(drive_job_until "$JOB_ID" '.observed_facts.messages | any(.sequence == 1 and .turn_outcome != null)' "$harness turn")"
   jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$inspection" >/dev/null
   jq -e --arg harness "$harness" '.observed_facts.messages | map(select(.sequence == 1 and .harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
   jq -e --arg source "$SOURCE_COMMIT" '
@@ -162,8 +181,7 @@ prove_harness() {
   ' <<<"$inspection" >/dev/null
 
   "$BINARY" cleanup "$JOB_ID"
-  "$BINARY" worker --once
-  inspection="$($BINARY inspect --json "$JOB_ID")"
+  inspection="$(drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "$harness cleanup")"
   jq -e '.job.cleanup_state == "complete"' <<<"$inspection" >/dev/null
   jq -n \
     --arg harness "$harness" \
