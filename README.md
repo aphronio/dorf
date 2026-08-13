@@ -1,9 +1,12 @@
 # Dorf
 
-**Dorf is the open-source control plane for durable agent Jobs on infrastructure you control.**
+**Dorf is the open-source control plane for running agent harnesses on infrastructure you control.**
 
-Dorf uses code for predictable work and isolated agents for judgment. Jobs can run in the
-background, recover from failure, and show evidence of what happened.
+Your agents. Your infrastructure. One API.
+
+Dorf's direction is to carry a supported agent setup into compatible isolated infrastructure
+without rebuilding it in a new agent framework. Dorf keeps custody of the whole Job, including
+recovery, external effects, evidence, the workflow-defined outcome, and cleanup.
 
 Today, Dorf supports one coding workflow: a Job starts with a goal and ends with a verified pull
 request.
@@ -53,8 +56,8 @@ Dorf records evidence and cleans up resources.
 Each coding Job gets its own Sandbox, clone, branch, checks, review, and pull request. Dorf can resume
 the Job without repeating completed work.
 
-Coding is the first workflow, not the final limit. A second real workflow, such as research, will
-show which parts should become a shared API.
+Whole-setup portability across more Harnesses and Sandbox providers is direction, not current
+support. General workflow authoring follows real Core portability proof.
 
 The main commands are:
 
