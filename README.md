@@ -80,9 +80,9 @@ Use `absurdctl list-tasks` and `absurdctl dump-task` for scheduler details.
 The project is one Go application with generated PostgreSQL query code:
 
 ```bash
-scripts/dev/prepare.sh
-scripts/dev/check.sh
-scripts/build-release.sh dist/release
+scripts/dev/setup.sh
+.dorf/bin/mise run check
+.dorf/bin/mise exec -- scripts/build-release.sh dist/release
 ```
 
 Architecture and authority details are indexed in [docs/README.md](docs/README.md).

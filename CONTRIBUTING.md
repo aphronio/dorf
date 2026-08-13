@@ -3,16 +3,16 @@
 Use the repository-managed toolchain and run the repository contract:
 
 ```bash
-scripts/dev/prepare.sh
-scripts/dev/check.sh
-go build -o .dorf/bin/dorf ./cmd/dorf
+scripts/dev/setup.sh
+.dorf/bin/mise run check
+.dorf/bin/mise exec -- go build -o .dorf/bin/dorf ./cmd/dorf
 .dorf/bin/dorf version
-go version -m .dorf/bin/dorf
+.dorf/bin/mise exec -- go version -m .dorf/bin/dorf
 ```
 
-`prepare.sh` converges the required tools and disposable PostgreSQL test database. `check.sh` rejects
-stale generated SQL and runs query preparation, Go tests, and vet. PostgreSQL integration tests
-require `DORF_TEST_DATABASE_URL` to name the prepared database.
+`setup.sh` bootstraps a checkout-local Mise, installs the locked repository toolchain, and converges
+the disposable PostgreSQL test database. `.dorf/bin/mise run check` rejects stale generated SQL and runs query
+preparation, Go tests, and vet. Set `DORF_TEST_DATABASE_URL` to use an external test database.
 
 Read [AGENTS.md](AGENTS.md) before changing a documented product, architecture, storage, provider,
 setup, image, or release boundary.

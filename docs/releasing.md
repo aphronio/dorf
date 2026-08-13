@@ -4,8 +4,8 @@ From a clean source commit already available on GitHub, run the repository check
 authority:
 
 ```bash
-scripts/dev/prepare.sh
-scripts/dev/check.sh
+scripts/dev/setup.sh
+.dorf/bin/mise run check
 
 PROVIDER_CONNECTION=personal-chatgpt \
 GITHUB_INSTALLATION_ID=INSTALLATION_ID \

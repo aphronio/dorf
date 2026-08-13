@@ -4,6 +4,10 @@ postgres = "17.10"
 sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 
+[tasks.setup]
+description = "Converge the repository development environment"
+run = "scripts/dev/setup.sh"
+
 [tasks."sql:generate"]
 description = "Generate private PostgreSQL query code"
 run = "sqlc generate"
@@ -14,8 +18,17 @@ run = "sqlc diff"
 
 [tasks."sql:vet"]
 description = "Prepare every query against the migrated test database"
-run = "DORF_TEST_DATABASE_URL=${DORF_TEST_DATABASE_URL:-postgresql:///dorf_test?host=/var/run/postgresql} sqlc vet"
+run = "sqlc vet"
 
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
-run = "scripts/dev/check.sh"
+run = """
+if [ -z "${DORF_TEST_DATABASE_URL:-}" ] && [ -f .dorf/test-database-url ]; then
+  export DORF_TEST_DATABASE_URL="$(cat .dorf/test-database-url)"
+fi
+: "${DORF_TEST_DATABASE_URL:?run scripts/dev/setup.sh or set DORF_TEST_DATABASE_URL}"
+sqlc diff
+sqlc vet
+go test ./...
+go vet ./...
+"""

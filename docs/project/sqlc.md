@@ -35,9 +35,9 @@ Store method -> generated query -> PostgreSQL
 ## Feedback loop
 
 ```bash
-mise run sql:generate  # after schema or query edits
-mise run sql:check     # generated files match their inputs; no database needed
-scripts/dev/check.sh   # live query preparation, Go tests, and Go vet
+.dorf/bin/mise run sql:generate  # after schema or query edits
+.dorf/bin/mise run sql:check     # generated files match their inputs; no database needed
+.dorf/bin/mise run check         # live query preparation, Go tests, and Go vet
 ```
 
 `sqlc.yaml` deliberately uses the local analyzer for generation and diffing. Live `sqlc/db-prepare`

@@ -33,40 +33,12 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Install Go
-        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6
-        with:
-          go-version: "1.25.0"
-          cache: true
-      - name: Download exact modules
-        run: go mod download
-      - name: Install pinned SQL and durability tools
-        run: |
-          tool_dir="$RUNNER_TEMP/dorf-tools"
-          mkdir -p "$tool_dir"
-          curl -LsSf -o "$RUNNER_TEMP/sqlc.tar.gz" \
-            "https://github.com/sqlc-dev/sqlc/releases/download/v1.31.1/sqlc_1.31.1_linux_amd64.tar.gz"
-          printf '%s  %s\n' \
-            '497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354' \
-            "$RUNNER_TEMP/sqlc.tar.gz" | sha256sum --check --strict
-          tar -xzf "$RUNNER_TEMP/sqlc.tar.gz" -C "$tool_dir" sqlc
-          curl -LsSf -o "$tool_dir/absurdctl" \
-            "https://github.com/earendil-works/absurd/releases/download/0.5.0/absurdctl"
-          printf '%s  %s\n' \
-            'e9c37151bf3d1656fcc9b018dc90a2ac6972a31bda77329d8c929da34bb0724e' \
-            "$tool_dir/absurdctl" | sha256sum --check --strict
-          chmod 0755 "$tool_dir/absurdctl" "$tool_dir/sqlc"
-          echo "$tool_dir" >> "$GITHUB_PATH"
-      - name: Validate repository setup script
-        run: bash -n scripts/dev/*.sh
-      - name: Initialize fresh PostgreSQL schemas
-        run: |
-          absurdctl init -d "$DORF_TEST_DATABASE_URL"
-          DORF_DATABASE_URL="$DORF_TEST_DATABASE_URL" go run ./cmd/dorf migrate
+      - name: Set up the repository
+        run: scripts/dev/setup.sh
       - name: Check SQL generation and live behavior
-        run: scripts/dev/check.sh
+        run: .dorf/bin/mise run check
       - name: Build supported release artifact
-        run: scripts/build-release.sh dist/release
+        run: .dorf/bin/mise exec -- scripts/build-release.sh dist/release
       - name: Smoke installed artifact
         run: |
           archive="$(find dist/release -maxdepth 1 -name 'dorf_*_linux_x86_64.tar.gz' -print -quit)"
@@ -75,4 +47,4 @@ jobs:
           trap 'rm -rf -- "$smoke_dir"' EXIT
           tar -xzf "$archive" -C "$smoke_dir"
           "$smoke_dir/dorf" version
-          go version -m "$smoke_dir/dorf"
+          .dorf/bin/mise exec -- go version -m "$smoke_dir/dorf"

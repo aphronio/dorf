@@ -40,9 +40,9 @@ for an explicit ecosystem comparison; neither directory is a source of Dorf requ
 Keep every slice runnable with the repository contract:
 
 ```bash
-scripts/dev/prepare.sh
-scripts/dev/check.sh
-go build -o .dorf/bin/dorf ./cmd/dorf
+scripts/dev/setup.sh
+.dorf/bin/mise run check
+.dorf/bin/mise exec -- go build -o .dorf/bin/dorf ./cmd/dorf
 .dorf/bin/dorf version
 ```
 
