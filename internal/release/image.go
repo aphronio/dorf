@@ -17,7 +17,32 @@ import (
 	"github.com/aphronio/dorf/internal/incus"
 )
 
-const ArchiveName = "dorf-codex-incus-vm-v4-x86_64.tar.gz"
+const (
+	ArchiveName        = "dorf-codex-incus-vm-v4-x86_64.tar.gz"
+	BaseImageReference = "images:debian/13"
+)
+
+var requiredImageTools = []string{
+	"bash",
+	"curl",
+	"g++",
+	"gcc",
+	"git",
+	"go",
+	"jq",
+	"make",
+	"node",
+	"pip",
+	"pkg-config",
+	"python",
+	"ripgrep",
+	"tar",
+	"unzip",
+	"uv",
+	"wget",
+}
+
+var requiredToolIntegrity = []string{"go", "node", "uv"}
 
 type Manifest struct {
 	SchemaVersion    int               `json:"schema_version"`
@@ -26,6 +51,7 @@ type Manifest struct {
 	Architecture     string            `json:"architecture"`
 	ImageType        string            `json:"image_type"`
 	ImageFingerprint string            `json:"image_fingerprint"`
+	BaseImage        BaseImage         `json:"base_image"`
 	Archive          Archive           `json:"archive"`
 	Codex            Codex             `json:"codex"`
 	Tools            map[string]string `json:"tools"`
@@ -33,6 +59,12 @@ type Manifest struct {
 	SourceCommit     string            `json:"source_commit"`
 	ValidatedAt      string            `json:"validated_at"`
 }
+
+type BaseImage struct {
+	Reference   string `json:"reference"`
+	Fingerprint string `json:"fingerprint"`
+}
+
 type Archive struct {
 	Name   string `json:"name"`
 	SHA256 string `json:"sha256"`
@@ -46,6 +78,7 @@ type imageMetadata struct {
 	Package       string            `json:"package"`
 	Version       string            `json:"version"`
 	NPMIntegrity  string            `json:"npm_integrity"`
+	BaseImage     BaseImage         `json:"base_image"`
 	Tools         map[string]string `json:"tools"`
 	ToolIntegrity map[string]string `json:"tool_integrity"`
 }
@@ -77,16 +110,18 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 	if metadata.Package != "@openai/codex" || metadata.Version == "" || len(metadata.NPMIntegrity) < 8 || metadata.NPMIntegrity[:7] != "sha512-" {
 		return fmt.Errorf("image metadata has no exact Codex package identity")
 	}
-	for _, tool := range []string{"git", "go", "node", "uv"} {
+	if metadata.BaseImage.Reference != BaseImageReference || !digest.MatchString(metadata.BaseImage.Fingerprint) {
+		return fmt.Errorf("image metadata has no exact Debian 13 base identity")
+	}
+	for _, tool := range requiredImageTools {
 		if metadata.Tools[tool] == "" {
 			return fmt.Errorf("image metadata has no %s version", tool)
 		}
 	}
-	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(metadata.ToolIntegrity["uv"]) {
-		return fmt.Errorf("image metadata has no verified uv archive integrity")
-	}
-	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(metadata.ToolIntegrity["go"]) {
-		return fmt.Errorf("image metadata has no verified Go archive integrity")
+	for _, tool := range requiredToolIntegrity {
+		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(metadata.ToolIntegrity[tool]) {
+			return fmt.Errorf("image metadata has no verified %s archive integrity", tool)
+		}
 	}
 	file, err := os.Open(archivePath)
 	if err != nil {
@@ -102,7 +137,7 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 		return closeErr
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
-	manifest := Manifest{SchemaVersion: 4, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Codex: Codex{Version: metadata.Version, NPMIntegrity: metadata.NPMIntegrity}, Tools: metadata.Tools, ToolIntegrity: map[string]string{"go": metadata.ToolIntegrity["go"], "uv": metadata.ToolIntegrity["uv"]}, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
+	manifest := Manifest{SchemaVersion: 4, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, BaseImage: metadata.BaseImage, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Codex: Codex{Version: metadata.Version, NPMIntegrity: metadata.NPMIntegrity}, Tools: metadata.Tools, ToolIntegrity: metadata.ToolIntegrity, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -212,24 +247,26 @@ func validate(m Manifest, archivePath string) error {
 	if m.SchemaVersion != 4 || m.Environment != "incus" || m.Architecture != "x86_64" || m.ImageType != "virtual-machine" {
 		return fmt.Errorf("official image manifest has an unsupported product shape")
 	}
+	if m.BaseImage.Reference != BaseImageReference || !digest.MatchString(m.BaseImage.Fingerprint) {
+		return fmt.Errorf("official image manifest has no exact Debian 13 base identity")
+	}
 	if m.Archive.Name != ArchiveName || filepath.Base(archivePath) != ArchiveName || m.Archive.SHA256 != m.ImageFingerprint || !digest.MatchString(m.ImageFingerprint) || m.Archive.Size < 1 {
 		return fmt.Errorf("official image manifest has invalid archive identity")
 	}
 	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(m.ReleaseTag) || !oid.MatchString(m.SourceCommit) || m.Codex.Version == "" || len(m.Codex.NPMIntegrity) < 8 || m.Codex.NPMIntegrity[:7] != "sha512-" {
 		return fmt.Errorf("official image manifest has invalid release identity")
 	}
-	required := []string{"git", "go", "node", "uv"}
+	required := append([]string(nil), requiredImageTools...)
 	sort.Strings(required)
 	for _, tool := range required {
 		if m.Tools[tool] == "" {
 			return fmt.Errorf("official image manifest omits %s", tool)
 		}
 	}
-	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ToolIntegrity["uv"]) {
-		return fmt.Errorf("official image manifest omits verified uv integrity")
-	}
-	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ToolIntegrity["go"]) {
-		return fmt.Errorf("official image manifest omits verified Go integrity")
+	for _, tool := range requiredToolIntegrity {
+		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ToolIntegrity[tool]) {
+			return fmt.Errorf("official image manifest omits verified %s integrity", tool)
+		}
 	}
 	return nil
 }

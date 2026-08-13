@@ -59,10 +59,13 @@ dorf image install \
 ```
 
 Maintainers can instead build and prove the image locally with
-`scripts/incus/prepare-dorf-codex-release.sh`. Schema 4 is the first post-cutover image contract: it
-contains the pinned Go 1.26.5 toolchain and proves the managed repository's declared preparation
-inside a fresh Sandbox before publication. Schema-3 images are pre-cutover and unsupported even if
-their alias is still present locally. The image contains no upstream credential or scoped route key.
+`scripts/incus/release-dorf-codex-image.sh`. Schema 4 is the first post-cutover image contract: it
+identifies an exact Debian 13 base and contains Python 3.14, Node 24 LTS, pinned Go and uv, Codex,
+native build tools, and common command-line utilities. It proves the managed repository's declared
+preparation inside a fresh Sandbox before publication. Repository libraries and test tools remain
+lockfile-owned and are installed by that preparation command. Schema-3 images are pre-cutover and
+unsupported even if their alias is still present locally. The image contains no upstream credential
+or scoped route key.
 
 ## 3. Connect the provider and initialize PostgreSQL/Absurd
 

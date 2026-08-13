@@ -722,7 +722,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted and implemented — 2026-07-31; local-first and combined product-release
   boundaries revised during public activation — 2026-08-04; Go artifact boundary at D047 cutover
-  — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08
+  — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08; base and inventory
+  clauses superseded by D064 — 2026-08-13
 - **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
   exactly one Go x86_64 Linux archive/checksum and one Incus archive/compatibility manifest. One repo-owned
   local command builds from an immutable base fingerprint, selects and records the current Codex npm
@@ -1061,7 +1062,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D049 — Repositories own their development-tool setup
 
-- **Status:** Accepted setup boundary — 2026-08-09
+- **Status:** Accepted setup boundary — 2026-08-09; fixed schema-4 inventory sentence superseded by
+  D064 while repository ownership remains accepted — 2026-08-13
 - **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
   inspection needs. Keep the existing schema-4 image and release assets unchanged. Dorf's declared
   `commands.prepare` invokes a repository-owned script that installs missing pinned tools,
@@ -1462,3 +1464,35 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A supported Harness cannot fit the AgentRun boundary, a second Sandbox cannot
   preserve the Job authority model, or real external-client use shows that profile selection and
   capability admission do not keep common code independent of Harness and Sandbox.
+
+## D064 — Debian 13 is the shared supported-toolchain Sandbox baseline
+
+- **Status:** Accepted image baseline before first schema-4 publication — 2026-08-13
+- **Decision:** The official x86_64 Sandbox image uses the exact current `images:debian/13` VM
+  fingerprint and carries only a cross-repository workstation baseline: Python 3.14 with pip, Node 24
+  LTS, pinned Go and uv, Git, Codex, native C/C++ build tools, and common shell/archive/search
+  utilities. npm is used only to install Codex during construction; npm, npx, Corepack, Yarn, pnpm,
+  pytest, Ruff, application libraries, GitHub CLI, tmux, PostgreSQL, and Absurd are not shared image
+  contents. Managed repositories retain their
+  language versions and dependencies in ordinary project metadata and lockfiles and install them
+  through `commands.prepare`.
+- **Integrity:** Manifest schema 4 records the exact Debian base reference and fingerprint, every
+  installed bootstrap-tool version, the final image/archive digest, Codex npm integrity, and verified
+  Node, Go, and uv archive digests. One versioned recipe is the complete image construction authority;
+  it copies no host state into the fresh base. Release proof exercises the image through the existing
+  real no-change AgentRun terminal and reconciles cleanup before publication rather than duplicating
+  the recipe with content assertions.
+- **Why:** A small polyglot bootstrap lets Codex inspect and deterministically prepare ordinary Python,
+  JavaScript, Go, and native-extension repositories without turning their dependency graphs into a
+  Dorf release concern. Debian 13 supplies the current stable/LTS runway. Keeping project packages in
+  the repository avoids cross-repository version conflicts and preserves the development-tooling
+  seam required by D049. The builder uses Incus's supported publish-from-instance path: Distrobuilder
+  would require an additional host toolchain and a full from-scratch Debian VM definition even though
+  Dorf intentionally customizes an existing official image.
+- **Cost:** The shared image and its proof surface are larger than the earlier harness-only image, and
+  Python, Node, Go, uv, and Codex support windows require deliberate image refreshes. The supported
+  clean-machine host remains Ubuntu 24.04; this decision changes the disposable Sandbox guest only.
+- **Reconsider when:** Measured image transfer or cold-start cost dominates Job latency, a bootstrap
+  tool has no cross-repository consumer, Debian prevents a real managed-repository terminal, or
+  repository preparation repeatedly needs another tool whose inclusion is cheaper and safer than a
+  content-addressed setup cache.

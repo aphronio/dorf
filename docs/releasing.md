@@ -1,24 +1,23 @@
 # Releasing Dorf
 
-Dorf releases one x86_64 Linux Go application and the credential-free Incus VM image proven with
-that application. There is no Python package or package-index publication.
+Dorf releases one x86_64 Linux Go application and the credential-free Debian 13 Incus VM image
+proven with that application. There is no Python package or package-index publication.
 
 From one clean source commit already available on GitHub:
 
 ```bash
 scripts/dev/prepare.sh
 scripts/dev/check.sh
-scripts/build-release.sh dist/room-image
 
 PROVIDER_CONNECTION=personal-chatgpt \
 GITHUB_INSTALLATION_ID=INSTALLATION_ID \
-  scripts/incus/publish-dorf-codex-release.sh
+  scripts/incus/release-dorf-codex-image.sh --publish
 ```
 
-The local publisher retains the owner's provider credential on the host. It builds a fresh image,
-checks the credential boundary, admits a real Go Job against the exact source commit, completes a
-real Codex turn, proves exact cleanup, builds the static Go archive/checksum, creates one complete
-draft containing all four assets, and publishes it once. GitHub release immutability and `gh
+The local publisher retains the owner's provider credential on the host. Its versioned recipe builds
+a fresh image without copying host state, then it admits a real Go Job against the exact source
+commit, completes a real Codex turn, proves exact cleanup, builds the static Go archive/checksum,
+creates one complete draft containing all four assets, and publishes it once. GitHub release immutability and `gh
 release verify[-asset]` are required.
 
 Release tags are exactly `v` plus `internal/version.Version`. The assets are:

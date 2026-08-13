@@ -5,43 +5,50 @@ Go application's Incus Sandbox. Keep this shared image stable instead of adding 
 repository's development dependencies to it. After clone, deterministic repository preparation may
 install that repository's pinned packages and tools from the network.
 
-The default public path consumes a Dorf-built image. It includes Git, pinned Go 1.26.5, uv, Node,
-and Codex: the existing baseline needed to clone a managed repository and run its deterministic
-preparation command. Tools specific to Dorf itself, including Absurd and PostgreSQL, belong to
-Dorf's repository-owned setup even when an existing image already happens to contain Go. Build-only
-npm is removed. The local builder remains available for development:
+The default public path consumes a Dorf-built Debian 13 image. Its shared workstation baseline is
+Python 3.14 with pip, the Node 24 LTS runtime, pinned Go and uv, Git, Codex, native C/C++ build
+tools, and the small command-line set required for ordinary repository setup. Repository libraries,
+test tools, npm/Corepack/Yarn/pnpm, and application frameworks are not image contents; the managed
+repository installs its locked dependencies through deterministic preparation. Tools specific to
+Dorf itself, including Absurd and PostgreSQL, belong to that repository-owned setup. The local
+builder remains available for development:
 
 ```bash
 scripts/incus/build-dorf-codex-image.sh
 ```
 
-The build and provisioning scripts are the source of truth for the base fingerprint, installed
-harness and tools, selected Codex release, and credential checks. `IMAGE_ALIAS` changes the local
-published alias. The builder resolves the configured Ubuntu VM alias to an immutable fingerprint
-before launching it and records the exact Codex version, npm package integrity, Git, Node, and uv
-versions, the verified uv release-archive digest, and base fingerprint. Tool installation uses a
-pinned x86_64 uv release archive whose published SHA-256 is verified before installation; it does
-not execute a mutable network installer.
+That single recipe is the image definition and builder. It resolves `images:debian/13` to an
+immutable fingerprint, launches one VM, installs the declared contents, removes build-only npm, and
+publishes the result locally. The fresh upstream VM receives only that versioned recipe, so no host
+credential or project dependency is copied into the image. `IMAGE_ALIAS` changes the local alias.
+The manifest records the base identity; exact Codex and installed tool versions; Codex npm
+integrity; and verified Node, Go, and uv release-archive digests. Tool installation uses pinned
+x86_64 release archives whose published SHA-256 values are verified before installation; it does
+not execute a mutable network installer. Debian package versions are retained in the final immutable
+image rather than promoted to a second package manifest.
+
+This uses Incus's supported publish-from-instance path. Distrobuilder is the official declarative
+from-scratch alternative, but its VM path requires an additional host build toolchain and a full
+Debian OS definition. Because Dorf deliberately starts from the official Debian image, that would
+add another build boundary instead of simplifying this customization.
 
 ## Candidate and release pipeline
 
-`scripts/incus/prepare-dorf-codex-release.sh` performs the complete candidate proof:
+`scripts/incus/release-dorf-codex-image.sh` performs the complete candidate proof:
 
 1. builds a uniquely named image from the current immutable base fingerprint;
 2. resolves the current `@openai/codex@latest`, records its version and npm integrity, and installs
    that exact selected version;
-3. launches a clean probe and executes the installed `go` and `gofmt`, matching `go version` to the
-   image metadata, while checking the image for forbidden credentials and other required tools;
-4. admits the release source commit through the Go durable Job spine, lets its Sandbox clone the
+3. admits the release source commit through the Go durable Job spine, lets its Sandbox clone the
    repository, and requires the repository's declared preparation Action to succeed;
-5. completes one real AgentRun through the Codex app-server Harness and a scoped Provider Route, with an explicit
+4. completes one real AgentRun through the Codex app-server Harness and a scoped Provider Route, with an explicit
    no-modification goal, and requires the exact starting Revision to remain current with the
    exact unchanged `git-revision` Evidence owned by that AgentRun and Revision generation zero;
-6. records the image fingerprint, Harness/Thread/Turn identity, timings, and terminal state in a
+5. records the image fingerprint, Harness/Thread/Turn identity, timings, and terminal state in a
    redacted local evidence directory;
-7. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
+6. verifies Sandbox and Provider Route cleanup in a `finally` boundary through the same durable Go
    path, with fenced Go cancellation and synchronous exact reconciliation as the failure fallback; and
-8. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
+7. exports the VM, creates the canonical compatibility manifest, and reconciles its exact temporary
    VMs and candidate alias.
 
 This is deliberately a bounded image-capability proof, not the coding-to-PR terminal. The expected
@@ -57,7 +64,8 @@ Run that proof manually with an already connected Provider Gateway name:
 
 ```bash
 PROVIDER_CONNECTION=personal-chatgpt \
-  scripts/incus/prepare-dorf-codex-release.sh
+GITHUB_INSTALLATION_ID=INSTALLATION_ID \
+  scripts/incus/release-dorf-codex-image.sh
 ```
 
 If provider preflight fails, run the available Go readiness command from the Dorf source checkout:
@@ -66,21 +74,22 @@ If provider preflight fails, run the available Go readiness command from the Dor
 go run ./cmd/dorf doctor --provider "$PROVIDER_CONNECTION"
 ```
 
-`scripts/incus/publish-dorf-codex-release.sh` runs that proof and publication as one repo-owned
-local release operation. It keeps the selected Provider Gateway credential on the owner's host and
-attaches only the credential-free archive and compatibility manifest to the same immutable `vX.Y.Z`
-release that contains the supported Go binary. Run it from a clean versioned commit that has
-already reached GitHub and passed the Go checks:
+The same command publishes only when passed `--publish`. It keeps the selected Provider Gateway
+credential on the owner's host and attaches only the credential-free archive and compatibility
+manifest to the same immutable `vX.Y.Z` release as the supported Go binary. Run it from a clean
+versioned commit that has already reached GitHub and passed the Go checks:
 
 ```bash
 PROVIDER_CONNECTION=personal-chatgpt \
-  scripts/incus/publish-dorf-codex-release.sh
+GITHUB_INSTALLATION_ID=INSTALLATION_ID \
+  scripts/incus/release-dorf-codex-image.sh --publish
 ```
 
 The schema-4 x86_64 release assets are named `dorf-codex-incus-vm-v4-x86_64.tar.gz` and
 `dorf-codex-incus-vm-v4-x86_64.json`. Schema 4 is the first post-Go-cutover image contract. It
-rejects the historical schema-3 workstation, which did not require Go and failed the issue #38
-repository setup dogfood. The explicit `incus-vm` segment prevents the release artifact
+requires the exact Debian 13 base fingerprint and complete bootstrap inventory; it rejects the
+historical schema-3 workstation, which did not require Go and failed the issue #38 repository setup
+dogfood. The explicit `incus-vm` segment prevents the release artifact
 from looking like a generic Linux filesystem or a portable image for another Environment. The
 versioned channel keeps the Go application and its proven Sandbox image in one immutable boundary.
 
@@ -128,8 +137,9 @@ release manifest and archive when all of these agree:
 
 - GitHub reports the release as immutable;
 - GitHub's manifest asset digest matches the downloaded manifest;
-- manifest schema 4 identifies the `incus` Environment and complete Git, Go, Node, and uv workstation,
-  and its release tag, architecture, VM type, archive name, size, and digest match the release;
+- manifest schema 4 identifies the `incus` Environment, exact Debian 13 base, complete bootstrap
+  workstation, and verified Node, Go, and uv archives, and its release tag, architecture, VM type,
+  archive name, size, and digest match the release;
 - the archive's GitHub digest, manifest digest, and Incus fingerprint are identical; and
 - Incus reports the expected fingerprint after import.
 
