@@ -23,11 +23,18 @@ as_root() {
 
 ensure_bootstrap_packages() {
   local missing=false
-  for command in curl gcc make sha256sum; do
+  for command in bison curl flex gcc make perl pkg-config runuser sha256sum useradd; do
     if ! command -v "$command" >/dev/null 2>&1; then
       missing=true
     fi
   done
+  if command -v pkg-config >/dev/null 2>&1; then
+    for library in openssl readline uuid zlib; do
+      if ! pkg-config --exists "$library"; then
+        missing=true
+      fi
+    done
+  fi
   if [[ "$missing" == false ]]; then
     return
   fi
@@ -39,7 +46,7 @@ ensure_bootstrap_packages() {
     apt-get -o DPkg::Lock::Timeout=120 update
   as_root env DEBIAN_FRONTEND=noninteractive \
     apt-get -o DPkg::Lock::Timeout=120 install -y --no-install-recommends \
-      build-essential ca-certificates curl
+      bison build-essential ca-certificates curl flex libreadline-dev libssl-dev passwd pkg-config util-linux uuid-dev zlib1g-dev
 }
 
 install_mise() {
@@ -47,7 +54,7 @@ install_mise() {
     echo "Dorf development setup currently supports Linux x86_64." >&2
     exit 1
   fi
-  if [[ -x "$MISE_BINARY" ]] && [[ "$($MISE_BINARY --version | awk '{print $1}')" == "$MISE_VERSION" ]]; then
+  if [[ -x "$MISE_BINARY" ]] && [[ "$($MISE_BINARY version | awk '{print $1}')" == "$MISE_VERSION" ]]; then
     return
   fi
   local download
@@ -66,6 +73,9 @@ install_mise_wrapper() {
 set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MISE_CONFIG_DIR="$project_root/.dorf/mise-config"
+export MISE_DATA_DIR="$project_root/.dorf/mise-data"
+export MISE_CACHE_DIR="$project_root/.dorf/mise-cache"
+export MISE_STATE_DIR="$project_root/.dorf/mise-state"
 exec "$project_root/.dorf/mise/bin/mise" "$@"
 EOF
   chmod 0755 "$MISE"
@@ -79,21 +89,45 @@ mise_exec() {
   mise_run exec -- "$@"
 }
 
+ensure_postgres_user() {
+  if [[ "$(id -u)" -eq 0 ]] && ! id dorf-postgres >/dev/null 2>&1; then
+    useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin dorf-postgres
+  fi
+}
+
+postgres_exec() {
+  local command=$1
+  shift
+  if [[ "$(id -u)" -ne 0 ]]; then
+    mise_exec "$command" "$@"
+    return
+  fi
+  ensure_postgres_user
+  local executable
+  executable="$(mise_run which "$command")"
+  runuser -u dorf-postgres -- "$executable" "$@"
+}
+
 converge_local_database() {
   local data="$DEFAULT_DATABASE_DIR/data"
   local socket="$DEFAULT_DATABASE_DIR/socket"
   local log="$DEFAULT_DATABASE_DIR/postgres.log"
   mkdir -p "$socket"
+  if [[ "$(id -u)" -eq 0 ]]; then
+    ensure_postgres_user
+    chown -R dorf-postgres:nogroup "$DEFAULT_DATABASE_DIR"
+  fi
   if [[ ! -s "$data/PG_VERSION" ]]; then
-    mise_exec initdb -D "$data" --auth=trust --no-locale >&2
+    postgres_exec initdb -D "$data" --auth=trust --no-locale >&2
   fi
-  if ! mise_exec pg_ctl -D "$data" status >/dev/null 2>&1; then
-    mise_exec pg_ctl -D "$data" -l "$log" -o "-k $socket" -w start >&2
+  if ! postgres_exec pg_ctl -D "$data" status >/dev/null 2>&1; then
+    postgres_exec pg_ctl -D "$data" -l "$log" -o "-k $socket" -w start >&2
   fi
-  local url="postgresql:///dorf_test?host=$socket"
-  if ! mise_exec psql "postgresql:///postgres?host=$socket" -Atqc \
+  local url="postgresql://dorf-postgres@/dorf_test?host=$socket"
+  local admin_url="postgresql://dorf-postgres@/postgres?host=$socket"
+  if ! postgres_exec psql "$admin_url" -Atqc \
     "select 1 from pg_database where datname='dorf_test'" | grep -qx 1; then
-    mise_exec createdb -h "$socket" dorf_test >&2
+    postgres_exec createdb -h "$socket" -U dorf-postgres dorf_test >&2
   fi
   printf '%s\n' "$url"
 }
@@ -125,7 +159,7 @@ DORF_DATABASE_URL="$test_database_url" mise_exec go run ./cmd/dorf migrate
 
 printf '%s\n' \
   "Dorf development setup complete." \
-  "  Mise: $($MISE --version)" \
+  "  Mise: $($MISE version)" \
   "  Go: $(mise_exec go version)" \
   "  sqlc: $(mise_exec sqlc version)" \
   "  PostgreSQL: $(mise_exec psql --version)" \
