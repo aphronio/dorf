@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly HARNESS="${DORF_HARNESS:-codex}"
-if [[ "$HARNESS" != "codex" && "$HARNESS" != "pi" ]]; then
-  echo "DORF_HARNESS must be codex or pi." >&2
-  exit 2
-fi
-
 provision() {
   export DEBIAN_FRONTEND=noninteractive
   readonly EXPECTED_BASE_IMAGE="images:debian/13"
@@ -73,20 +67,17 @@ provision() {
   ln -sf /opt/dorf-python/bin/pip /usr/local/bin/pip
   ln -sf /opt/dorf-python/bin/pip /usr/local/bin/pip3
 
-  case "$HARNESS" in
-    codex)
-      HARNESS_PACKAGE="@openai/codex"
-      HARNESS_COMMAND="codex"
-      ;;
-    pi)
-      HARNESS_PACKAGE="@earendil-works/pi-coding-agent"
-      HARNESS_COMMAND="pi"
-      ;;
-  esac
-  HARNESS_VERSION="$(npm view "$HARNESS_PACKAGE@latest" version)"
-  HARNESS_NPM_INTEGRITY="$(npm view "$HARNESS_PACKAGE@$HARNESS_VERSION" dist.integrity)"
-  npm install -g "$HARNESS_PACKAGE@$HARNESS_VERSION"
-  ln -sf "/opt/node/bin/$HARNESS_COMMAND" "/usr/local/bin/$HARNESS_COMMAND"
+  readonly CODEX_PACKAGE="@openai/codex"
+  readonly PI_PACKAGE="@earendil-works/pi-coding-agent"
+  CODEX_VERSION="$(npm view "$CODEX_PACKAGE@latest" version)"
+  CODEX_NPM_INTEGRITY="$(npm view "$CODEX_PACKAGE@$CODEX_VERSION" dist.integrity)"
+  PI_VERSION="$(npm view "$PI_PACKAGE@latest" version)"
+  PI_NPM_INTEGRITY="$(npm view "$PI_PACKAGE@$PI_VERSION" dist.integrity)"
+  npm install -g "$CODEX_PACKAGE@$CODEX_VERSION" "$PI_PACKAGE@$PI_VERSION"
+  ln -sf /opt/node/bin/codex /usr/local/bin/codex
+  ln -sf /opt/node/bin/pi /usr/local/bin/pi
+  codex --version >/dev/null
+  pi --version >/dev/null
   npm cache clean --force
   rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /opt/node/bin/npm /opt/node/bin/npx /opt/node/bin/corepack \
@@ -96,10 +87,12 @@ provision() {
 
   install -d -m 0755 /usr/local/share/dorf
   jq -n \
-    --arg harness "$HARNESS" \
-    --arg package "$HARNESS_PACKAGE" \
-    --arg version "$HARNESS_VERSION" \
-    --arg npm_integrity "$HARNESS_NPM_INTEGRITY" \
+    --arg codex_package "$CODEX_PACKAGE" \
+    --arg codex_version "$CODEX_VERSION" \
+    --arg codex_npm_integrity "$CODEX_NPM_INTEGRITY" \
+    --arg pi_package "$PI_PACKAGE" \
+    --arg pi_version "$PI_VERSION" \
+    --arg pi_npm_integrity "$PI_NPM_INTEGRITY" \
     --arg base_reference "$DORF_BASE_IMAGE" \
     --arg base_fingerprint "$DORF_BASE_FINGERPRINT" \
     --arg bash "$BASH_VERSION" \
@@ -123,10 +116,10 @@ provision() {
     --arg node_integrity "sha256:$NODE_SHA256" \
     --arg uv_integrity "sha256:$UV_ARCHIVE_SHA256" \
     '{
-      harness: $harness,
-      package: $package,
-      version: $version,
-      npm_integrity: $npm_integrity,
+      harnesses: {
+        codex: {package: $codex_package, version: $codex_version, npm_integrity: $codex_npm_integrity},
+        pi: {package: $pi_package, version: $pi_version, npm_integrity: $pi_npm_integrity}
+      },
       base_image: {reference: $base_reference, fingerprint: $base_fingerprint},
       tools: {
         bash: $bash,
@@ -169,8 +162,8 @@ if [[ "${1:-}" == "provision" ]]; then
   exit
 fi
 
-readonly IMAGE_ALIAS="${IMAGE_ALIAS:-dorf-$HARNESS}"
-readonly BUILD_VM="${BUILD_VM:-dorf-$HARNESS-build}"
+readonly IMAGE_ALIAS="${IMAGE_ALIAS:-dorf}"
+readonly BUILD_VM="${BUILD_VM:-dorf-build}"
 readonly BASE_IMAGE="images:debian/13"
 readonly NETWORK="${NETWORK:-incusbr0}"
 readonly ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
@@ -208,13 +201,13 @@ incus exec "$BUILD_VM" -- true >/dev/null
 incus file push "$IMAGE_SCRIPT" "$BUILD_VM/tmp/build-dorf-image.sh"
 incus exec "$BUILD_VM" -- chmod +x /tmp/build-dorf-image.sh
 incus exec "$BUILD_VM" -- env \
-  "DORF_HARNESS=$HARNESS" \
   "DORF_BASE_IMAGE=$BASE_IMAGE" \
   "DORF_BASE_FINGERPRINT=$BASE_FINGERPRINT" \
   /tmp/build-dorf-image.sh provision
 incus exec "$BUILD_VM" -- rm -f /tmp/build-dorf-image.sh
 
-HARNESS_VERSION="$(incus exec "$BUILD_VM" -- jq -r .version /usr/local/share/dorf/image.json)"
+CODEX_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.codex.version /usr/local/share/dorf/image.json)"
+PI_VERSION="$(incus exec "$BUILD_VM" -- jq -r .harnesses.pi.version /usr/local/share/dorf/image.json)"
 if [[ -n "$IMAGE_METADATA_PATH" ]]; then
   mkdir -p "$(dirname -- "$IMAGE_METADATA_PATH")"
   incus file pull "$BUILD_VM/usr/local/share/dorf/image.json" "$IMAGE_METADATA_PATH"
@@ -222,8 +215,9 @@ fi
 incus exec "$BUILD_VM" -- sync
 incus stop "$BUILD_VM" --timeout 60
 incus publish "$BUILD_VM" --alias "$IMAGE_ALIAS" --reuse \
-  description="Dorf Debian 13 VM with the $HARNESS $HARNESS_VERSION harness" \
-  "dorf.$HARNESS.version=$HARNESS_VERSION" \
+  description="Dorf Debian 13 VM with Codex $CODEX_VERSION and Pi $PI_VERSION" \
+  "dorf.codex.version=$CODEX_VERSION" \
+  "dorf.pi.version=$PI_VERSION" \
   dorf.source.base_fingerprint="$BASE_FINGERPRINT"
 
 echo "Published local Incus image alias: $IMAGE_ALIAS"

@@ -9,9 +9,9 @@ scripts/dev/setup.sh
 
 PROVIDER_CONNECTION=personal-chatgpt \
 GITHUB_INSTALLATION_ID=INSTALLATION_ID \
-  scripts/incus/release-dorf-codex-image.sh --publish
+  scripts/incus/release-dorf-image.sh --publish
 ```
 
-[`scripts/incus/release-dorf-codex-image.sh`](../scripts/incus/release-dorf-codex-image.sh) is the
+[`scripts/incus/release-dorf-image.sh`](../scripts/incus/release-dorf-image.sh) is the
 source of truth for release inputs, proof gates, artifacts, and publication. Do not duplicate those
 details here or publish by bypassing that command.

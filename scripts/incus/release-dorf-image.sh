@@ -22,14 +22,14 @@ fi
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
-readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/room-image}"
-readonly NETWORK="${NETWORK:-incusbr0}"
-readonly ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
+readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/incus-image}"
+readonly CANDIDATE_NETWORK="${NETWORK:-incusbr0}"
+readonly CANDIDATE_ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
 readonly SOURCE_COMMIT="${SOURCE_COMMIT:-$(git -C "$PROJECT_ROOT" rev-parse HEAD)}"
 readonly BUILD_ID="$(date -u +%Y%m%d%H%M%S)"
-readonly CANDIDATE_ALIAS="dorf-codex-candidate-$BUILD_ID"
-readonly BUILD_VM="dorf-codex-build-$BUILD_ID"
-readonly ARCHIVE_BASENAME="dorf-codex-incus-vm-v4-x86_64"
+readonly CANDIDATE_ALIAS="dorf-candidate-$BUILD_ID"
+readonly CANDIDATE_BUILD_VM="dorf-build-$BUILD_ID"
+readonly ARCHIVE_BASENAME="dorf-incus-vm-v5-x86_64"
 readonly ARCHIVE_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.tar.gz"
 readonly MANIFEST_PATH="$OUTPUT_DIR/$ARCHIVE_BASENAME.json"
 readonly METADATA_PATH="$OUTPUT_DIR/image.json"
@@ -37,14 +37,37 @@ readonly EVIDENCE_DIR="$OUTPUT_DIR/workstation-evidence"
 readonly EVIDENCE_POLICY="${EVIDENCE_POLICY:-retain}"
 readonly PROOF_ROOT="$(mktemp -d)"
 readonly BINARY="$PROOF_ROOT/dorf"
-readonly GOAL_FILE="$PROOF_ROOT/goal.txt"
-readonly ADMISSION_KEY="image-proof:$BUILD_ID"
 JOB_ID=""
+
+if [[ -z "${DORF_DATABASE_URL:-}" && -f "$PROJECT_ROOT/.dorf/test-database-url" ]]; then
+  IFS= read -r DORF_DATABASE_URL <"$PROJECT_ROOT/.dorf/test-database-url"
+  export DORF_DATABASE_URL
+fi
+
+drive_job_until() {
+  local job_id="$1"
+  local predicate="$2"
+  local description="$3"
+  local deadline=$((SECONDS + 3600))
+  local inspection=""
+
+  while ((SECONDS < deadline)); do
+    "$BINARY" worker --once >/dev/null
+    inspection="$("$BINARY" inspect --json "$job_id")"
+    if jq -e "$predicate" <<<"$inspection" >/dev/null; then
+      printf '%s\n' "$inspection"
+      return
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for $description on Job $job_id." >&2
+  return 1
+}
 
 cleanup() {
   if [[ -n "$JOB_ID" ]]; then
     "$BINARY" cleanup "$JOB_ID" >/dev/null 2>&1 || true
-    "$BINARY" worker --once >/dev/null 2>&1 || true
+    drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "cleanup" >/dev/null 2>&1 || true
   fi
   if [[ "$EVIDENCE_POLICY" == "remove" ]]; then
     rm -rf -- "$EVIDENCE_DIR"
@@ -96,12 +119,11 @@ fi
 mkdir -p "$OUTPUT_DIR"
 rm -f "$METADATA_PATH" "$ARCHIVE_PATH" "$MANIFEST_PATH"
 go -C "$PROJECT_ROOT" build -o "$BINARY" ./cmd/dorf
-"$BINARY" doctor --provider "$PROVIDER_CONNECTION"
 
 IMAGE_ALIAS="$CANDIDATE_ALIAS" \
-BUILD_VM="$BUILD_VM" \
-NETWORK="$NETWORK" \
-ROOT_DISK_SIZE="$ROOT_DISK_SIZE" \
+BUILD_VM="$CANDIDATE_BUILD_VM" \
+NETWORK="$CANDIDATE_NETWORK" \
+ROOT_DISK_SIZE="$CANDIDATE_ROOT_DISK_SIZE" \
 IMAGE_METADATA_PATH="$METADATA_PATH" \
   "$SCRIPT_DIR/build-dorf-image.sh"
 
@@ -112,59 +134,71 @@ if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
 fi
 
 export DORF_INCUS_IMAGE="$CANDIDATE_ALIAS"
-export DORF_INCUS_NETWORK="$NETWORK"
-export DORF_INCUS_DISK_SIZE="$ROOT_DISK_SIZE"
-printf '%s\n' \
-  'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
-  >"$GOAL_FILE"
-ADMISSION="$($BINARY admit \
-  --key "$ADMISSION_KEY:$CANDIDATE_FINGERPRINT" \
-  --goal-file "$GOAL_FILE" \
-  --repo https://github.com/aphronio/dorf.git \
-  --revision "$SOURCE_COMMIT" \
-  --branch "dorf/image-proof-$BUILD_ID" \
-  --github-repo aphronio/dorf \
-  --github-installation "$GITHUB_INSTALLATION_ID" \
-  --base "${BASE_BRANCH:-main}" \
-  --provider "$PROVIDER_CONNECTION" \
-  --model gpt-5.6-sol \
-  --reasoning low)"
-JOB_ID="$(jq -er .job_id <<<"$ADMISSION")"
-"$BINARY" worker --once
-INSPECTION="$($BINARY inspect --json "$JOB_ID")"
-jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$INSPECTION" >/dev/null
-jq -e '.observed_facts.messages | map(select(.sequence == 1 and .harness == "codex" and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$INSPECTION" >/dev/null
-jq -e --arg source "$SOURCE_COMMIT" '
-  (.observed_facts.messages | map(select(.sequence == 1)) | .[0].agent_run_id) as $agent_run_id |
-  .job.revision == $source and
-  (.observed_facts.revisions | length == 1) and
-  (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and
-  (.observed_facts.evidence | any(
-    .kind == "git-revision" and
-    .agent_run_id == $agent_run_id and
-    .revision == $source and
-    (.started_at | length > 0) and
-    (.finished_at | length > 0)
-  )) and
-  (.observed_facts.checks | length == 0) and
-  ([.observed_facts.agent_runs[] | select(.role != "implement")] | length == 0) and
-  .proposal == null
-' <<<"$INSPECTION" >/dev/null
-
-"$BINARY" cleanup "$JOB_ID"
-"$BINARY" worker --once
-INSPECTION="$($BINARY inspect --json "$JOB_ID")"
-jq -e '.job.cleanup_state == "complete"' <<<"$INSPECTION" >/dev/null
+export DORF_INCUS_NETWORK="$CANDIDATE_NETWORK"
+export DORF_INCUS_DISK_SIZE="$CANDIDATE_ROOT_DISK_SIZE"
+"$BINARY" doctor --provider "$PROVIDER_CONNECTION"
 mkdir -p "$EVIDENCE_DIR"
-jq -n \
-  --arg image "$CANDIDATE_ALIAS" \
-  --arg fingerprint "$CANDIDATE_FINGERPRINT" \
-  --arg source "$SOURCE_COMMIT" \
-  --arg provider "$PROVIDER_CONNECTION" \
-  --arg job "$JOB_ID" \
-  '{schema_version:3,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
-  >"$EVIDENCE_DIR/image-proof.json"
-JOB_ID=""
+
+prove_harness() {
+  local harness="$1"
+  local goal_file="$PROOF_ROOT/$harness-goal.txt"
+  local admission inspection
+  export DORF_HARNESS="$harness"
+  printf '%s\n' \
+    'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
+    >"$goal_file"
+  admission="$($BINARY admit \
+    --key "image-proof:$harness:$BUILD_ID:$CANDIDATE_FINGERPRINT" \
+    --goal-file "$goal_file" \
+    --repo https://github.com/aphronio/dorf.git \
+    --revision "$SOURCE_COMMIT" \
+    --branch "dorf/image-proof-$harness-$BUILD_ID" \
+    --github-repo aphronio/dorf \
+    --github-installation "$GITHUB_INSTALLATION_ID" \
+    --base "${BASE_BRANCH:-main}" \
+    --provider "$PROVIDER_CONNECTION" \
+    --model gpt-5.6-sol \
+    --reasoning low)"
+  JOB_ID="$(jq -er .job_id <<<"$admission")"
+  inspection="$(drive_job_until "$JOB_ID" '.observed_facts.agent_runs | any(.message_id != null and .turn_outcome != null)' "$harness turn")"
+  jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$inspection" >/dev/null
+  jq -e --arg harness "$harness" '.observed_facts.agent_runs | map(select(.harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
+  jq -e --arg source "$SOURCE_COMMIT" '
+    (.observed_facts.messages | map(select(.sequence == 1)) | .[0].id) as $message_id |
+    (.observed_facts.agent_runs | map(select(.message_id == $message_id)) | .[0].id) as $agent_run_id |
+    .job.revision == $source and
+    (.observed_facts.revisions | length == 1) and
+    (.observed_facts.revisions[0].oid == $source and .observed_facts.revisions[0].generation == 0) and
+    (.observed_facts.evidence | any(
+      .kind == "git-revision" and
+      .agent_run_id == $agent_run_id and
+      .revision == $source and
+      (.started_at | length > 0) and
+      (.finished_at | length > 0)
+    )) and
+    (.observed_facts.checks | length == 0) and
+    ([.observed_facts.agent_runs[] | select(.role != "implement")] | length == 0) and
+    .proposal == null
+  ' <<<"$inspection" >/dev/null
+
+  "$BINARY" cleanup "$JOB_ID"
+  inspection="$(drive_job_until "$JOB_ID" '.job.cleanup_state == "complete"' "$harness cleanup")"
+  jq -e '.job.cleanup_state == "complete"' <<<"$inspection" >/dev/null
+  jq -n \
+    --arg harness "$harness" \
+    --arg image "$CANDIDATE_ALIAS" \
+    --arg fingerprint "$CANDIDATE_FINGERPRINT" \
+    --arg source "$SOURCE_COMMIT" \
+    --arg provider "$PROVIDER_CONNECTION" \
+    --arg job "$JOB_ID" \
+    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
+    >"$EVIDENCE_DIR/$harness-image-proof.json"
+  JOB_ID=""
+}
+
+prove_harness codex
+prove_harness pi
+unset DORF_HARNESS
 
 incus image export "$CANDIDATE_ALIAS" "$OUTPUT_DIR/$ARCHIVE_BASENAME" --vm
 PRODUCT_VERSION="$($BINARY version | awk '{print $2}')"
@@ -203,15 +237,17 @@ fi
 
 NOTES_PATH="$(mktemp)"
 trap 'rm -f "$NOTES_PATH"; cleanup' EXIT
-CODEX_VERSION="$(jq -r .codex.version "$MANIFEST_PATH")"
+CODEX_VERSION="$(jq -r .harnesses.codex.version "$MANIFEST_PATH")"
+PI_VERSION="$(jq -r .harnesses.pi.version "$MANIFEST_PATH")"
 BASE_IMAGE_REFERENCE="$(jq -r .base_image.reference "$MANIFEST_PATH")"
 printf '%s\n' \
   "Dorf $PRODUCT_VERSION" \
   "" \
   "Go x86_64 Linux application and credential-free Incus VM image." \
-  "The image was promoted after a real Dorf Codex turn." \
+  "The image was promoted after real Dorf Codex and Pi turns against one fingerprint." \
   "" \
   "Codex: $CODEX_VERSION" \
+  "Pi: $PI_VERSION" \
   "Base: $BASE_IMAGE_REFERENCE" \
   "Environment: Incus VM" \
   "Architecture: x86_64" \

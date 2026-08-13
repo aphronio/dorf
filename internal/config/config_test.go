@@ -72,7 +72,7 @@ func TestLoadSelectsOneConcreteHarnessProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Harness != "pi" || cfg.IncusImage != "dorf-pi" {
+	if cfg.Harness != "pi" || cfg.IncusImage != "dorf" {
 		t.Fatalf("profile harness=%q image=%q", cfg.Harness, cfg.IncusImage)
 	}
 }

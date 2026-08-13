@@ -18,9 +18,14 @@ import (
 )
 
 const (
-	ArchiveName        = "dorf-codex-incus-vm-v4-x86_64.tar.gz"
+	ArchiveName        = "dorf-incus-vm-v5-x86_64.tar.gz"
 	BaseImageReference = "images:debian/13"
 )
+
+var requiredHarnessPackages = map[string]string{
+	"codex": "@openai/codex",
+	"pi":    "@earendil-works/pi-coding-agent",
+}
 
 var requiredImageTools = []string{
 	"bash",
@@ -45,19 +50,19 @@ var requiredImageTools = []string{
 var requiredToolIntegrity = []string{"go", "node", "uv"}
 
 type Manifest struct {
-	SchemaVersion    int               `json:"schema_version"`
-	ReleaseTag       string            `json:"release_tag"`
-	Environment      string            `json:"environment"`
-	Architecture     string            `json:"architecture"`
-	ImageType        string            `json:"image_type"`
-	ImageFingerprint string            `json:"image_fingerprint"`
-	BaseImage        BaseImage         `json:"base_image"`
-	Archive          Archive           `json:"archive"`
-	Codex            Codex             `json:"codex"`
-	Tools            map[string]string `json:"tools"`
-	ToolIntegrity    map[string]string `json:"tool_integrity"`
-	SourceCommit     string            `json:"source_commit"`
-	ValidatedAt      string            `json:"validated_at"`
+	SchemaVersion    int                `json:"schema_version"`
+	ReleaseTag       string             `json:"release_tag"`
+	Environment      string             `json:"environment"`
+	Architecture     string             `json:"architecture"`
+	ImageType        string             `json:"image_type"`
+	ImageFingerprint string             `json:"image_fingerprint"`
+	BaseImage        BaseImage          `json:"base_image"`
+	Archive          Archive            `json:"archive"`
+	Harnesses        map[string]Harness `json:"harnesses"`
+	Tools            map[string]string  `json:"tools"`
+	ToolIntegrity    map[string]string  `json:"tool_integrity"`
+	SourceCommit     string             `json:"source_commit"`
+	ValidatedAt      string             `json:"validated_at"`
 }
 
 type BaseImage struct {
@@ -70,17 +75,17 @@ type Archive struct {
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
-type Codex struct {
+
+type Harness struct {
+	Package      string `json:"package"`
 	Version      string `json:"version"`
 	NPMIntegrity string `json:"npm_integrity"`
 }
 type imageMetadata struct {
-	Package       string            `json:"package"`
-	Version       string            `json:"version"`
-	NPMIntegrity  string            `json:"npm_integrity"`
-	BaseImage     BaseImage         `json:"base_image"`
-	Tools         map[string]string `json:"tools"`
-	ToolIntegrity map[string]string `json:"tool_integrity"`
+	Harnesses     map[string]Harness `json:"harnesses"`
+	BaseImage     BaseImage          `json:"base_image"`
+	Tools         map[string]string  `json:"tools"`
+	ToolIntegrity map[string]string  `json:"tool_integrity"`
 }
 
 var oid = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -107,8 +112,8 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 	if err := json.Unmarshal(metadataBytes, &metadata); err != nil {
 		return err
 	}
-	if metadata.Package != "@openai/codex" || metadata.Version == "" || len(metadata.NPMIntegrity) < 8 || metadata.NPMIntegrity[:7] != "sha512-" {
-		return fmt.Errorf("image metadata has no exact Codex package identity")
+	if err := validateHarnesses(metadata.Harnesses); err != nil {
+		return fmt.Errorf("image metadata %w", err)
 	}
 	if metadata.BaseImage.Reference != BaseImageReference || !digest.MatchString(metadata.BaseImage.Fingerprint) {
 		return fmt.Errorf("image metadata has no exact Debian 13 base identity")
@@ -137,7 +142,7 @@ func CreateManifest(archivePath, metadataPath, tag, sourceCommit, validatedAt, o
 		return closeErr
 	}
 	fingerprint := hex.EncodeToString(hash.Sum(nil))
-	manifest := Manifest{SchemaVersion: 4, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, BaseImage: metadata.BaseImage, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Codex: Codex{Version: metadata.Version, NPMIntegrity: metadata.NPMIntegrity}, Tools: metadata.Tools, ToolIntegrity: metadata.ToolIntegrity, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
+	manifest := Manifest{SchemaVersion: 5, ReleaseTag: tag, Environment: "incus", Architecture: "x86_64", ImageType: "virtual-machine", ImageFingerprint: fingerprint, BaseImage: metadata.BaseImage, Archive: Archive{Name: ArchiveName, SHA256: fingerprint, Size: size}, Harnesses: metadata.Harnesses, Tools: metadata.Tools, ToolIntegrity: metadata.ToolIntegrity, SourceCommit: sourceCommit, ValidatedAt: validatedAt}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -244,7 +249,7 @@ func validate(m Manifest, archivePath string) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return fmt.Errorf("official Dorf Incus images are supported only on Linux x86_64")
 	}
-	if m.SchemaVersion != 4 || m.Environment != "incus" || m.Architecture != "x86_64" || m.ImageType != "virtual-machine" {
+	if m.SchemaVersion != 5 || m.Environment != "incus" || m.Architecture != "x86_64" || m.ImageType != "virtual-machine" {
 		return fmt.Errorf("official image manifest has an unsupported product shape")
 	}
 	if m.BaseImage.Reference != BaseImageReference || !digest.MatchString(m.BaseImage.Fingerprint) {
@@ -253,8 +258,11 @@ func validate(m Manifest, archivePath string) error {
 	if m.Archive.Name != ArchiveName || filepath.Base(archivePath) != ArchiveName || m.Archive.SHA256 != m.ImageFingerprint || !digest.MatchString(m.ImageFingerprint) || m.Archive.Size < 1 {
 		return fmt.Errorf("official image manifest has invalid archive identity")
 	}
-	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(m.ReleaseTag) || !oid.MatchString(m.SourceCommit) || m.Codex.Version == "" || len(m.Codex.NPMIntegrity) < 8 || m.Codex.NPMIntegrity[:7] != "sha512-" {
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(m.ReleaseTag) || !oid.MatchString(m.SourceCommit) {
 		return fmt.Errorf("official image manifest has invalid release identity")
+	}
+	if err := validateHarnesses(m.Harnesses); err != nil {
+		return fmt.Errorf("official image manifest %w", err)
 	}
 	required := append([]string(nil), requiredImageTools...)
 	sort.Strings(required)
@@ -266,6 +274,19 @@ func validate(m Manifest, archivePath string) error {
 	for _, tool := range requiredToolIntegrity {
 		if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(m.ToolIntegrity[tool]) {
 			return fmt.Errorf("official image manifest omits verified %s integrity", tool)
+		}
+	}
+	return nil
+}
+
+func validateHarnesses(harnesses map[string]Harness) error {
+	if len(harnesses) != len(requiredHarnessPackages) {
+		return fmt.Errorf("must contain exactly the verified Codex and Pi Harnesses")
+	}
+	for name, requiredPackage := range requiredHarnessPackages {
+		harness, ok := harnesses[name]
+		if !ok || harness.Package != requiredPackage || harness.Version == "" || !strings.HasPrefix(harness.NPMIntegrity, "sha512-") {
+			return fmt.Errorf("has no exact %s package identity", name)
 		}
 	}
 	return nil

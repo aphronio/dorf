@@ -261,7 +261,7 @@ func imageCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Official credential-free image ready: %s fingerprint=%s Codex=%s\n", cfg.IncusImage, installed.ImageFingerprint, installed.Codex.Version)
+	fmt.Fprintf(stdout, "Official credential-free image ready: %s fingerprint=%s Codex=%s Pi=%s\n", cfg.IncusImage, installed.ImageFingerprint, installed.Harnesses["codex"].Version, installed.Harnesses["pi"].Version)
 	return nil
 }
 
