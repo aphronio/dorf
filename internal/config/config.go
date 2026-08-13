@@ -42,7 +42,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		DatabaseURL:      value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
 		Harness:          harness,
-		IncusImage:       value("DORF_INCUS_IMAGE", "dorf-"+harness),
+		IncusImage:       value("DORF_INCUS_IMAGE", "dorf"),
 		IncusNetwork:     value("DORF_INCUS_NETWORK", "incusbr0"),
 		IncusDiskSize:    value("DORF_INCUS_DISK_SIZE", "40GiB"),
 		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),

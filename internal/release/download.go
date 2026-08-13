@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const manifestName = "dorf-codex-incus-vm-v4-x86_64.json"
+const manifestName = "dorf-incus-vm-v5-x86_64.json"
 
 type githubRelease struct {
 	Tag        string        `json:"tag_name"`

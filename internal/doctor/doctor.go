@@ -92,7 +92,7 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 	if err == nil && result.ExitCode != 0 {
 		err = fmt.Errorf("image %s is unavailable", cfg.IncusImage)
 	}
-	add("incus-image", err, "publish the official credential-free dorf-codex image; the worker verifies its credential boundary before route installation")
+	add("incus-image", err, "install the official credential-free Dorf image; the worker verifies its credential boundary before route installation")
 	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
 	add("provider-route-authority", err, "connect the named provider and bind the broker to the private Incus bridge")
 	return checks

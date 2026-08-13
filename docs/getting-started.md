@@ -73,6 +73,9 @@ Every failed fact includes a remediation.
 
 ## 5. Run a coding Job
 
+Codex is the default Harness. To use Pi, export `DORF_HARNESS=pi` for the Dorf commands and Worker.
+Both Harnesses use the same installed credential-free image.
+
 Save the complete goal in `goal.txt`, then admit it with stable authority:
 
 ```bash

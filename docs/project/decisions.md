@@ -723,25 +723,24 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted and implemented — 2026-07-31; local-first and combined product-release
   boundaries revised during public activation — 2026-08-04; Go artifact boundary at D047 cutover
   — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08; base and inventory
-  clauses superseded by D064 — 2026-08-13
-- **Decision:** Publish the credential-free x86_64 Codex VM as an immutable GitHub Release containing
+  clauses superseded by D064 and current artifact identity refined by D066 — 2026-08-13
+- **Decision:** Publish the credential-free x86_64 Sandbox VM as an immutable GitHub Release containing
   exactly one Go x86_64 Linux archive/checksum and one Incus archive/compatibility manifest. One repo-owned
-  local command builds from an immutable base fingerprint, selects and records the current Codex npm
-  release, proves the credential boundary, and completes the real coding tracer from clone and
+  local command builds from an immutable base fingerprint, records its exact Harness packages,
+  proves the credential boundary, and completes a real coding tracer for every declared Harness from clone and
   repo-owned preparation through an implementation turn, checks, scoped routing,
-  content-addressed evidence, and exact cleanup. The image includes Git, Go, Node, uv, and Codex but
-  removes build-only npm. The command exports the untouched candidate and
+  content-addressed evidence, and exact cleanup. The image includes Git, Go, Node, uv, and its
+  declared Harness executables but removes build-only npm. The command exports the untouched candidate and
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
 - **Artifact identity:** Attach the image to the normal immutable `vX.Y.Z` Dorf product release
-  instead of creating machine-only releases in the human-facing release feed. Manifest schema 4
-  uses the x86_64 assets `dorf-codex-incus-vm-v4-x86_64.tar.gz` and
-  `dorf-codex-incus-vm-v4-x86_64.json`; it requires `environment: incus`, the complete Git, Go, Node,
-  and uv coding-workstation inventory, and verified pinned Go and uv release-archive digests. Its
+  instead of creating machine-only releases in the human-facing release feed. The current exact
+  schema and asset identity live in D066. The manifest requires `environment: incus`, the complete
+  coding-workstation inventory, and verified pinned tool release-archive digests. Its
   candidate proof executes `go`, `gofmt`, and the repository's declared preparation in a fresh
   Sandbox. Issue #38 dogfood showed that the historical schema-3 image could reach a Go repository
-  without Go installed, so the Go installer accepts only schema 4. Old pre-cutover clients and image
+  without Go installed, so the Go installer accepts only the current schema. Old clients and image
   schemas are not a compatibility target.
 - **Promotion boundary:** The repository must be public and GitHub immutable releases must be
   enabled before the first image is promoted. The publisher records that reviewed repository
@@ -1062,10 +1061,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D049 — Repositories own their development-tool setup
 
-- **Status:** Accepted setup boundary — 2026-08-09; fixed schema-4 inventory sentence superseded by
-  D064 while repository ownership remains accepted — 2026-08-13
+- **Status:** Accepted setup boundary — 2026-08-09; fixed image-inventory sentence superseded by
+  D064 and D066 while repository ownership remains accepted — 2026-08-13
 - **Decision:** Do not expand the shared Incus image for Dorf-specific Go, Absurd, PostgreSQL, or
-  inspection needs. Keep the existing schema-4 image and release assets unchanged. Dorf's declared
+  inspection needs. D064 and D066 own the current shared image profile. Dorf's declared
   `commands.prepare` invokes a repository-owned script that installs missing pinned tools,
   converges a disposable local database and Absurd schema, and downloads modules. Installation and
   initialization are deterministic Actions; no AgentRun decides or performs them conversationally.
@@ -1468,22 +1467,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D064 — Debian 13 is the shared supported-toolchain Sandbox baseline
 
-- **Status:** Accepted image baseline before first schema-4 publication — 2026-08-13
+- **Status:** Accepted image baseline; combined Harness packaging refined by D066 — 2026-08-13
 - **Decision:** The official x86_64 Sandbox image uses the exact current `images:debian/13` VM
   fingerprint and carries only a cross-repository workstation baseline: Python 3.14 with pip, Node 24
-  LTS, pinned Go and uv, Git, Codex, native C/C++ build tools, and common shell/archive/search
-  utilities. npm is used only to install Codex during construction; npm, npx, Corepack, Yarn, pnpm,
+  LTS, pinned Go and uv, Git, the verified Harness executables, native C/C++ build tools, and common
+  shell/archive/search utilities. npm is used only to install Harness packages during construction; npm, npx, Corepack, Yarn, pnpm,
   pytest, Ruff, application libraries, GitHub CLI, tmux, PostgreSQL, and Absurd are not shared image
   contents. Managed repositories retain their
   language versions and dependencies in ordinary project metadata and lockfiles and install them
   through `commands.prepare`.
-- **Integrity:** Manifest schema 4 records the exact Debian base reference and fingerprint, every
-  installed bootstrap-tool version, the final image/archive digest, Codex npm integrity, and verified
+- **Integrity:** The current manifest records the exact Debian base reference and fingerprint, every
+  installed bootstrap-tool version, the final image/archive digest, each Harness npm integrity, and verified
   Node, Go, and uv archive digests. One versioned recipe is the complete image construction authority;
   it copies no host state into the fresh base. Release proof exercises the image through the existing
   real no-change AgentRun terminal and reconciles cleanup before publication rather than duplicating
   the recipe with content assertions.
-- **Why:** A small polyglot bootstrap lets Codex inspect and deterministically prepare ordinary Python,
+- **Why:** A small polyglot bootstrap lets the selected Harness inspect and deterministically prepare ordinary Python,
   JavaScript, Go, and native-extension repositories without turning their dependency graphs into a
   Dorf release concern. Debian 13 supplies the current stable/LTS runway. Keeping project packages in
   the repository avoids cross-repository version conflicts and preserves the development-tooling
@@ -1491,7 +1490,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   would require an additional host toolchain and a full from-scratch Debian VM definition even though
   Dorf intentionally customizes an existing official image.
 - **Cost:** The shared image and its proof surface are larger than the earlier harness-only image, and
-  Python, Node, Go, uv, and Codex support windows require deliberate image refreshes. The supported
+  Python, Node, Go, uv, and Harness support windows require deliberate image refreshes. The supported
   clean-machine host remains Ubuntu 24.04; this decision changes the disposable Sandbox guest only.
 - **Reconsider when:** Measured image transfer or cold-start cost dominates Job latency, a bootstrap
   tool has no cross-repository consumer, Debian prevents a real managed-repository terminal, or
@@ -1500,10 +1499,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D065 — Pi is the second Harness and reuses Dorf's scoped Provider Gateway
 
-- **Status:** Accepted; second-Harness coding-to-PR terminal proven — 2026-08-13
+- **Status:** Accepted; second-Harness coding-to-PR terminal proven; image packaging refined by D066 — 2026-08-13
 - **Decision:** Pi, distributed as `@earendil-works/pi-coding-agent`, is the deliberately selected
   second Harness for the D063 portability sequence. Its Incus profile uses the shared Debian 13
-  baseline with Pi instead of Codex. A Sandbox-resident Pi RPC process owns the live native session;
+  image while runtime selection starts Pi rather than Codex. A Sandbox-resident Pi RPC process owns the live native session;
   the native Pi session maps to a Dorf Thread, each accepted RPC prompt starts a Dorf Turn, and Pi's
   queued steering user entries remain within their target Dorf Turn. The RPC process survives
   host-side Worker loss and exposes explicit prompt acceptance, settlement, follow-up, and steering
@@ -1533,8 +1532,31 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   verified second Harness for the current Incus coding workflow profile.
 - **Why:** Pi's documented RPC mode is its headless JSON protocol for embedding from a non-TypeScript
   control plane. It supports the required OpenAI Responses transport and lets Dorf test Harness
-  portability without adding a TypeScript SDK sidecar or another provider-custody system. A separate
-  image keeps each profile credential-free and avoids a speculative multi-Harness runtime image.
+  portability without adding a TypeScript SDK sidecar or another provider-custody system. D066 owns
+  the later decision to package both credential-free Harness executables in one image.
 - **Reconsider when:** Pi cannot preserve no-duplicate recovery or required intervention semantics,
   its native session format cannot remain authoritative for observation, or a smaller supported
   integration proves the portability boundary with less profile-specific machinery.
+
+## D066 — One credential-free image carries both verified Harnesses
+
+- **Status:** Accepted packaging direction; same-fingerprint dual-Harness release proof required — 2026-08-13
+- **Decision:** Publish one Debian 13 Incus image containing exact Codex and Pi npm packages over the
+  shared workstation baseline. `DORF_HARNESS` selects one runtime adapter; it does not select another
+  image. The image contains no Harness authentication, Provider Route key, session, or configuration.
+  Manifest schema 5 records both package versions and npm integrities and uses the exact assets
+  `dorf-incus-vm-v5-x86_64.tar.gz` and `dorf-incus-vm-v5-x86_64.json`. The installer converges the
+  neutral `dorf` alias on the manifest's immutable fingerprint.
+- **Promotion boundary:** One candidate fingerprint must complete separate real Codex and Pi
+  no-change coding Jobs, including exact native Thread/Turn binding, Revision Evidence, route
+  revocation, and Sandbox cleanup, before publication. The repository release command is the only
+  procedure authority for that proof and publication.
+- **Why:** The shared Debian and cross-repository toolchain dominate image size. Duplicating that
+  baseline for two small Harness packages increases release, download, storage, rollback, and
+  operator-selection surface without adding isolation: the Job-owned Sandbox and scoped Provider
+  Route remain the security boundaries, and only the selected Harness is started and configured.
+- **Supersedes and refines:** Supersedes D065's separate-image packaging choice, refines D038's
+  schema-4 Codex artifact identity, and leaves D064's shared Debian/toolchain baseline intact.
+- **Reconsider when:** Co-installation causes measured dependency conflicts, materially expands a
+  Harness-specific attack boundary, prevents independent security updates, or separate delta images
+  become cheaper than one shared artifact in real release and installation evidence.
