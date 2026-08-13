@@ -27,12 +27,6 @@ Dorf with another workflow or agent control plane.
 
 ## P0 — evaluate first
 
-- [smol machines](https://smolmachines.com/) — Open local and managed hardware microVMs with the
-  same workload model, persistent disks, OCI images, nested Docker, headless Chromium, ports,
-  deny-by-default networking, deterministic names, exec, files, stop/start, snapshots, and forks.
-  Local is free; cloud has no minimum or card requirement and includes $10 monthly credit. This is
-  the strongest local-to-managed candidate, but prove Docker Compose, Incus-like guest behavior,
-  exact cleanup, and a maintainable Go integration because the current unified SDK is Node/Python.
 - [E2B](https://e2b.dev/docs) — Managed in-house Firecracker-like microVM runtime with an explicit
   Docker and Docker Compose template, browsers, public endpoints, pause/resume, snapshots, metadata,
   and list/adopt lifecycle APIs; its free Hobby tier includes $100 in one-time credits, making it the
@@ -42,6 +36,15 @@ Dorf with another workflow or agent control plane.
   one-hour continuous Hobby runtime, remote Provider Gateway reachability, and a newly announced
   runtime whose detailed architecture is not yet published. See the
   [2026-08-13 announcement](https://x.com/mlejva/status/2087947332507807830).
+- [smol machines](https://smolmachines.com/) — Open local and managed hardware microVMs with the
+  same workload model, persistent disks, OCI images, nested Docker, headless Chromium, ports,
+  deny-by-default networking, deterministic names, exec, files, stop/start, snapshots, and forks.
+  Local is free; cloud has no minimum or card requirement and includes $10 monthly credit. This is
+  the strongest local-to-managed candidate, but the [cloud proof](smol-cloud-capability-proof.md)
+  found a documented-default network mismatch and the
+  [local v1.8.0 proof](smol-local-capability-proof.md) found a hardened-service DNS blocker. Keep it
+  behind the E2B slice until one prepared workstation passes both surfaces and the adapter choice is
+  resolved; the current unified SDK is Node/Python.
 - [Namespace Devboxes](https://namespace.so/docs/devbox) — Managed persistent development machines
   with Docker-oriented images, durable execs, endpoints, strong egress controls, Tailscale, a mature
   Go SDK, a 30-day trial, and per-minute pricing with no compute charge while paused; confirm exact
@@ -131,14 +134,26 @@ Dorf with another workflow or agent control plane.
 
 ## Evaluation sequence
 
-The first **E2B** capability spike passed. Next run the same proof on free **smolvm local**, then on
-**smol cloud**. Continue to **Namespace**, **Daytona VM**, and **Runloop** only if needed. Revisit
-**Freestyle** when a fixed $50/month persistence commitment is justified. Use the same test:
-immutable image, Docker Compose, headless browser, authenticated served endpoint, scoped Provider
-Gateway route, controller-loss reconciliation, stop/start persistence, and confirmed deletion.
+The **E2B**, **smol cloud**, and **smolvm local v1.8.0** capability spikes are complete. The current
+working preference is one narrow **E2B** second-provider slice first because its bounded proof passed
+the most complete workstation terminal. This is not yet a support or adapter decision. Keep smol
+local/cloud next in line after its DNS, explicit-network, prepared-image, and remote Provider Gateway
+gaps are resolved. Continue to **Namespace**, **Daytona VM**, and **Runloop** only if needed. Revisit
+**Freestyle** when a fixed $50/month persistence commitment is justified.
 
-For the next local profile, spike **smolvm** first and **Hypeman** second, then compare **Docker
-Sandboxes** only if its built-in Docker Compose experience outweighs mandatory account sign-in and
-proprietary distribution. Test Linux and Apple silicon where applicable. The same combined Harness
-image should be expressed as a reproducible OCI build rather than preserving Incus-specific
-packaging.
+Use the same acceptance bar for every candidate: immutable image, Docker Compose, headless browser,
+authenticated served endpoint, scoped Provider Gateway route, controller-loss reconciliation,
+stop/start persistence, and confirmed deletion.
+
+The adapter implementation remains open. Compare the provider's official SDK, a small direct or
+generated Go client, and a narrowly isolated SDK sidecar only against the operations earned by the
+E2B slice; do not build a provider registry or cross-language adapter framework in advance. Dorf's
+use of [Absurd's official Go SDK](https://github.com/earendil-works/absurd/tree/main/sdks), alongside
+its Python and TypeScript SDKs, is a useful upstream-maintenance precedent—not a requirement that
+every Sandbox provider expose all three languages.
+
+For the next local profile, rerun **smolvm** only after its DNS/control-plane gap changes in a newer
+pinned release; otherwise spike **Hypeman** next. Compare **Docker Sandboxes** only if its built-in
+Docker Compose experience outweighs mandatory account sign-in and proprietary distribution. Test
+Linux and Apple silicon where applicable. The same combined Harness image should be expressed as a
+reproducible OCI build rather than preserving Incus-specific packaging.
