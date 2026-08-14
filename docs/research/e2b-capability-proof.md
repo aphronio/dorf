@@ -19,6 +19,14 @@ One 4-vCPU, 4-GB Ubuntu 24.04 template and one disposable Sandbox completed ever
 - provider-enforced deny-all outbound networking while the control channel remained usable; and
 - terminal kill followed by a metadata query confirming no owned Sandbox remained.
 
+A second live proof used Dorf's narrow native Go lifecycle client rather than the JavaScript SDK. It
+allowed E2B to accept one create request, consumed and deliberately discarded the successful HTTP
+response before Dorf could observe the provider ID, rediscovered exactly one running Sandbox by its
+Job, Dorf Sandbox ID, and ownership nonce, re-attested that metadata through the individual resource
+endpoint, deleted it, and confirmed the ownership query was empty. The first run also caught that
+E2B's multi-state list filter is comma-delimited; after correcting that wire detail, the fault-injected
+proof passed and a separate inventory confirmed that no lifecycle-proof Sandbox remained.
+
 The reusable template is named `dorf-capability-20260814-v1`. The disposable Sandbox was confirmed
 absent. Detailed machine-readable evidence is retained locally under the ignored path
 `.dorf/e2b-spike/evidence.json`; no API key, Provider Route, or upstream credential entered the
@@ -26,11 +34,12 @@ template, Sandbox, evidence, or logs.
 
 ## What remains unproved
 
-- The proof reconnected through metadata after deliberately discarding the original handle; it did
-  not inject an actual lost create response. The real adapter must fault-inject that ambiguity.
-- E2B has official JavaScript and Python SDKs but no official Go SDK. Its official
-  [OpenAPI specification](https://github.com/e2b-dev/docs/blob/main/openapi-public.yml) covers the
-  platform and in-Sandbox `envd` APIs, so a native generated Go client is feasible but unproved.
+- The native lifecycle proof is not yet integrated with Dorf's durable Action settlement or Sandbox
+  record. It proves the provider-side recovery primitive, not the second-provider terminal.
+- E2B has official JavaScript and Python SDKs but no official Go SDK. The initial Go boundary is a
+  handwritten client over the four lifecycle operations in E2B's current
+  [control-plane OpenAPI specification](https://github.com/e2b-dev/infra/blob/d586e2e86853b19b156fe7bc1cd76c2ea0b45475/spec/openapi.yml).
+  Native command execution over `envd` ConnectRPC remains the next unproved adapter slice.
 - The template did not contain the pinned combined Codex/Pi Harness profile or run a Dorf Job.
 - The current Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from
   E2B to that owner-hosted authority has been designed or tested. This is the principal blocker to

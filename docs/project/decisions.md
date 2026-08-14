@@ -1571,3 +1571,41 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Co-installation causes measured dependency conflicts, materially expands a
   Harness-specific attack boundary, prevents independent security updates, or separate delta images
   become cheaper than one shared artifact in real release and installation evidence.
+
+## D067 — E2B is the next Sandbox portability proof target
+
+- **Status:** Accepted proof target; lifecycle recovery primitive proven — 2026-08-14
+- **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
+  implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
+  ownership discovery across running and paused Sandboxes, individual-resource attestation, and
+  ownership-guarded deletion. It consumes a configured prebuilt template reference and does not
+  build templates, execute commands, transfer files, expose a general provider registry, or enter
+  common workflow code. E2B's official JavaScript SDK remains a behavioral oracle, not a runtime
+  sidecar or a second Dorf control plane.
+- **Recovery boundary:** E2B create has no caller-selected resource ID or documented idempotency key.
+  Dorf therefore attaches its Job ID, durable Sandbox ID, and ownership nonce as provider metadata.
+  A create request is never automatically replayed after possible dispatch. Reconciliation
+  exhaustively queries the provider by that exact identity: one match is adoptable, no match remains
+  absent or uncertain according to the caller's durable Action state, and multiple matches require
+  attention. Provider-generated IDs remain opaque locators. Cleanup re-attests exact ownership before
+  deletion and confirms absence separately.
+- **Proof:** A live Hobby-account test let E2B accept a restricted Sandbox create and then discarded
+  the successful response locally. The Go client recovered the single resource by exact ownership
+  metadata, inspected it by its opaque provider ID, deleted it, and confirmed no ownership match
+  remained. Hermetic tests cover the same lost-response path, pagination, duplicate ownership,
+  foreign-resource deletion refusal, stale locators, idempotent absence, and provider errors without
+  retaining E2B's returned access tokens. Detailed observations remain in the
+  [E2B capability proof](../research/e2b-capability-proof.md).
+- **Next earned boundary:** Prove only the command/data plane required by current Dorf call sites,
+  including argv, stdin, raw stdout and stderr, exact exit status, timeout, cancellation, and
+  indeterminate stream termination. Do not add files, snapshots, browsers, Docker, template builds,
+  or workflow integration to that slice unless its terminal requires them.
+- **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
+  network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
+  client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn
+  JavaScript SDK through a sidecar would add another protocol and process boundary before command
+  streaming has proved that cost necessary.
+- **Reconsider when:** The native command protocol cannot remain smaller than a maintained sidecar,
+  E2B cannot support Dorf's no-duplicate recovery or scoped Provider Gateway route, managed-service
+  cost or reliability fails dogfood, or another provider reaches the complete D063 coding-to-PR
+  terminal with materially less authority overlap.
