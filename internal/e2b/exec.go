@@ -234,6 +234,12 @@ func (e *Executor) sendStdin(ctx context.Context, pid uint32, input []byte) <-ch
 			}
 		}
 		_, err := e.process.CloseStdin(ctx, connect.NewRequest(&process.CloseStdinRequest{Process: processByPID(pid)}))
+		// The command may consume the complete input and exit before envd handles
+		// CloseStdin. SendInput has already succeeded in that case, and the Start
+		// stream's terminal event remains the authoritative process result.
+		if connect.CodeOf(err) == connect.CodeNotFound {
+			err = nil
+		}
 		done <- err
 	}()
 	return done

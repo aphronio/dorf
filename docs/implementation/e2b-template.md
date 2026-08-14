@@ -32,3 +32,19 @@ DORF_E2B_PROFILE_MANIFEST=dist/e2b-template/profile.json \
   .dorf/bin/mise exec -- go test ./internal/e2b \
   -run TestLiveCombinedHarnessProfile -count=1 -v
 ```
+
+After the deployment has made its private Provider Gateway reachable at one exact HTTPS `/v1` URL,
+qualify the provider-neutral route and unchanged Codex Harness:
+
+```bash
+DORF_E2B_GATEWAY_LIVE=1 \
+DORF_E2B_TEMPLATE='<exact-template-reference>' \
+DORF_E2B_PROVIDER_GATEWAY_URL='https://<deployment-owned-host>/v1' \
+  .dorf/bin/mise exec -- go test ./internal/codex \
+  -run TestLiveE2BScopedGatewayCompletesCodexTurn -count=1 -v
+```
+
+The test does not start or own the tunnel. It requires the configured Gateway Connection, admits only
+the exact HTTPS hostname to E2B egress, revokes the exact route before Sandbox cleanup, and never
+prints route or provider credentials. The Gateway authority documents the temporary proof and the
+uncommitted durable-domain boundary.

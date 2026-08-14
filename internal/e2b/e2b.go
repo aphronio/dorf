@@ -49,9 +49,10 @@ type Ownership struct {
 }
 
 type CreateRequest struct {
-	Template string
-	Timeout  time.Duration
-	Owner    Ownership
+	Template         string
+	Timeout          time.Duration
+	Owner            Ownership
+	AllowedHostnames []string
 }
 
 type Sandbox struct {
@@ -116,7 +117,9 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 		Metadata            map[string]string `json:"metadata"`
 		AllowInternetAccess bool              `json:"allow_internet_access"`
 		Network             struct {
-			AllowPublicTraffic bool `json:"allowPublicTraffic"`
+			AllowPublicTraffic bool     `json:"allowPublicTraffic"`
+			AllowOut           []string `json:"allowOut,omitempty"`
+			DenyOut            []string `json:"denyOut,omitempty"`
 		} `json:"network"`
 		AutoPause  bool `json:"autoPause"`
 		AutoResume struct {
@@ -128,6 +131,10 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 		Secure:              true,
 		Metadata:            request.Owner.metadata(),
 		AllowInternetAccess: false,
+	}
+	body.Network.AllowOut = append([]string(nil), request.AllowedHostnames...)
+	if len(body.Network.AllowOut) > 0 {
+		body.Network.DenyOut = []string{"0.0.0.0/0"}
 	}
 	var response createResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes", nil, body, http.StatusCreated, &response); err != nil {

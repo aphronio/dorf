@@ -664,7 +664,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D036 — Shared Provider Gateway for trusted clients and Dorf Sandboxes
 
-- **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08
+- **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08;
+  remote E2B route wire proved — 2026-08-14
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -680,9 +681,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   bind loopback; Codex Sandbox composition binds the selected private Incus bridge address so both the
   host and attached Sandboxes can reach it, never a wildcard or LAN address. An interface-scoped
   firewall rule admits the gateway port only from the bridge. Connection and route semantics do not
-  depend on that location. A real remote Sandbox may use the same route shape through a private
-  authenticated transport, but remote exposure, workload identity, and multi-user authority remain
-  unimplemented until a concrete deployment requires them.
+  depend on that location. A remote Sandbox may use the same route shape through an exact
+  deployment-supplied HTTPS `/v1` URL while the broker remains private behind an outbound tunnel.
+  The Sandbox adapter owns topology validation and exact-host default-deny egress; the revocable
+  consumer route key authenticates Gateway requests. A disposable TryCloudflare tunnel proved that
+  wire path for E2B, but it is not a durable deployment choice. Stable tunnel/domain operations,
+  workload identity beyond the scoped route, and multi-user authority remain unimplemented until a
+  concrete deployment requires them.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
   ChatGPT, Kimi Code, or Grok and API-key providers such as OpenAI or OpenRouter. Names are direction,
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
@@ -1577,8 +1582,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D067 — E2B is the next Sandbox portability proof target
 
-- **Status:** Accepted proof target; provider-neutral Sandbox seam extracted after lifecycle,
-  command, exact-profile, and authenticated-endpoint proofs — 2026-08-14
+- **Status:** Accepted proof target; provider-neutral Sandbox seam and remote scoped-Gateway wire
+  proved after lifecycle, command, exact-profile, and authenticated-endpoint proofs — 2026-08-14
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1606,10 +1611,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   E2B exhaustively resolves one opaque provider locator from exact metadata. Authenticated endpoints
   expose separate guest-bind and controller-dial URLs plus cloned provider headers without exposing
   their capability in formatting. Provider-route reachability is also adapter-owned: Incus validates
-  the exact configured private bridge, while E2B rejects the unproved remote route. A compile-time
-  implementation assertion covers both adapters and an import-boundary test rejects Incus or E2B
-  imports from common consumers. Startup still composes the supported Incus profile; this seam does
-  not claim E2B support.
+  the exact configured private bridge, while E2B requires one exact HTTPS `/v1` URL and creates the
+  Sandbox with only that hostname allowed over otherwise denied egress. Tunnel lifecycle remains
+  deployment-owned. A compile-time implementation assertion covers both adapters and an
+  import-boundary test rejects Incus or E2B imports from common consumers. Startup still composes the
+  supported Incus profile; this seam does not claim E2B support.
 - **Recovery boundary:** E2B create has no caller-selected resource ID or documented idempotency key.
   Dorf therefore attaches its Job ID, durable Sandbox ID, and ownership nonce as provider metadata.
   A create request is never automatically replayed after possible dispatch. Reconciliation
@@ -1639,13 +1645,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   live proof was rerun entirely through `internal/sandbox.Sandbox`: it reconciled creation without a
   provider locator in Codex, executed the controller commands, resolved the authenticated endpoint,
   recovered the exact thread and turn after abrupt loss, ownership-deleted the resource, and observed
-  it absent.
+  it absent. The next live proof kept the local broker on its private Incus bridge and placed a
+  disposable outbound HTTPS tunnel in front of it. E2B denied all egress except that exact hostname;
+  an unauthenticated request from the Sandbox returned 401, common `terminal.Externals.RouteCreate`
+  installed only the scoped route key and external URL, and an unchanged Codex Harness completed a
+  real `gpt-5.6-sol` turn through the owner Gateway. Cleanup revoked the exact route before removing
+  its Sandbox files, ownership-deleted the Sandbox, observed zero matching E2B resources and zero
+  proof routes, and stopped the tunnel. No tunnel hostname, route key, E2B key, or upstream credential
+  is durable repository state.
   Detailed observations remain in the
   [E2B capability proof](../research/e2b-capability-proof.md).
-- **Next earned boundary:** Design and prove the secure E2B-to-owner Provider Gateway route, then let
-  provider/profile composition admit E2B before one no-change Codex Job proves Action settlement and
-  cleanup through the common Sandbox contract. Do not add files, snapshots, a provider registry, or
-  a capability matrix to this slice.
+- **Next earned boundary:** Let provider/profile composition admit E2B, then run one no-change Codex
+  Job to prove durable Action settlement and cleanup through the common Sandbox contract. Choose a
+  stable tunnel/domain only when that operational profile is ready; do not add files, snapshots, a
+  provider registry, or a capability matrix to this slice.
 - **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
   network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
   client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn

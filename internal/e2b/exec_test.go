@@ -61,6 +61,20 @@ func TestExecPreservesArgvStdinRawOutputAndTerminalStatus(t *testing.T) {
 }
 
 func TestExecReturnsTypedExitAndIndeterminateErrors(t *testing.T) {
+	t.Run("completed process wins close stdin race", func(t *testing.T) {
+		rpc := &fakeProcessClient{
+			stream:     &fakeStartStream{messages: []*process.StartResponse{startEvent(6), endEvent(0, true, "exited", "")}},
+			closeError: connect.NewError(connect.CodeNotFound, errors.New("process already exited")),
+		}
+		result, err := (&Executor{process: rpc}).Exec(context.Background(), ExecRequest{Argv: []string{"consume-and-exit"}, Stdin: []byte("complete input")})
+		if err != nil || result.ExitCode != 0 || !result.Exited {
+			t.Fatalf("result=%#v error=%v", result, err)
+		}
+		if !bytes.Equal(rpc.stdin, []byte("complete input")) {
+			t.Fatalf("stdin=%q", rpc.stdin)
+		}
+	})
+
 	t.Run("nonzero terminal event", func(t *testing.T) {
 		rpc := &fakeProcessClient{stream: &fakeStartStream{messages: []*process.StartResponse{
 			startEvent(7), endEvent(17, true, "exited", "command failed"),
@@ -195,6 +209,7 @@ type fakeProcessClient struct {
 	stdin        []byte
 	stdinPID     uint32
 	closedPID    uint32
+	closeError   error
 	signalCalls  int
 	signalPID    uint32
 	signal       process.Signal
@@ -218,7 +233,7 @@ func (c *fakeProcessClient) CloseStdin(_ context.Context, request *connect.Reque
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closedPID = request.Msg.Process.GetPid()
-	return connect.NewResponse(&process.CloseStdinResponse{}), nil
+	return connect.NewResponse(&process.CloseStdinResponse{}), c.closeError
 }
 
 func (c *fakeProcessClient) SendSignal(_ context.Context, request *connect.Request[process.SendSignalRequest]) (*connect.Response[process.SendSignalResponse], error) {

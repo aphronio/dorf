@@ -27,7 +27,7 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 			base: handlerTransport{handler: api},
 		}},
 	}
-	_, err := client.Create(context.Background(), CreateRequest{Template: "template:build", Timeout: 10 * time.Minute, Owner: owner})
+	_, err := client.Create(context.Background(), CreateRequest{Template: "template:build", Timeout: 10 * time.Minute, Owner: owner, AllowedHostnames: []string{"gateway.example"}})
 	if err == nil || !strings.Contains(err.Error(), "injected lost response") {
 		t.Fatalf("ambiguous create error = %v", err)
 	}
@@ -78,6 +78,22 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if _, err := adapter.ProviderRouteURL(context.Background(), "https://gateway.example/v1"); err == nil || !strings.Contains(err.Error(), "remote-provider-gateway-route") {
 		t.Fatalf("unproved E2B route admission = %v", err)
 	}
+	adapter.Config.ProviderGatewayURL = "https://temporary-gateway.example/v1"
+	if routeURL, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err != nil || routeURL != adapter.Config.ProviderGatewayURL {
+		t.Fatalf("E2B Provider Gateway URL = %q, %v", routeURL, err)
+	}
+	for _, value := range []string{
+		"http://temporary-gateway.example/v1",
+		"https://temporary-gateway.example",
+		"https://temporary-gateway.example/v1/",
+		"https://user@temporary-gateway.example/v1",
+		"https://temporary-gateway.example/v1?token=secret",
+	} {
+		adapter.Config.ProviderGatewayURL = value
+		if _, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err == nil {
+			t.Fatalf("accepted unsafe E2B Provider Gateway URL %q", value)
+		}
+	}
 
 	foreign := owner
 	foreign.OwnershipNonce = strings.Repeat("b", 64)
@@ -119,6 +135,14 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	network, ok := api.createBody["network"].(map[string]any)
 	if !ok || network["allowPublicTraffic"] != false {
 		t.Fatalf("create network = %#v", api.createBody["network"])
+	}
+	allowed, ok := network["allowOut"].([]any)
+	if !ok || len(allowed) != 1 || allowed[0] != "gateway.example" {
+		t.Fatalf("create network allowOut = %#v", network["allowOut"])
+	}
+	denied, ok := network["denyOut"].([]any)
+	if !ok || len(denied) != 1 || denied[0] != "0.0.0.0/0" {
+		t.Fatalf("create network denyOut = %#v", network["denyOut"])
 	}
 	if api.createBody["timeout"] != float64(600) {
 		t.Fatalf("create timeout = %#v", api.createBody["timeout"])

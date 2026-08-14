@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -15,15 +16,15 @@ import (
 const reviewAttestationPath = "/tmp/dorf/review-attestation.json"
 
 type AdapterConfig struct {
-	Template       string
-	Workspace      string
-	SandboxTimeout time.Duration
-	ProcessTimeout time.Duration
+	Template           string
+	Workspace          string
+	SandboxTimeout     time.Duration
+	ProcessTimeout     time.Duration
+	ProviderGatewayURL string
 }
 
-// Adapter exposes only E2B capabilities already earned by live proofs. A
-// real Job is rejected at route admission until the reverse Provider Gateway
-// transport is implemented and proven.
+// Adapter exposes only E2B capabilities already earned by live proofs. Remote
+// Provider Gateway admission requires one exact deployment-supplied HTTPS URL.
 type Adapter struct {
 	Client Client
 	Config AdapterConfig
@@ -37,12 +38,20 @@ func (a Adapter) Workspace() string { return a.Config.Workspace }
 
 func (a Adapter) ReconcileOwnedCreate(ctx context.Context, owner provider.Ownership) error {
 	identity := e2bOwnership(owner)
+	var allowedHostnames []string
+	if strings.TrimSpace(a.Config.ProviderGatewayURL) != "" {
+		gatewayURL, err := a.providerGatewayURL()
+		if err != nil {
+			return err
+		}
+		allowedHostnames = []string{gatewayURL.Hostname()}
+	}
 	present, err := a.Client.FindOwned(ctx, identity)
 	if err != nil {
 		return err
 	}
 	if present == nil {
-		if _, err := a.Client.Create(ctx, CreateRequest{Template: a.Config.Template, Timeout: a.Config.SandboxTimeout, Owner: identity}); err != nil {
+		if _, err := a.Client.Create(ctx, CreateRequest{Template: a.Config.Template, Timeout: a.Config.SandboxTimeout, Owner: identity, AllowedHostnames: allowedHostnames}); err != nil {
 			// Create is deliberately attempted once. A later durable retry uses
 			// FindOwned before deciding whether another mutation is safe.
 			return err
@@ -183,8 +192,26 @@ func (a Adapter) Endpoint(ctx context.Context, owner provider.Ownership, port in
 	return provider.NewEndpoint(endpoint.ListenURL, endpoint.DialURL, endpoint.Headers()), nil
 }
 
-func (Adapter) ProviderRouteURL(context.Context, string) (string, error) {
-	return "", &provider.UnsupportedError{Capability: "remote-provider-gateway-route"}
+func (a Adapter) ProviderRouteURL(_ context.Context, _ string) (string, error) {
+	if strings.TrimSpace(a.Config.ProviderGatewayURL) == "" {
+		return "", &provider.UnsupportedError{Capability: "remote-provider-gateway-route"}
+	}
+	parsed, err := a.providerGatewayURL()
+	if err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
+}
+
+func (a Adapter) providerGatewayURL() (*url.URL, error) {
+	parsed, err := url.Parse(a.Config.ProviderGatewayURL)
+	if err != nil {
+		return nil, fmt.Errorf("E2B Provider Gateway URL is invalid: %w", err)
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/v1" {
+		return nil, fmt.Errorf("E2B Provider Gateway URL must be an exact HTTPS /v1 endpoint")
+	}
+	return parsed, nil
 }
 
 func reconcileClone(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, repository, revision, branch string) error {
