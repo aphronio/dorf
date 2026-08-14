@@ -96,6 +96,9 @@ dorf worker
 dorf inspect JOB_ID
 ```
 
+For automation, `dorf inspect --json JOB_ID` exposes machine-readable readiness, proposal, outcome,
+and cleanup facts.
+
 `worker` may be restarted after process loss. Use `dorf message` for later input and `--intent steer`
 to target active work. Dorf observes the exact pull request for acceptance or rejection. To stop
 without a GitHub decision:
