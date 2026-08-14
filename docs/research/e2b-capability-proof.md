@@ -69,6 +69,24 @@ adapter. Codex recovered native thread `019fffed-15cc-7372-8f47-2e63f7017cfa` an
 Sandbox and observed its exact ownership query absent. This still used only a proof marker rather
 than a working Provider Route, so it does not claim a model outcome or supported E2B profile.
 
+A seventh proof kept the Provider Gateway broker on its private Incus bridge and placed a disposable
+outbound HTTPS tunnel in front of it. E2B admitted only that exact hostname over otherwise denied
+egress. The common terminal layer installed one consumer-scoped route; an anonymous request from the
+Sandbox received 401, while unchanged Codex completed a real `gpt-5.6-sol` turn through the scoped
+route. Cleanup revoked the route before deleting the Sandbox, and independent inventory found zero
+proof routes and zero exact E2B resources before the tunnel stopped.
+
+An eighth proof selected E2B at Dorf's composition root and admitted one durable no-change Codex Job
+against the exact remote repository Revision. It settled Sandbox create, clone, setup, and route
+Actions, then exposed a missing `sandbox_id` in the PostgreSQL delivery projection before model
+submission. After that field was restored, the same durable Job adopted its existing provider
+resources, bound and completed one native thread and turn, and recorded exact unchanged Git-revision
+Evidence. Explicit cleanup settled route revoke before Sandbox delete and completed its Absurd task.
+An independent final check found zero matching running or paused E2B Sandboxes and zero Gateway
+routes. The disposable tunnel stopped. General Sandbox internet access was explicitly enabled for
+this Job because clean repository setup follows changing dependency and redirect hosts; E2B remains
+default-deny when that profile option is absent.
+
 The broad capability template is named `dorf-capability-20260814-v1`; the combined Harness profile
 uses the exact build reference above. Detailed machine-readable capability evidence and the exact
 profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.json` and
@@ -77,23 +95,20 @@ template, Sandbox, evidence file, manifest, or logs.
 
 ## What remains unproved
 
-- The native lifecycle proof is not yet integrated with Dorf's durable Action settlement or Sandbox
-  record. It proves the provider-side recovery primitive, not the second-provider terminal.
 - E2B has official JavaScript and Python SDKs but no official Go SDK. The initial Go boundary is a
   handwritten client over the four lifecycle operations in E2B's current
   [control-plane OpenAPI specification](https://github.com/e2b-dev/infra/blob/d586e2e86853b19b156fe7bc1cd76c2ea0b45475/spec/openapi.yml).
   The command client is generated only from the pinned upstream process schema; handwritten code
   retains Dorf's timeout, cancellation, retry, output, and error semantics.
-- The exact combined Codex/Pi template has not run a Dorf Job or a native Harness session.
+- Pi on the exact combined template has not run a Dorf Job; the E2B runtime profile currently admits
+  Codex only.
 - No provider file-transfer or durable artifact API has been implemented. A concrete workflow must
   earn that surface rather than extending the command client speculatively.
-- The host-to-E2B authenticated Codex endpoint is proven, but the reverse path remains: the current
-  Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from E2B to that
-  owner-hosted authority has been designed or tested. This is the principal blocker to a real
-  Codex-on-E2B terminal.
+- The tested reverse path uses an unsupported disposable Quick Tunnel. A stable deployment-owned
+  HTTPS route and domain remain unselected.
+- Checks, isolated review, publication, Proposal observation, and Outcome have not run through E2B.
 - The Hobby one-hour continuous runtime, sustained cost, regional behavior, service reliability,
   and the new custom runtime's detailed isolation guarantees were not evaluated.
 
-Do not call E2B a supported provider until a real adapter preserves Dorf-owned Action settlement,
-route creation and revocation, AgentRun recovery, repository evidence, publication, and confirmed
-Job cleanup while satisfying D063's import and branch oracle.
+Do not call E2B a supported coding-to-PR provider until checks, isolated review, publication,
+Proposal observation, Outcome, and confirmed cleanup pass without provider branches in common code.

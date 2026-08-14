@@ -208,14 +208,16 @@ connection and provider identities, not controller filesystem paths or copied se
 ## Harness and Sandbox adapters
 
 Incus remains the only supported Sandbox provider; E2B has proved the lifecycle, command, exact
-profile, and authenticated-endpoint primitives but not a complete Job terminal. Both now implement
-one provider-neutral Sandbox contract. Every operation carries Dorf's Job ID, durable Sandbox ID,
-and ownership nonce while provider locators, lifecycle APIs, command transports, topology, and
-connection capabilities remain adapter-private. Common workflow, repository, publication,
-terminal, Codex, and Pi code imports no provider package; the composition root selects the concrete
-adapter. A provider/profile is not supported until its required route and Harness capabilities are
-admitted and proved end to end. Support direction and proof order live in the
-[North Star](north-star.md).
+profile, authenticated endpoint, remote scoped route, and one complete no-change Codex Job with
+cleanup, but not a coding-to-PR terminal. Both implement one provider-neutral Sandbox contract.
+Every operation carries Dorf's Job ID, durable Sandbox ID, and ownership nonce while provider
+locators, lifecycle APIs, command transports, topology, and connection capabilities remain
+adapter-private. Common workflow, repository, publication, terminal, Codex, and Pi code imports no
+provider package; the composition root selects the one configured adapter. Each Job durably pins
+that Sandbox profile, and a differently configured worker refuses both ordinary recovery and
+cleanup before an external call. A provider/profile is not supported until its required route and
+Harness capabilities are admitted and proved end to end. Support direction and proof order live in
+the [North Star](north-star.md).
 
 Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
 workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small

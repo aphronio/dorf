@@ -20,8 +20,11 @@ identity derivation and Action settlement state needed for reconciliation.
 Remote Sandbox profiles supply one exact HTTPS `/v1` Gateway URL whose transport is owned by the
 deployment, not by the Sandbox adapter. The broker remains bound to its private address behind an
 outbound tunnel; Dorf neither opens a public listener nor gives the tunnel upstream credentials.
-The provider adapter restricts Sandbox egress to the configured Gateway hostname, and the Gateway's
-revocable consumer key remains the request capability. The E2B wire proof used a disposable
+The E2B adapter defaults to restricting Sandbox egress to the configured Gateway hostname, and the
+Gateway's revocable consumer key remains the request capability. A repository profile may
+explicitly admit general internet egress when clean setup and agent work require changing package,
+redirect, or documentation hosts; that broader policy is visible deployment configuration and does
+not give the Sandbox an upstream credential. The E2B wire and no-change Job proofs used a disposable
 TryCloudflare Quick Tunnel only to validate this path. Quick Tunnels are not a supported deployment:
 they have no stable hostname or uptime guarantee, and durable tunnel/domain selection remains a
 deployment decision.
@@ -32,7 +35,7 @@ deployment decision.
 - Route keys are broker-local capabilities, never upstream credentials.
 - The broker binds to loopback or one exact private Incus bridge IPv4, never wildcard.
 - A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
-  rejected, and the Sandbox receives default-deny egress with only that hostname allowed.
+  rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
 - Route creation and revocation use stable Action identities and authenticated management calls.
 - Missing, ambiguous, stale, or non-WebSocket authentication fails before Sandbox mutation.
 - Cleanup is incomplete until the exact Sandbox route is revoked or attention remains observable.
