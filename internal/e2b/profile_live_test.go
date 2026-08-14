@@ -23,6 +23,13 @@ func TestLiveCombinedHarnessProfile(t *testing.T) {
 		t.Fatal("E2B_API_KEY and DORF_E2B_PROFILE_MANIFEST are required")
 	}
 
+	projectRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(manifestPath) {
+		manifestPath = filepath.Join(projectRoot, filepath.FromSlash(manifestPath))
+	}
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -33,10 +40,6 @@ func TestLiveCombinedHarnessProfile(t *testing.T) {
 	}
 	if manifest.Provider != "e2b" || manifest.Template.Reference == "" || manifest.SourceDirty {
 		t.Fatalf("invalid exact E2B template manifest: %#v", manifest)
-	}
-	projectRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
 	}
 	recipe, err := os.ReadFile(filepath.Join(projectRoot, filepath.FromSlash(manifest.Profile.Recipe)))
 	if err != nil {

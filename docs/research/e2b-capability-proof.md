@@ -1,8 +1,9 @@
 # E2B Capability Proof
 
-Observed on 2026-08-14 with the E2B Hobby account and JavaScript SDK 2.39.0. This is ecosystem
-research, not a supported Dorf profile or the D063 second-provider terminal. The ranked candidate
-list remains the [Sandbox and VM Provider Watchlist](sandbox-vm-watchlist.md).
+Observed on 2026-08-14 with the E2B Hobby account, JavaScript SDK 2.39.0 for capability and template
+construction, and Dorf's native Go adapter for lifecycle, execution, and profile qualification. E2B
+is not yet a supported Dorf provider or the D063 second-provider terminal. The ranked candidate list
+remains the [Sandbox and VM Provider Watchlist](sandbox-vm-watchlist.md).
 
 ## Result
 
@@ -37,10 +38,23 @@ inventory found no running or paused Dorf E2B proof resources. Connect-Go requir
 cancellation-preserving context without the caller's deadline so it would not replace envd's
 independent process-timeout header.
 
-The reusable template is named `dorf-capability-20260814-v1`. The disposable Sandbox was confirmed
-absent. Detailed machine-readable evidence is retained locally under the ignored path
-`.dorf/e2b-spike/evidence.json`; no API key, Provider Route, or upstream credential entered the
-template, Sandbox, evidence, or logs.
+A fourth proof extracted the Incus guest provisioning body into one provider-neutral recipe, pinned
+Codex 0.147.0 and Pi 0.84.1 to the npm integrities already recorded by the combined Incus artifact,
+and built it from the exact Debian 13 amd64 OCI manifest
+`sha256:d8f17b92dc7ff10f9c1fdecab0ad21103d1d24aed823c3a0359e4f50adfab3eb`. E2B produced template ID
+`gp4l4gthfx5pl5jedixa`, build ID `8bb1103a-c331-4098-9dac-b26a2ed31eae`, and exact runtime reference
+`dorf-debian13-combined:8bb1103a-c331-4098-9dac-b26a2ed31eae` from clean source commit
+`6e5801b029608656f5b6c2076032befafed4b990`. Dorf's native Go client then created a restricted
+Sandbox from that exact reference and attested Debian 13 x86_64, envd 0.6.13, the complete tool
+inventory, both Harness executables, root access to `/workspace/job`, absence of npm/npx and baked
+Harness or Provider Route configuration, and ownership-guarded cleanup. A final account inventory
+contained no running or paused Sandbox.
+
+The broad capability template is named `dorf-capability-20260814-v1`; the combined Harness profile
+uses the exact build reference above. Detailed machine-readable capability evidence and the exact
+profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.json` and
+`dist/e2b-template/profile.json`. No API key, Provider Route, or upstream credential entered either
+template, Sandbox, evidence file, manifest, or logs.
 
 ## What remains unproved
 
@@ -51,7 +65,7 @@ template, Sandbox, evidence, or logs.
   [control-plane OpenAPI specification](https://github.com/e2b-dev/infra/blob/d586e2e86853b19b156fe7bc1cd76c2ea0b45475/spec/openapi.yml).
   The command client is generated only from the pinned upstream process schema; handwritten code
   retains Dorf's timeout, cancellation, retry, output, and error semantics.
-- The template did not contain the pinned combined Codex/Pi Harness profile or run a Dorf Job.
+- The exact combined Codex/Pi template has not run a Dorf Job or a native Harness session.
 - No provider file-transfer or durable artifact API has been implemented. A concrete workflow must
   earn that surface rather than extending the command client speculatively.
 - The current Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from

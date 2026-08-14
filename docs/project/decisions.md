@@ -1472,28 +1472,31 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D064 — Debian 13 is the shared supported-toolchain Sandbox baseline
 
-- **Status:** Accepted image baseline; combined Harness packaging refined by D066 — 2026-08-13
-- **Decision:** The official x86_64 Sandbox image uses the exact current `images:debian/13` VM
-  fingerprint and carries only a cross-repository workstation baseline: Python 3.14 with pip, Node 24
+- **Status:** Accepted profile baseline; combined Harness packaging refined by D066; second-provider
+  template qualified by D067 — 2026-08-14
+- **Decision:** The official x86_64 Sandbox profile uses an exact provider-native Debian 13 base
+  identity and carries only a cross-repository workstation baseline: Python 3.14 with pip, Node 24
   LTS, pinned Go and uv, Git, the verified Harness executables, native C/C++ build tools, and common
   shell/archive/search utilities. npm is used only to install Harness packages during construction; npm, npx, Corepack, Yarn, pnpm,
   pytest, Ruff, application libraries, GitHub CLI, tmux, PostgreSQL, and Absurd are not shared image
   contents. Managed repositories retain their
   language versions and dependencies in ordinary project metadata and lockfiles and install them
   through `commands.prepare`.
-- **Integrity:** The current manifest records the exact Debian base reference and fingerprint, every
-  installed bootstrap-tool version, the final image/archive digest, each Harness npm integrity, and verified
-  Node, Go, and uv archive digests. One versioned recipe is the complete image construction authority;
-  it copies no host state into the fresh base. Release proof exercises the image through the existing
-  real no-change AgentRun terminal and reconciles cleanup before publication rather than duplicating
-  the recipe with content assertions.
+- **Integrity:** One provider-neutral, versioned guest recipe is the complete tool and Harness
+  construction authority and copies no host state into the fresh base. Provider packaging supplies
+  and records its exact Debian identity: Incus uses the resolved `images:debian/13` VM fingerprint;
+  E2B uses an exact `linux/amd64` OCI manifest digest. The guest profile metadata records that base
+  identity, every installed bootstrap-tool version, each Harness npm integrity, and verified Node,
+  Go, and uv archive digests; provider artifact manifests bind the exact build to the recipe and
+  source. Provider release/profile proof verifies the resulting artifact and reconciles its
+  disposable Sandbox cleanup.
 - **Why:** A small polyglot bootstrap lets the selected Harness inspect and deterministically prepare ordinary Python,
   JavaScript, Go, and native-extension repositories without turning their dependency graphs into a
   Dorf release concern. Debian 13 supplies the current stable/LTS runway. Keeping project packages in
   the repository avoids cross-repository version conflicts and preserves the development-tooling
-  seam required by D049. The builder uses Incus's supported publish-from-instance path: Distrobuilder
-  would require an additional host toolchain and a full from-scratch Debian VM definition even though
-  Dorf intentionally customizes an existing official image.
+  seam required by D049. Each provider retains its natural packaging path while consuming the same
+  recipe: Incus publishes a configured VM instance, while E2B snapshots a template built from an
+  exact OCI base. Packaging identity does not enter the shared runtime contract.
 - **Cost:** The shared image and its proof surface are larger than the earlier harness-only image, and
   Python, Node, Go, uv, and Harness support windows require deliberate image refreshes. The supported
   clean-machine host remains Ubuntu 24.04; this decision changes the disposable Sandbox guest only.
@@ -1574,7 +1577,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D067 — E2B is the next Sandbox portability proof target
 
-- **Status:** Accepted proof target; lifecycle and command primitives proven — 2026-08-14
+- **Status:** Accepted proof target; lifecycle, command, and exact profile artifact proven — 2026-08-14
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1609,16 +1612,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   foreign-resource deletion refusal, stale locators, idempotent absence, and provider errors without
   retaining E2B's returned access tokens. A second live test used native binary ConnectRPC against
   envd 0.6.13 and proved literal argv, binary stdin, separate raw stdout and stderr, exact nonzero
-  exit status, provider process timeout, caller-cancellation ambiguity, and one-shot PID cleanup.
+  exit status, provider process timeout, caller-cancellation ambiguity, and one-shot PID cleanup. One
+  shared guest recipe then produced exact E2B build
+  `dorf-debian13-combined:8bb1103a-c331-4098-9dac-b26a2ed31eae` from clean source
+  `6e5801b029608656f5b6c2076032befafed4b990`; the native Go adapter qualified its Debian 13 amd64
+  identity, envd 0.6.13, complete tool inventory, Codex 0.147.0, Pi 0.84.1, root workspace, and
+  credential absence before ownership-guarded deletion. The account had no running or paused
+  Sandbox afterward.
   Detailed observations remain in the
   [E2B capability proof](../research/e2b-capability-proof.md).
-- **Next earned boundary:** Build and qualify one exact E2B template artifact carrying the existing
-  credential-free combined Harness profile; template construction and readiness remain release/profile
-  tooling rather than runtime-adapter work. Then prove Codex's remote control endpoint on that
-  artifact: separate the process bind address from the provider-resolved `wss` dial endpoint, retain
-  E2B's scoped traffic header alongside Dorf's Harness authorization, and recover the same native
-  session after controller loss. Do not add files, snapshots, or common workflow integration to
-  those slices.
+- **Next earned boundary:** Prove Codex's remote control endpoint on the exact artifact: separate the
+  process bind address from the provider-resolved `wss` dial endpoint, retain E2B's scoped traffic
+  header alongside Dorf's Harness authorization, and recover the same native session after
+  controller loss. That completes the concrete second implementation surface needed to extract the
+  common Sandbox interface described above. Do not add files, snapshots, or workflow integration to
+  this slice.
 - **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
   network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
   client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn
