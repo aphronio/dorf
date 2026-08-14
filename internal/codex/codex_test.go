@@ -158,6 +158,57 @@ func TestLiveExactServerReconnectUsesRetainedCapability(t *testing.T) {
 	}
 }
 
+func TestRemoteEndpointSeparatesGuestBindFromAuthenticatedDial(t *testing.T) {
+	const token = "retained-control-capability"
+	const trafficToken = "provider-traffic-capability"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token || r.Header.Get("e2b-traffic-access-token") != trafficToken {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.CloseNow()
+		kind, payload, err := conn.Read(r.Context())
+		if err != nil || kind != websocket.MessageText {
+			t.Errorf("read initialize: kind=%v error=%v", kind, err)
+			return
+		}
+		var request map[string]any
+		if err := json.Unmarshal(payload, &request); err != nil {
+			t.Error(err)
+			return
+		}
+		response, _ := json.Marshal(map[string]any{"id": request["id"], "result": map[string]any{}})
+		if err := conn.Write(r.Context(), websocket.MessageText, response); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+
+	runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n" + token + "\n"}}
+	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	headers := http.Header{"e2b-traffic-access-token": []string{trafficToken}}
+	endpoint := endpointAccess{
+		listen:  "ws://0.0.0.0:4500",
+		dial:    "ws" + strings.TrimPrefix(server.URL, "http"),
+		headers: headers,
+	}
+	if err := agent.withServerEndpointController(context.Background(), "sandbox-1", endpoint, false, nil, func(_ *protocol) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	probeCommand := strings.Join(runner.calls[0], " ")
+	if !strings.Contains(probeCommand, endpoint.listen) || strings.Contains(probeCommand, endpoint.dial) {
+		t.Fatalf("probe did not use only the guest bind endpoint: %s", probeCommand)
+	}
+	if headers.Get("Authorization") != "" {
+		t.Fatal("dial mutated the provider-owned header set")
+	}
+}
+
 func TestStrictReviewProcessRestartRotatesCapabilityButRecoversExactThreadAndTurn(t *testing.T) {
 	const oldToken = "old-review-control-capability"
 	nonce, input := strings.Repeat("a", 64), "exact persisted review input"

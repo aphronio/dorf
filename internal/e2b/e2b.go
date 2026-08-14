@@ -116,8 +116,11 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 		Secure              bool              `json:"secure"`
 		Metadata            map[string]string `json:"metadata"`
 		AllowInternetAccess bool              `json:"allow_internet_access"`
-		AutoPause           bool              `json:"autoPause"`
-		AutoResume          struct {
+		Network             struct {
+			AllowPublicTraffic bool `json:"allowPublicTraffic"`
+		} `json:"network"`
+		AutoPause  bool `json:"autoPause"`
+		AutoResume struct {
 			Enabled bool `json:"enabled"`
 		} `json:"autoResume"`
 	}{
@@ -211,27 +214,38 @@ func (c Client) InspectOwned(ctx context.Context, providerID string, owner Owner
 // ConnectEnvd extends the Sandbox lifetime and returns fresh, scoped envd
 // connection material. It does not expose the team API key to the Sandbox.
 func (c Client) ConnectEnvd(ctx context.Context, providerID string, timeout time.Duration) (EnvdConnection, error) {
-	if strings.TrimSpace(providerID) == "" {
-		return EnvdConnection{}, fmt.Errorf("E2B provider Sandbox ID is required")
-	}
-	if timeout <= 0 || timeout%time.Second != 0 {
-		return EnvdConnection{}, fmt.Errorf("E2B Sandbox timeout must be a positive whole number of seconds")
-	}
-	var response connectionResponse
-	body := struct {
-		Timeout int64 `json:"timeout"`
-	}{Timeout: int64(timeout / time.Second)}
-	if err := c.doJSONOneOf(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(providerID)+"/connect", nil, body, []int{http.StatusOK, http.StatusCreated}, &response); err != nil {
+	response, err := c.connect(ctx, providerID, timeout)
+	if err != nil {
 		return EnvdConnection{}, err
 	}
-	if response.SandboxID != providerID || response.EnvdVersion == "" || response.EnvdAccessToken == "" {
-		return EnvdConnection{}, fmt.Errorf("E2B connect response omitted required scoped connection material")
+	if response.EnvdVersion == "" || response.EnvdAccessToken == "" {
+		return EnvdConnection{}, fmt.Errorf("E2B connect response omitted required scoped envd material")
 	}
 	domain := strings.TrimSpace(response.Domain)
 	if domain == "" {
 		domain = "e2b.app"
 	}
 	return EnvdConnection{ProviderID: providerID, Domain: domain, Version: response.EnvdVersion, accessToken: response.EnvdAccessToken}, nil
+}
+
+func (c Client) connect(ctx context.Context, providerID string, timeout time.Duration) (connectionResponse, error) {
+	if strings.TrimSpace(providerID) == "" {
+		return connectionResponse{}, fmt.Errorf("E2B provider Sandbox ID is required")
+	}
+	if timeout <= 0 || timeout%time.Second != 0 {
+		return connectionResponse{}, fmt.Errorf("E2B Sandbox timeout must be a positive whole number of seconds")
+	}
+	var response connectionResponse
+	body := struct {
+		Timeout int64 `json:"timeout"`
+	}{Timeout: int64(timeout / time.Second)}
+	if err := c.doJSONOneOf(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(providerID)+"/connect", nil, body, []int{http.StatusOK, http.StatusCreated}, &response); err != nil {
+		return connectionResponse{}, err
+	}
+	if response.SandboxID != providerID {
+		return connectionResponse{}, fmt.Errorf("E2B connect response returned a foreign Sandbox ID")
+	}
+	return response, nil
 }
 
 // DeleteOwned refuses to delete a resource until exact ownership is attested.
@@ -388,10 +402,11 @@ type createResponse struct {
 }
 
 type connectionResponse struct {
-	SandboxID       string `json:"sandboxID"`
-	Domain          string `json:"domain"`
-	EnvdVersion     string `json:"envdVersion"`
-	EnvdAccessToken string `json:"envdAccessToken"`
+	SandboxID          string `json:"sandboxID"`
+	Domain             string `json:"domain"`
+	EnvdVersion        string `json:"envdVersion"`
+	EnvdAccessToken    string `json:"envdAccessToken"`
+	TrafficAccessToken string `json:"trafficAccessToken"`
 }
 
 func (s createResponse) sandbox() Sandbox {

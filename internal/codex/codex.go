@@ -241,7 +241,7 @@ func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner i
 }
 
 func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, true, func() error {
+	return a.withServerEndpointController(ctx, sandboxName, sameEndpoint(endpoint), true, func() error {
 		// Re-attest after reconnect or process replacement. The authentication
 		// token can rotate; only this exact host-owned Sandbox identity persists.
 		if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
@@ -252,18 +252,28 @@ func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoi
 }
 
 func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint string, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, endpoint, false, nil, fn)
+	return a.withServerEndpointController(ctx, sandboxName, sameEndpoint(endpoint), false, nil, fn)
 }
 
-func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, endpoint string, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
-	probe, err := a.probeServer(ctx, sandboxName, endpoint)
+type endpointAccess struct {
+	listen  string
+	dial    string
+	headers http.Header
+}
+
+func sameEndpoint(endpoint string) endpointAccess {
+	return endpointAccess{listen: endpoint, dial: endpoint}
+}
+
+func (a Agent) withServerEndpointController(ctx context.Context, sandboxName string, endpoint endpointAccess, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
+	probe, err := a.probeServer(ctx, sandboxName, endpoint.listen)
 	if err != nil {
 		return err
 	}
 	// Prefer the exact authenticated process left by a dead executor. A live
 	// process that cannot be inspected is attention, never permission to kill it.
 	if probe.running && probe.tracked && probe.token != "" {
-		protocol, dialErr := dialProtocol(ctx, endpoint, probe.token)
+		protocol, dialErr := dialProtocol(ctx, endpoint.dial, probe.token, endpoint.headers)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
 			if authorize != nil {
@@ -291,7 +301,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 	if write.ExitCode != 0 {
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
-	launch := appServerScript(endpoint, tokenSHA256(token), reviewReadOnly)
+	launch := appServerScript(endpoint.listen, tokenSHA256(token), reviewReadOnly)
 	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", launch)
 	if err != nil {
 		return err
@@ -301,7 +311,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName, en
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		protocol, dialErr := dialProtocol(ctx, endpoint, token)
+		protocol, dialErr := dialProtocol(ctx, endpoint.dial, token, endpoint.headers)
 		if dialErr == nil {
 			defer protocol.connection.Close(websocket.StatusNormalClosure, "done")
 			if authorize != nil {
@@ -369,14 +379,18 @@ func tokenSHA256(token string) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func dialProtocol(ctx context.Context, endpoint, token string) (*protocol, error) {
+func dialProtocol(ctx context.Context, endpoint, token string, transportHeaders ...http.Header) (*protocol, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{Transport: transport}
 	requestCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	headers := http.Header{"Authorization": []string{"Bearer " + token}}
+	headers := make(http.Header)
+	if len(transportHeaders) > 0 && transportHeaders[0] != nil {
+		headers = transportHeaders[0].Clone()
+	}
+	headers.Set("Authorization", "Bearer "+token)
 	conn, response, err := websocket.Dial(requestCtx, endpoint, &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: headers})
 	if err != nil {
 		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {

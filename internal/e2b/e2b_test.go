@@ -51,6 +51,16 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if connection.ProviderID != discovered.ProviderID || connection.Domain != "e2b.app" || connection.Version != "0.6.2" || connection.accessToken != "scoped-envd-token" {
 		t.Fatalf("envd connection = %#v", connection)
 	}
+	endpoint, err := client.ConnectEndpoint(context.Background(), discovered.ProviderID, 4500, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.ListenURL != "ws://0.0.0.0:4500" || endpoint.DialURL != "wss://4500-provider-1.e2b.app" || endpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
+		t.Fatalf("endpoint = %#v", endpoint)
+	}
+	if strings.Contains(endpoint.String(), "scoped-traffic-token") {
+		t.Fatal("E2B endpoint string leaked its traffic token")
+	}
 
 	foreign := owner
 	foreign.OwnershipNonce = strings.Repeat("b", 64)
@@ -88,6 +98,10 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 
 	if api.createBody["templateID"] != "template:build" || api.createBody["secure"] != true || api.createBody["allow_internet_access"] != false {
 		t.Fatalf("create body = %#v", api.createBody)
+	}
+	network, ok := api.createBody["network"].(map[string]any)
+	if !ok || network["allowPublicTraffic"] != false {
+		t.Fatalf("create network = %#v", api.createBody["network"])
 	}
 	if api.createBody["timeout"] != float64(600) {
 		t.Fatalf("create timeout = %#v", api.createBody["timeout"])
@@ -249,7 +263,8 @@ func (a *fakeAPI) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	case request.Method == http.MethodPost && request.URL.Path == "/sandboxes/provider-1/connect":
 		response.WriteHeader(http.StatusOK)
 		json.NewEncoder(response).Encode(map[string]any{
-			"sandboxID": "provider-1", "domain": "e2b.app", "envdVersion": "0.6.2", "envdAccessToken": "scoped-envd-token",
+			"sandboxID": "provider-1", "domain": "e2b.app", "envdVersion": "0.6.2",
+			"envdAccessToken": "scoped-envd-token", "trafficAccessToken": "scoped-traffic-token",
 		})
 	case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/sandboxes/"):
 		id := strings.TrimPrefix(request.URL.Path, "/sandboxes/")

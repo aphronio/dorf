@@ -10,6 +10,7 @@ the resulting exact template reference.
   and [`scripts/e2b/bun.lock`](../../scripts/e2b/bun.lock)
 - Runtime lifecycle and execution adapter: [`internal/e2b`](../../internal/e2b)
 - Exact profile qualification: [`internal/e2b/profile_live_test.go`](../../internal/e2b/profile_live_test.go)
+- Authenticated Codex endpoint qualification: [`internal/codex/e2b_endpoint_live_test.go`](../../internal/codex/e2b_endpoint_live_test.go)
 - Provider credential boundary: [`docs/project/provider-gateway.md`](../project/provider-gateway.md)
 
 From a clean source commit with `E2B_API_KEY` available only in the host environment, run:

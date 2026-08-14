@@ -1577,7 +1577,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D067 — E2B is the next Sandbox portability proof target
 
-- **Status:** Accepted proof target; lifecycle, command, and exact profile artifact proven — 2026-08-14
+- **Status:** Accepted proof target; lifecycle, command, exact profile, and authenticated endpoint
+  proven — 2026-08-14
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1618,15 +1619,19 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   `6e5801b029608656f5b6c2076032befafed4b990`; the native Go adapter qualified its Debian 13 amd64
   identity, envd 0.6.13, complete tool inventory, Codex 0.147.0, Pi 0.84.1, root workspace, and
   credential absence before ownership-guarded deletion. The account had no running or paused
-  Sandbox afterward.
+  Sandbox afterward. An authenticated endpoint proof then separated Codex's `ws://0.0.0.0:4500`
+  process bind from E2B's provider-resolved `wss` URL, restricted public ingress, and required both
+  E2B's scoped traffic header and Codex's independent control capability. After abrupt controller
+  loss, a second connection resumed the exact native thread and observed the exact submitted turn;
+  no upstream model outcome was claimed. Every proof Sandbox, including failed iterations, was
+  ownership-deleted and final account inventory was empty.
   Detailed observations remain in the
   [E2B capability proof](../research/e2b-capability-proof.md).
-- **Next earned boundary:** Prove Codex's remote control endpoint on the exact artifact: separate the
-  process bind address from the provider-resolved `wss` dial endpoint, retain E2B's scoped traffic
-  header alongside Dorf's Harness authorization, and recover the same native session after
-  controller loss. That completes the concrete second implementation surface needed to extract the
-  common Sandbox interface described above. Do not add files, snapshots, or workflow integration to
-  this slice.
+- **Next earned boundary:** Extract the exact common Sandbox interface described above from the now
+  proven Incus and E2B surfaces, then make provider/profile composition select one implementation
+  without provider branches in common consumers. The next real terminal still requires a secure
+  E2B-to-owner Provider Gateway route before one no-change Codex Job can prove Action settlement and
+  cleanup. Do not add files, snapshots, a provider registry, or a capability matrix to this slice.
 - **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
   network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
   client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn

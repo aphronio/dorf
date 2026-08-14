@@ -50,6 +50,16 @@ inventory, both Harness executables, root access to `/workspace/job`, absence of
 Harness or Provider Route configuration, and ownership-guarded cleanup. A final account inventory
 contained no running or paused Sandbox.
 
+A fifth proof corrected the native create request to set E2B's independent
+`network.allowPublicTraffic: false` ingress restriction in addition to deny-all outbound internet.
+The native client then resolved the Codex app-server's in-VM bind URL separately from E2B's external
+`wss` port-proxy URL and supplied the provider's scoped traffic token only on the WebSocket upgrade.
+Codex simultaneously enforced its own separately generated control capability. After an abrupt
+controller disconnect, a second authenticated connection resumed the exact native thread and read
+the exact turn ID returned before loss. The turn had no working upstream Provider Route, so this
+proves endpoint transport and native controller recovery, not a successful model outcome. All
+iterations were ownership-deleted and the final running/paused account inventory was empty.
+
 The broad capability template is named `dorf-capability-20260814-v1`; the combined Harness profile
 uses the exact build reference above. Detailed machine-readable capability evidence and the exact
 profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.json` and
@@ -68,9 +78,10 @@ template, Sandbox, evidence file, manifest, or logs.
 - The exact combined Codex/Pi template has not run a Dorf Job or a native Harness session.
 - No provider file-transfer or durable artifact API has been implemented. A concrete workflow must
   earn that surface rather than extending the command client speculatively.
-- The current Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from
-  E2B to that owner-hosted authority has been designed or tested. This is the principal blocker to
-  a real Codex-on-E2B terminal.
+- The host-to-E2B authenticated Codex endpoint is proven, but the reverse path remains: the current
+  Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from E2B to that
+  owner-hosted authority has been designed or tested. This is the principal blocker to a real
+  Codex-on-E2B terminal.
 - The Hobby one-hour continuous runtime, sustained cost, regional behavior, service reliability,
   and the new custom runtime's detailed isolation guarantees were not evaluated.
 
