@@ -2,8 +2,6 @@ package e2b
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -22,16 +20,7 @@ func TestLiveLifecycleRecoversLostCreateResponse(t *testing.T) {
 	if apiKey == "" || template == "" {
 		t.Fatal("E2B_API_KEY and DORF_E2B_TEMPLATE are required")
 	}
-	nonceBytes := make([]byte, 32)
-	if _, err := rand.Read(nonceBytes); err != nil {
-		t.Fatal(err)
-	}
-	nonce := hex.EncodeToString(nonceBytes)
-	owner := Ownership{
-		JobID:          "e2b-lifecycle-proof-" + nonce[:12],
-		SandboxID:      "dorf-e2b-proof-" + nonce[:12],
-		OwnershipNonce: nonce,
-	}
+	owner := liveOwnership(t, "lifecycle")
 	transport := &liveLostResponseTransport{base: http.DefaultTransport}
 	client := Client{APIKey: apiKey, HTTPClient: &http.Client{Transport: transport}}
 	t.Logf("creating restricted E2B lifecycle proof for %s", owner.SandboxID)

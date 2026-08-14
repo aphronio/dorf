@@ -44,6 +44,13 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if inspected.TemplateID != "template:build" || inspected.State != "running" {
 		t.Fatalf("inspected Sandbox = %#v", inspected)
 	}
+	connection, err := client.ConnectEnvd(context.Background(), discovered.ProviderID, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.ProviderID != discovered.ProviderID || connection.Domain != "e2b.app" || connection.Version != "0.6.2" || connection.accessToken != "scoped-envd-token" {
+		t.Fatalf("envd connection = %#v", connection)
+	}
 
 	foreign := owner
 	foreign.OwnershipNonce = strings.Repeat("b", 64)
@@ -239,6 +246,11 @@ func (a *fakeAPI) ServeHTTP(response http.ResponseWriter, request *http.Request)
 			}
 		}
 		json.NewEncoder(response).Encode(listed)
+	case request.Method == http.MethodPost && request.URL.Path == "/sandboxes/provider-1/connect":
+		response.WriteHeader(http.StatusOK)
+		json.NewEncoder(response).Encode(map[string]any{
+			"sandboxID": "provider-1", "domain": "e2b.app", "envdVersion": "0.6.2", "envdAccessToken": "scoped-envd-token",
+		})
 	case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/sandboxes/"):
 		id := strings.TrimPrefix(request.URL.Path, "/sandboxes/")
 		sandbox, ok := a.sandboxes[id]

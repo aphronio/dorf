@@ -1,5 +1,5 @@
-// Package e2b implements the smallest E2B control-plane boundary earned by
-// Dorf's second-Sandbox-provider lifecycle proof.
+// Package e2b implements the E2B lifecycle and process primitives earned by
+// Dorf's incremental second-Sandbox-provider proofs.
 package e2b
 
 import (
@@ -61,6 +61,22 @@ type Sandbox struct {
 	StartedAt   time.Time
 	EndAt       time.Time
 }
+
+// EnvdConnection contains the short-lived, Sandbox-scoped material needed to
+// reach envd. The access token is intentionally private so it cannot be
+// serialized or logged by consumers.
+type EnvdConnection struct {
+	ProviderID  string
+	Domain      string
+	Version     string
+	accessToken string
+}
+
+func (c EnvdConnection) String() string {
+	return fmt.Sprintf("E2B envd connection %s (%s, envd %s, scoped token redacted)", c.ProviderID, c.Domain, c.Version)
+}
+
+func (c EnvdConnection) GoString() string { return c.String() }
 
 type APIError struct {
 	StatusCode int
@@ -192,6 +208,32 @@ func (c Client) InspectOwned(ctx context.Context, providerID string, owner Owner
 	return sandbox, nil
 }
 
+// ConnectEnvd extends the Sandbox lifetime and returns fresh, scoped envd
+// connection material. It does not expose the team API key to the Sandbox.
+func (c Client) ConnectEnvd(ctx context.Context, providerID string, timeout time.Duration) (EnvdConnection, error) {
+	if strings.TrimSpace(providerID) == "" {
+		return EnvdConnection{}, fmt.Errorf("E2B provider Sandbox ID is required")
+	}
+	if timeout <= 0 || timeout%time.Second != 0 {
+		return EnvdConnection{}, fmt.Errorf("E2B Sandbox timeout must be a positive whole number of seconds")
+	}
+	var response connectionResponse
+	body := struct {
+		Timeout int64 `json:"timeout"`
+	}{Timeout: int64(timeout / time.Second)}
+	if err := c.doJSONOneOf(ctx, http.MethodPost, "/sandboxes/"+url.PathEscape(providerID)+"/connect", nil, body, []int{http.StatusOK, http.StatusCreated}, &response); err != nil {
+		return EnvdConnection{}, err
+	}
+	if response.SandboxID != providerID || response.EnvdVersion == "" || response.EnvdAccessToken == "" {
+		return EnvdConnection{}, fmt.Errorf("E2B connect response omitted required scoped connection material")
+	}
+	domain := strings.TrimSpace(response.Domain)
+	if domain == "" {
+		domain = "e2b.app"
+	}
+	return EnvdConnection{ProviderID: providerID, Domain: domain, Version: response.EnvdVersion, accessToken: response.EnvdAccessToken}, nil
+}
+
 // DeleteOwned refuses to delete a resource until exact ownership is attested.
 // An already absent provider resource is settled successfully.
 func (c Client) DeleteOwned(ctx context.Context, providerID string, owner Ownership) error {
@@ -234,6 +276,15 @@ func (c Client) doJSON(ctx context.Context, method, path string, query url.Value
 }
 
 func (c Client) doJSONWithHeaders(ctx context.Context, method, path string, query url.Values, input any, wantStatus int, output any) (http.Header, error) {
+	return c.doJSONStatuses(ctx, method, path, query, input, []int{wantStatus}, output)
+}
+
+func (c Client) doJSONOneOf(ctx context.Context, method, path string, query url.Values, input any, wantStatuses []int, output any) error {
+	_, err := c.doJSONStatuses(ctx, method, path, query, input, wantStatuses, output)
+	return err
+}
+
+func (c Client) doJSONStatuses(ctx context.Context, method, path string, query url.Values, input any, wantStatuses []int, output any) (http.Header, error) {
 	if strings.TrimSpace(c.APIKey) == "" {
 		return nil, fmt.Errorf("E2B API key is required")
 	}
@@ -272,7 +323,7 @@ func (c Client) doJSONWithHeaders(ctx context.Context, method, path string, quer
 		return nil, fmt.Errorf("E2B %s %s: %w", method, path, err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != wantStatus {
+	if !containsStatus(wantStatuses, response.StatusCode) {
 		return nil, decodeAPIError(response)
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {
@@ -284,6 +335,15 @@ func (c Client) doJSONWithHeaders(ctx context.Context, method, path string, quer
 		return nil, fmt.Errorf("decode E2B %s %s response: %w", method, path, err)
 	}
 	return response.Header.Clone(), nil
+}
+
+func containsStatus(statuses []int, status int) bool {
+	for _, candidate := range statuses {
+		if candidate == status {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeAPIError(response *http.Response) error {
@@ -325,6 +385,13 @@ type createResponse struct {
 	SandboxID   string `json:"sandboxID"`
 	TemplateID  string `json:"templateID"`
 	EnvdVersion string `json:"envdVersion"`
+}
+
+type connectionResponse struct {
+	SandboxID       string `json:"sandboxID"`
+	Domain          string `json:"domain"`
+	EnvdVersion     string `json:"envdVersion"`
+	EnvdAccessToken string `json:"envdAccessToken"`
 }
 
 func (s createResponse) sandbox() Sandbox {

@@ -27,6 +27,16 @@ endpoint, deleted it, and confirmed the ownership query was empty. The first run
 E2B's multi-state list filter is comma-delimited; after correcting that wire detail, the fault-injected
 proof passed and a separate inventory confirmed that no lifecycle-proof Sandbox remained.
 
+A third live proof used the vendored E2B `process.proto` at infra commit
+`d586e2e86853b19b156fe7bc1cd76c2ea0b45475` and generated Connect-Go code. Against hosted envd
+0.6.13, the native Go client preserved literal argv, binary stdin, separate raw stdout and stderr,
+and exit code 17. A provider-enforced 500 ms process timeout produced E2B's documented
+`deadline_exceeded` stream terminal; a separate caller cancellation remained indeterminate with its
+observed PID and was explicitly killed once. The proof then deleted the Sandbox and a separate
+inventory found no running or paused Dorf E2B proof resources. Connect-Go required a
+cancellation-preserving context without the caller's deadline so it would not replace envd's
+independent process-timeout header.
+
 The reusable template is named `dorf-capability-20260814-v1`. The disposable Sandbox was confirmed
 absent. Detailed machine-readable evidence is retained locally under the ignored path
 `.dorf/e2b-spike/evidence.json`; no API key, Provider Route, or upstream credential entered the
@@ -39,8 +49,11 @@ template, Sandbox, evidence, or logs.
 - E2B has official JavaScript and Python SDKs but no official Go SDK. The initial Go boundary is a
   handwritten client over the four lifecycle operations in E2B's current
   [control-plane OpenAPI specification](https://github.com/e2b-dev/infra/blob/d586e2e86853b19b156fe7bc1cd76c2ea0b45475/spec/openapi.yml).
-  Native command execution over `envd` ConnectRPC remains the next unproved adapter slice.
+  The command client is generated only from the pinned upstream process schema; handwritten code
+  retains Dorf's timeout, cancellation, retry, output, and error semantics.
 - The template did not contain the pinned combined Codex/Pi Harness profile or run a Dorf Job.
+- No provider file-transfer or durable artifact API has been implemented. A concrete workflow must
+  earn that surface rather than extending the command client speculatively.
 - The current Provider Gateway binds plain HTTP to a private Incus bridge. No secure remote path from
   E2B to that owner-hosted authority has been designed or tested. This is the principal blocker to
   a real Codex-on-E2B terminal.

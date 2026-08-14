@@ -3,9 +3,11 @@ module github.com/aphronio/dorf
 go 1.25.0
 
 require (
+	connectrpc.com/connect v1.18.1
 	github.com/coder/websocket v1.8.15
 	github.com/earendil-works/absurd/sdks/go/absurd v0.5.0
 	github.com/jackc/pgx/v5 v5.10.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
