@@ -3,7 +3,7 @@ select j.id,j.admission_key,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
-       j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -46,20 +46,20 @@ where id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,goal,repository,revision,branch,
-    provider_connection,model,reasoning_effort,
+    sandbox_profile,provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(goal),sqlc.arg(repository),
     sqlc.arg(revision),sqlc.arg(branch),
-    sqlc.arg(provider_connection),sqlc.arg(model),
+    sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort),sqlc.arg(github_repository),
     sqlc.arg(github_installation_id),sqlc.arg(base_branch)
 )
 on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
-select id,admission_key,goal,repository,revision,branch,provider_connection,
+select id,admission_key,goal,repository,revision,branch,sandbox_profile,provider_connection,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch

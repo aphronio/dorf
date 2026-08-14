@@ -152,6 +152,28 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	}
 }
 
+func TestCreateCanExplicitlyUseProfileInternetAccess(t *testing.T) {
+	api := newFakeAPI(t)
+	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: api}}}
+	owner := Ownership{JobID: "job-internet", SandboxID: "dorf-job-internet", OwnershipNonce: strings.Repeat("d", 64)}
+	if _, err := client.Create(context.Background(), CreateRequest{Template: "template:build", Timeout: 10 * time.Minute, Owner: owner, AllowedHostnames: []string{"gateway.example"}, AllowInternet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if api.createBody["allow_internet_access"] != true {
+		t.Fatalf("allow_internet_access = %#v", api.createBody["allow_internet_access"])
+	}
+	network, ok := api.createBody["network"].(map[string]any)
+	if !ok {
+		t.Fatalf("create network = %#v", api.createBody["network"])
+	}
+	if _, exists := network["allowOut"]; exists {
+		t.Fatalf("unrestricted profile unexpectedly sent allowOut = %#v", network["allowOut"])
+	}
+	if _, exists := network["denyOut"]; exists {
+		t.Fatalf("unrestricted profile unexpectedly sent denyOut = %#v", network["denyOut"])
+	}
+}
+
 func TestFindOwnedPaginatesRunningAndPausedAndRejectsDuplicates(t *testing.T) {
 	owner := Ownership{JobID: "job-2", SandboxID: "dorf-job-2", OwnershipNonce: strings.Repeat("c", 64)}
 	requests := 0

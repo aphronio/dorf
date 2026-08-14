@@ -53,6 +53,7 @@ type CreateRequest struct {
 	Timeout          time.Duration
 	Owner            Ownership
 	AllowedHostnames []string
+	AllowInternet    bool
 }
 
 type Sandbox struct {
@@ -130,10 +131,12 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 		Timeout:             int64(request.Timeout / time.Second),
 		Secure:              true,
 		Metadata:            request.Owner.metadata(),
-		AllowInternetAccess: false,
+		AllowInternetAccess: request.AllowInternet,
 	}
-	body.Network.AllowOut = append([]string(nil), request.AllowedHostnames...)
-	if len(body.Network.AllowOut) > 0 {
+	if !request.AllowInternet {
+		body.Network.AllowOut = append([]string(nil), request.AllowedHostnames...)
+	}
+	if !request.AllowInternet && len(body.Network.AllowOut) > 0 {
 		body.Network.DenyOut = []string{"0.0.0.0/0"}
 	}
 	var response createResponse

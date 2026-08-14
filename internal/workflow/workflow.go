@@ -41,11 +41,17 @@ type ProviderChecker interface {
 	Check(context.Context, string) error
 }
 
+type sandboxProfileStore interface {
+	Job(context.Context, string) (spine.Job, error)
+	SetWorkflowAttention(context.Context, string, string, string) error
+	SetCleanupAttention(context.Context, string, string) error
+}
+
 func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime) {
+func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime, sandboxProfile string) {
 	proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
 	proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
 	if proposal.PollInterval <= 0 {
@@ -53,6 +59,9 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 	}
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
+			return TaskResultV1{}, err
+		}
+		if err := requireSandboxProfile(ctx, store, params.JobID, sandboxProfile, false); err != nil {
 			return TaskResultV1{}, err
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
@@ -98,6 +107,9 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		if err := verifyAttachedTask(ctx, store, params.JobID, CleanupTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
+		if err := requireSandboxProfile(ctx, store, params.JobID, sandboxProfile, true); err != nil {
+			return TaskResultV1{}, err
+		}
 		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
 			if err := runCleanup(workCtx, service, store, params.JobID); err != nil {
 				return TaskResultV1{}, err
@@ -105,6 +117,28 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func requireSandboxProfile(ctx context.Context, store sandboxProfileStore, jobID, configured string, cleanup bool) error {
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	configured = strings.TrimSpace(configured)
+	if configured != "" && job.SandboxProfile == configured {
+		return nil
+	}
+	detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker is configured for %q", job.SandboxProfile, configured)
+	var attentionErr error
+	if cleanup {
+		attentionErr = store.SetCleanupAttention(ctx, jobID, detail)
+	} else {
+		attentionErr = store.SetWorkflowAttention(ctx, jobID, "sandbox-profile", detail)
+	}
+	if attentionErr != nil {
+		return fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
+	}
+	return errors.New(detail)
 }
 
 func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {

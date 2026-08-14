@@ -1,7 +1,7 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    schema: "internal/postgres/migrations/001_baseline.sql"
+    schema: "internal/postgres/migrations"
     queries: "internal/postgres/queries"
     strict_function_checks: true
     strict_order_by: true

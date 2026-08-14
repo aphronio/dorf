@@ -73,7 +73,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 }
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
-select id,admission_key,goal,repository,revision,branch,provider_connection,
+select id,admission_key,goal,repository,revision,branch,sandbox_profile,provider_connection,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch
@@ -89,6 +89,7 @@ type GetAdmittedJobForUpdateRow struct {
 	Repository           string
 	Revision             string
 	Branch               string
+	SandboxProfile       string
 	ProviderConnection   string
 	Model                string
 	ReasoningEffort      string
@@ -107,6 +108,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.Repository,
 		&i.Revision,
 		&i.Branch,
+		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
@@ -122,7 +124,7 @@ select j.id,j.admission_key,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
-       j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
@@ -144,6 +146,7 @@ type GetJobRow struct {
 	GithubRepository        string
 	GithubInstallationID    string
 	BaseBranch              string
+	SandboxProfile          string
 	ProviderConnection      string
 	Model                   string
 	ReasoningEffort         string
@@ -173,6 +176,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.GithubRepository,
 		&i.GithubInstallationID,
 		&i.BaseBranch,
+		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
@@ -297,15 +301,15 @@ func (q *Queries) GetSetupRetryJobForUpdate(ctx context.Context, jobID string) (
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,goal,repository,revision,branch,
-    provider_connection,model,reasoning_effort,
+    sandbox_profile,provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     $1,$2,$3,$4,
     $5,$6,
-    $7,$8,
-    $9,$10,
-    $11,$12
+    $7,$8,$9,
+    $10,$11,
+    $12,$13
 )
 on conflict(admission_key) do nothing
 `
@@ -317,6 +321,7 @@ type InsertAdmittedJobParams struct {
 	Repository           string
 	Revision             string
 	Branch               string
+	SandboxProfile       string
 	ProviderConnection   string
 	Model                string
 	ReasoningEffort      string
@@ -333,6 +338,7 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.Repository,
 		arg.Revision,
 		arg.Branch,
+		arg.SandboxProfile,
 		arg.ProviderConnection,
 		arg.Model,
 		arg.ReasoningEffort,

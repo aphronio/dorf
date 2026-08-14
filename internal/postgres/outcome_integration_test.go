@@ -59,7 +59,7 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 		AdmissionKey: "pre-proposal-abandon-" + fmt.Sprint(time.Now().UnixNano()),
 		Goal:         "stop this coding Job", Repository: "https://github.com/aphronio/dorf.git",
 		Revision: strings.Repeat("a", 40), Branch: "dorf/pre-proposal-abandon",
-		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
 	})
 	if err != nil || !created {

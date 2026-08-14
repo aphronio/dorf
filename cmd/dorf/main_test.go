@@ -5,9 +5,39 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/e2b"
+	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 )
+
+func TestSandboxForConfigSelectsOneConcreteAdapter(t *testing.T) {
+	local, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileIncus, IncusImage: "dorf", IncusNetwork: "incusbr0", IncusDiskSize: "40GiB", Workspace: "/workspace/job"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := local.(incus.Adapter); !ok {
+		t.Fatalf("local adapter = %T", local)
+	}
+	managed, err := sandboxForConfig(config.Config{
+		SandboxProfile: config.SandboxProfileE2B, E2BAPIKey: "test-key", E2BTemplate: "dorf:exact-build",
+		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
+		Workspace: "/workspace/job", TurnTimeout: 45 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := managed.(e2b.Adapter); !ok {
+		t.Fatalf("managed adapter = %T", managed)
+	}
+	if _, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileE2B, E2BTemplate: "dorf:exact-build", E2BSandboxTimeout: time.Minute, Workspace: "/workspace/job", E2BGatewayURL: "https://gateway.example/v1"}); err == nil || !strings.Contains(err.Error(), "E2B_API_KEY") {
+		t.Fatalf("missing E2B API key error = %v", err)
+	}
+	if _, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileE2B, E2BAPIKey: "test-key", E2BTemplate: "dorf:exact-build", E2BSandboxTimeout: time.Minute, Workspace: "/workspace/job", E2BGatewayURL: "http://gateway.example/v1"}); err == nil {
+		t.Fatal("invalid remote Gateway URL was admitted")
+	}
+}
 
 func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.T) {
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)

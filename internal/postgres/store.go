@@ -32,6 +32,8 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
+var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_profile.sql"}
+
 func MessageTaskKey(jobID string) string { return "coding-job:v3:" + jobID }
 
 type Store struct{ DB *sql.DB }
@@ -60,6 +62,7 @@ type NewJob struct {
 	Repository         string
 	Revision           string
 	Branch             string
+	SandboxProfile     string
 	ProviderConnection string
 	Model              string
 	ReasoningEffort    string
@@ -120,6 +123,7 @@ func (s Store) Migrate(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, `select to_regnamespace('dorf') is not null`).Scan(&installed); err != nil {
 		return err
 	}
+	applied := map[string]bool{}
 	if installed {
 		var migrationsTable bool
 		if err := tx.QueryRowContext(ctx, `select to_regclass('dorf.schema_migrations') is not null`).Scan(&migrationsTable); err != nil {
@@ -128,20 +132,48 @@ func (s Store) Migrate(ctx context.Context) error {
 		if !migrationsTable {
 			return fmt.Errorf("existing Dorf schema has no baseline identity; recreate this prototype database")
 		}
-		var total, baseline int
-		if err := tx.QueryRowContext(ctx, `select count(*),count(*) filter(where name='001_baseline.sql') from dorf.schema_migrations`).Scan(&total, &baseline); err != nil {
+		rows, err := tx.QueryContext(ctx, `select name from dorf.schema_migrations order by name`)
+		if err != nil {
 			return err
 		}
-		if total != 1 || baseline != 1 {
-			return fmt.Errorf("prototype Dorf migration history is incompatible with the greenfield baseline; recreate this database")
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			applied[name] = true
 		}
-	} else {
-		contents, err := migrationFiles.ReadFile("migrations/001_baseline.sql")
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if !applied["001_baseline.sql"] {
+			return fmt.Errorf("existing Dorf schema has no baseline identity; recreate this prototype database")
+		}
+		for name := range applied {
+			known := false
+			for _, migration := range dorfMigrations {
+				known = known || name == migration
+			}
+			if !known {
+				return fmt.Errorf("Dorf migration history contains unsupported migration %q", name)
+			}
+		}
+	}
+	for _, name := range dorfMigrations {
+		if applied[name] {
+			continue
+		}
+		contents, err := migrationFiles.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply Dorf baseline schema: %w", err)
+			return fmt.Errorf("apply Dorf migration %s: %w", name, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -164,14 +196,15 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.Repository = strings.TrimSpace(input.Repository)
 	input.Revision = strings.TrimSpace(input.Revision)
 	input.Branch = strings.TrimSpace(input.Branch)
+	input.SandboxProfile = strings.TrimSpace(input.SandboxProfile)
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
 	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
 	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
-	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Provider Connection, model, canonical GitHub repository, installation, and explicit base branch")
+	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, complete goal, repository, branch, Sandbox profile, Provider Connection, model, canonical GitHub repository, installation, and explicit base branch")
 	}
 	if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
 		return spine.Job{}, false, err
@@ -191,7 +224,7 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	queries := dbsql.New(s.DB).WithTx(tx)
 	rows, err := queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
 		ID: id, AdmissionKey: input.AdmissionKey, Goal: input.Goal, Repository: input.Repository,
-		Revision: input.Revision, Branch: input.Branch, ProviderConnection: input.ProviderConnection,
+		Revision: input.Revision, Branch: input.Branch, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
 		Model: input.Model, ReasoningEffort: input.ReasoningEffort, GithubRepository: sql.NullString{String: input.GitHubRepository, Valid: true},
 		GithubInstallationID: sql.NullString{String: input.GitHubInstallation, Valid: true}, BaseBranch: sql.NullString{String: input.BaseBranch, Valid: true},
 	})
@@ -204,7 +237,7 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	stored := NewJob{
 		AdmissionKey: storedRow.AdmissionKey, Goal: storedRow.Goal, Repository: storedRow.Repository,
-		Revision: storedRow.Revision, Branch: storedRow.Branch, ProviderConnection: storedRow.ProviderConnection,
+		Revision: storedRow.Revision, Branch: storedRow.Branch, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 		GitHubRepository: storedRow.GithubRepository, GitHubInstallation: storedRow.GithubInstallationID, BaseBranch: storedRow.BaseBranch,
 	}
@@ -399,8 +432,8 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Goal: row.Goal, Repository: row.Repository,
 		Revision: row.Revision, StartingRevision: row.StartingRevision, Branch: row.Branch,
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
-		ProviderConnection: row.ProviderConnection,
-		Model:              row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
+		SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
+		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
 		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID,
 		WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
 		WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
@@ -1154,6 +1187,7 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*spine.Delivery,
 		return nil, err
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run.SandboxID = runRow.SandboxID
 	if run.Role != "implement" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has unsupported role %s", run.ID, run.Role)
 	}
@@ -1201,6 +1235,7 @@ func (s Store) DeliveryCandidate(ctx context.Context, jobID string) (*spine.Deli
 		return nil, err
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run.SandboxID = runRow.SandboxID
 	return &spine.Delivery{Message: message, AgentRun: run}, nil
 }
 

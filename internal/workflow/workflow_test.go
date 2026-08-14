@@ -1,12 +1,56 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+type profileGuardStore struct {
+	job               spine.Job
+	workflowAttention string
+	cleanupAttention  string
+	attentionErr      error
+}
+
+func (s *profileGuardStore) Job(context.Context, string) (spine.Job, error) { return s.job, nil }
+func (s *profileGuardStore) SetWorkflowAttention(_ context.Context, _, _, detail string) error {
+	s.workflowAttention = detail
+	return s.attentionErr
+}
+func (s *profileGuardStore) SetCleanupAttention(_ context.Context, _, detail string) error {
+	s.cleanupAttention = detail
+	return s.attentionErr
+}
+
+func TestSandboxProfileGuardStopsMismatchedWorkAndCleanup(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		store := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}}
+		err := requireSandboxProfile(context.Background(), store, store.job.ID, "e2b", cleanup)
+		if err == nil || !strings.Contains(err.Error(), `requires Sandbox profile "incus"`) {
+			t.Fatalf("cleanup=%v mismatch error=%v", cleanup, err)
+		}
+		if cleanup && store.cleanupAttention == "" || !cleanup && store.workflowAttention == "" {
+			t.Fatalf("cleanup=%v did not persist profile attention: %#v", cleanup, store)
+		}
+	}
+	matching := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "e2b"}}
+	if err := requireSandboxProfile(context.Background(), matching, matching.job.ID, "e2b", false); err != nil {
+		t.Fatal(err)
+	}
+	if matching.workflowAttention != "" || matching.cleanupAttention != "" {
+		t.Fatalf("matching profile wrote attention: %#v", matching)
+	}
+	failedAttention := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}, attentionErr: errors.New("write failed")}
+	if err := requireSandboxProfile(context.Background(), failedAttention, failedAttention.job.ID, "e2b", false); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("attention persistence error=%v", err)
+	}
+}
 
 func TestPersistedWorkflowContractsV1(t *testing.T) {
 	tests := []struct {

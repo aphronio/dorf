@@ -31,7 +31,8 @@ select id,job_id,message_id,state,
        (baseline_turn_id is not null)::boolean as baseline_recorded,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
-       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision
+       coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
+       coalesce(sandbox_id,'') as sandbox_id
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 

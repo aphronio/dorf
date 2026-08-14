@@ -10,24 +10,33 @@ import (
 )
 
 const (
-	AbsurdVersion = "0.5.0"
-	QueueName     = "dorf_jobs"
+	AbsurdVersion       = "0.5.0"
+	QueueName           = "dorf_jobs"
+	SandboxProfileIncus = "incus"
+	SandboxProfileE2B   = "e2b"
+	defaultE2BTimeout   = 55 * time.Minute
 )
 
 type Config struct {
-	DatabaseURL      string
-	Harness          string
-	IncusImage       string
-	IncusNetwork     string
-	IncusDiskSize    string
-	GatewayStatePath string
-	Workspace        string
-	AppServerPort    int
-	TurnTimeout      time.Duration
-	EvidenceRoot     string
-	GitHubMetadata   string
-	GitHubPrivateKey string
-	GitHubAPIURL     string
+	DatabaseURL       string
+	Harness           string
+	SandboxProfile    string
+	IncusImage        string
+	IncusNetwork      string
+	IncusDiskSize     string
+	GatewayStatePath  string
+	Workspace         string
+	AppServerPort     int
+	TurnTimeout       time.Duration
+	EvidenceRoot      string
+	GitHubMetadata    string
+	GitHubPrivateKey  string
+	GitHubAPIURL      string
+	E2BAPIKey         string
+	E2BTemplate       string
+	E2BGatewayURL     string
+	E2BSandboxTimeout time.Duration
+	E2BAllowInternet  bool
 }
 
 func Load() (Config, error) {
@@ -39,20 +48,46 @@ func Load() (Config, error) {
 	if harness != "codex" && harness != "pi" {
 		return Config{}, fmt.Errorf("DORF_HARNESS must be codex or pi")
 	}
+	sandboxProfile := value("DORF_SANDBOX_PROFILE", SandboxProfileIncus)
+	if sandboxProfile != SandboxProfileIncus && sandboxProfile != SandboxProfileE2B {
+		return Config{}, fmt.Errorf("DORF_SANDBOX_PROFILE must be incus or e2b")
+	}
+	if sandboxProfile == SandboxProfileE2B && harness != "codex" {
+		return Config{}, fmt.Errorf("the e2b Sandbox profile currently admits only the codex Harness")
+	}
 	cfg := Config{
-		DatabaseURL:      value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
-		Harness:          harness,
-		IncusImage:       value("DORF_INCUS_IMAGE", "dorf"),
-		IncusNetwork:     value("DORF_INCUS_NETWORK", "incusbr0"),
-		IncusDiskSize:    value("DORF_INCUS_DISK_SIZE", "40GiB"),
-		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
-		Workspace:        "/workspace/job",
-		AppServerPort:    4500,
-		TurnTimeout:      45 * time.Minute,
-		EvidenceRoot:     value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
-		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
-		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
-		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
+		DatabaseURL:       value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
+		Harness:           harness,
+		SandboxProfile:    sandboxProfile,
+		IncusImage:        value("DORF_INCUS_IMAGE", "dorf"),
+		IncusNetwork:      value("DORF_INCUS_NETWORK", "incusbr0"),
+		IncusDiskSize:     value("DORF_INCUS_DISK_SIZE", "40GiB"),
+		GatewayStatePath:  value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
+		Workspace:         "/workspace/job",
+		AppServerPort:     4500,
+		TurnTimeout:       45 * time.Minute,
+		EvidenceRoot:      value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
+		GitHubMetadata:    value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
+		GitHubPrivateKey:  value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
+		GitHubAPIURL:      value("DORF_GITHUB_API_URL", "https://api.github.com"),
+		E2BAPIKey:         strings.TrimSpace(os.Getenv("E2B_API_KEY")),
+		E2BTemplate:       strings.TrimSpace(os.Getenv("DORF_E2B_TEMPLATE")),
+		E2BGatewayURL:     strings.TrimSpace(os.Getenv("DORF_E2B_PROVIDER_GATEWAY_URL")),
+		E2BSandboxTimeout: defaultE2BTimeout,
+	}
+	if raw := strings.TrimSpace(os.Getenv("DORF_E2B_ALLOW_INTERNET")); raw != "" {
+		allowed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("DORF_E2B_ALLOW_INTERNET must be true or false")
+		}
+		cfg.E2BAllowInternet = allowed
+	}
+	if raw := strings.TrimSpace(os.Getenv("DORF_E2B_SANDBOX_TIMEOUT")); raw != "" {
+		duration, err := time.ParseDuration(raw)
+		if err != nil || duration <= 0 || duration%time.Second != 0 {
+			return Config{}, fmt.Errorf("DORF_E2B_SANDBOX_TIMEOUT must be a positive whole-second Go duration")
+		}
+		cfg.E2BSandboxTimeout = duration
 	}
 	cfg.GatewayStatePath, err = filepath.Abs(cfg.GatewayStatePath)
 	if err != nil {

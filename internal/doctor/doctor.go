@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -36,16 +37,6 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 		}
 		checks = append(checks, Check{Name: name, Status: "failed", Detail: detail})
 	}
-	var platformErr error
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		platformErr = fmt.Errorf("found %s/%s; supported host is linux/amd64", runtime.GOOS, runtime.GOARCH)
-	}
-	add("host-platform", platformErr, "use an x86_64 Linux host; macOS cannot host the local Incus VM daemon")
-	kvm, kvmErr := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
-	if kvmErr == nil {
-		kvmErr = kvm.Close()
-	}
-	add("hardware-virtualization", kvmErr, "enable virtualization and grant this user read/write access to /dev/kvm")
 	add("host-capacity", HostCapacity(), "provide at least 4 GiB total memory and 20 GiB free on /")
 	add("postgresql", db.PingContext(ctx), "verify DORF_DATABASE_URL and local PostgreSQL is running")
 	var version string
@@ -69,7 +60,41 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 		err = fmt.Errorf("queue dorf_jobs is missing")
 	}
 	add("absurd-queue", err, "run dorf migrate")
-	_, err = exec.LookPath("incus")
+	switch cfg.SandboxProfile {
+	case config.SandboxProfileIncus:
+		addIncusChecks(ctx, cfg, add)
+	case config.SandboxProfileE2B:
+		adapter := e2b.Adapter{Config: e2b.AdapterConfig{Template: cfg.E2BTemplate, Workspace: cfg.Workspace, SandboxTimeout: cfg.E2BSandboxTimeout, ProcessTimeout: cfg.TurnTimeout, ProviderGatewayURL: cfg.E2BGatewayURL, AllowInternet: cfg.E2BAllowInternet}}
+		add("e2b-profile", adapter.Validate(), "configure the exact E2B template, whole-second timeout, workspace, and deployment-owned HTTPS /v1 Gateway URL")
+		var keyErr error
+		if strings.TrimSpace(cfg.E2BAPIKey) == "" {
+			keyErr = fmt.Errorf("E2B_API_KEY is empty")
+		}
+		add("e2b-api-key", keyErr, "provide the E2B project key only through the host environment")
+	default:
+		add("sandbox-profile", fmt.Errorf("unsupported Sandbox profile %q", cfg.SandboxProfile), "select incus or e2b")
+	}
+	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
+	repair := "connect the named provider and bind the broker to the private Incus bridge"
+	if cfg.SandboxProfile == config.SandboxProfileE2B {
+		repair = "connect the named provider; the deployment-owned HTTPS route must reach its private broker"
+	}
+	add("provider-route-authority", err, repair)
+	return checks
+}
+
+func addIncusChecks(ctx context.Context, cfg config.Config, add func(string, error, string)) {
+	var platformErr error
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		platformErr = fmt.Errorf("found %s/%s; supported host is linux/amd64", runtime.GOOS, runtime.GOARCH)
+	}
+	add("host-platform", platformErr, "use an x86_64 Linux host; macOS cannot host the local Incus VM daemon")
+	kvm, kvmErr := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+	if kvmErr == nil {
+		kvmErr = kvm.Close()
+	}
+	add("hardware-virtualization", kvmErr, "enable virtualization and grant this user read/write access to /dev/kvm")
+	_, err := exec.LookPath("incus")
 	add("incus-command", err, "install and initialize Incus; no Docker socket is used")
 	runner := incus.CommandRunner{}
 	if err == nil {
@@ -93,9 +118,6 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, connection string) 
 		err = fmt.Errorf("image %s is unavailable", cfg.IncusImage)
 	}
 	add("incus-image", err, "install the official credential-free Dorf image; the worker verifies its credential boundary before route installation")
-	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
-	add("provider-route-authority", err, "connect the named provider and bind the broker to the private Incus bridge")
-	return checks
 }
 
 func HostCapacity() error {

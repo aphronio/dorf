@@ -72,8 +72,49 @@ func TestLoadSelectsOneConcreteHarnessProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Harness != "pi" || cfg.IncusImage != "dorf" {
-		t.Fatalf("profile harness=%q image=%q", cfg.Harness, cfg.IncusImage)
+	if cfg.Harness != "pi" || cfg.SandboxProfile != SandboxProfileIncus || cfg.IncusImage != "dorf" {
+		t.Fatalf("profile harness=%q Sandbox=%q image=%q", cfg.Harness, cfg.SandboxProfile, cfg.IncusImage)
+	}
+}
+
+func TestLoadSelectsE2BProfileExplicitly(t *testing.T) {
+	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
+	t.Setenv("E2B_API_KEY", "secret-test-key")
+	t.Setenv("DORF_E2B_TEMPLATE", "dorf:exact-build")
+	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "https://gateway.example/v1")
+	t.Setenv("DORF_E2B_ALLOW_INTERNET", "true")
+	t.Setenv("DORF_E2B_SANDBOX_TIMEOUT", "42m")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SandboxProfile != SandboxProfileE2B || cfg.E2BTemplate != "dorf:exact-build" || cfg.E2BGatewayURL != "https://gateway.example/v1" || !cfg.E2BAllowInternet || cfg.E2BSandboxTimeout != 42*time.Minute {
+		t.Fatalf("E2B profile = %#v", cfg)
+	}
+}
+
+func TestLoadLeavesE2BRuntimeReadinessToComposition(t *testing.T) {
+	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
+	t.Setenv("E2B_API_KEY", "")
+	t.Setenv("DORF_E2B_TEMPLATE", "")
+	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SandboxProfile != SandboxProfileE2B || cfg.E2BAPIKey != "" || cfg.E2BTemplate != "" || cfg.E2BGatewayURL != "" {
+		t.Fatalf("incomplete E2B profile was not preserved for command-specific validation")
+	}
+}
+
+func TestLoadRejectsUnsupportedE2BHarness(t *testing.T) {
+	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
+	t.Setenv("E2B_API_KEY", "secret-test-key")
+	t.Setenv("DORF_E2B_TEMPLATE", "dorf:exact-build")
+	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "https://gateway.example/v1")
+	t.Setenv("DORF_HARNESS", "pi")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "only the codex Harness") {
+		t.Fatalf("unsupported E2B Harness error = %v", err)
 	}
 }
 

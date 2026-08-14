@@ -162,9 +162,9 @@ func admitFaultJob(t *testing.T, store postgres.Store, suffix string) spine.Job 
 		GitHubRepository:   "aphronio/dorf",
 		GitHubInstallation: "42",
 		BaseBranch:         "greenfield",
-		ProviderConnection: "primary",
-		Model:              "gpt-5.6-sol",
-		ReasoningEffort:    "high",
+		SandboxProfile:     "incus", ProviderConnection: "primary",
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "high",
 	})
 	if err != nil || !created {
 		t.Fatalf("admit fault Job=%#v created=%v err=%v", job, created, err)

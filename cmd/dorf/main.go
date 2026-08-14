@@ -20,6 +20,7 @@ import (
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
+	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -138,8 +139,11 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 		}
 		return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
 	}
-	incusSandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
-	sandbox := incus.Adapter{Sandbox: incusSandbox}
+	sandbox, err := sandboxForConfig(cfg)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
 	var agent terminal.Harness
 	switch cfg.Harness {
 	case codex.Harness:
@@ -159,8 +163,33 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace, Ownership: ownership}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
-	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client})
+	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client}, cfg.SandboxProfile)
 	return client, nil
+}
+
+func sandboxForConfig(cfg config.Config) (provider.Sandbox, error) {
+	switch cfg.SandboxProfile {
+	case config.SandboxProfileIncus:
+		return incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}}, nil
+	case config.SandboxProfileE2B:
+		if strings.TrimSpace(cfg.E2BAPIKey) == "" {
+			return nil, fmt.Errorf("invalid e2b Sandbox profile: E2B_API_KEY is empty")
+		}
+		adapter := e2b.Adapter{
+			Client: e2b.Client{APIKey: cfg.E2BAPIKey},
+			Config: e2b.AdapterConfig{
+				Template: cfg.E2BTemplate, Workspace: cfg.Workspace,
+				SandboxTimeout: cfg.E2BSandboxTimeout, ProcessTimeout: cfg.TurnTimeout,
+				ProviderGatewayURL: cfg.E2BGatewayURL, AllowInternet: cfg.E2BAllowInternet,
+			},
+		}
+		if err := adapter.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid e2b Sandbox profile: %w", err)
+		}
+		return adapter, nil
+	default:
+		return nil, fmt.Errorf("unsupported Sandbox profile %q", cfg.SandboxProfile)
+	}
 }
 
 func migrate(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
@@ -318,7 +347,7 @@ func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Con
 	if !doctor.Ready(checks) {
 		return fmt.Errorf("setup is not converged; apply the failed check remediations and rerun this command")
 	}
-	fmt.Fprintln(stdout, "Dorf is ready: Go, PostgreSQL, Absurd, Incus, the credential-free Codex image, and Provider Gateway checks passed")
+	fmt.Fprintf(stdout, "Dorf is ready: PostgreSQL, Absurd, Sandbox profile %s, Harness %s, and Provider Gateway checks passed\n", cfg.SandboxProfile, cfg.Harness)
 	return nil
 }
 
@@ -412,7 +441,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 		*branch = "dorf/" + spine.JobID(strings.TrimSpace(*key))
 	}
 	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	job, created, err := workflow.Admit(ctx, store, client, providers, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
+	job, created, err := workflow.Admit(ctx, store, client, providers, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, SandboxProfile: cfg.SandboxProfile, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
 	if err != nil {
 		return err
 	}
@@ -548,7 +577,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if assessment.Ready {
 		readiness = "ready"
 	}
-	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)

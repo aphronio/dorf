@@ -21,6 +21,7 @@ type AdapterConfig struct {
 	SandboxTimeout     time.Duration
 	ProcessTimeout     time.Duration
 	ProviderGatewayURL string
+	AllowInternet      bool
 }
 
 // Adapter exposes only E2B capabilities already earned by live proofs. Remote
@@ -51,7 +52,7 @@ func (a Adapter) ReconcileOwnedCreate(ctx context.Context, owner provider.Owners
 		return err
 	}
 	if present == nil {
-		if _, err := a.Client.Create(ctx, CreateRequest{Template: a.Config.Template, Timeout: a.Config.SandboxTimeout, Owner: identity, AllowedHostnames: allowedHostnames}); err != nil {
+		if _, err := a.Client.Create(ctx, CreateRequest{Template: a.Config.Template, Timeout: a.Config.SandboxTimeout, Owner: identity, AllowedHostnames: allowedHostnames, AllowInternet: a.Config.AllowInternet}); err != nil {
 			// Create is deliberately attempted once. A later durable retry uses
 			// FindOwned before deciding whether another mutation is safe.
 			return err
@@ -201,6 +202,22 @@ func (a Adapter) ProviderRouteURL(_ context.Context, _ string) (string, error) {
 		return "", err
 	}
 	return parsed.String(), nil
+}
+
+// Validate checks the immutable runtime-profile inputs without contacting E2B
+// or mutating provider state.
+func (a Adapter) Validate() error {
+	if strings.TrimSpace(a.Config.Template) == "" {
+		return fmt.Errorf("E2B Sandbox requires a pinned template reference")
+	}
+	if a.Config.SandboxTimeout <= 0 || a.Config.SandboxTimeout%time.Second != 0 {
+		return fmt.Errorf("E2B Sandbox timeout must be a positive whole number of seconds")
+	}
+	if strings.TrimSpace(a.Config.Workspace) == "" {
+		return fmt.Errorf("E2B Sandbox requires a workspace")
+	}
+	_, err := a.providerGatewayURL()
+	return err
 }
 
 func (a Adapter) providerGatewayURL() (*url.URL, error) {

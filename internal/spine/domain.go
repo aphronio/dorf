@@ -59,6 +59,7 @@ type Job struct {
 	GitHubRepository        string       `json:"github_repository,omitempty"`
 	GitHubInstallation      string       `json:"github_installation_id,omitempty"`
 	BaseBranch              string       `json:"base_branch,omitempty"`
+	SandboxProfile          string       `json:"sandbox_profile"`
 	ProviderConnection      string       `json:"provider_connection"`
 	Model                   string       `json:"model"`
 	ReasoningEffort         string       `json:"reasoning_effort"`
