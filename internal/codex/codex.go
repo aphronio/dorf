@@ -10,11 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/incus"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
@@ -30,7 +29,7 @@ const (
 )
 
 type Agent struct {
-	Sandbox incus.Sandbox
+	Sandbox provider.Sandbox
 	Port    int
 	Timeout time.Duration
 }
@@ -39,12 +38,29 @@ const Harness = "codex"
 
 func (a Agent) Name() string { return Harness }
 
-func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, _ string) error {
-	return a.Sandbox.InstallRoute(ctx, sandboxName, baseURL, key)
+func (a Agent) InstallRoute(ctx context.Context, owner provider.Ownership, baseURL, key, _ string) error {
+	config := fmt.Sprintf("model_provider = \"dorf\"\n\n[model_providers.dorf]\nname = \"Dorf Provider Gateway\"\nbase_url = %q\nenv_key = \"DORF_PROVIDER_ROUTE_KEY\"\nwire_api = \"responses\"\nsupports_websockets = true\nrequires_openai_auth = false\n", baseURL)
+	input := []byte(strings.ReplaceAll(config, "\n", "\\n") + "\n" + key + "\n")
+	script := "umask 077; mkdir -p /root/.codex /root/.config/dorf; IFS= read -r config; printf '%b' \"$config\" > /root/.codex/config.toml; IFS= read -r key; printf '%s\\n' \"$key\" > /root/.config/dorf/provider-route.key"
+	result, err := a.Sandbox.Exec(ctx, owner, input, "bash", "-lc", script)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("install Codex scoped provider route: %s", strings.TrimSpace(result.Stderr))
+	}
+	return nil
 }
 
-func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
-	return a.Sandbox.RemoveRoute(ctx, sandboxName)
+func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error {
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "rm", "-f", "/root/.config/dorf/provider-route.key", "/root/.codex/config.toml")
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("remove Codex scoped provider route: %s", strings.TrimSpace(result.Stderr))
+	}
+	return nil
 }
 
 type TurnOutcome = spine.HarnessTurn
@@ -71,16 +87,16 @@ type reviewVisibilityError struct{ reason string }
 func (e *reviewVisibilityError) Error() string                   { return e.reason }
 func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
-	threadID, turn, err := a.startInitialTurn(ctx, sandboxName, workspace, agentRunID, input, model, effort, "danger-full-access")
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
+	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access")
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := spine.HarnessBinding{Harness: Harness}
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
 		binding.ThreadID, binding.Turn = threadID, turn
 		return err
@@ -88,11 +104,11 @@ func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace
 	return binding, err
 }
 
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := spine.HarnessBinding{Harness: Harness}
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
 		binding.ThreadID, binding.Turn = threadID, turn
 		return err
@@ -100,11 +116,11 @@ func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, workspa
 	return binding, err
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
-	err := a.withReviewServer(ctx, sandboxName, owner, func(protocol *protocol) error {
+	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		missingAttempts := 0
 		for {
 			observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
@@ -140,12 +156,12 @@ func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, workspace 
 	return binding, err
 }
 
-func (a Agent) startInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID, input, model, effort, capability string) (string, TurnOutcome, error) {
+func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort, capability string) (string, TurnOutcome, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var sessionID string
 	var outcome TurnOutcome
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
 		sessionID, outcome, err = protocol.reconcileInitialTurn(ctx, workspace, agentRunID, input, model, effort, capability)
 		return err
@@ -153,12 +169,12 @@ func (a Agent) startInitialTurn(ctx context.Context, sandboxName, workspace, age
 	return sessionID, outcome, err
 }
 
-func (a Agent) ReadInitialTurns(ctx context.Context, sandboxName, workspace string) (spine.HarnessHistory, error) {
+func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, workspace string) (spine.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var threadID string
 	var turns []TurnOutcome
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
 		threadID, turns, err = protocol.inspectInitialTurns(ctx, workspace)
 		return err
@@ -166,11 +182,11 @@ func (a Agent) ReadInitialTurns(ctx context.Context, sandboxName, workspace stri
 	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) ReadTurns(ctx context.Context, sandboxName, threadID string) (spine.HarnessHistory, error) {
+func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var turns []TurnOutcome
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
 		turns, err = protocol.readTurns(ctx, threadID)
 		return err
@@ -178,11 +194,11 @@ func (a Agent) ReadTurns(ctx context.Context, sandboxName, threadID string) (spi
 	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var outcome TurnOutcome
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
 		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
@@ -190,11 +206,11 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, 
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
-func (a Agent) SteerTurn(ctx context.Context, sandboxName, sessionID, turnID, agentRunID, input string) (string, error) {
+func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID, input string) (string, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var acceptedTurnID string
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		var err error
 		acceptedTurnID, err = protocol.steerTurn(ctx, sessionID, turnID, agentRunID, input)
 		return err
@@ -202,11 +218,11 @@ func (a Agent) SteerTurn(ctx context.Context, sandboxName, sessionID, turnID, ag
 	return acceptedTurnID, err
 }
 
-func (a Agent) WaitTurn(ctx context.Context, sandboxName, threadID, turnID string) (spine.HarnessBinding, error) {
+func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	outcome := TurnOutcome{ID: turnID, Status: "running"}
-	err := a.withServer(ctx, sandboxName, func(protocol *protocol) error {
+	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		return protocol.pollTurn(ctx, threadID, turnID, &outcome)
 	})
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
@@ -219,40 +235,42 @@ func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.Can
 	return context.WithCancel(ctx)
 }
 
-func (a Agent) withServer(ctx context.Context, sandboxName string, fn func(*protocol) error) error {
-	address, err := a.Sandbox.PrivateIPv4(ctx, sandboxName)
+func (a Agent) withServer(ctx context.Context, owner provider.Ownership, fn func(*protocol) error) error {
+	endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
 	if err != nil {
 		return err
 	}
-	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
-	return a.withServerEndpoint(ctx, sandboxName, endpoint, fn)
+	return a.withServerEndpointController(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers()}, false, nil, fn)
 }
 
-func (a Agent) withReviewServer(ctx context.Context, sandboxName string, owner incus.ReviewMetadata, fn func(*protocol) error) error {
-	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+func (a Agent) withReviewServer(ctx context.Context, owner provider.Ownership, review provider.ReviewMetadata, fn func(*protocol) error) error {
+	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return err
 	}
-	address, err := a.Sandbox.PrivateIPv4(ctx, sandboxName)
+	endpoint, err := a.Sandbox.Endpoint(ctx, owner, a.Port)
 	if err != nil {
 		return err
 	}
-	endpoint := "ws://" + address + ":" + strconv.Itoa(a.Port)
-	return a.withReviewServerEndpoint(ctx, sandboxName, endpoint, owner, fn)
+	return a.withReviewServerAccess(ctx, owner, endpointAccess{listen: endpoint.ListenURL, dial: endpoint.DialURL, headers: endpoint.Headers()}, review, fn)
 }
 
-func (a Agent) withReviewServerEndpoint(ctx context.Context, sandboxName, endpoint string, owner incus.ReviewMetadata, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, sameEndpoint(endpoint), true, func() error {
+func (a Agent) withReviewServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, review provider.ReviewMetadata, fn func(*protocol) error) error {
+	return a.withReviewServerAccess(ctx, owner, sameEndpoint(endpoint), review, fn)
+}
+
+func (a Agent) withReviewServerAccess(ctx context.Context, owner provider.Ownership, endpoint endpointAccess, review provider.ReviewMetadata, fn func(*protocol) error) error {
+	return a.withServerEndpointController(ctx, owner, endpoint, true, func() error {
 		// Re-attest after reconnect or process replacement. The authentication
 		// token can rotate; only this exact host-owned Sandbox identity persists.
-		if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+		if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 			return err
 		}
 		return nil
 	}, fn)
 }
 
-func (a Agent) withServerEndpoint(ctx context.Context, sandboxName, endpoint string, fn func(*protocol) error) error {
-	return a.withServerEndpointController(ctx, sandboxName, sameEndpoint(endpoint), false, nil, fn)
+func (a Agent) withServerEndpoint(ctx context.Context, owner provider.Ownership, endpoint string, fn func(*protocol) error) error {
+	return a.withServerEndpointController(ctx, owner, sameEndpoint(endpoint), false, nil, fn)
 }
 
 type endpointAccess struct {
@@ -265,8 +283,8 @@ func sameEndpoint(endpoint string) endpointAccess {
 	return endpointAccess{listen: endpoint, dial: endpoint}
 }
 
-func (a Agent) withServerEndpointController(ctx context.Context, sandboxName string, endpoint endpointAccess, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
-	probe, err := a.probeServer(ctx, sandboxName, endpoint.listen)
+func (a Agent) withServerEndpointController(ctx context.Context, owner provider.Ownership, endpoint endpointAccess, reviewReadOnly bool, authorize func() error, fn func(*protocol) error) error {
+	probe, err := a.probeServer(ctx, owner, endpoint.listen)
 	if err != nil {
 		return err
 	}
@@ -294,7 +312,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName str
 	if err != nil {
 		return err
 	}
-	write, err := a.Sandbox.Exec(ctx, sandboxName, []byte(token+"\n"), "bash", "-lc", controlCapabilityScript())
+	write, err := a.Sandbox.Exec(ctx, owner, []byte(token+"\n"), "bash", "-lc", controlCapabilityScript())
 	if err != nil {
 		return err
 	}
@@ -302,7 +320,7 @@ func (a Agent) withServerEndpointController(ctx context.Context, sandboxName str
 		return fmt.Errorf("write Codex app-server capability: %s", strings.TrimSpace(write.Stderr))
 	}
 	launch := appServerScript(endpoint.listen, tokenSHA256(token), reviewReadOnly)
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", launch)
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", launch)
 	if err != nil {
 		return err
 	}
@@ -350,9 +368,9 @@ type serverProbe struct {
 	token   string
 }
 
-func (a Agent) probeServer(ctx context.Context, sandboxName, endpoint string) (serverProbe, error) {
+func (a Agent) probeServer(ctx context.Context, owner provider.Ownership, endpoint string) (serverProbe, error) {
 	script := probeServerScript(endpoint)
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script)
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", script)
 	if err != nil {
 		return serverProbe{}, err
 	}

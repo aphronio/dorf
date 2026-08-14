@@ -32,6 +32,7 @@ import (
 	"github.com/aphronio/dorf/internal/publication"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	"github.com/aphronio/dorf/internal/repository"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/version"
@@ -129,7 +130,16 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	sandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
+	store := postgres.Store{DB: db}
+	ownership := func(ctx context.Context, sandboxID string) (provider.Ownership, error) {
+		owned, err := store.Sandbox(ctx, sandboxID)
+		if err != nil {
+			return provider.Ownership{}, err
+		}
+		return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
+	}
+	incusSandbox := incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}
+	sandbox := incus.Adapter{Sandbox: incusSandbox}
 	var agent terminal.Harness
 	switch cfg.Harness {
 	case codex.Harness:
@@ -145,11 +155,10 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 		client.Close()
 		return nil, err
 	}
-	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent}
-	store := postgres.Store{DB: db}
+	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent, Ownership: ownership}
 	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
-	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
+	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace, Ownership: ownership}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client})
 	return client, nil
 }

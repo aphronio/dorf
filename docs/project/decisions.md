@@ -1577,8 +1577,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D067 — E2B is the next Sandbox portability proof target
 
-- **Status:** Accepted proof target; lifecycle, command, exact profile, and authenticated endpoint
-  proven — 2026-08-14
+- **Status:** Accepted proof target; provider-neutral Sandbox seam extracted after lifecycle,
+  command, exact-profile, and authenticated-endpoint proofs — 2026-08-14
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1599,6 +1599,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   consumer code. Extract the exact interface only after the E2B endpoint proof completes the second
   implementation's required surface; do not build a provider registry or speculative capability
   matrix.
+- **Extracted seam:** `internal/sandbox.Sandbox` is the single contract used by terminal,
+  repository, publication, Codex, and Pi. Every execution, endpoint, review, repository, and cleanup
+  call carries the complete Dorf ownership tuple; common code never guesses an E2B provider ID or
+  relies on the Dorf Sandbox name without its nonce. Incus resolves its deterministic instance while
+  E2B exhaustively resolves one opaque provider locator from exact metadata. Authenticated endpoints
+  expose separate guest-bind and controller-dial URLs plus cloned provider headers without exposing
+  their capability in formatting. Provider-route reachability is also adapter-owned: Incus validates
+  the exact configured private bridge, while E2B rejects the unproved remote route. A compile-time
+  implementation assertion covers both adapters and an import-boundary test rejects Incus or E2B
+  imports from common consumers. Startup still composes the supported Incus profile; this seam does
+  not claim E2B support.
 - **Recovery boundary:** E2B create has no caller-selected resource ID or documented idempotency key.
   Dorf therefore attaches its Job ID, durable Sandbox ID, and ownership nonce as provider metadata.
   A create request is never automatically replayed after possible dispatch. Reconciliation
@@ -1624,14 +1635,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   E2B's scoped traffic header and Codex's independent control capability. After abrupt controller
   loss, a second connection resumed the exact native thread and observed the exact submitted turn;
   no upstream model outcome was claimed. Every proof Sandbox, including failed iterations, was
-  ownership-deleted and final account inventory was empty.
+  ownership-deleted and final account inventory was empty. After extracting the common seam, the
+  live proof was rerun entirely through `internal/sandbox.Sandbox`: it reconciled creation without a
+  provider locator in Codex, executed the controller commands, resolved the authenticated endpoint,
+  recovered the exact thread and turn after abrupt loss, ownership-deleted the resource, and observed
+  it absent.
   Detailed observations remain in the
   [E2B capability proof](../research/e2b-capability-proof.md).
-- **Next earned boundary:** Extract the exact common Sandbox interface described above from the now
-  proven Incus and E2B surfaces, then make provider/profile composition select one implementation
-  without provider branches in common consumers. The next real terminal still requires a secure
-  E2B-to-owner Provider Gateway route before one no-change Codex Job can prove Action settlement and
-  cleanup. Do not add files, snapshots, a provider registry, or a capability matrix to this slice.
+- **Next earned boundary:** Design and prove the secure E2B-to-owner Provider Gateway route, then let
+  provider/profile composition admit E2B before one no-change Codex Job proves Action settlement and
+  cleanup through the common Sandbox contract. Do not add files, snapshots, a provider registry, or
+  a capability matrix to this slice.
 - **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
   network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
   client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn

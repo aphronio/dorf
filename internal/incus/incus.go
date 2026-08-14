@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -21,11 +22,7 @@ type Config struct {
 	Workspace string
 }
 
-type Result struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-}
+type Result = provider.Result
 
 type Runner interface {
 	Run(context.Context, string, []byte, ...string) (Result, error)
@@ -57,29 +54,17 @@ type Sandbox struct {
 	Sleep  func(time.Duration)
 }
 
-type ReviewMetadata struct {
-	JobID          string
-	AgentRunID     string
-	Revision       string
-	OwnershipNonce string
-}
+type ReviewMetadata = provider.ReviewMetadata
 
 // OwnershipMetadata is the host-owned identity of every Dorf Sandbox. The
 // SandboxID is also the exact Incus instance name; callers must never discover
 // or delete a Sandbox by a mutable workflow role.
-type OwnershipMetadata struct {
-	JobID          string
-	SandboxID      string
-	OwnershipNonce string
-}
+type OwnershipMetadata = provider.Ownership
 
-type OwnershipError struct{ Reason string }
-
-func (e *OwnershipError) Error() string         { return e.Reason }
-func (e *OwnershipError) AttentionNeeded() bool { return true }
+type OwnershipError = provider.OwnershipError
 
 func ownershipErrorf(format string, args ...any) error {
-	return &OwnershipError{Reason: fmt.Sprintf(format, args...)}
+	return provider.OwnershipErrorf(format, args...)
 }
 
 func (s Sandbox) Name(jobID string) string {
@@ -382,33 +367,6 @@ func (s Sandbox) BridgeIPv4(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("configured Incus network %s has invalid private ipv4.address %q", s.Config.Network, raw)
 	}
 	return address.String(), nil
-}
-
-func (s Sandbox) InstallRoute(ctx context.Context, name, baseURL, key string) error {
-	config := fmt.Sprintf("model_provider = \"dorf\"\n\n[model_providers.dorf]\nname = \"Dorf Provider Gateway\"\nbase_url = %q\nenv_key = \"DORF_PROVIDER_ROUTE_KEY\"\nwire_api = \"responses\"\nsupports_websockets = true\nrequires_openai_auth = false\n", baseURL)
-	script := "umask 077; mkdir -p /root/.codex /root/.config/dorf; IFS= read -r config; printf '%s' \"$config\" > /root/.codex/config.toml; IFS= read -r key; printf '%s\\n' \"$key\" > /root/.config/dorf/provider-route.key"
-	input := []byte(strings.ReplaceAll(config, "\n", "\\n") + "\n" + key + "\n")
-	// printf %b decodes the newline escapes without interpolating either value.
-	script = "umask 077; mkdir -p /root/.codex /root/.config/dorf; IFS= read -r config; printf '%b' \"$config\" > /root/.codex/config.toml; IFS= read -r key; printf '%s\\n' \"$key\" > /root/.config/dorf/provider-route.key"
-	result, err := s.Exec(ctx, name, input, "bash", "-lc", script)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return failure("install scoped provider route", result)
-	}
-	return nil
-}
-
-func (s Sandbox) RemoveRoute(ctx context.Context, name string) error {
-	result, err := s.Exec(ctx, name, nil, "rm", "-f", "/root/.config/dorf/provider-route.key", "/root/.codex/config.toml")
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 && !absent(result) {
-		return failure("remove scoped provider route", result)
-	}
-	return nil
 }
 
 func (s Sandbox) delete(ctx context.Context, name string) error {

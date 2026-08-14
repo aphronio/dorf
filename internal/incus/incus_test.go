@@ -186,17 +186,6 @@ func TestRepositoryCloneRefreshesAnExistingVerifiedOrigin(t *testing.T) {
 	}
 }
 
-func TestInstallRouteEnablesResponsesWebSockets(t *testing.T) {
-	runner := &scriptedRunner{}
-	sandbox := Sandbox{Runner: runner}
-	if err := sandbox.InstallRoute(context.Background(), "dorf-job", "http://10.42.0.1:8317/v1", "scoped-test-key"); err != nil {
-		t.Fatal(err)
-	}
-	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") {
-		t.Fatalf("installed Codex provider config does not enable Responses WebSockets: %q", runner.inputs)
-	}
-}
-
 func TestConfiguredBridgeIPv4ComesFromExactIncusNetwork(t *testing.T) {
 	runner := &scriptedRunner{}
 	sandbox := Sandbox{Config: Config{Network: "dorfbr0"}, Runner: runner}

@@ -1,17 +1,15 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/aphronio/dorf/internal/e2b"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
@@ -26,79 +24,55 @@ func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
 
 	owner := e2bEndpointOwnership(t)
 	client := e2b.Client{APIKey: apiKey}
+	sandbox := e2b.Adapter{Client: client, Config: e2b.AdapterConfig{
+		Template: template, Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second,
+	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	sandbox, err := client.Create(ctx, e2b.CreateRequest{Template: template, Timeout: 10 * time.Minute, Owner: owner})
-	if err != nil {
+	if err := sandbox.ReconcileOwnedCreate(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	providerID := sandbox.ProviderID
+	present := true
 	defer func() {
-		if providerID == "" {
+		if !present {
 			return
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cleanupCancel()
-		if err := client.DeleteOwned(cleanupCtx, providerID, owner); err != nil {
-			t.Errorf("cleanup E2B Sandbox %s: %v", providerID, err)
+		if err := sandbox.DeleteOwned(cleanupCtx, owner); err != nil {
+			t.Errorf("cleanup E2B Sandbox: %v", err)
 		}
 	}()
 
-	envd, err := client.ConnectEnvd(ctx, providerID, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
+	installed, err := sandbox.Exec(ctx, owner, []byte("endpoint-proof-only\n"), "bash", "-lc", `umask 077; install -d -m 700 /root/.config/dorf; cat > /root/.config/dorf/provider-route.key`)
+	if err != nil || installed.ExitCode != 0 {
+		t.Fatalf("install proof-only route marker: %#v, %v", installed, err)
 	}
-	executor, err := e2b.NewExecutor(envd, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoint, err := client.ConnectEndpoint(ctx, providerID, 4500, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	endpointExec(t, ctx, executor, []byte("endpoint-proof-only\n"), `umask 077; install -d -m 700 /root/.config/dorf; cat > /root/.config/dorf/provider-route.key`)
-	controlToken, err := randomToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpointExec(t, ctx, executor, []byte(controlToken+"\n"), controlCapabilityScript())
-	endpointExec(t, ctx, executor, nil, appServerScript(endpoint.ListenURL, tokenSHA256(controlToken), false))
-
-	var first *protocol
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		first, err = dialProtocol(ctx, endpoint.DialURL, controlToken, endpoint.Headers())
-		if err == nil {
-			break
+	agent := Agent{Sandbox: sandbox, Port: 4500, Timeout: 2 * time.Minute}
+	var threadID string
+	var turn TurnOutcome
+	if err := agent.withServer(ctx, owner, func(first *protocol) error {
+		var err error
+		threadID, err = first.startThread(ctx, "/workspace/job", "gpt-5.6-sol", "danger-full-access")
+		if err != nil {
+			return err
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("remote Codex endpoint did not become ready: %v", err)
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	threadID, err := first.startThread(ctx, "/workspace/job", "gpt-5.6-sol", "danger-full-access")
-	if err != nil {
+		turn, err = first.startTurn(ctx, threadID, "/workspace/job", "endpoint-proof-message", "persist this endpoint proof", "gpt-5.6-sol", "low", "danger-full-access")
 		first.connection.CloseNow()
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
-	turn, err := first.startTurn(ctx, threadID, "/workspace/job", "endpoint-proof-message", "persist this endpoint proof", "gpt-5.6-sol", "low", "danger-full-access")
-	if err != nil {
-		first.connection.CloseNow()
-		t.Fatal(err)
-	}
-	first.connection.CloseNow()
 
-	second, err := dialProtocol(ctx, endpoint.DialURL, controlToken, endpoint.Headers())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer second.connection.CloseNow()
-	if err := second.resumeThread(ctx, threadID); err != nil {
-		t.Fatal(err)
-	}
-	turns, err := second.readTurns(ctx, threadID)
-	if err != nil {
+	var turns []TurnOutcome
+	if err := agent.withServer(ctx, owner, func(second *protocol) error {
+		if err := second.resumeThread(ctx, threadID); err != nil {
+			return err
+		}
+		var err error
+		turns, err = second.readTurns(ctx, threadID)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	found := false
@@ -111,37 +85,35 @@ func TestLiveE2BAuthenticatedEndpointRecoversCodexThread(t *testing.T) {
 		t.Fatalf("reconnected controller did not observe exact turn %s: %#v", turn.ID, turns)
 	}
 
-	if err := client.DeleteOwned(ctx, providerID, owner); err != nil {
+	if err := sandbox.DeleteOwned(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	providerID = ""
-	t.Logf("proved remote endpoint %s with two scoped capabilities and recovered Codex thread %s turn %s", endpoint.DialURL, threadID, turn.ID)
-}
-
-func endpointExec(t *testing.T, ctx context.Context, executor *e2b.Executor, stdin []byte, script string) {
-	t.Helper()
-	var stdout, stderr bytes.Buffer
-	result, err := executor.Exec(ctx, e2b.ExecRequest{
-		Argv: []string{"/bin/bash", "-lc", script}, Stdin: stdin,
-		ProcessTimeout: 30 * time.Second, Stdout: &stdout, Stderr: &stderr,
-	})
-	if err != nil {
-		var exitErr *e2b.ExitError
-		if errors.As(err, &exitErr) {
-			t.Fatalf("endpoint command exited %d: %s", result.ExitCode, strings.TrimSpace(stderr.String()))
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		owned, err := sandbox.OwnedPresent(ctx, owner)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Fatal(err)
+		if !owned {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("common E2B Sandbox remained present after ownership-guarded deletion")
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
+	present = false
+	t.Logf("proved common E2B Sandbox contract and recovered Codex thread %s turn %s", threadID, turn.ID)
 }
 
-func e2bEndpointOwnership(t *testing.T) e2b.Ownership {
+func e2bEndpointOwnership(t *testing.T) provider.Ownership {
 	t.Helper()
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
 	}
 	nonce := hex.EncodeToString(raw)
-	return e2b.Ownership{
+	return provider.Ownership{
 		JobID:          "e2b-codex-endpoint-proof-" + nonce[:12],
 		SandboxID:      "dorf-e2b-codex-endpoint-" + nonce[:12],
 		OwnershipNonce: nonce,

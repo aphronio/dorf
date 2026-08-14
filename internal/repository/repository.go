@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/incus"
 	policy "github.com/aphronio/dorf/internal/review"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -46,7 +46,7 @@ var knownScopedSecrets = []scopedSecret{
 }
 
 type Manager struct {
-	Sandbox   incus.Sandbox
+	Sandbox   provider.Sandbox
 	Workspace string
 }
 
@@ -125,18 +125,18 @@ func ParseContract(contents string) (Contract, error) {
 	return contract, nil
 }
 
-func (m Manager) ChangeFacts(ctx context.Context, sandboxName, baseRevision, revision string) (policy.ChangeFacts, error) {
+func (m Manager) ChangeFacts(ctx context.Context, owner provider.Ownership, baseRevision, revision string) (policy.ChangeFacts, error) {
 	if !fullOID(baseRevision) || !fullOID(revision) {
 		return policy.ChangeFacts{}, fmt.Errorf("ChangeFacts require full immutable Git Revisions")
 	}
-	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
+	if err := m.validateGit(ctx, owner, revision); err != nil {
 		return policy.ChangeFacts{}, &AttentionError{Reason: err.Error()}
 	}
-	contract, err := m.LoadContract(ctx, sandboxName)
+	contract, err := m.LoadContract(ctx, owner)
 	if err != nil {
 		return policy.ChangeFacts{}, err
 	}
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "git", "-C", m.Workspace, "diff", "--name-only", "-z", baseRevision, revision, "--")
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "diff", "--name-only", "-z", baseRevision, revision, "--")
 	if err != nil {
 		return policy.ChangeFacts{}, err
 	}
@@ -194,8 +194,8 @@ func parseString(value string) (string, error) {
 	return result, nil
 }
 
-func (m Manager) LoadContract(ctx context.Context, sandboxName string) (Contract, error) {
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", "cd \"$1\" && test -f .dorf.toml && cat .dorf.toml", "dorf-contract", m.Workspace)
+func (m Manager) LoadContract(ctx context.Context, owner provider.Ownership) (Contract, error) {
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", "cd \"$1\" && test -f .dorf.toml && cat .dorf.toml", "dorf-contract", m.Workspace)
 	if err != nil {
 		return Contract{}, err
 	}
@@ -212,20 +212,20 @@ func (m Manager) LoadContract(ctx context.Context, sandboxName string) (Contract
 	return contract, nil
 }
 
-func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision, command string) (spine.CommandObservation, error) {
+func (m Manager) RunCommand(ctx context.Context, owner provider.Ownership, identity, revision, command string) (spine.CommandObservation, error) {
 	if !safeIdentity.MatchString(identity) {
 		return spine.CommandObservation{}, fmt.Errorf("unsafe command identity %q", identity)
 	}
-	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
+	if err := m.validateGit(ctx, owner, revision); err != nil {
 		return spine.CommandObservation{}, &AttentionError{Reason: err.Error()}
 	}
 	digestBytes := sha256.Sum256([]byte(command))
 	commandDigest := hex.EncodeToString(digestBytes[:])
-	redactionSecrets, err := m.redactionSecrets(ctx, sandboxName)
+	redactionSecrets, err := m.redactionSecrets(ctx, owner)
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", commandReceiptScript, "dorf-command", identity, revision, commandDigest, command, m.Workspace, strconv.Itoa(maxOutputBytes))
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", commandReceiptScript, "dorf-command", identity, revision, commandDigest, command, m.Workspace, strconv.Itoa(maxOutputBytes))
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
@@ -242,15 +242,15 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	if exitErr != nil || startErr != nil || finishErr != nil || finishedNS < startedNS {
 		return spine.CommandObservation{}, &AttentionError{Reason: "repository command receipt has invalid bounded outcome"}
 	}
-	stdout, err := m.receiptFile(ctx, sandboxName, identity, "stdout")
+	stdout, err := m.receiptFile(ctx, owner, identity, "stdout")
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
-	stderr, err := m.receiptFile(ctx, sandboxName, identity, "stderr")
+	stderr, err := m.receiptFile(ctx, owner, identity, "stderr")
 	if err != nil {
 		return spine.CommandObservation{}, err
 	}
-	if err := m.validateGit(ctx, sandboxName, revision); err != nil {
+	if err := m.validateGit(ctx, owner, revision); err != nil {
 		return spine.CommandObservation{}, &AttentionError{Reason: err.Error()}
 	}
 	stdout, stderr, redactions := redact(stdout, stderr, redactionSecrets)
@@ -258,10 +258,10 @@ func (m Manager) RunCommand(ctx context.Context, sandboxName, identity, revision
 	return spine.CommandObservation{Command: command, ExitCode: exitCode, StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC(), Stdout: []byte(stdout), Stderr: []byte(stderr), StdoutCut: lines[6] == "1", StderrCut: lines[7] == "1", Redactions: redactions}, nil
 }
 
-func (m Manager) redactionSecrets(ctx context.Context, sandboxName string) ([]scopedSecret, error) {
+func (m Manager) redactionSecrets(ctx context.Context, owner provider.Ownership) ([]scopedSecret, error) {
 	secrets := make([]scopedSecret, 0, len(knownScopedSecrets))
 	for _, known := range knownScopedSecrets {
-		result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", "test -r \"$1\" && cat \"$1\"", "dorf-secret", known.path)
+		result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", "test -r \"$1\" && cat \"$1\"", "dorf-secret", known.path)
 		if err != nil {
 			return nil, err
 		}
@@ -297,8 +297,8 @@ func truncate(value string, limit int) string {
 	return value
 }
 
-func (m Manager) receiptFile(ctx context.Context, sandboxName, identity, name string) (string, error) {
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "cat", "/tmp/dorf/command-receipts/"+identity+"/"+name)
+func (m Manager) receiptFile(ctx context.Context, owner provider.Ownership, identity, name string) (string, error) {
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "cat", "/tmp/dorf/command-receipts/"+identity+"/"+name)
 	if err != nil {
 		return "", err
 	}
@@ -308,11 +308,11 @@ func (m Manager) receiptFile(ctx context.Context, sandboxName, identity, name st
 	return result.Stdout, nil
 }
 
-func (m Manager) ObserveRevision(ctx context.Context, sandboxName, branch, comparisonBase string) (spine.RevisionObservation, error) {
+func (m Manager) ObserveRevision(ctx context.Context, owner provider.Ownership, branch, comparisonBase string) (spine.RevisionObservation, error) {
 	if !fullOID(comparisonBase) {
 		return spine.RevisionObservation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
 	if err != nil {
 		return spine.RevisionObservation{}, err
 	}
@@ -335,9 +335,9 @@ func (m Manager) ObserveRevision(ctx context.Context, sandboxName, branch, compa
 	return observation, nil
 }
 
-func (m Manager) validateGit(ctx context.Context, sandboxName, revision string) error {
+func (m Manager) validateGit(ctx context.Context, owner provider.Ownership, revision string) error {
 	script := "set -eu; cd \"$2\"; head=$(git rev-parse HEAD); test \"$head\" = \"$1\" || { echo \"HEAD=$head expected=$1\" >&2; exit 10; }; branch=$(git symbolic-ref --short HEAD); test -n \"$branch\" || { echo 'detached or unborn branch' >&2; exit 11; }; status=$(git status --porcelain=v1 --untracked-files=all); test -z \"$status\" || { echo \"dirty checkout: $status\" >&2; exit 12; }"
-	result, err := m.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
+	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
 	if err != nil {
 		return err
 	}

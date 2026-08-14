@@ -12,7 +12,10 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
+
+var repositoryTestOwner = provider.Ownership{SandboxID: "sandbox"}
 
 func TestParseNarrowRepositoryContract(t *testing.T) {
 	contract, err := ParseContract(`[commands]
@@ -69,11 +72,11 @@ func TestCommandReceiptExecutesExactCommandOnce(t *testing.T) {
 	manager := testManager(repo)
 	identity := "check-" + head[:12]
 	command := fmt.Sprintf("printf 'once\\n' >> %q; printf 'observed stdout\\n'; printf 'observed stderr\\n' >&2; exit 7", counter)
-	first, err := manager.RunCommand(context.Background(), "sandbox", identity, head, command)
+	first, err := manager.RunCommand(context.Background(), repositoryTestOwner, identity, head, command)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := manager.RunCommand(context.Background(), "sandbox", identity, head, command)
+	second, err := manager.RunCommand(context.Background(), repositoryTestOwner, identity, head, command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestObserveRevisionFromRealGitCheckout(t *testing.T) {
 				}
 			}
 
-			observation, err := testManager(repo).ObserveRevision(context.Background(), "sandbox", "dorf/proof", base)
+			observation, err := testManager(repo).ObserveRevision(context.Background(), repositoryTestOwner, "dorf/proof", base)
 			if tt.dirty {
 				if err == nil || !strings.Contains(err.Error(), "checkout is dirty") {
 					t.Fatalf("dirty observation error=%v", err)
@@ -156,7 +159,7 @@ func (localIncusRunner) Run(ctx context.Context, command string, input []byte, a
 }
 
 func testManager(workspace string) Manager {
-	return Manager{Sandbox: incus.Sandbox{Runner: localIncusRunner{}}, Workspace: workspace}
+	return Manager{Sandbox: incus.Adapter{Sandbox: incus.Sandbox{Runner: localIncusRunner{}}}, Workspace: workspace}
 }
 
 func testRepository(t *testing.T) (string, string) {

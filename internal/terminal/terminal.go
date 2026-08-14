@@ -3,27 +3,26 @@ package terminal
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"strings"
 
 	"github.com/aphronio/dorf/internal/gateway"
-	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Externals struct {
-	Sandbox incus.Sandbox
-	Gateway gateway.Gateway
-	Agent   Harness
+	Sandbox   provider.Sandbox
+	Gateway   gateway.Gateway
+	Agent     Harness
+	Ownership func(context.Context, string) (provider.Ownership, error)
 }
 
 func (e Externals) Harness() string { return e.Agent.Name() }
 
 func (e Externals) repository() repository.Manager {
-	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Config.Workspace}
+	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Workspace()}
 }
 
 func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
@@ -34,19 +33,23 @@ func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spi
 }
 
 func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
-	if sandbox.JobID != job.ID || sandbox.ID != e.Sandbox.Name(job.ID) {
+	if sandbox.JobID != job.ID || sandbox.ID != spine.MainSandboxName(job.ID) {
 		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
-	return e.Sandbox.ReconcileClone(ctx, sandbox.ID, job.Repository, job.Revision, job.Branch)
+	return e.Sandbox.ReconcileClone(ctx, ownershipMetadata(sandbox), job.Repository, job.Revision, job.Branch)
 }
 
 func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
-	manager := e.repository()
-	contract, err := manager.LoadContract(ctx, e.Sandbox.Name(job.ID))
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return spine.CommandObservation{}, nil, err
 	}
-	observation, err := manager.RunCommand(ctx, e.Sandbox.Name(job.ID), action.ID, job.StartingRevision, contract.Prepare)
+	manager := e.repository()
+	contract, err := manager.LoadContract(ctx, owner)
+	if err != nil {
+		return spine.CommandObservation{}, nil, err
+	}
+	observation, err := manager.RunCommand(ctx, owner, action.ID, job.StartingRevision, contract.Prepare)
 	checks := make([]spine.DeclaredCheck, 0, len(contract.Checks))
 	for _, check := range contract.Checks {
 		checks = append(checks, spine.DeclaredCheck{Name: check.Name, Command: check.Command})
@@ -55,15 +58,27 @@ func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action sp
 }
 
 func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job) (spine.RevisionObservation, error) {
-	return e.repository().ObserveRevision(ctx, e.Sandbox.Name(job.ID), job.Branch, job.Revision)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return spine.RevisionObservation{}, err
+	}
+	return e.repository().ObserveRevision(ctx, owner, job.Branch, job.Revision)
 }
 
 func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spine.Check) (spine.CommandObservation, error) {
-	return e.repository().RunCommand(ctx, e.Sandbox.Name(job.ID), check.ID, job.Revision, check.Command)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return spine.CommandObservation{}, err
+	}
+	return e.repository().RunCommand(ctx, owner, check.ID, job.Revision, check.Command)
 }
 
 func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (policy.ChangeFacts, error) {
-	return e.repository().ChangeFacts(ctx, e.Sandbox.Name(job.ID), job.StartingRevision, job.Revision)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return policy.ChangeFacts{}, err
+	}
+	return e.repository().ChangeFacts(ctx, owner, job.StartingRevision, job.Revision)
 }
 
 func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) error {
@@ -73,7 +88,7 @@ func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run
 	if run.InputRevision != job.Revision {
 		return fmt.Errorf("review checkout identity conflicts with current Revision")
 	}
-	workspace := e.Sandbox.Config.Workspace
+	workspace := e.Sandbox.Workspace()
 	if err := e.Sandbox.AttachReviewMetadata(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
 		return err
 	}
@@ -83,7 +98,11 @@ workspace=$1; revision=$2
 	test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 	git -C "$workspace" cat-file -e "$revision^{commit}"
 	git -C "$workspace" bundle create - HEAD`
-	bundle, err := e.Sandbox.Exec(ctx, e.Sandbox.Name(job.ID), nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.InputRevision)
+	mainOwner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return err
+	}
+	bundle, err := e.Sandbox.Exec(ctx, mainOwner, nil, "bash", "-c", sourceScript, "dorf-review-source", workspace, run.InputRevision)
 	if err != nil {
 		return err
 	}
@@ -109,7 +128,7 @@ head=$(git -C "$workspace" rev-parse HEAD)
 test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"`
-	result, err := e.Sandbox.Exec(ctx, run.SandboxID, []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.InputRevision)
+	result, err := e.Sandbox.Exec(ctx, ownershipMetadata(run.Sandbox), []byte(bundle.Stdout), "bash", "-c", targetScript, "dorf-review-checkout", workspace, run.InputRevision)
 	if err != nil {
 		return err
 	}
@@ -123,7 +142,7 @@ func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.Job, run 
 	if run.SandboxID == "" {
 		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
 	}
-	if err := e.Sandbox.AttestReview(ctx, run.SandboxID, reviewMetadata(job, run)); err != nil {
+	if err := e.Sandbox.AttestReview(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
 		return spine.ReviewCheckoutObservation{}, err
 	}
 	script := `set -eu
@@ -133,8 +152,8 @@ tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
 test "$head" = "$revision"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 printf '%s %s clean\n' "$head" "$tree"`
-	workspace := e.Sandbox.Config.Workspace
-	result, err := e.Sandbox.Exec(ctx, run.SandboxID, nil, "bash", "-c", script, "dorf-review-verify", workspace, run.InputRevision)
+	workspace := e.Sandbox.Workspace()
+	result, err := e.Sandbox.Exec(ctx, ownershipMetadata(run.Sandbox), nil, "bash", "-c", script, "dorf-review-verify", workspace, run.InputRevision)
 	if err != nil || result.ExitCode != 0 {
 		return spine.ReviewCheckoutObservation{}, fmt.Errorf("verify exact review checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
@@ -150,7 +169,7 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spi
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.StartStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.StartStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
@@ -168,7 +187,7 @@ func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.R
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
@@ -178,7 +197,7 @@ func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.Revi
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	binding, err := e.Agent.WaitStrictReviewTurn(ctx, run.SandboxID, e.Sandbox.Config.Workspace, reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
+	binding, err := e.Agent.WaitStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
@@ -199,12 +218,12 @@ func reviewInput(run spine.ReviewRunView) (string, error) {
 	return run.Request.Input, nil
 }
 
-func reviewMetadata(job spine.Job, run spine.ReviewRunView) incus.ReviewMetadata {
-	return incus.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
+func reviewMetadata(job spine.Job, run spine.ReviewRunView) provider.ReviewMetadata {
+	return provider.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
 }
 
-func ownershipMetadata(sandbox spine.Sandbox) incus.OwnershipMetadata {
-	return incus.OwnershipMetadata{JobID: sandbox.JobID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
+func ownershipMetadata(sandbox spine.Sandbox) provider.Ownership {
+	return provider.Ownership{JobID: sandbox.JobID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
 }
 
 func reviewEffort(role, implementationEffort string) string {
@@ -225,11 +244,8 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	if err != nil {
 		return err
 	}
-	bridgeIPv4, err := e.Sandbox.BridgeIPv4(ctx)
+	baseURL, err = e.Sandbox.ProviderRouteURL(ctx, baseURL)
 	if err != nil {
-		return err
-	}
-	if err := requireBridgeRoute(baseURL, bridgeIPv4); err != nil {
 		return err
 	}
 	route, err := e.Gateway.ReconcileCreate(ctx, job.ProviderConnection, routeConsumer(sandbox), expected.ID)
@@ -239,26 +255,42 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	if route.ID != expected.ID {
 		return fmt.Errorf("provider Gateway returned a foreign Route identity")
 	}
-	if err := e.Agent.InstallRoute(ctx, sandbox.ID, route.BaseURL, route.APIKey, job.Model); err != nil {
+	if err := e.Agent.InstallRoute(ctx, ownershipMetadata(sandbox), route.BaseURL, route.APIKey, job.Model); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
-	return e.Agent.StartInitialTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
+	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (spine.HarnessHistory, error) {
-	return e.Agent.ReadInitialTurns(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return spine.HarnessHistory{}, err
+	}
+	return e.Agent.ReadInitialTurns(ctx, owner, e.Sandbox.Workspace())
 }
 
 func (e Externals) AgentTurns(ctx context.Context, job spine.Job, threadID string) (spine.HarnessHistory, error) {
-	return e.Agent.ReadTurns(ctx, e.Sandbox.Name(job.ID), threadID)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return spine.HarnessHistory{}, err
+	}
+	return e.Agent.ReadTurns(ctx, owner, threadID)
 }
 
 func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
-	return e.Agent.StartTurn(ctx, e.Sandbox.Name(job.ID), e.Sandbox.Config.Workspace, delivery.AgentRun.ThreadID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
+	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	return e.Agent.StartTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ThreadID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
 }
 
 func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
@@ -269,11 +301,19 @@ func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {
-	return e.Agent.SteerTurn(ctx, e.Sandbox.Name(job.ID), delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
+	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
+	if err != nil {
+		return "", err
+	}
+	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
 }
 
 func (e Externals) AgentWait(ctx context.Context, job spine.Job, threadID, turnID string) (spine.HarnessBinding, error) {
-	return e.Agent.WaitTurn(ctx, e.Sandbox.Name(job.ID), threadID, turnID)
+	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	if err != nil {
+		return spine.HarnessBinding{}, err
+	}
+	return e.Agent.WaitTurn(ctx, owner, threadID, turnID)
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine.Sandbox, route spine.Route) error {
@@ -288,7 +328,7 @@ func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine
 		return presentErr
 	}
 	if present {
-		if err := e.Agent.RemoveRoute(ctx, sandbox.ID); err != nil {
+		if err := e.Agent.RemoveRoute(ctx, ownershipMetadata(sandbox)); err != nil {
 			return err
 		}
 	}
@@ -304,17 +344,11 @@ func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, sandbox spi
 
 func routeConsumer(sandbox spine.Sandbox) string { return "sandbox:" + sandbox.ID }
 
-func requireBridgeRoute(baseURL, bridgeIPv4 string) error {
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return fmt.Errorf("provider route URL is invalid: %w", err)
+func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Ownership, error) {
+	if e.Ownership == nil {
+		return provider.Ownership{}, fmt.Errorf("Sandbox ownership resolver is not configured")
 	}
-	address := net.ParseIP(parsed.Hostname())
-	bridge := net.ParseIP(bridgeIPv4)
-	if parsed.Scheme != "http" || address == nil || address.To4() == nil || bridge == nil || bridge.To4() == nil || !bridge.IsPrivate() || bridge.IsLoopback() || !address.Equal(bridge) {
-		return fmt.Errorf("provider route must use configured Incus bridge IPv4 %s", bridgeIPv4)
-	}
-	return nil
+	return e.Ownership(ctx, sandboxID)
 }
 
 var _ spine.ServiceExternals = Externals{}

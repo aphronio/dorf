@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 const (
@@ -91,13 +93,10 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("E2B API returned HTTP %d: %s", e.StatusCode, e.Message)
 }
 
-type OwnershipError struct{ Reason string }
-
-func (e *OwnershipError) Error() string         { return e.Reason }
-func (e *OwnershipError) AttentionNeeded() bool { return true }
+type OwnershipError = provider.OwnershipError
 
 func ownershipErrorf(format string, args ...any) error {
-	return &OwnershipError{Reason: fmt.Sprintf(format, args...)}
+	return provider.OwnershipErrorf(format, args...)
 }
 
 func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, error) {

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *testing.T) {
@@ -61,6 +63,21 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if strings.Contains(endpoint.String(), "scoped-traffic-token") {
 		t.Fatal("E2B endpoint string leaked its traffic token")
 	}
+	commonOwner := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	adapter := Adapter{Client: client, Config: AdapterConfig{SandboxTimeout: 10 * time.Minute, Workspace: "/workspace/job"}}
+	if present, err := adapter.OwnedPresent(context.Background(), commonOwner); err != nil || !present {
+		t.Fatalf("common Sandbox presence = %v, %v", present, err)
+	}
+	if err := adapter.AttestOwnership(context.Background(), commonOwner); err != nil {
+		t.Fatal(err)
+	}
+	commonEndpoint, err := adapter.Endpoint(context.Background(), commonOwner, 4500)
+	if err != nil || commonEndpoint.DialURL != endpoint.DialURL || commonEndpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
+		t.Fatalf("common Sandbox endpoint = %#v, %v", commonEndpoint, err)
+	}
+	if _, err := adapter.ProviderRouteURL(context.Background(), "https://gateway.example/v1"); err == nil || !strings.Contains(err.Error(), "remote-provider-gateway-route") {
+		t.Fatalf("unproved E2B route admission = %v", err)
+	}
 
 	foreign := owner
 	foreign.OwnershipNonce = strings.Repeat("b", 64)
@@ -70,10 +87,10 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if api.deleteCalls != 0 {
 		t.Fatalf("foreign ownership made %d delete calls", api.deleteCalls)
 	}
-	if err := client.DeleteOwned(context.Background(), discovered.ProviderID, owner); err != nil {
+	if err := adapter.DeleteOwned(context.Background(), commonOwner); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.DeleteOwned(context.Background(), discovered.ProviderID, owner); err != nil {
+	if err := adapter.DeleteOwned(context.Background(), commonOwner); err != nil {
 		t.Fatalf("idempotent delete: %v", err)
 	}
 	api.mu.Lock()

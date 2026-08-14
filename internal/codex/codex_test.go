@@ -13,9 +13,22 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
+
+func testSandbox(runner incus.Runner) incus.Adapter {
+	return incus.Adapter{Sandbox: incus.Sandbox{Runner: runner}}
+}
+
+func testOwner(sandboxID string) provider.Ownership {
+	return provider.Ownership{SandboxID: sandboxID}
+}
+
+func reviewOwner(sandboxID string, review provider.ReviewMetadata) provider.Ownership {
+	return provider.Ownership{JobID: review.JobID, SandboxID: sandboxID, OwnershipNonce: review.OwnershipNonce}
+}
 
 type probeRunner struct {
 	result incus.Result
@@ -66,9 +79,9 @@ func (r *reviewIsolationRunner) Run(_ context.Context, command string, _ []byte,
 
 func TestStrictReviewNeverDiscoversImplementationSandboxNativeState(t *testing.T) {
 	runner := &reviewIsolationRunner{}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}, Port: 4500}
+	agent := Agent{Sandbox: testSandbox(runner), Port: 4500}
 	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	_, err := agent.StartStrictReviewTurn(context.Background(), "dorf-review-owned", "/workspace/job", owner, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
+	_, err := agent.StartStrictReviewTurn(context.Background(), reviewOwner("dorf-review-owned", owner), "/workspace/job", owner, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
 	if err == nil {
 		t.Fatal("strict review unexpectedly passed the forced reviewer probe failure")
 	}
@@ -118,11 +131,22 @@ func TestAppServerLaunchRetainsCapabilityAndEnforcesDorfAutonomy(t *testing.T) {
 	}
 }
 
+func TestInstallRouteEnablesResponsesWebSockets(t *testing.T) {
+	runner := &probeRunner{}
+	agent := Agent{Sandbox: testSandbox(runner)}
+	if err := agent.InstallRoute(context.Background(), testOwner("dorf-job"), "http://10.42.0.1:8317/v1", "scoped-test-key", "gpt-test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") {
+		t.Fatalf("installed Codex provider config does not enable Responses WebSockets: %q", runner.inputs)
+	}
+}
+
 func TestLiveServerProbeReadsOnlyRetainedCapabilityForExactTrackedProcess(t *testing.T) {
 	runner := &probeRunner{result: incus.Result{Stdout: "1\n1\nprivate-capability\n"}}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	agent := Agent{Sandbox: testSandbox(runner)}
 	endpoint := "ws://10.0.0.2:4500"
-	probe, err := agent.probeServer(context.Background(), "sandbox-1", endpoint)
+	probe, err := agent.probeServer(context.Background(), testOwner("sandbox-1"), endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,9 +169,9 @@ func TestLiveExactServerReconnectUsesRetainedCapability(t *testing.T) {
 	server := testAppServer(t, token, false)
 	defer server.Close()
 	runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n" + token + "\n"}}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	agent := Agent{Sandbox: testSandbox(runner)}
 	called := false
-	if err := agent.withServerEndpoint(context.Background(), "sandbox-1", "ws"+strings.TrimPrefix(server.URL, "http"), func(_ *protocol) error {
+	if err := agent.withServerEndpoint(context.Background(), testOwner("sandbox-1"), "ws"+strings.TrimPrefix(server.URL, "http"), func(_ *protocol) error {
 		called = true
 		return nil
 	}); err != nil {
@@ -190,14 +214,14 @@ func TestRemoteEndpointSeparatesGuestBindFromAuthenticatedDial(t *testing.T) {
 	defer server.Close()
 
 	runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n" + token + "\n"}}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	agent := Agent{Sandbox: testSandbox(runner)}
 	headers := http.Header{"e2b-traffic-access-token": []string{trafficToken}}
 	endpoint := endpointAccess{
 		listen:  "ws://0.0.0.0:4500",
 		dial:    "ws" + strings.TrimPrefix(server.URL, "http"),
 		headers: headers,
 	}
-	if err := agent.withServerEndpointController(context.Background(), "sandbox-1", endpoint, false, nil, func(_ *protocol) error { return nil }); err != nil {
+	if err := agent.withServerEndpointController(context.Background(), testOwner("sandbox-1"), endpoint, false, nil, func(_ *protocol) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	probeCommand := strings.Join(runner.calls[0], " ")
@@ -233,11 +257,11 @@ func TestStrictReviewProcessRestartRotatesCapabilityButRecoversExactThreadAndTur
 	sandboxName := "dorf-review-owned"
 	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
 	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: owner, token: oldToken}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
+	agent := Agent{Sandbox: testSandbox(runner)}
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
 	recover := func() spine.HarnessHistory {
 		history := spine.HarnessHistory{Harness: Harness}
-		err := agent.withReviewServerEndpoint(context.Background(), sandboxName, endpoint, owner, func(protocol *protocol) error {
+		err := agent.withReviewServerEndpoint(context.Background(), reviewOwner(sandboxName, owner), endpoint, owner, func(protocol *protocol) error {
 			observedThread, turns, err := protocol.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
 			history.ThreadID, history.Turns = observedThread, turns
 			return err
@@ -271,8 +295,8 @@ func TestStrictReviewForeignOwnershipCannotClaimLogicalControllerIdentity(t *tes
 	foreign := actual
 	foreign.OwnershipNonce = strings.Repeat("d", 64)
 	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: actual, token: "retained"}
-	agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
-	_, err := agent.StartStrictReviewTurn(context.Background(), sandboxName, "/workspace/job", foreign, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
+	agent := Agent{Sandbox: testSandbox(runner)}
+	_, err := agent.StartStrictReviewTurn(context.Background(), reviewOwner(sandboxName, foreign), "/workspace/job", foreign, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
 	if err == nil || !strings.Contains(err.Error(), "ownership_nonce") {
 		t.Fatalf("foreign ownership error=%v", err)
 	}
@@ -284,8 +308,8 @@ func TestStrictReviewForeignOwnershipCannotClaimLogicalControllerIdentity(t *tes
 func TestLiveServerMissingOrRejectedCapabilityStopsWithoutReplacement(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n"}}
-		agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
-		err := agent.withServerEndpoint(context.Background(), "sandbox-1", "ws://127.0.0.1:1", func(_ *protocol) error { return nil })
+		agent := Agent{Sandbox: testSandbox(runner)}
+		err := agent.withServerEndpoint(context.Background(), testOwner("sandbox-1"), "ws://127.0.0.1:1", func(_ *protocol) error { return nil })
 		if err == nil || !strings.Contains(err.Error(), "no recoverable scoped capability") {
 			t.Fatalf("missing capability error=%v", err)
 		}
@@ -296,8 +320,8 @@ func TestLiveServerMissingOrRejectedCapabilityStopsWithoutReplacement(t *testing
 		server := testAppServer(t, token, true)
 		defer server.Close()
 		runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n" + token + "\n"}}
-		agent := Agent{Sandbox: incus.Sandbox{Runner: runner}}
-		err := agent.withServerEndpoint(context.Background(), "sandbox-1", "ws"+strings.TrimPrefix(server.URL, "http"), func(_ *protocol) error { return nil })
+		agent := Agent{Sandbox: testSandbox(runner)}
+		err := agent.withServerEndpoint(context.Background(), testOwner("sandbox-1"), "ws"+strings.TrimPrefix(server.URL, "http"), func(_ *protocol) error { return nil })
 		if err == nil || !strings.Contains(err.Error(), "could not be authenticated or inspected") || !strings.Contains(err.Error(), "rejected its scoped control capability") {
 			t.Fatalf("rejected capability error=%v", err)
 		}

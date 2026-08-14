@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/incus"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -27,13 +27,13 @@ const (
 )
 
 type Agent struct {
-	Sandbox incus.Sandbox
+	Sandbox provider.Sandbox
 	Timeout time.Duration
 }
 
 func (Agent) Name() string { return Harness }
 
-func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, model string) error {
+func (a Agent) InstallRoute(ctx context.Context, owner provider.Ownership, baseURL, key, model string) error {
 	config, err := json.Marshal(map[string]any{"providers": map[string]any{"dorf": map[string]any{
 		"baseUrl": baseURL,
 		"api":     "openai-responses",
@@ -45,7 +45,7 @@ func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, mode
 	}
 	input := append(append(config, '\n'), []byte(key+"\n")...)
 	script := "set -eu; umask 077; install -d -m 700 /root/.pi/agent /root/.config/dorf; IFS= read -r config; printf '%s\\n' \"$config\" > " + modelsFile + "; IFS= read -r key; printf '%s\\n' \"$key\" > " + routeKey
-	result, err := a.Sandbox.Exec(ctx, sandboxName, input, "bash", "-lc", script)
+	result, err := a.Sandbox.Exec(ctx, owner, input, "bash", "-lc", script)
 	if err != nil {
 		return err
 	}
@@ -55,9 +55,9 @@ func (a Agent) InstallRoute(ctx context.Context, sandboxName, baseURL, key, mode
 	return nil
 }
 
-func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
+func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error {
 	script := "set -eu; systemctl stop " + rpcUnit + " >/dev/null 2>&1 || true; rm -f " + rpcInput + " " + rpcEvents + " " + rpcErrors + " " + rpcConfig + " " + routeKey + " " + modelsFile + "; rmdir " + rpcDir + " >/dev/null 2>&1 || true"
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script)
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", script)
 	if err != nil {
 		return err
 	}
@@ -67,31 +67,31 @@ func (a Agent) RemoveRoute(ctx context.Context, sandboxName string) error {
 	return nil
 }
 
-func (a Agent) StartInitialTurn(ctx context.Context, sandboxName, workspace, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
-	threadID := sandboxName
-	if err := a.runTurn(ctx, sandboxName, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
+	threadID := owner.SandboxID
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return a.latestBinding(ctx, sandboxName, threadID)
+	return a.latestBinding(ctx, owner, threadID)
 }
 
-func (a Agent) ReadInitialTurns(ctx context.Context, sandboxName, _ string) (spine.HarnessHistory, error) {
-	return a.readHistory(ctx, sandboxName, sandboxName, true)
+func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, _ string) (spine.HarnessHistory, error) {
+	return a.readHistory(ctx, owner, owner.SandboxID, true)
 }
 
-func (a Agent) ReadTurns(ctx context.Context, sandboxName, threadID string) (spine.HarnessHistory, error) {
-	return a.readHistory(ctx, sandboxName, threadID, false)
+func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessHistory, error) {
+	return a.readHistory(ctx, owner, threadID, false)
 }
 
-func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
-	before, err := a.readHistory(ctx, sandboxName, threadID, false)
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
+	before, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, sandboxName, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	after, err := a.readHistory(ctx, sandboxName, threadID, false)
+	after, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
@@ -101,10 +101,10 @@ func (a Agent) StartTurn(ctx context.Context, sandboxName, workspace, threadID, 
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: after.Turns[len(after.Turns)-1]}, nil
 }
 
-func (a Agent) SteerTurn(ctx context.Context, sandboxName, _ string, targetTurnID, agentRunID, input string) (string, error) {
+func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string, targetTurnID, agentRunID, input string) (string, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	response, err := a.rpcCommand(ctx, sandboxName, agentRunID, "steer", input)
+	response, err := a.rpcCommand(ctx, owner, agentRunID, "steer", input)
 	if err != nil {
 		return "", err
 	}
@@ -114,11 +114,11 @@ func (a Agent) SteerTurn(ctx context.Context, sandboxName, _ string, targetTurnI
 	return targetTurnID, nil
 }
 
-func (a Agent) WaitTurn(ctx context.Context, sandboxName, threadID, turnID string) (spine.HarnessBinding, error) {
+func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (spine.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	for {
-		history, err := a.readHistory(ctx, sandboxName, threadID, false)
+		history, err := a.readHistory(ctx, owner, threadID, false)
 		if err != nil {
 			return spine.HarnessBinding{}, err
 		}
@@ -143,42 +143,42 @@ func (a Agent) WaitTurn(ctx context.Context, sandboxName, threadID, turnID strin
 	}
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, sandboxName, workspace string, owner incus.ReviewMetadata, submissionNonce string, input, model, effort string) (spine.HarnessBinding, error) {
-	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce string, input, model, effort string) (spine.HarnessBinding, error) {
+	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	if err := a.runTurn(ctx, sandboxName, workspace, sandboxName, submissionNonce, input, model, effort, true); err != nil {
+	if err := a.runTurn(ctx, owner, workspace, owner.SandboxID, submissionNonce, input, model, effort, true); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return a.latestBinding(ctx, sandboxName, sandboxName)
+	return a.latestBinding(ctx, owner, owner.SandboxID)
 }
 
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, sandboxName, _ string, owner incus.ReviewMetadata, _ string, _, _, _ string) (spine.HarnessBinding, error) {
-	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, _ string, _, _, _ string) (spine.HarnessBinding, error) {
+	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	history, err := a.readHistory(ctx, sandboxName, sandboxName, true)
+	history, err := a.readHistory(ctx, owner, owner.SandboxID, true)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
 	if len(history.Turns) == 0 {
 		return spine.HarnessBinding{}, nil
 	}
-	return spine.HarnessBinding{Harness: Harness, ThreadID: sandboxName, Turn: history.Turns[len(history.Turns)-1]}, nil
+	return spine.HarnessBinding{Harness: Harness, ThreadID: owner.SandboxID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, sandboxName, _ string, owner incus.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (spine.HarnessBinding, error) {
-	if err := a.Sandbox.AttestReview(ctx, sandboxName, owner); err != nil {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (spine.HarnessBinding, error) {
+	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return a.WaitTurn(ctx, sandboxName, threadID, turnID)
+	return a.WaitTurn(ctx, owner, threadID, turnID)
 }
 
-func (a Agent) latestBinding(ctx context.Context, sandboxName, threadID string) (spine.HarnessBinding, error) {
-	history, err := a.readHistory(ctx, sandboxName, threadID, false)
+func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessBinding, error) {
+	history, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
@@ -188,21 +188,21 @@ func (a Agent) latestBinding(ctx context.Context, sandboxName, threadID string) 
 	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) runTurn(ctx context.Context, sandboxName, workspace, threadID, requestID, input, model, effort string, readOnly bool) error {
+func (a Agent) runTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, requestID, input, model, effort string, readOnly bool) error {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	tools := "read,bash,edit,write,grep,find,ls"
 	if readOnly {
 		tools = "read,grep,find,ls"
 	}
-	before, err := a.readHistory(ctx, sandboxName, threadID, true)
+	before, err := a.readHistory(ctx, owner, threadID, true)
 	if err != nil {
 		return err
 	}
-	if err := a.ensureRPC(ctx, sandboxName, workspace, threadID, model, effort, tools); err != nil {
+	if err := a.ensureRPC(ctx, owner, workspace, threadID, model, effort, tools); err != nil {
 		return err
 	}
-	response, err := a.rpcCommand(ctx, sandboxName, requestID, "prompt", input)
+	response, err := a.rpcCommand(ctx, owner, requestID, "prompt", input)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (a Agent) runTurn(ctx context.Context, sandboxName, workspace, threadID, re
 		return &rpcRejectionError{reason: "Pi RPC prompt rejected before submission: " + response.Error}
 	}
 	for {
-		after, err := a.readHistory(ctx, sandboxName, threadID, true)
+		after, err := a.readHistory(ctx, owner, threadID, true)
 		if err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func (a Agent) runTurn(ctx context.Context, sandboxName, workspace, threadID, re
 	}
 }
 
-func (a Agent) ensureRPC(ctx context.Context, sandboxName, workspace, threadID, model, effort, tools string) error {
+func (a Agent) ensureRPC(ctx context.Context, owner provider.Ownership, workspace, threadID, model, effort, tools string) error {
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join([]string{workspace, threadID, model, effort, tools}, "\x00"))))
 	script := `set -eu
 root=$1; expected=$2; workspace=$3; thread=$4; model=$5; effort=$6; tools=$7
@@ -252,7 +252,7 @@ for _ in $(seq 1 50); do
 done
 cat ` + rpcErrors + ` >&2
 exit 1`
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script, "dorf-pi-rpc-start", rpcDir, digest, workspace, threadID, model, effort, tools)
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-pi-rpc-start", rpcDir, digest, workspace, threadID, model, effort, tools)
 	if err != nil {
 		return err
 	}
@@ -275,25 +275,25 @@ type rpcRejectionError struct{ reason string }
 func (e *rpcRejectionError) Error() string        { return e.reason }
 func (*rpcRejectionError) DefiniteNoSubmit() bool { return true }
 
-func (a Agent) rpcCommand(ctx context.Context, sandboxName, requestID, command, message string) (rpcResponse, error) {
+func (a Agent) rpcCommand(ctx context.Context, owner provider.Ownership, requestID, command, message string) (rpcResponse, error) {
 	request, err := json.Marshal(map[string]string{"id": requestID, "type": command, "message": message})
 	if err != nil {
 		return rpcResponse{}, err
 	}
 	request = append(request, '\n')
-	result, err := a.Sandbox.Exec(ctx, sandboxName, request, "bash", "-lc", "set -eu; cat > "+rpcInput)
+	result, err := a.Sandbox.Exec(ctx, owner, request, "bash", "-lc", "set -eu; cat > "+rpcInput)
 	if err != nil {
 		return rpcResponse{}, err
 	}
 	if result.ExitCode != 0 {
 		return rpcResponse{}, fmt.Errorf("send Pi RPC %s: %s", command, strings.TrimSpace(result.Stderr))
 	}
-	return a.waitRPCResponse(ctx, sandboxName, requestID, command)
+	return a.waitRPCResponse(ctx, owner, requestID, command)
 }
 
-func (a Agent) waitRPCResponse(ctx context.Context, sandboxName, requestID, command string) (rpcResponse, error) {
+func (a Agent) waitRPCResponse(ctx context.Context, owner provider.Ownership, requestID, command string) (rpcResponse, error) {
 	for {
-		result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "cat", rpcEvents)
+		result, err := a.Sandbox.Exec(ctx, owner, nil, "cat", rpcEvents)
 		if err != nil {
 			return rpcResponse{}, err
 		}
@@ -322,9 +322,9 @@ func (a Agent) waitRPCResponse(ctx context.Context, sandboxName, requestID, comm
 	}
 }
 
-func (a Agent) readHistory(ctx context.Context, sandboxName, threadID string, allowMissing bool) (spine.HarnessHistory, error) {
+func (a Agent) readHistory(ctx context.Context, owner provider.Ownership, threadID string, allowMissing bool) (spine.HarnessHistory, error) {
 	script := "set -eu; shopt -s nullglob; files=(" + sessionDir + "/*_\"$1\".jsonl); if (( ${#files[@]} == 0 )); then exit 0; fi; if (( ${#files[@]} != 1 )); then echo 'ambiguous Pi session identity' >&2; exit 2; fi; cat -- \"${files[0]}\""
-	result, err := a.Sandbox.Exec(ctx, sandboxName, nil, "bash", "-lc", script, "dorf-pi-history", threadID)
+	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-pi-history", threadID)
 	if err != nil {
 		return spine.HarnessHistory{}, err
 	}

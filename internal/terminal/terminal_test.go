@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -30,14 +31,21 @@ func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 }
 
 func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
-	if err := requireBridgeRoute("http://10.42.0.1:8317/v1", "10.42.0.1"); err != nil {
+	adapter := incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Network: "dorf0"}, Runner: bridgeAddressRunner{}}}
+	if _, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err != nil {
 		t.Fatal(err)
 	}
 	for _, value := range []string{"http://10.43.0.1:8317/v1", "http://127.0.0.1:8317/v1", "http://0.0.0.0:8317/v1", "http://192.0.2.10:8317/v1", "https://10.42.0.1:8317/v1"} {
-		if err := requireBridgeRoute(value, "10.42.0.1"); err == nil {
+		if _, err := adapter.ProviderRouteURL(context.Background(), value); err == nil {
 			t.Fatalf("accepted unsafe Sandbox route %s", value)
 		}
 	}
+}
+
+type bridgeAddressRunner struct{}
+
+func (bridgeAddressRunner) Run(context.Context, string, []byte, ...string) (incus.Result, error) {
+	return incus.Result{Stdout: "10.42.0.1/24\n"}, nil
 }
 
 func TestCodingTurnInputKeepsReviewFeedbackOpaque(t *testing.T) {
@@ -151,7 +159,15 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	sandbox := incus.Sandbox{Config: incus.Config{Workspace: "/workspace/job"}}
 	runner := &localReviewBoundaryRunner{implementationName: sandbox.Name(job.ID), reviewerName: run.Sandbox.ID, implementationPath: implementationPath, reviewerPath: reviewerPath, metadata: metadata}
 	sandbox.Runner = runner
-	externals := Externals{Sandbox: sandbox}
+	externals := Externals{
+		Sandbox: incus.Adapter{Sandbox: sandbox},
+		Ownership: func(_ context.Context, sandboxID string) (provider.Ownership, error) {
+			if sandboxID == run.Sandbox.ID {
+				return ownershipMetadata(run.Sandbox), nil
+			}
+			return provider.Ownership{JobID: job.ID, SandboxID: sandboxID}, nil
+		},
+	}
 	withoutSandbox := run
 	withoutSandbox.SandboxID = ""
 	if err := externals.PrepareReviewCheckout(context.Background(), job, withoutSandbox); err == nil {
@@ -172,7 +188,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	if _, err := os.Stat(filepath.Join(reviewerPath, "forged.txt")); !os.IsNotExist(err) {
 		t.Fatalf("implementation forged worktree crossed reviewer boundary: %v", err)
 	}
-	implementationSandbox := externals.Sandbox.Name(job.ID)
+	implementationSandbox := spine.MainSandboxName(job.ID)
 	var sourceImplementation, targetReviewer, verifyReviewer bool
 	for _, call := range runner.calls {
 		joined := strings.Join(call, " ")

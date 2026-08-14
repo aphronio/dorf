@@ -14,9 +14,9 @@ import (
 
 	"github.com/aphronio/dorf/internal/evidence"
 	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -447,8 +447,9 @@ func truncateUTF8(value string, limit int) string {
 }
 
 type GitRepository struct {
-	Sandbox   incus.Sandbox
+	Sandbox   provider.Sandbox
 	Workspace string
+	Ownership func(context.Context, string) (provider.Ownership, error)
 	Run       func(context.Context, []string, []string) ([]byte, []byte, error)
 }
 
@@ -456,12 +457,15 @@ func (r GitRepository) Relation(ctx context.Context, job spine.Job, remote strin
 	if !postgres.ValidRevision(remote) {
 		return "", &AttentionError{Reason: "remote head is not an exact commit OID"}
 	}
-	name := r.Sandbox.Name(job.ID)
-	present, err := r.Sandbox.Exec(ctx, name, nil, "git", "-C", r.Workspace, "cat-file", "-e", remote+"^{commit}")
+	owner, err := r.owner(ctx, job.ID)
+	if err != nil {
+		return "", err
+	}
+	present, err := r.Sandbox.Exec(ctx, owner, nil, "git", "-C", r.Workspace, "cat-file", "-e", remote+"^{commit}")
 	if err != nil || present.ExitCode != 0 {
 		return "", &AttentionError{Reason: fmt.Sprintf("remote head %s is not present in the admitted repository; cannot prove safe ancestry", remote)}
 	}
-	behind, err := r.Sandbox.Exec(ctx, name, nil, "git", "-C", r.Workspace, "merge-base", "--is-ancestor", remote, job.Revision)
+	behind, err := r.Sandbox.Exec(ctx, owner, nil, "git", "-C", r.Workspace, "merge-base", "--is-ancestor", remote, job.Revision)
 	if err != nil {
 		return "", err
 	}
@@ -471,7 +475,7 @@ func (r GitRepository) Relation(ctx context.Context, job spine.Job, remote strin
 	if behind.ExitCode != 1 {
 		return "", fmt.Errorf("classify remote head ancestry: git merge-base exited %d: %s", behind.ExitCode, boundedStderr(behind.Stderr))
 	}
-	ahead, err := r.Sandbox.Exec(ctx, name, nil, "git", "-C", r.Workspace, "merge-base", "--is-ancestor", job.Revision, remote)
+	ahead, err := r.Sandbox.Exec(ctx, owner, nil, "git", "-C", r.Workspace, "merge-base", "--is-ancestor", job.Revision, remote)
 	if err != nil {
 		return "", err
 	}
@@ -500,8 +504,11 @@ func (r GitRepository) Push(ctx context.Context, job spine.Job, token string) er
 	if token == "" {
 		return fmt.Errorf("repository push requires one ephemeral GitHub App token")
 	}
-	name := r.Sandbox.Name(job.ID)
-	verify, err := r.Sandbox.Exec(ctx, name, nil, "bash", "-c", `set -eu
+	owner, err := r.owner(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	verify, err := r.Sandbox.Exec(ctx, owner, nil, "bash", "-c", `set -eu
 workspace=$1; revision=$2; branch=$3; bundle=$4
 test "$(git -C "$workspace" rev-parse "refs/heads/$branch")" = "$revision"
 test "$(git -C "$workspace" rev-parse "$revision^{commit}")" = "$revision"
@@ -543,6 +550,13 @@ rm -f -- "$bundle"`, "dorf-publication-export", r.Workspace, job.Revision, job.B
 		return fmt.Errorf("push exact Revision to recorded head without force: %s", sanitize(stderr, token))
 	}
 	return nil
+}
+
+func (r GitRepository) owner(ctx context.Context, jobID string) (provider.Ownership, error) {
+	if r.Ownership == nil {
+		return provider.Ownership{}, fmt.Errorf("Sandbox ownership resolver is not configured")
+	}
+	return r.Ownership(ctx, spine.MainSandboxName(jobID))
 }
 
 func runGit(ctx context.Context, additions, args []string) ([]byte, []byte, error) {

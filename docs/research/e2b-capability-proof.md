@@ -60,6 +60,15 @@ the exact turn ID returned before loss. The turn had no working upstream Provide
 proves endpoint transport and native controller recovery, not a successful model outcome. All
 iterations were ownership-deleted and the final running/paused account inventory was empty.
 
+A sixth proof reran that authenticated-endpoint scenario through the extracted
+`internal/sandbox.Sandbox` contract rather than calling E2B lifecycle, envd, or endpoint types from
+Codex. The common ownership tuple drove create reconciliation, every command, endpoint resolution,
+reconnect, and deletion; the provider-generated ID and traffic capability remained inside the E2B
+adapter. Codex recovered native thread `019fffed-15cc-7372-8f47-2e63f7017cfa` and turn
+`019fffed-1702-7412-88dd-300a441f0ebc` after abrupt controller loss, then the adapter deleted the
+Sandbox and observed its exact ownership query absent. This still used only a proof marker rather
+than a working Provider Route, so it does not claim a model outcome or supported E2B profile.
+
 The broad capability template is named `dorf-capability-20260814-v1`; the combined Harness profile
 uses the exact build reference above. Detailed machine-readable capability evidence and the exact
 profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.json` and
