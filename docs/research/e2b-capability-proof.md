@@ -2,8 +2,9 @@
 
 Observed on 2026-08-14 with the E2B Hobby account, JavaScript SDK 2.39.0 for capability and template
 construction, and Dorf's native Go adapter for lifecycle, execution, and profile qualification. E2B
-is not yet a supported Dorf provider or the D063 second-provider terminal. The ranked candidate list
-remains the [Sandbox and VM Provider Watchlist](sandbox-vm-watchlist.md).
+completed the D063 second-provider Codex coding-to-PR terminal but is not yet a supported deployment
+profile because its reverse route remains disposable. The ranked candidate list remains the
+[Sandbox and VM Provider Watchlist](sandbox-vm-watchlist.md).
 
 ## Result
 
@@ -87,6 +88,28 @@ routes. The disposable tunnel stopped. General Sandbox internet access was expli
 this Job because clean repository setup follows changing dependency and redirect hosts; E2B remains
 default-deny when that profile option is absent.
 
+A ninth proof admitted a documentation-only modifying Job from exact remote Revision
+`b95373166af6a0ffee743c3c5840dedaa95a8c6f`. Codex committed Revision
+`3183e618329abd72f0697fd3a9f83e86a94dc91d`; both repository Checks passed, policy correctly selected
+no agent review, and Dorf pushed the exact branch and opened PR #134. GitHub CI passed. Closing that
+PR produced a rejected Outcome, after which Dorf revoked the scoped route before deleting the main
+Sandbox and completed both its run and cleanup tasks. Independent inventory found no matching E2B
+Sandbox and no Gateway route.
+
+A tenth proof admitted a focused E2B endpoint security-test Job from the same base. Codex added
+`internal/e2b/endpoint_test.go`, committed exact Revision
+`764f9312dd217b149e393c0ae1f31696894f4174`, and passed both repository Checks. Review policy selected
+one general Role because the non-documentation change was not mechanically classified. Dorf created
+a separately owned E2B reviewer Sandbox, transferred the immutable checkout by Git bundle, installed
+an independent scoped Provider Route, and ran Codex with immutable read-only capability. The reviewer
+returned no-material-issue feedback with observed Revision-bound Evidence; an unchanged follow-up
+settled on the original implementation thread. Dorf published PR #135, GitHub CI passed, and the PR
+merged as `f6961465f89b383d3ae0e84a207f64c4f2fba925`. Dorf observed the accepted Outcome, revoked the
+main route before deleting the main Sandbox, revoked the reviewer route before deleting the reviewer
+Sandbox, and completed both Absurd tasks. Independent final queries found zero Job-owned running or
+paused E2B Sandboxes and zero Gateway routes before the disposable tunnel stopped. No tunnel
+hostname or credential is recorded here.
+
 The broad capability template is named `dorf-capability-20260814-v1`; the combined Harness profile
 uses the exact build reference above. Detailed machine-readable capability evidence and the exact
 profile manifest are retained locally under ignored `.dorf/e2b-spike/evidence.json` and
@@ -106,9 +129,8 @@ template, Sandbox, evidence file, manifest, or logs.
   earn that surface rather than extending the command client speculatively.
 - The tested reverse path uses an unsupported disposable Quick Tunnel. A stable deployment-owned
   HTTPS route and domain remain unselected.
-- Checks, isolated review, publication, Proposal observation, and Outcome have not run through E2B.
 - The Hobby one-hour continuous runtime, sustained cost, regional behavior, service reliability,
   and the new custom runtime's detailed isolation guarantees were not evaluated.
 
-Do not call E2B a supported coding-to-PR provider until checks, isolated review, publication,
-Proposal observation, Outcome, and confirmed cleanup pass without provider branches in common code.
+E2B has completed the provider-neutral coding-to-PR proof. Do not call the disposable-tunnel profile
+a supported deployment until stable reverse-route operations and their recovery behavior are proven.

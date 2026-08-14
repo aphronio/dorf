@@ -1582,9 +1582,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D067 — E2B is the next Sandbox portability proof target
 
-- **Status:** Accepted proof target; provider-neutral composition, one durable no-change Codex Job,
-  and bounded Pi implementation and isolated-review execution proved after lifecycle, command,
-  exact-profile, authenticated-endpoint, and remote-route proofs — 2026-08-14
+- **Status:** Accepted; complete second-provider Codex and Pi coding-to-PR terminals proven —
+  2026-08-14
 - **Decision:** Pursue E2B as D063's second Sandbox provider one earned slice at a time. The first
   implementation is a narrow native Go control-plane client for one create attempt, exhaustive exact
   ownership discovery across running and paused Sandboxes, individual-resource attestation, and
@@ -1621,7 +1620,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Job's Sandbox profile; a worker configured for another profile leaves ordinary work or cleanup in
   observable attention before any provider call. This is a scalar authority fence, not a provider
   registry. The admitted E2B profile supports both Codex and Pi without provider branches in shared
-  consumers.
+  consumers. The proved coding-to-PR terminals do not make the disposable-tunnel profile a supported
+  deployment.
 - **Recovery boundary:** E2B create has no caller-selected resource ID or documented idempotency key.
   Dorf therefore attaches its Job ID, durable Sandbox ID, and ownership nonce as provider metadata.
   A create request is never automatically replayed after possible dispatch. Reconciliation
@@ -1669,15 +1669,27 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   check found zero exact E2B matches and zero Gateway routes. The disposable tunnel was then stopped.
   The Job used explicit general internet egress because clean repository setup follows package and
   redirect hosts that are not a stable static allowlist; the model route remained consumer-scoped.
+  Two modifying Jobs then completed the remaining terminal. The first produced exact Revision
+  `3183e618329abd72f0697fd3a9f83e86a94dc91d`, passed both repository Checks, correctly selected no
+  agent review for a documentation-only change, published PR #134, observed its closed rejection,
+  and cleaned its route and Sandbox. The second produced exact Revision
+  `764f9312dd217b149e393c0ae1f31696894f4174`, passed both Checks, and selected one general reviewer.
+  A separately owned E2B Sandbox received the exact checkout by Git bundle, ran Codex with immutable
+  read-only capability, and returned no-material-issue feedback with Revision-bound review Evidence.
+  The original implementation thread accepted that feedback without changing the Revision, Dorf
+  published PR #135, observed merge commit `f6961465f89b383d3ae0e84a207f64c4f2fba925` as an accepted
+  Outcome, then revoked each route before ownership-deleting its main and reviewer Sandboxes. Both
+  Absurd tasks completed, an independent E2B metadata query found zero Job-owned running or paused
+  Sandboxes, the Gateway route inventory was empty, and the disposable tunnel stopped. No provider,
+  route, tunnel, GitHub, or upstream credential entered durable evidence or repository state.
   Detailed observations remain in the
   [E2B capability proof](../research/e2b-capability-proof.md).
-  A later live E2B Pi proof exercised the main and isolated-review Sandboxes, Pi implementation and
-  review AgentRuns, and the declared check and smoke Checks. That bounded proof did not
-  include Proposal publication, Outcome observation, or cleanup.
-- **Next earned boundary:** Complete the modifying Pi Job through host-side Proposal publication,
-  Proposal observation, Outcome, and cleanup without changing common workflow code. Choose a stable
-  tunnel/domain only when that operational profile is ready; do not add files, snapshots, a provider
-  registry, or a capability matrix to this slice.
+  A later live E2B Pi Job completed implementation and isolated-review AgentRuns in separately owned
+  Sandboxes, exact-Revision Checks, host-side publication, a terminal Outcome, and cleanup through the
+  same common workflow. D068 records the exhausted-attempt recovery observed during that terminal.
+- **Next earned boundary:** Choose and prove a stable deployment-owned tunnel/domain only when the
+  operational E2B profile is ready. Do not add files, snapshots, waiting-Sandbox lifecycle
+  optimization, a provider registry, or a capability matrix until a concrete workflow earns it.
 - **Why:** E2B passed the bounded VM, Docker Compose, browser, authenticated endpoint, pause/resume,
   network, and cleanup capability spike without a fixed subscription. A handwritten lifecycle
   client keeps Dorf's reconciliation policy visible and small; adopting the full high-churn
