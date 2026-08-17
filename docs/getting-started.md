@@ -105,5 +105,10 @@ dorf abandon JOB_ID
 dorf inspect JOB_ID
 ```
 
+If `dorf inspect --json JOB_ID` reports the attached main task as `failed` after its underlying cause
+has been repaired, run `dorf retry JOB_ID`. This schedules exactly one more bounded attempt on the
+same Absurd task and retains its checkpoints. The receipt reports scheduling identities but does not
+claim that a worker has resumed it yet; use `dorf inspect JOB_ID` to observe current work and progress.
+
 Cleanup remains separately observable. Use `dorf cleanup JOB_ID` only to explicitly start or retry
 it, then inspect again.

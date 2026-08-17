@@ -186,6 +186,10 @@ may occur before a Proposal. Outcome and cleanup remain separate.
 - **External ambiguity:** inspect the external authority; never infer success from timeout or retry
   blindly.
 - **Poison work:** bounded attempts, time, cost, and attention stop infinite agent or provider spend.
+- **Operator retry:** after repairing the cause of an attached main task's terminal failure,
+  `dorf retry JOB_ID` uses Absurd's public retry API to add exactly one bounded attempt to that same
+  task. Existing checkpoints and Dorf facts remain authoritative; scheduling is not reported as
+  successful resumption.
 - **Code changes:** prefer short-lived Jobs, additive compatible task results where practical, and
   versioned workflow code. Let active Jobs drain on their pinned version rather than translating
   opaque execution history.

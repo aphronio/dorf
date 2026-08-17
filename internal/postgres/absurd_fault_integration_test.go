@@ -2,7 +2,9 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +13,67 @@ import (
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
+
+type retryProofResult struct {
+	JobID string `json:"job_id"`
+}
+
+func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
+	_, store, defaultClient := testDatabase(t)
+	defaultClient.Close()
+	ctx := context.Background()
+	queueName := fmt.Sprintf("dorf_retry_%d", time.Now().UnixNano())
+	client := newFaultClient(t, store, queueName)
+	const taskName = "dorf-retry-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
+		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable outage")
+	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
+
+	job := admitFaultJob(t, store, fmt.Sprintf("retry-%d", time.Now().UnixNano()))
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := client.FetchTaskResult(ctx, queueName, job.TaskID)
+	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
+		t.Fatalf("failed task=%#v err=%v", failed, err)
+	}
+	receipt, err := workflow.RetryFailedJob(ctx, store, client, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.JobID != job.ID || receipt.TaskID != job.TaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
+		t.Fatalf("retry receipt=%#v", receipt)
+	}
+	pending, err := client.FetchTaskResult(ctx, queueName, job.TaskID)
+	if err != nil || pending == nil || pending.State != absurd.TaskPending {
+		t.Fatalf("scheduled task=%#v err=%v", pending, err)
+	}
+	if _, err := workflow.RetryFailedJob(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "not currently failed") {
+		t.Fatalf("non-failed retry error=%v", err)
+	}
+	after, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != job {
+		t.Fatalf("retry mutated Dorf Job facts: before=%#v after=%#v", job, after)
+	}
+}
 
 type faultActionParams struct {
 	JobID string `json:"job_id"`

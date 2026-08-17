@@ -1212,8 +1212,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted workflow simplification — 2026-08-10
 - **Decision:** The main Job task runs two direct, Revision-scoped Steps: push the exact Revision, then
   create or adopt its exact pull request. Stable Actions reconcile Git and GitHub before an uncertain
-  effect repeats. There is no publication child task, attachment field, custom retry command, or
-  mirrored task state; operators use Absurd's public retry after resolving publication attention.
+  effect repeats. There is no publication child task, attachment field, or mirrored task state.
+  D068 later adds a thin Dorf command over Absurd's public retry without changing this ownership.
 - **Acceptance UI:** The same task observes the exact pull request. A comment from the repository
   `OWNER` or `COLLABORATOR` becomes one idempotent human Message whose `FromID` is the GitHub comment
   identity. Dorf acknowledges it with an eyes reaction. Once the same implementation flow has handled
@@ -1699,3 +1699,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   E2B cannot support Dorf's no-duplicate recovery or scoped Provider Gateway route, managed-service
   cost or reliability fails dogfood, or another provider reaches the complete D063 coding-to-PR
   terminal with materially less authority overlap.
+
+## D068 — Explicit Job retry rearms the same failed Absurd task once
+
+- **Status:** Accepted operator ergonomics after a real exhausted-attempt recovery — 2026-08-17
+- **Decision:** `dorf retry JOB_ID` is a thin operator command for an admission-open Job whose attached
+  main Absurd task is currently `failed`. It calls Absurd's public in-place retry without overriding
+  `max_attempts`, which atomically adds exactly one bounded attempt to the same task and retains its
+  checkpoints. It never spawns a replacement task, mutates Dorf facts, resumes a Sandbox directly,
+  or copies task attempts and checkpoint state into Dorf tables. Dorf maps the Job to its attached
+  main task and refuses closed admission; Absurd atomically refuses a missing or non-failed task.
+  Sandbox-profile admission remains the worker's responsibility when it claims the new run.
+- **Truthful receipt:** The command returns only the Job, task, new run and attempt identities and says
+  that retry was scheduled. Current work and continuation remain ordinary inspection projections;
+  they become true only when a matching worker runs and new progress is observed.
+- **Why:** A real E2B and Pi coding Job exhausted its automatic attempts during a host IPv4 outage
+  after durable work had already reached isolated review. Calling Absurd's public retry on the same
+  task scheduled attempt 6; the worker recovered the existing Job, Sandboxes, native harness state,
+  and workflow facts, then completed review, publication, a terminal Outcome, and cleanup. The recovery
+  proved the boundary, while requiring operators to construct a one-off Go client made the ordinary
+  repair path unnecessarily obscure.
+- **Refines:** D048's public-Absurd-API boundary and D054's earlier decision not to build a separate
+  publication retry mechanism. Absurd still owns retry eligibility, attempts, runs, and checkpoints.
+- **Reconsider when:** Different task classes need distinct operator policy, one-attempt rearming is
+  insufficient in measured operations, or Absurd exposes a safer first-class repair receipt that
+  should replace Dorf's thin projection.

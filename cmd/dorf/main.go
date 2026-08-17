@@ -83,6 +83,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return imageCommand(ctx, cfg, args[1:], stdout, stderr)
 	case "release-manifest":
 		return releaseManifest(args[1:], stdout, stderr)
+	case "retry":
+		client, err := absurdClient(db)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		return retry(ctx, store, client, args[1:], stdout, stderr)
 	}
 	client, err := application(db, cfg)
 	if err != nil {
@@ -127,7 +134,7 @@ func hostCommand(ctx context.Context, args []string, stdout, stderr io.Writer) e
 }
 
 func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
-	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
+	client, err := absurdClient(db)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +172,10 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace, Ownership: ownership}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
 	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client}, cfg.SandboxProfile)
 	return client, nil
+}
+
+func absurdClient(db *sql.DB) (*absurd.Client, error) {
+	return absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
 }
 
 func sandboxForConfig(cfg config.Config) (provider.Sandbox, error) {
@@ -610,6 +621,22 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	return nil
 }
 
+func retry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("retry", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("retry requires one Job ID")
+	}
+	receipt, err := workflow.RetryFailedJob(ctx, store, client, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, receipt)
+}
+
 func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("evidence", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -863,6 +890,6 @@ func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) 
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
