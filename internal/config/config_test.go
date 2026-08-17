@@ -107,14 +107,18 @@ func TestLoadLeavesE2BRuntimeReadinessToComposition(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnsupportedE2BHarness(t *testing.T) {
+func TestLoadE2BProfilePreservesAndAdmitsPi(t *testing.T) {
 	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
 	t.Setenv("E2B_API_KEY", "secret-test-key")
 	t.Setenv("DORF_E2B_TEMPLATE", "dorf:exact-build")
 	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "https://gateway.example/v1")
 	t.Setenv("DORF_HARNESS", "pi")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "only the codex Harness") {
-		t.Fatalf("unsupported E2B Harness error = %v", err)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SandboxProfile != SandboxProfileE2B || cfg.Harness != "pi" {
+		t.Fatalf("profile harness=%q Sandbox=%q", cfg.Harness, cfg.SandboxProfile)
 	}
 }
 

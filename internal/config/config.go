@@ -52,9 +52,6 @@ func Load() (Config, error) {
 	if sandboxProfile != SandboxProfileIncus && sandboxProfile != SandboxProfileE2B {
 		return Config{}, fmt.Errorf("DORF_SANDBOX_PROFILE must be incus or e2b")
 	}
-	if sandboxProfile == SandboxProfileE2B && harness != "codex" {
-		return Config{}, fmt.Errorf("the e2b Sandbox profile currently admits only the codex Harness")
-	}
 	cfg := Config{
 		DatabaseURL:       value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
 		Harness:           harness,

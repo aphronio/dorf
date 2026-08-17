@@ -19,8 +19,8 @@ performs idempotent initialization. It must not commandeer operator-owned Incus 
 persist derived readiness flags, expose credentials, or infer external proof from unit tests.
 
 Incus remains the default profile. The incremental E2B proof profile is selected with
-`DORF_SANDBOX_PROFILE=e2b` and currently admits Codex only. It requires the host-only `E2B_API_KEY`,
-an exact `DORF_E2B_TEMPLATE`, and an exact deployment-owned HTTPS `/v1` URL in
+`DORF_SANDBOX_PROFILE=e2b` and admits both Codex and Pi. It requires the host-only `E2B_API_KEY`, an
+exact `DORF_E2B_TEMPLATE`, and an exact deployment-owned HTTPS `/v1` URL in
 `DORF_E2B_PROVIDER_GATEWAY_URL`. `DORF_E2B_ALLOW_INTERNET=true` is an explicit broader egress policy,
 not an implicit adapter default. Jobs durably retain the selected profile so a differently
 configured worker cannot recover or clean them through the wrong provider authority.
