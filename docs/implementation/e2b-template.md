@@ -46,5 +46,5 @@ DORF_E2B_PROVIDER_GATEWAY_URL='https://<deployment-owned-host>/v1' \
 
 The test does not start or own the tunnel. It requires the configured Gateway Connection, admits only
 the exact HTTPS hostname to E2B egress, revokes the exact route before Sandbox cleanup, and never
-prints route or provider credentials. The Gateway authority documents the temporary proof and the
-uncommitted durable-domain boundary.
+prints route or provider credentials. The [Gateway authority](../project/provider-gateway.md) owns
+deployment reachability; D067 records the accepted durable E2B profile boundary.

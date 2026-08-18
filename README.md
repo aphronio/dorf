@@ -28,12 +28,14 @@ Coding Job
 | --- | --- |
 | Many kinds of Jobs | Coding Job to PR |
 | Choice of agent | Codex or Pi |
-| Choice of Sandbox | Local Incus on x86_64 Linux |
+| Choice of Sandbox | Local Incus; E2B proof profile |
 | Many ways to start Jobs | CLI |
 
 ## Build
 
-Dorf currently runs on x86_64 Linux with local Incus. macOS is not supported as a host.
+Dorf's default supported deployment runs on x86_64 Linux with local Incus. An admitted E2B proof
+profile requires an exact template and a deployment-owned HTTPS Provider Gateway route. Disposable
+tunnels are not a supported deployment. macOS is not supported as a host.
 
 ```bash
 go build -o ./bin/dorf ./cmd/dorf
@@ -56,8 +58,8 @@ Dorf records evidence and cleans up resources.
 Each coding Job gets its own Sandbox, clone, branch, checks, review, and pull request. Dorf can resume
 the Job without repeating completed work.
 
-Whole-setup portability across more Harnesses and Sandbox providers is direction, not current
-support. General workflow authoring follows real Core portability proof.
+The common Sandbox seam has been proved with Incus and E2B. Broader deployment profiles and general
+workflow authoring remain use-case-driven work.
 
 The main commands are:
 

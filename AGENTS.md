@@ -13,8 +13,6 @@ Read only the authority relevant to the task:
 - [Orchestration](docs/project/orchestration.md): coordinating and recovering bounded issues or epics.
 - [Core Setup](docs/implementation/core-setup.md): host setup, default deployment, and diagnostics.
 - [sqlc Guide](docs/project/sqlc.md): schema, queries, generation, transactions, and type mapping.
-- [Incus Image](docs/implementation/incus-image.md): image construction, release, and installation authorities.
-- [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and dogfood operations.
 - [Release Process](docs/releasing.md): release operator entry point.
 - [Sandbox and VM Watchlist](docs/research/sandbox-vm-watchlist.md): non-normative candidates and
   current evaluation priority; consult when discussing or selecting Sandbox or VM providers.
@@ -51,4 +49,5 @@ scripts/dev/setup.sh
 
 Run the PostgreSQL-backed integration suite locally before pushing changes to durable storage, SQL,
 transactions, or sequencing. CI repeats deterministic unit and PostgreSQL integration coverage;
-real Incus, Codex, and GitHub proof should match the boundary changed.
+real affected Sandbox, Harness, Provider Gateway, and external-authority proof should match the
+boundary changed.

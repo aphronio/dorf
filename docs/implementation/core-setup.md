@@ -11,8 +11,8 @@ Operator installation and diagnosis live in [Getting started](../getting-started
   composition root in [`cmd/dorf`](../../cmd/dorf)
 - Provider installation and connection: [`internal/gateway`](../../internal/gateway) and the
   [Provider Gateway boundary](../project/provider-gateway.md)
-- Image installation and verification: [`internal/release`](../../internal/release) and the
-  [Incus image authority map](incus-image.md)
+- Sandbox artifact construction and qualification: [`internal/release`](../../internal/release), the
+  [Incus image authority map](incus-image.md), and the [E2B template authority map](e2b-template.md)
 
 Setup must remain convergent and observational: rerunning it rechecks current authorities and only
 performs idempotent initialization. It must not commandeer operator-owned Incus configuration,
