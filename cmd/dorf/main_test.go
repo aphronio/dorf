@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 func TestSandboxForConfigSelectsOneConcreteAdapter(t *testing.T) {
@@ -93,5 +95,55 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	last := abandoned[len(abandoned)-1]
 	if last.Kind != "Outcome" || !strings.Contains(last.Detail, string(spine.OutcomeAbandoned)) || strings.Contains(last.Detail, "GitHub") {
 		t.Fatalf("pre-Proposal abandonment history = %#v", last)
+	}
+}
+
+func TestTaskResultProjectionPublishesOnlyBoundedFailureMessage(t *testing.T) {
+	view := projectTaskResult("task-1", &absurd.TaskResultSnapshot{
+		State:   absurd.TaskFailed,
+		Failure: json.RawMessage(`{"name":"*errors.errorString","message":"clone repository:\nCould not resolve host github.com","traceback":"secret stack details"}`),
+	})
+	if view.LastError != "clone repository: Could not resolve host github.com" {
+		t.Fatalf("last error = %q", view.LastError)
+	}
+	encoded, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hidden := range []string{"traceback", "secret stack details", `"failure"`} {
+		if strings.Contains(string(encoded), hidden) {
+			t.Fatalf("public task projection exposed %q: %s", hidden, encoded)
+		}
+	}
+
+	long := boundedTaskError(json.RawMessage(`{"message":"` + strings.Repeat("x", 400) + `"}`))
+	if got := len([]rune(long)); got != 320 || !strings.HasSuffix(long, "…") {
+		t.Fatalf("bounded error has %d runes", got)
+	}
+}
+
+func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
+	job := spine.Job{ID: "job-123", AdmissionOpen: true}
+	execution := taskResultView{TaskID: "task-1", State: absurd.TaskFailed, LastError: "clone repository: DNS failed"}
+	var output strings.Builder
+	renderWorkflowExecutionAttention(&output, job, execution, "Clone repository")
+	want := "  attention: workflow stopped\n" +
+		"  operation: Clone repository\n" +
+		"  reason: clone repository: DNS failed\n" +
+		"  next: repair the cause, then run dorf retry job-123\n"
+	if output.String() != want {
+		t.Fatalf("attention output:\n%s\nwant:\n%s", output.String(), want)
+	}
+
+	output.Reset()
+	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123"}, execution, "Complete")
+	if output.Len() != 0 {
+		t.Fatalf("closed Job rendered non-actionable attention: %q", output.String())
+	}
+
+	output.Reset()
+	renderWorkflowExecutionAttention(&output, job, taskResultView{State: absurd.TaskRunning}, "Clone repository")
+	if output.Len() != 0 {
+		t.Fatalf("running task rendered failure attention: %q", output.String())
 	}
 }

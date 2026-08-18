@@ -19,6 +19,9 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		if work.Kind != InvestigationWorkAction || work.ActionKind != want || work.Scope != sandbox.ID {
 			t.Fatalf("work=%#v want Action %s", work, want)
 		}
+		if want == spine.ActionRepositoryClone && work.Description() != "Clone repository" {
+			t.Fatalf("repository clone description=%q", work.Description())
+		}
 		snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: want, Scope: sandbox.ID, State: spine.ActionSucceeded})
 	}
 	if work := snapshot.Project(); work.Kind != InvestigationWorkDeliver || work.FactID != run.ID {

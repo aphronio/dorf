@@ -606,20 +606,20 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
 	history := workflowHistory(snapshot)
+	runExecution, err := fetchTaskResult(ctx, client, job.TaskID)
+	if err != nil {
+		return err
+	}
+	cleanupExecution, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
+	if err != nil {
+		return err
+	}
 	if *jsonOutput {
 		messages := make([]spine.Message, 0, len(snapshot.Deliveries))
 		agentRuns := make([]spine.AgentRun, 0, len(snapshot.Deliveries))
 		for _, delivery := range snapshot.Deliveries {
 			messages = append(messages, delivery.Message)
 			agentRuns = append(agentRuns, delivery.AgentRun)
-		}
-		runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
-		if err != nil {
-			return err
-		}
-		cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
-		if err != nil {
-			return err
 		}
 		view := map[string]any{
 			"job":                            job,
@@ -633,8 +633,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
 				"sandboxes": snapshot.Sandboxes, "messages": messages,
 			},
-			"absurd_run":     runEvidence,
-			"absurd_cleanup": cleanupEvidence,
+			"execution": map[string]any{
+				"main":    runExecution,
+				"cleanup": cleanupExecution,
+			},
 		}
 		return writeJSON(stdout, view)
 	}
@@ -642,7 +644,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if assessment.Ready {
 		readiness = "ready"
 	}
-	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Workflow, job.WorkflowRevision, job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
+	renderWorkflowExecutionAttention(stdout, job, runExecution, currentWork.Description())
+	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -703,11 +707,11 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		}
 		report = string(contents)
 	}
-	runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
+	runExecution, err := fetchTaskResult(ctx, client, job.TaskID)
 	if err != nil {
 		return err
 	}
-	cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
+	cleanupExecution, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
 	if err != nil {
 		return err
 	}
@@ -717,11 +721,14 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 			"job": job, "current_work": work, "report": snapshot.Report, "report_markdown": report,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
-			"absurd_run":                     runEvidence, "absurd_cleanup": cleanupEvidence,
+			"execution":                      map[string]any{"main": runExecution, "cleanup": cleanupExecution},
 		})
 	}
-	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  current work: %s",
-		job.ID, job.Workflow, job.WorkflowRevision, job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, work.Kind)
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
+	renderWorkflowExecutionAttention(stdout, job, runExecution, work.Description())
+	fmt.Fprintf(stdout, "  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n",
+		job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState)
+	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
 	}
@@ -1001,10 +1008,10 @@ func renderHistory(output io.Writer, entries []historyEntry) {
 }
 
 type taskResultView struct {
-	TaskID  string                 `json:"task_id,omitempty"`
-	State   absurd.TaskResultState `json:"state,omitempty"`
-	Result  json.RawMessage        `json:"result,omitempty"`
-	Failure json.RawMessage        `json:"failure,omitempty"`
+	TaskID    string                 `json:"task_id,omitempty"`
+	State     absurd.TaskResultState `json:"state,omitempty"`
+	Result    json.RawMessage        `json:"result,omitempty"`
+	LastError string                 `json:"last_error,omitempty"`
 }
 
 func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) (taskResultView, error) {
@@ -1018,7 +1025,49 @@ func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) 
 	if snapshot == nil {
 		return taskResultView{TaskID: taskID, State: "missing"}, nil
 	}
-	return taskResultView{TaskID: taskID, State: snapshot.State, Result: snapshot.Result, Failure: snapshot.Failure}, nil
+	return projectTaskResult(taskID, snapshot), nil
+}
+
+func projectTaskResult(taskID string, snapshot *absurd.TaskResultSnapshot) taskResultView {
+	if snapshot == nil {
+		return taskResultView{TaskID: taskID, State: "missing"}
+	}
+	return taskResultView{
+		TaskID:    taskID,
+		State:     snapshot.State,
+		Result:    snapshot.Result,
+		LastError: boundedTaskError(snapshot.Failure),
+	}
+}
+
+func boundedTaskError(raw json.RawMessage) string {
+	var failure struct {
+		Message string `json:"message"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &failure) != nil {
+		return ""
+	}
+	message := strings.Join(strings.Fields(failure.Message), " ")
+	const maxRunes = 320
+	runes := []rune(message)
+	if len(runes) > maxRunes {
+		message = string(runes[:maxRunes-1]) + "…"
+	}
+	return message
+}
+
+func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution taskResultView, operation string) {
+	if execution.State != absurd.TaskFailed || !job.AdmissionOpen {
+		return
+	}
+	fmt.Fprintln(output, "  attention: workflow stopped")
+	if operation = strings.TrimSpace(operation); operation != "" {
+		fmt.Fprintf(output, "  operation: %s\n", operation)
+	}
+	if execution.LastError != "" {
+		fmt.Fprintf(output, "  reason: %s\n", execution.LastError)
+	}
+	fmt.Fprintf(output, "  next: repair the cause, then run dorf retry %s\n", job.ID)
 }
 
 func usage(output io.Writer) error {
