@@ -48,27 +48,42 @@ type sandboxProfileStore interface {
 	SetCleanupAttention(context.Context, string, string) error
 }
 
+// Runtime is the provider-neutral execution bundle for one durably selected
+// Sandbox profile. Provider and Harness selection remain in the composition
+// root; workflows only consume their established contracts.
+type Runtime struct {
+	Service  spine.Service
+	Proposal ProposalRuntime
+	Profile  RuntimeProfile
+}
+
+type RuntimeResolver interface {
+	Resolve(context.Context, string) (Runtime, error)
+}
+
 func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime, profile RuntimeProfile) {
-	proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
-	proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
-	if proposal.PollInterval <= 0 {
-		proposal.PollInterval = 30 * time.Second
-	}
+func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver) {
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		if err := requireJobProfile(ctx, store, params.JobID, profile, CodingToProposalDefinition(), false); err != nil {
+		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID, CodingToProposalDefinition(), false)
+		if err != nil {
 			return TaskResultV1{}, err
+		}
+		proposal := runtime.Proposal
+		proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
+		proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
+		if proposal.PollInterval <= 0 {
+			proposal.PollInterval = 30 * time.Second
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
 		for {
-			work, err := RunJob(ctx, service, store, proposal, params.JobID)
+			work, err := RunJob(ctx, runtime.Service, store, proposal, params.JobID)
 			if err != nil {
 				return TaskResultV1{}, err
 			}
@@ -108,11 +123,12 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		if err := verifyAttachedTask(ctx, store, params.JobID, InvestigationTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		if err := requireJobProfile(ctx, store, params.JobID, profile, CodebaseInvestigationDefinition(), false); err != nil {
+		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID, CodebaseInvestigationDefinition(), false)
+		if err != nil {
 			return TaskResultV1{}, err
 		}
 		for {
-			work, err := RunCodebaseInvestigation(ctx, service, store, params.JobID)
+			work, err := RunCodebaseInvestigation(ctx, runtime.Service, store, params.JobID)
 			if err != nil {
 				return TaskResultV1{}, err
 			}
@@ -164,11 +180,12 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		if err != nil {
 			return TaskResultV1{}, err
 		}
-		if err := requireJobProfile(ctx, store, params.JobID, profile, definition, true); err != nil {
+		runtime, err := runtimeForLoadedJob(ctx, store, runtimes, job, definition, true)
+		if err != nil {
 			return TaskResultV1{}, err
 		}
 		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
-			if err := runCleanup(workCtx, service, store, params.JobID); err != nil {
+			if err := runCleanup(workCtx, runtime.Service, store, params.JobID); err != nil {
 				return TaskResultV1{}, err
 			}
 			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
@@ -176,58 +193,71 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func requireJobProfile(ctx context.Context, store sandboxProfileStore, jobID string, profile RuntimeProfile, expected Definition, cleanup bool) error {
+func runtimeForJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, jobID string, expected Definition, cleanup bool) (Runtime, error) {
 	job, err := store.Job(ctx, jobID)
 	if err != nil {
-		return err
+		return Runtime{}, err
 	}
+	return runtimeForLoadedJob(ctx, store, runtimes, job, expected, cleanup)
+}
+
+func runtimeForLoadedJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, job spine.Job, expected Definition, cleanup bool) (Runtime, error) {
+	jobID := job.ID
 	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
 		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
+		var attentionErr error
 		if cleanup {
-			err = store.SetCleanupAttention(ctx, jobID, detail)
+			attentionErr = store.SetCleanupAttention(ctx, jobID, detail)
 		} else {
-			err = store.SetWorkflowAttention(ctx, jobID, "workflow-profile", detail)
+			attentionErr = store.SetWorkflowAttention(ctx, jobID, "workflow-profile", detail)
 		}
-		if err != nil {
-			return fmt.Errorf("%s; record workflow mismatch attention: %w", detail, err)
+		if attentionErr != nil {
+			return Runtime{}, fmt.Errorf("%s; record workflow mismatch attention: %w", detail, attentionErr)
+		}
+		return Runtime{}, errors.New(detail)
+	}
+	if runtimes == nil {
+		return Runtime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
+	}
+	runtime, err := runtimes.Resolve(ctx, job.SandboxProfile)
+	if err != nil {
+		return Runtime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
+	}
+	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, cleanup); err != nil {
+		return Runtime{}, err
+	}
+	return runtime, nil
+}
+
+func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine.Job, profile RuntimeProfile, expected Definition, cleanup bool) error {
+	configured := strings.TrimSpace(profile.SandboxProfile)
+	if job.SandboxProfile != configured {
+		detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, configured)
+		var attentionErr error
+		if cleanup {
+			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
+		} else {
+			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "sandbox-profile", detail)
+		}
+		if attentionErr != nil {
+			return fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
 		}
 		return errors.New(detail)
 	}
 	if err := profile.Require(expected); err != nil {
 		detail := err.Error()
+		var attentionErr error
 		if cleanup {
-			err = store.SetCleanupAttention(ctx, jobID, detail)
+			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
 		} else {
-			err = store.SetWorkflowAttention(ctx, jobID, "provider-capabilities", detail)
+			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "provider-capabilities", detail)
 		}
-		if err != nil {
-			return fmt.Errorf("%s; record provider capability attention: %w", detail, err)
+		if attentionErr != nil {
+			return fmt.Errorf("%s; record provider capability attention: %w", detail, attentionErr)
 		}
 		return errors.New(detail)
 	}
-	return requireSandboxProfile(ctx, store, jobID, profile.SandboxProfile, cleanup)
-}
-
-func requireSandboxProfile(ctx context.Context, store sandboxProfileStore, jobID, configured string, cleanup bool) error {
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	configured = strings.TrimSpace(configured)
-	if configured != "" && job.SandboxProfile == configured {
-		return nil
-	}
-	detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker is configured for %q", job.SandboxProfile, configured)
-	var attentionErr error
-	if cleanup {
-		attentionErr = store.SetCleanupAttention(ctx, jobID, detail)
-	} else {
-		attentionErr = store.SetWorkflowAttention(ctx, jobID, "sandbox-profile", detail)
-	}
-	if attentionErr != nil {
-		return fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
-	}
-	return errors.New(detail)
+	return nil
 }
 
 func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
@@ -256,10 +286,10 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 	return result, nil
 }
 
-func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, input postgres.NewJob) (spine.Job, bool, error) {
+func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {
 	input.Workflow = spine.WorkflowCodingToProposal
 	input.WorkflowRevision = spine.CodingToProposalRevision
-	return admit(ctx, store, client, providers, ConfiguredRuntimeProfile(input.SandboxProfile), CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input)
+	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input)
 }
 
 func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {

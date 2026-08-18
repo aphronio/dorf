@@ -133,17 +133,24 @@ if [[ ! "$CANDIDATE_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
-export DORF_INCUS_IMAGE="$CANDIDATE_ALIAS"
-export DORF_INCUS_NETWORK="$CANDIDATE_NETWORK"
-export DORF_INCUS_DISK_SIZE="$CANDIDATE_ROOT_DISK_SIZE"
-"$BINARY" doctor --provider "$PROVIDER_CONNECTION"
 mkdir -p "$EVIDENCE_DIR"
 
 prove_harness() {
   local harness="$1"
+  local profile_name="release-$harness"
   local goal_file="$PROOF_ROOT/$harness-goal.txt"
   local admission inspection
-  export DORF_HARNESS="$harness"
+  if "$BINARY" profile show "$profile_name" >/dev/null 2>&1; then
+    "$BINARY" profile update "$profile_name" \
+      --provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
+      --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
+  else
+    "$BINARY" profile create "$profile_name" \
+      --provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
+      --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
+  fi
+  "$BINARY" profile verify "$profile_name"
+  "$BINARY" doctor --provider "$PROVIDER_CONNECTION" --profile "$profile_name"
   printf '%s\n' \
     'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
     >"$goal_file"
@@ -157,6 +164,7 @@ prove_harness() {
     --github-installation "$GITHUB_INSTALLATION_ID" \
     --base "${BASE_BRANCH:-main}" \
     --provider "$PROVIDER_CONNECTION" \
+    --profile "$profile_name" \
     --model gpt-5.6-sol \
     --reasoning low)"
   JOB_ID="$(jq -er .job_id <<<"$admission")"
@@ -212,7 +220,6 @@ verify_release_attestation() {
 
 prove_harness codex
 prove_harness pi
-unset DORF_HARNESS
 
 incus image export "$CANDIDATE_ALIAS" "$OUTPUT_DIR/$ARCHIVE_BASENAME" --vm
 PRODUCT_VERSION="$($BINARY version | awk '{print $2}')"

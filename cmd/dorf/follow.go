@@ -25,6 +25,7 @@ const (
 
 type followSnapshot struct {
 	Job             spine.Job
+	Profile         spine.SandboxProfile
 	Definition      workflow.Definition
 	History         []historyEntry
 	Operation       string
@@ -85,6 +86,10 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 	if err != nil {
 		return followSnapshot{}, err
 	}
+	profile, err := store.SandboxProfile(ctx, job.SandboxProfile)
+	if err != nil {
+		return followSnapshot{}, err
+	}
 	execution, err := fetchTaskResult(ctx, client, job.TaskID)
 	if err != nil {
 		return followSnapshot{}, err
@@ -104,7 +109,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			runs = append(runs, delivery.AgentRun)
 		}
 		return followSnapshot{
-			Job: snapshot.Job, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
+			Job: snapshot.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == workflow.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}, nil
@@ -115,7 +120,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		}
 		work := snapshot.Project()
 		return followSnapshot{
-			Job: snapshot.Job, Definition: workflow.CodebaseInvestigationDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
+			Job: snapshot.Job, Profile: profile, Definition: workflow.CodebaseInvestigationDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
 			NeedsAttention: work.Kind == workflow.InvestigationWorkAttention, AgentRuns: []spine.AgentRun{snapshot.Delivery.AgentRun},
 			Sandboxes: []spine.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
 		}, nil
@@ -286,7 +291,7 @@ func liveFollowStatuses(observedAt time.Time, snapshot followSnapshot) []string 
 		}
 		statuses = append(statuses, fmt.Sprintf("  %-12s %s", "AgentRun", detail))
 	}
-	provider := sandboxProviderName(snapshot.Job.SandboxProfile)
+	provider := sandboxRuntimeLabel(snapshot.Profile, snapshot.Job.SandboxProfile)
 	for _, sandbox := range provisionedSandboxes(snapshot.Job, snapshot.AgentRuns, snapshot.Sandboxes, snapshot.Actions) {
 		statuses = append(statuses, fmt.Sprintf("  %-12s %s · %s · provisioned %s", "Sandbox", sandbox.Label, provider, formatElapsed(observedAt.Sub(sandbox.Since))))
 	}
@@ -312,6 +317,13 @@ func sandboxProviderName(profile string) string {
 	default:
 		return profile
 	}
+}
+
+func sandboxRuntimeLabel(profile spine.SandboxProfile, selected string) string {
+	if profile.Name == "" || profile.Name != selected || profile.Provider == "" {
+		return sandboxProviderName(selected)
+	}
+	return profile.Name + " · " + sandboxProviderName(string(profile.Provider))
 }
 
 func interactiveFollowOutput(output io.Writer) bool {

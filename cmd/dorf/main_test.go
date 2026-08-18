@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,34 +10,62 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestSandboxForConfigSelectsOneConcreteAdapter(t *testing.T) {
-	local, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileIncus, IncusImage: "dorf", IncusNetwork: "incusbr0", IncusDiskSize: "40GiB", Workspace: "/workspace/job"})
+func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
+	var stdout, stderr strings.Builder
+	if err := profileCommand(context.Background(), postgres.Store{}, config.Config{}, []string{"replace"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), `unsupported profile command "replace"`) {
+		t.Fatalf("legacy mutation command error=%v", err)
+	}
+	if err := profileCommand(context.Background(), postgres.Store{}, config.Config{}, []string{"update"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "profile update requires NAME") {
+		t.Fatalf("update command error=%v", err)
+	}
+}
+
+func TestProfileInstallValidatesIdentityBeforeArtifactMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"Invalid_Name", "--release", "v1.2.3", "--harness", "codex"},
+		{"local", "--release", "v1.2.3", "--harness", "unknown"},
+	} {
+		var stdout, stderr strings.Builder
+		err := installOfficialIncusProfile(context.Background(), postgres.Store{}, args, &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "Sandbox profile") {
+			t.Fatalf("args=%v error=%v", args, err)
+		}
+	}
+}
+
+func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
+	local, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, spine.SandboxProfile{
+		Name: "local", Provider: spine.SandboxProviderIncus, Artifact: strings.Repeat("a", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := local.(incus.Adapter); !ok {
 		t.Fatalf("local adapter = %T", local)
 	}
-	managed, err := sandboxForConfig(config.Config{
-		SandboxProfile: config.SandboxProfileE2B, E2BAPIKey: "test-key", E2BTemplate: "dorf:exact-build",
+	managedProfile := spine.SandboxProfile{
+		Name: "managed", Provider: spine.SandboxProviderE2B, Artifact: "dorf:exact-build",
 		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
-		Workspace: "/workspace/job", TurnTimeout: 45 * time.Minute,
-	})
+	}
+	managed, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace/job", TurnTimeout: 45 * time.Minute}, managedProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := managed.(e2b.Adapter); !ok {
 		t.Fatalf("managed adapter = %T", managed)
 	}
-	if _, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileE2B, E2BTemplate: "dorf:exact-build", E2BSandboxTimeout: time.Minute, Workspace: "/workspace/job", E2BGatewayURL: "https://gateway.example/v1"}); err == nil || !strings.Contains(err.Error(), "E2B_API_KEY") {
+	if _, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, managedProfile); err == nil || !strings.Contains(err.Error(), "E2B_API_KEY") {
 		t.Fatalf("missing E2B API key error = %v", err)
 	}
-	if _, err := sandboxForConfig(config.Config{SandboxProfile: config.SandboxProfileE2B, E2BAPIKey: "test-key", E2BTemplate: "dorf:exact-build", E2BSandboxTimeout: time.Minute, Workspace: "/workspace/job", E2BGatewayURL: "http://gateway.example/v1"}); err == nil {
+	managedProfile.E2BGatewayURL = "http://gateway.example/v1"
+	if _, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace/job"}, managedProfile); err == nil {
 		t.Fatal("invalid remote Gateway URL was admitted")
 	}
 }

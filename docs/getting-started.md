@@ -24,29 +24,37 @@ Set the deployment database when the default local PostgreSQL DSN is not appropr
 export DORF_DATABASE_URL='postgresql:///dorf?host=/var/run/postgresql'
 ```
 
-## 2. Install the Sandbox image
+## 2. Initialize storage and install a Sandbox profile
 
 Use the same release tag as the application:
 
 ```bash
-dorf image install --release vX.Y.Z
+dorf migrate
+dorf profile install local-codex --release vX.Y.Z --harness codex
+dorf profile verify local-codex
+dorf profile set-default local-codex
 ```
 
 For an offline-prepared host, download the manifest and archive from that release and pass them
 explicitly:
 
 ```bash
-dorf image install --manifest MANIFEST.json --archive IMAGE.tar.gz
+dorf profile install local-codex \
+  --manifest MANIFEST.json --archive IMAGE.tar.gz --harness codex
 ```
 
-The CLI verifies release and image identity before import. Image construction, publication, and
-consumer-validation authorities are indexed in the [Incus image guide](implementation/incus-image.md).
+The CLI verifies release and image identity before import, then stores the exact fingerprint. The
+explicit profile verification creates one disposable Sandbox, runs Dorf's base functional probe,
+deletes it, and confirms absence before the profile can admit work. To bring an existing artifact,
+use `dorf profile create` with its provider-specific image or template reference. Image construction,
+publication, and consumer-validation authorities are indexed in the
+[Incus image guide](implementation/incus-image.md).
 
 ## 3. Connect the provider and initialize Dorf
 
 ```bash
-dorf provider connect chatgpt --name personal-chatgpt
-dorf setup --provider personal-chatgpt
+dorf provider connect chatgpt --name personal-chatgpt --profile local-codex
+dorf setup --provider personal-chatgpt --profile local-codex
 ```
 
 Provider state is deployment-owned and defaults under the XDG data directory. Override its location
@@ -62,6 +70,7 @@ access to the selected repository. Keep its metadata and private key at the path
 ```bash
 dorf doctor \
   --provider personal-chatgpt \
+  --profile local-codex \
   --contract .dorf.toml \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --github-repo OWNER/REPOSITORY \
@@ -73,8 +82,9 @@ Every failed fact includes a remediation.
 
 ## 5. Run a coding Job
 
-Codex is the default Harness. To use Pi, export `DORF_HARNESS=pi` for the Dorf commands and Worker.
-Both Harnesses use the same installed credential-free image.
+The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
+Create and verify a separate Pi profile when that Job should use Pi; both may reference the same
+exact credential-free image.
 
 Save the complete goal in `goal.txt`, then admit it with stable authority:
 

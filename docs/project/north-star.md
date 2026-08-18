@@ -203,8 +203,9 @@ automation canvas, graph framework, agent builder, or model/tool Harness.
 ## Current verified slice
 
 The supported product today remains one Go application using PostgreSQL and Absurd, one coding
-workflow, local Incus on the supported host as its Sandbox provider, Codex and Pi as its verified
-Harness profiles, and Git/GitHub as proposal and acceptance authorities. The implemented
+workflow, named verified Sandbox profiles, local Incus on the supported host, Codex and Pi, and
+Git/GitHub as proposal and acceptance authorities. E2B has proved the same complete workflow seam
+but still requires a stable deployment-owned remote Gateway route. The implemented
 `codebase-investigation` workflow is the next dogfood candidate, not yet an expanded support claim.
 This narrow support claim is evidence, not the permanent product boundary.
 

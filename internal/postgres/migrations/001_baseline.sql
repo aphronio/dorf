@@ -8,6 +8,43 @@ create table dorf.schema_migrations (
     applied_at timestamptz not null default clock_timestamp()
 );
 
+create table dorf.sandbox_profiles (
+    name text primary key check (name ~ '^[a-z][a-z0-9-]{0,62}$'),
+    provider text not null check (provider in ('incus','e2b')),
+    harness text not null check (harness in ('codex','pi')),
+    artifact text not null check (length(trim(artifact)) > 0),
+    incus_network text,
+    incus_disk_size text,
+    e2b_gateway_url text,
+    e2b_sandbox_timeout_seconds bigint,
+    e2b_allow_internet boolean,
+    is_default boolean not null default false,
+    created_at timestamptz not null default clock_timestamp(),
+    check (
+        (provider='incus' and incus_network is not null and incus_disk_size is not null and
+         length(trim(incus_network)) > 0 and length(trim(incus_disk_size)) > 0 and
+         e2b_gateway_url is null and e2b_sandbox_timeout_seconds is null and e2b_allow_internet is null) or
+        (provider='e2b' and incus_network is null and incus_disk_size is null and
+         e2b_gateway_url is not null and e2b_sandbox_timeout_seconds is not null and
+         length(trim(e2b_gateway_url)) > 0 and e2b_sandbox_timeout_seconds > 0 and e2b_allow_internet is not null)
+    )
+);
+create unique index sandbox_profiles_one_default on dorf.sandbox_profiles(is_default) where is_default;
+
+create table dorf.sandbox_profile_verifications (
+    profile_name text primary key references dorf.sandbox_profiles(name) on delete cascade,
+    contract_version text not null check (length(trim(contract_version)) > 0),
+    sandbox_id text not null unique check (length(trim(sandbox_id)) > 0),
+    ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
+    harness_version text,
+    attempted_at timestamptz not null default clock_timestamp(),
+    probe_completed_at timestamptz,
+    cleaned_at timestamptz,
+    last_error text,
+    check (probe_completed_at is null or (harness_version is not null and length(trim(harness_version)) > 0)),
+    check (cleaned_at is null or cleaned_at >= coalesce(probe_completed_at,attempted_at))
+);
+
 create table dorf.jobs (
     id text primary key,
     admission_key text not null unique,
@@ -17,7 +54,7 @@ create table dorf.jobs (
     repository text not null check (length(trim(repository)) > 0),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     branch text not null check (length(trim(branch)) > 0),
-    sandbox_profile text not null check (length(trim(sandbox_profile)) > 0),
+    sandbox_profile text not null references dorf.sandbox_profiles(name),
     github_repository text,
     github_installation_id text,
     base_branch text,
@@ -280,6 +317,8 @@ comment on table dorf.job_messages is 'Immutable client input and Job-local admi
 comment on table dorf.agent_runs is 'Harness Thread and Turn bindings plus lifecycle outcome; the harness owns transcript and context';
 comment on table dorf.evidence is 'Immutable content-addressed Evidence references; bytes live in deployment-owned storage';
 comment on table dorf.sandboxes is 'Job-owned isolated workstations used by one or more AgentRuns';
+comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider, artifact, and Harness definitions selected by Jobs';
+comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
 comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in Evidence storage';

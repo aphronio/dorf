@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,6 +56,32 @@ type Sandbox struct {
 }
 
 type ReviewMetadata = provider.ReviewMetadata
+
+// ResolveImageFingerprint turns an operator-friendly Incus alias or prefix
+// into the immutable image identity stored by a Sandbox profile.
+var imageFingerprintLine = regexp.MustCompile(`(?m)^Fingerprint:\s*([0-9a-fA-F]{64})\s*$`)
+
+func ResolveImageFingerprint(ctx context.Context, reference string, runner Runner) (string, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" {
+		return "", fmt.Errorf("Incus image reference is required")
+	}
+	if runner == nil {
+		runner = CommandRunner{}
+	}
+	result, err := runner.Run(ctx, "incus", nil, "image", "info", reference)
+	if err != nil {
+		return "", err
+	}
+	if result.ExitCode != 0 {
+		return "", failure("resolve Incus image", result)
+	}
+	match := imageFingerprintLine.FindStringSubmatch(result.Stdout)
+	if len(match) != 2 {
+		return "", fmt.Errorf("Incus image reference %q did not resolve to an exact fingerprint", reference)
+	}
+	return strings.ToLower(match[1]), nil
+}
 
 // OwnershipMetadata is the host-owned identity of every Dorf Sandbox. The
 // SandboxID is also the exact Incus instance name; callers must never discover

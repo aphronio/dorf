@@ -11,8 +11,8 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 
 Product direction and vocabulary live in the [North Star](north-star.md).
 
-The verified implementation is deliberately narrow: one Go application, one coding-to-PR workflow,
-PostgreSQL, Absurd, local Incus on the supported host, Codex and Pi, Git, and GitHub. A first
+The verified implementation is deliberately narrow: one Go application, two explicit workflows,
+PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. A first
 `codebase-investigation` implementation adds a second explicit coordinator and typed Report;
 its hermetic PostgreSQL terminal is proven while live dogfood remains the support gate. This
 architecture must keep both concrete paths clear without treating coding-specific or investigation-
@@ -229,17 +229,23 @@ product requirements; they are not implied by choosing Absurd.
 Deployment configuration owns host locations and credentials. Durable Jobs retain stable logical
 connection and provider identities, not controller filesystem paths or copied secrets.
 
+PostgreSQL owns each named Sandbox profile's provider, exact artifact, Harness, provider settings,
+default selection, and Dorf functional-verification receipt. A Job pins the selected profile name.
+The composition root resolves that durable name into one provider-neutral runtime bundle whenever
+the Job runs or cleans up. Profiles are immutable while a referencing Job has incomplete cleanup;
+an update clears verification and default status. Credentials remain host configuration.
+
 ## Harness and Sandbox adapters
 
-Incus remains the only supported Sandbox provider; E2B has proved the lifecycle, command, exact
-profile, authenticated endpoint, remote scoped route, and one complete no-change Codex Job with
-cleanup, but not a coding-to-PR terminal. Both implement one provider-neutral Sandbox contract.
+Incus and E2B implement one provider-neutral Sandbox contract. E2B has proved lifecycle, command,
+exact ownership recovery, authenticated endpoints, remote scoped routes, Codex and Pi, coding-to-PR,
+terminal Outcome observation, and cleanup through that seam.
 Every operation carries Dorf's Job ID, durable Sandbox ID, and ownership nonce while provider
 locators, lifecycle APIs, command transports, topology, and connection capabilities remain
 adapter-private. Common workflow, repository, publication, terminal, Codex, and Pi code imports no
-provider package; the composition root selects the one configured adapter. Each Job durably pins
-that Sandbox profile, and a differently configured worker refuses both ordinary recovery and
-cleanup before an external call. A provider/profile is not supported until its required route and
+provider package; the composition root resolves the Job's named profile into one adapter and Harness.
+A profile is not usable until Dorf's base functional probe and exact proof-resource cleanup complete.
+A provider/profile is not supported until its required route and
 Harness capabilities are admitted and proved end to end. Support direction and proof order live in
 the [North Star](north-star.md).
 

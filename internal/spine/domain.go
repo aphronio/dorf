@@ -57,6 +57,50 @@ const (
 	CodebaseInvestigationRevision              = "1"
 )
 
+type SandboxProvider string
+
+const (
+	SandboxProviderIncus SandboxProvider = "incus"
+	SandboxProviderE2B   SandboxProvider = "e2b"
+	BaseProfileContract                  = "base-1"
+)
+
+// SandboxProfile is one named provider, artifact, and Harness definition
+// selected by name at Job admission. It is immutable while referenced by an
+// incompletely cleaned Job. Provider credentials remain deployment secrets.
+type SandboxProfile struct {
+	Name              string               `json:"name"`
+	Provider          SandboxProvider      `json:"provider"`
+	Harness           string               `json:"harness"`
+	Artifact          string               `json:"artifact"`
+	IncusNetwork      string               `json:"incus_network,omitempty"`
+	IncusDiskSize     string               `json:"incus_disk_size,omitempty"`
+	E2BGatewayURL     string               `json:"e2b_gateway_url,omitempty"`
+	E2BSandboxTimeout time.Duration        `json:"e2b_sandbox_timeout,omitempty"`
+	E2BAllowInternet  bool                 `json:"e2b_allow_internet,omitempty"`
+	Default           bool                 `json:"default"`
+	CreatedAt         time.Time            `json:"created_at,omitempty"`
+	Verification      *ProfileVerification `json:"verification,omitempty"`
+}
+
+type ProfileVerification struct {
+	ProfileName      string    `json:"profile_name"`
+	ContractVersion  string    `json:"contract_version"`
+	SandboxID        string    `json:"sandbox_id"`
+	OwnershipNonce   string    `json:"-"`
+	HarnessVersion   string    `json:"harness_version,omitempty"`
+	AttemptedAt      time.Time `json:"attempted_at,omitempty"`
+	ProbeCompletedAt time.Time `json:"probe_completed_at,omitempty"`
+	CleanedAt        time.Time `json:"cleaned_at,omitempty"`
+	LastError        string    `json:"last_error,omitempty"`
+}
+
+func (p SandboxProfile) BaseVerified() bool {
+	return p.Verification != nil && p.Verification.ContractVersion == BaseProfileContract &&
+		!p.Verification.ProbeCompletedAt.IsZero() && !p.Verification.CleanedAt.IsZero() &&
+		p.Verification.LastError == ""
+}
+
 type Job struct {
 	ID                      string       `json:"id"`
 	AdmissionKey            string       `json:"admission_key"`

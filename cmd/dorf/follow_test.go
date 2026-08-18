@@ -161,10 +161,10 @@ func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
 
 func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-123", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, SandboxProfile: "incus", AdmittedAt: now.Add(-20 * time.Second)}
+	job := spine.Job{ID: "job-123", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
+		Job: job, Profile: spine.SandboxProfile{Name: "local-codex", Provider: spine.SandboxProviderIncus}, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
 		AgentRuns: []spine.AgentRun{{Role: "investigate", State: spine.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
 		Sandboxes: []spine.Sandbox{sandbox},
 		Actions:   []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},
@@ -180,7 +180,7 @@ func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.
 		"Current      Investigator running",
 		"Job          elapsed · 20s",
 		"AgentRun     Investigator · active 15s",
-		"Sandbox      primary · Incus · provisioned 18s",
+		"Sandbox      primary · local-codex · Incus · provisioned 18s",
 		"History",
 	} {
 		if !strings.Contains(got, want) {

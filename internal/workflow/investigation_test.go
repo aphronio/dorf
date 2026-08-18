@@ -69,7 +69,7 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 	if definition := CodebaseInvestigationDefinition(); len(definition.RequiredProviderCapabilities) != 0 {
 		t.Fatalf("investigation unexpectedly requires provider capabilities: %v", definition.RequiredProviderCapabilities)
 	}
-	if err := ConfiguredRuntimeProfile("e2b").Require(CodebaseInvestigationDefinition()); err != nil {
+	if err := (RuntimeProfile{SandboxProfile: "e2b"}).Require(CodebaseInvestigationDefinition()); err != nil {
 		t.Fatal(err)
 	}
 }

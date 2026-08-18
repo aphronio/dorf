@@ -29,6 +29,15 @@ type providerCheck struct {
 
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
+type integrationRuntimeResolver struct{ runtime workflow.Runtime }
+
+func (r integrationRuntimeResolver) Resolve(_ context.Context, name string) (workflow.Runtime, error) {
+	if name != r.runtime.Profile.SandboxProfile {
+		return workflow.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+	}
+	return r.runtime, nil
+}
+
 func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	t.Helper()
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
@@ -44,13 +53,36 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
+	profile, _, err := store.CreateSandboxProfile(context.Background(), spine.SandboxProfile{
+		Name: "incus", Provider: spine.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("a", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	})
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if !profile.BaseVerified() {
+		_, verification, err := store.BeginSandboxProfileVerification(context.Background(), profile.Name)
+		if err == nil {
+			err = store.RecordSandboxProfileProbe(context.Background(), verification, "codex-test")
+		}
+		if err == nil {
+			err = store.RecordSandboxProfileVerificationCleanup(context.Background(), verification)
+		}
+		if err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
 	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName})
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
 	service := spine.NewService(store, &integrationExternals{}, evidence.Store{}, nil, func(context.Context) error { return nil })
-	workflow.Register(client, service, store, workflow.ProposalRuntime{}, workflow.ConfiguredRuntimeProfile("incus"))
+	workflow.Register(client, store, integrationRuntimeResolver{runtime: workflow.Runtime{
+		Service: service, Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
+	}})
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -70,31 +102,31 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	input := postgres.NewJob{AdmissionKey: key, Goal: "initial input", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/integration", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("provider is not ready")}, blocked); err == nil {
+	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("provider is not ready")}, workflow.RuntimeProfile{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
 		t.Fatal("new Job bypassed provider readiness")
 	}
 	if _, err := store.Job(ctx, spine.JobID(blocked.AdmissionKey)); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("failed provider preflight persisted Job: %v", err)
 	}
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, input)
+	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
 	if job.SandboxProfile != "incus" || job.Workflow != spine.WorkflowCodingToProposal || job.WorkflowRevision != spine.CodingToProposalRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
-	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, input)
+	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.TaskID != job.TaskID {
 		t.Fatalf("idempotent Job admission=%#v created=%v err=%v", repeatedJob, created, err)
 	}
 	changedJob := input
 	changedJob.Goal = "changed complete input"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, changedJob); err == nil {
+	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: changedJob.SandboxProfile}, changedJob); err == nil {
 		t.Fatal("changed complete Job input under the same admission key did not conflict")
 	}
 	changedProfile := input
 	changedProfile.SandboxProfile = "e2b"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, changedProfile); err == nil {
+	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
 		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
 	}
 	taskIDs := []string{job.TaskID}
@@ -244,6 +276,135 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	if _, _, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
 		t.Fatal("cleanup allowed a new message")
+	}
+}
+
+func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	name := fmt.Sprintf("managed-%d", time.Now().UnixNano())
+	profile := spine.SandboxProfile{
+		Name: name, Provider: spine.SandboxProviderE2B, Harness: "pi", Artifact: "dorf:exact-build",
+		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
+	}
+	stored, created, err := store.CreateSandboxProfile(ctx, profile)
+	if err != nil || !created || stored.BaseVerified() {
+		t.Fatalf("created=%v profile=%#v err=%v", created, stored, err)
+	}
+	if _, err := store.SetDefaultSandboxProfile(ctx, name); err == nil {
+		t.Fatal("unverified profile became the default")
+	}
+	_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err == nil {
+		err = store.RecordSandboxProfileProbe(ctx, verification, "pi 0.52.3")
+	}
+	if err == nil {
+		err = store.RecordSandboxProfileVerificationCleanup(ctx, verification)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaulted, err := store.SetDefaultSandboxProfile(ctx, name)
+	if err != nil || !defaulted.Default || !defaulted.BaseVerified() {
+		t.Fatalf("default profile=%#v err=%v", defaulted, err)
+	}
+
+	input := postgres.NewJob{
+		AdmissionKey: "profile-immutability-" + name, Goal: "bounded implementation",
+		Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
+		Branch: "dorf/profile-immutability", SandboxProfile: name, ProviderConnection: "primary",
+		Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
+		GitHubInstallation: "42", BaseBranch: "main",
+	}
+	job, created, err := store.Admit(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit created=%v err=%v", created, err)
+	}
+	changed := profile
+	changed.Artifact = "dorf:other-build"
+	if _, err := store.UpdateSandboxProfile(ctx, changed); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("in-use profile update error=%v", err)
+	}
+	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id=$1`, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpdateSandboxProfile(ctx, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Artifact != changed.Artifact || updated.Default || updated.Verification != nil {
+		t.Fatalf("update did not require fresh verification: %#v", updated)
+	}
+	repeated, created, err := store.Admit(ctx, input)
+	if err != nil || created || repeated.ID != job.ID {
+		t.Fatalf("completed Job idempotency depended on updated profile verification: Job=%#v created=%v err=%v", repeated, created, err)
+	}
+	unverified := input
+	unverified.AdmissionKey += "-new"
+	unverified.Branch += "-new"
+	if _, _, err := store.Admit(ctx, unverified); err == nil || !strings.Contains(err.Error(), spine.BaseProfileContract) {
+		t.Fatalf("new Job admitted through updated unverified profile: %v", err)
+	}
+}
+
+func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	name := fmt.Sprintf("verification-update-%d", time.Now().UnixNano())
+	original := spine.SandboxProfile{
+		Name: name, Provider: spine.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("b", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	}
+	if _, _, err := store.CreateSandboxProfile(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	started, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil || started.Artifact != original.Artifact {
+		t.Fatalf("started profile=%#v err=%v", started, err)
+	}
+	updated := original
+	updated.Artifact = strings.Repeat("c", 64)
+	if _, err := store.UpdateSandboxProfile(ctx, updated); err == nil || !strings.Contains(err.Error(), "verification Sandbox cleanup is incomplete") {
+		t.Fatalf("active verification update error=%v", err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateSandboxProfile(ctx, updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileProbe(ctx, verification, "codex stale"); err == nil {
+		t.Fatal("stale verification certified the updated profile definition")
+	}
+	stored, err := store.SandboxProfile(ctx, name)
+	if err != nil || stored.Artifact != updated.Artifact || stored.Verification != nil || stored.BaseVerified() {
+		t.Fatalf("updated profile=%#v err=%v", stored, err)
+	}
+}
+
+func TestSandboxProfileSchemaRejectsNullRequiredFacts(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	for _, statement := range []string{
+		`insert into dorf.sandbox_profiles(name,provider,harness,artifact,incus_disk_size) values('invalid-incus-null','incus','codex',repeat('d',64),'40GiB')`,
+		`insert into dorf.sandbox_profiles(name,provider,harness,artifact,e2b_sandbox_timeout_seconds,e2b_allow_internet) values('invalid-e2b-null','e2b','codex','dorf:build',3300,false)`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err == nil {
+			t.Fatalf("schema accepted incomplete profile: %s", statement)
+		}
+	}
+	name := fmt.Sprintf("invalid-verification-%d", time.Now().UnixNano())
+	if _, _, err := store.CreateSandboxProfile(ctx, spine.SandboxProfile{
+		Name: name, Provider: spine.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("e", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		insert into dorf.sandbox_profile_verifications(
+			profile_name,contract_version,sandbox_id,ownership_nonce,probe_completed_at
+		) values($1,'base-1',$2,$3,clock_timestamp())`, name, "sandbox-"+name, strings.Repeat("f", 64)); err == nil {
+		t.Fatal("schema accepted a completed profile probe without a Harness version")
 	}
 }
 
@@ -1372,7 +1533,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, postgres.NewJob{AdmissionKey: "cleanup-exhausted-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/cleanup-exhausted", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: "incus"}, postgres.NewJob{AdmissionKey: "cleanup-exhausted-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/cleanup-exhausted", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
 	if err != nil || !created {
 		t.Fatalf("admit Job created=%v err=%v", created, err)
 	}

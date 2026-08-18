@@ -1768,3 +1768,42 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   deterministic reference validation, another workflow repeats
   the same definition/admission/inspection code with identical authority, or a remote client proves a
   smaller public application boundary.
+
+## D070 — Named Sandbox profiles pin exact artifacts and require Dorf verification
+
+- **Status:** Accepted incremental profile-management slice — 2026-08-18
+- **Decision:** PostgreSQL owns named Sandbox profiles. A profile binds one provider, exact provider
+  artifact, Harness, provider networking and lifecycle settings, and Dorf verification receipt.
+  Provider credentials and host paths remain deployment configuration and never enter the profile.
+  One verified profile may be selected explicitly per Job; omission resolves the one deployment
+  default. The Job durably pins the profile name. Workers resolve that name through the composition
+  root into the existing provider-neutral Sandbox and Harness contracts, so workflows contain no
+  Incus, E2B, or Harness selection branches.
+- **Artifact boundary:** `profile create` adopts an existing provider artifact; it does not build one.
+  Incus aliases are resolved to an exact image fingerprint before persistence. E2B profiles require
+  an exact template-build reference. `profile install` is the official Incus release convenience and
+  creates the same ordinary profile after verified import. Bring-your-own artifacts receive no Dorf
+  provenance or security attestation merely by being admitted.
+- **Verification boundary:** Dorf owns one mandatory, versioned `base-1` functional probe before a
+  profile may become default or admit a Job. The explicit, potentially billable operation reconciles
+  one durably owned disposable Sandbox, verifies a writable workspace, `bash`, `git`, `rg`, and the
+  selected Harness/version, then ownership-deletes the Sandbox and confirms absence. Its stable
+  ownership tuple and typed receipt make process-loss recovery converge through cleanup rather than
+  leak a proof resource. Repository-specific dependencies remain the repository setup or custom
+  artifact's responsibility. Optional capabilities stay broad and are added only when an actual
+  workflow requires them.
+- **Mutation rule:** A profile may be updated only while no Job using its name has incomplete
+  cleanup. An update clears its default and verification receipt, forcing explicit re-verification.
+  Exact profile revisions are deliberately deferred; immutable-while-in-use is sufficient until
+  measured operations require historical profile definitions beyond completed Jobs.
+- **Supersedes:** D067's process-wide `DORF_SANDBOX_PROFILE`/`DORF_HARNESS` selection and
+  differently-configured-worker fence. The durable Job fence is now the named profile itself, and
+  every Worker may recover Jobs across configured Incus and E2B profiles when their deployment
+  credentials are available.
+- **Why:** Provider kind alone did not identify the exact image, Harness, network, or verified
+  runtime contract, and process-wide selection prevented one deployment from truthfully recovering
+  Jobs on different providers. Named profiles improve operator UX and retain the narrow adapter seam
+  without introducing a provider matrix, plugin registry, image builder, or fine-grained tool claims.
+- **Reconsider when:** A real workflow earns browser, nested-container, served-endpoint, snapshot, or
+  GPU admission; completed Job audit needs immutable historical profile definitions; or a provider
+  cannot support the stable verification ownership and cleanup contract.

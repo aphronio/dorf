@@ -127,13 +127,10 @@ func lowerFirst(value string) string {
 	return strings.ToLower(value[:1]) + value[1:]
 }
 
-// ConfiguredRuntimeProfile identifies the selected provider profile. Current
-// workflows need no optional provider primitive beyond the baseline contracts.
-func ConfiguredRuntimeProfile(sandboxProfile string) RuntimeProfile {
-	return RuntimeProfile{SandboxProfile: strings.TrimSpace(sandboxProfile)}
-}
-
 func (p RuntimeProfile) Require(definition Definition) error {
+	if strings.TrimSpace(p.SandboxProfile) == "" {
+		return fmt.Errorf("workflow %s revision %s requires a named Sandbox profile", definition.Name, definition.Revision)
+	}
 	available := make(map[ProviderCapability]bool, len(p.ProviderCapabilities))
 	for _, capability := range p.ProviderCapabilities {
 		available[capability] = true

@@ -15,26 +15,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
-	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
-	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
-	"github.com/aphronio/dorf/internal/publication"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	"github.com/aphronio/dorf/internal/repository"
-	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
-	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -77,9 +70,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "setup":
 		return setup(ctx, store, db, cfg, args[1:], stdout, stderr)
 	case "provider":
-		return providerCommand(ctx, cfg, args[1:], stdout, stderr)
-	case "image":
-		return imageCommand(ctx, cfg, args[1:], stdout, stderr)
+		return providerCommand(ctx, store, cfg, args[1:], stdout, stderr)
+	case "profile":
+		return profileCommand(ctx, store, cfg, args[1:], stdout, stderr)
 	case "release-manifest":
 		return releaseManifest(args[1:], stdout, stderr)
 	case "retry":
@@ -140,68 +133,17 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 		return nil, err
 	}
 	store := postgres.Store{DB: db}
-	ownership := func(ctx context.Context, sandboxID string) (provider.Ownership, error) {
-		owned, err := store.Sandbox(ctx, sandboxID)
-		if err != nil {
-			return provider.Ownership{}, err
-		}
-		return provider.Ownership{JobID: owned.JobID, SandboxID: owned.ID, OwnershipNonce: owned.OwnershipNonce}, nil
-	}
-	sandbox, err := sandboxForConfig(cfg)
-	if err != nil {
-		client.Close()
-		return nil, err
-	}
-	var agent terminal.Harness
-	switch cfg.Harness {
-	case codex.Harness:
-		agent = codex.Agent{Sandbox: sandbox, Port: cfg.AppServerPort, Timeout: cfg.TurnTimeout}
-	case piagent.Harness:
-		agent = piagent.Agent{Sandbox: sandbox, Timeout: cfg.TurnTimeout}
-	default:
-		client.Close()
-		return nil, fmt.Errorf("unsupported harness %q", cfg.Harness)
-	}
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
 		client.Close()
 		return nil, err
 	}
-	externals := terminal.Externals{Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}, Agent: agent, Ownership: ownership}
-	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier, absurdruntime.RequireClaim)
-	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
-	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace, Ownership: ownership}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
-	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client}, workflow.ConfiguredRuntimeProfile(cfg.SandboxProfile))
+	workflow.Register(client, store, profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier})
 	return client, nil
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
 	return absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
-}
-
-func sandboxForConfig(cfg config.Config) (provider.Sandbox, error) {
-	switch cfg.SandboxProfile {
-	case config.SandboxProfileIncus:
-		return incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Image: cfg.IncusImage, Network: cfg.IncusNetwork, DiskSize: cfg.IncusDiskSize, Workspace: cfg.Workspace}}}, nil
-	case config.SandboxProfileE2B:
-		if strings.TrimSpace(cfg.E2BAPIKey) == "" {
-			return nil, fmt.Errorf("invalid e2b Sandbox profile: E2B_API_KEY is empty")
-		}
-		adapter := e2b.Adapter{
-			Client: e2b.Client{APIKey: cfg.E2BAPIKey},
-			Config: e2b.AdapterConfig{
-				Template: cfg.E2BTemplate, Workspace: cfg.Workspace,
-				SandboxTimeout: cfg.E2BSandboxTimeout, ProcessTimeout: cfg.TurnTimeout,
-				ProviderGatewayURL: cfg.E2BGatewayURL, AllowInternet: cfg.E2BAllowInternet,
-			},
-		}
-		if err := adapter.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid e2b Sandbox profile: %w", err)
-		}
-		return adapter, nil
-	default:
-		return nil, fmt.Errorf("unsupported Sandbox profile %q", cfg.SandboxProfile)
-	}
 }
 
 func migrate(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
@@ -254,64 +196,47 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 	return nil
 }
 
-func providerCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+func providerCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("provider requires: connect chatgpt --name NAME [--bind INCUS_BRIDGE_IP]")
+		return fmt.Errorf("provider requires: connect chatgpt --name NAME [--profile INCUS_PROFILE] [--bind IP]")
 	}
 	if args[0] != "connect" || len(args) < 2 || args[1] != "chatgpt" {
-		return fmt.Errorf("the supported provider command is: provider connect chatgpt --name NAME [--bind INCUS_BRIDGE_IP]")
+		return fmt.Errorf("the supported provider command is: provider connect chatgpt --name NAME [--profile INCUS_PROFILE] [--bind IP]")
 	}
 	set := flag.NewFlagSet("provider connect chatgpt", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	name := set.String("name", "personal-chatgpt", "stable Provider Connection name")
-	bind := set.String("bind", "", "exact private Incus bridge IPv4")
+	bind := set.String("bind", "", "exact broker bind IP; a non-loopback address requires its matching Incus --profile")
+	profileName := set.String("profile", "", "Incus profile used to resolve its private bridge")
 	if err := set.Parse(args[2:]); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*bind) == "" {
-		result, err := (incus.CommandRunner{}).Run(ctx, "incus", nil, "network", "get", cfg.IncusNetwork, "ipv4.address")
-		if err != nil || result.ExitCode != 0 {
-			return fmt.Errorf("resolve private Incus bridge address; initialize %s or pass --bind", cfg.IncusNetwork)
+	privateBridge := ""
+	if strings.TrimSpace(*bind) == "" || strings.TrimSpace(*profileName) != "" {
+		profile, err := sandboxProfileByNameOrDefault(ctx, store, *profileName)
+		if err != nil {
+			return err
 		}
-		*bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
+		if profile.Provider == spine.SandboxProviderIncus {
+			privateBridge = profile.IncusNetwork
+		} else if strings.TrimSpace(*bind) == "" {
+			return fmt.Errorf("Sandbox profile %q uses %s; remote deployments require an explicit --bind address", profile.Name, profile.Provider)
+		}
+		if strings.TrimSpace(*bind) == "" {
+			result, err := (incus.CommandRunner{}).Run(ctx, "incus", nil, "network", "get", profile.IncusNetwork, "ipv4.address")
+			if err != nil || result.ExitCode != 0 {
+				return fmt.Errorf("resolve private Incus bridge address; initialize %s or pass --bind", profile.IncusNetwork)
+			}
+			*bind = strings.Split(strings.TrimSpace(result.Stdout), "/")[0]
+		}
 	}
-	g := gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: cfg.IncusNetwork}
+	g := gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: privateBridge}
 	if err := g.ConnectChatGPT(ctx, *name, *bind, func(url, code string) {
 		fmt.Fprintf(stdout, "Open %s and enter %s\n", url, code)
 	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Provider Connection ready: %s (ChatGPT subscription; broker %s on %s)\n", *name, gateway.BackendVersion, *bind)
-	return nil
-}
-
-func imageCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "install" {
-		return fmt.Errorf("image requires: install --release vX.Y.Z (or --manifest FILE --archive FILE)")
-	}
-	set := flag.NewFlagSet("image install", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	manifest := set.String("manifest", "", "verified release image manifest")
-	archive := set.String("archive", "", "matching Incus VM archive")
-	releaseTag := set.String("release", "", "immutable Dorf GitHub release tag")
-	if err := set.Parse(args[1:]); err != nil {
-		return err
-	}
-	local := *manifest != "" || *archive != ""
-	if (*releaseTag == "" && !local) || (*releaseTag != "" && local) || (local && (*manifest == "" || *archive == "")) {
-		return fmt.Errorf("image install requires exactly --release or both --manifest and --archive")
-	}
-	var installed releaseapp.Manifest
-	var err error
-	if *releaseTag != "" {
-		installed, err = releaseapp.InstallPublishedImage(ctx, *releaseTag, cfg.IncusImage)
-	} else {
-		installed, err = releaseapp.InstallImage(ctx, *manifest, *archive, cfg.IncusImage)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(stdout, "Official credential-free image ready: %s fingerprint=%s Codex=%s Pi=%s\n", cfg.IncusImage, installed.ImageFingerprint, installed.Harnesses["codex"].Version, installed.Harnesses["pi"].Version)
 	return nil
 }
 
@@ -338,6 +263,7 @@ func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Con
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	connection := set.String("provider", "", "named Provider Connection")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
 	if err := set.Parse(args); err != nil {
 		return err
@@ -352,14 +278,19 @@ func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Con
 	if err := migrate(ctx, store, migrateArgs, stdout, stderr); err != nil {
 		return err
 	}
-	checks := doctor.Run(ctx, db, cfg, *connection)
+	profile, err := sandboxProfileByNameOrDefault(ctx, store, *profileName)
+	if err != nil {
+		return err
+	}
+	checks := doctor.Run(ctx, db, cfg, profile, *connection)
+	checks = appendProfileVerificationCheck(checks, profile)
 	if err := json.NewEncoder(stdout).Encode(checks); err != nil {
 		return err
 	}
 	if !doctor.Ready(checks) {
 		return fmt.Errorf("setup is not converged; apply the failed check remediations and rerun this command")
 	}
-	fmt.Fprintf(stdout, "Dorf is ready: PostgreSQL, Absurd, Sandbox profile %s, Harness %s, and Provider Gateway checks passed\n", cfg.SandboxProfile, cfg.Harness)
+	fmt.Fprintf(stdout, "Dorf is ready: PostgreSQL, Absurd, Sandbox profile %s, Harness %s, and Provider Gateway checks passed\n", profile.Name, profile.Harness)
 	return nil
 }
 
@@ -367,6 +298,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	set := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	connection := set.String("provider", "", "named Provider Connection")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	cloneURL := set.String("repo", "", "managed GitHub clone URL")
 	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
 	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
@@ -378,7 +310,12 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	if strings.TrimSpace(*connection) == "" {
 		return fmt.Errorf("doctor requires --provider")
 	}
-	checks := doctor.Run(ctx, db, cfg, *connection)
+	profile, err := sandboxProfileByNameOrDefault(ctx, postgres.Store{DB: db}, *profileName)
+	if err != nil {
+		return err
+	}
+	checks := doctor.Run(ctx, db, cfg, profile, *connection)
+	checks = appendProfileVerificationCheck(checks, profile)
 	if *contractPath != "" {
 		contents, readErr := os.ReadFile(*contractPath)
 		if readErr == nil {
@@ -442,6 +379,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	provider := set.String("provider", "", "named Provider Connection")
 	model := set.String("model", "", "Codex model")
 	effort := set.String("reasoning", "high", "Codex reasoning effort")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -453,7 +391,11 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 		*branch = "dorf/" + spine.JobID(strings.TrimSpace(*key))
 	}
 	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	job, created, err := workflow.Admit(ctx, store, client, providers, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, SandboxProfile: cfg.SandboxProfile, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
+	profile, err := selectedSandboxProfile(ctx, store, *profileName)
+	if err != nil {
+		return err
+	}
+	job, created, err := workflow.Admit(ctx, store, client, providers, workflow.RuntimeProfile{SandboxProfile: profile.Name}, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
 	if err != nil {
 		return err
 	}
@@ -476,6 +418,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	provider := set.String("provider", "", "named Provider Connection")
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	if err := set.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -483,14 +426,18 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
+	profile, err := selectedSandboxProfile(ctx, store, *profileName)
+	if err != nil {
+		return err
+	}
 	jobID := spine.JobID(strings.TrimSpace(*key))
 	input := postgres.NewJob{
 		AdmissionKey: *key, Goal: brief, Repository: *repository, Revision: *revision,
 		Branch:         "dorf/investigation-" + strings.TrimPrefix(jobID, "job-"),
-		SandboxProfile: cfg.SandboxProfile, ProviderConnection: *provider,
+		SandboxProfile: profile.Name, ProviderConnection: *provider,
 		Model: *model, ReasoningEffort: *effort,
 	}
-	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.ConfiguredRuntimeProfile(cfg.SandboxProfile), input)
+	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.RuntimeProfile{SandboxProfile: profile.Name}, input)
 	if err != nil {
 		return err
 	}
@@ -591,13 +538,17 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
+	profile, err := store.SandboxProfile(ctx, job.SandboxProfile)
+	if err != nil {
+		return err
+	}
 	if *followOutput {
 		followCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return followJob(followCtx, store, client, evidenceStore, job.ID, stdout)
 	}
 	if job.Workflow == spine.WorkflowCodebaseInvestigation {
-		return inspectCodebaseInvestigation(ctx, store, client, evidenceStore, job, *jsonOutput, stdout)
+		return inspectCodebaseInvestigation(ctx, store, client, evidenceStore, job, profile, *jsonOutput, stdout)
 	}
 	if job.Workflow != spine.WorkflowCodingToProposal {
 		return fmt.Errorf("inspect does not support workflow %q", job.Workflow)
@@ -631,6 +582,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		}
 		view := map[string]any{
 			"job":                            job,
+			"sandbox_profile":                profileView(profile),
 			"current_work":                   currentWork,
 			"readiness":                      assessment,
 			"required_provider_capabilities": workflow.CodingToProposalDefinition().RequiredProviderCapabilities,
@@ -654,7 +606,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderWorkflowExecutionAttention(stdout, job, runExecution, currentWork.Description())
-	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -687,7 +639,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	return nil
 }
 
-func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, job spine.Job, jsonOutput bool, stdout io.Writer) error {
+func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, job spine.Job, profile spine.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
 	snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, job.ID)
 	if err != nil {
 		return err
@@ -726,7 +678,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	definition := workflow.CodebaseInvestigationDefinition()
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
-			"job": job, "current_work": work, "report": snapshot.Report, "report_markdown": report,
+			"job": job, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "report_markdown": report,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
 			"execution":                      map[string]any{"main": runExecution, "cleanup": cleanupExecution},
@@ -734,8 +686,8 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderWorkflowExecutionAttention(stdout, job, runExecution, work.Description())
-	fmt.Fprintf(stdout, "  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n",
-		job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState)
+	fmt.Fprintf(stdout, "  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
+		job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
@@ -982,6 +934,6 @@ func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|profile|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

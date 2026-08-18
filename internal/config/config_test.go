@@ -65,72 +65,18 @@ func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
 	}
 }
 
-func TestLoadSelectsOneConcreteHarnessProfile(t *testing.T) {
-	t.Setenv("DORF_HARNESS", "pi")
-	t.Setenv("DORF_INCUS_IMAGE", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Harness != "pi" || cfg.SandboxProfile != SandboxProfileIncus || cfg.IncusImage != "dorf" {
-		t.Fatalf("profile harness=%q Sandbox=%q image=%q", cfg.Harness, cfg.SandboxProfile, cfg.IncusImage)
-	}
-}
-
-func TestLoadSelectsE2BProfileExplicitly(t *testing.T) {
-	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
+func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
 	t.Setenv("E2B_API_KEY", "secret-test-key")
-	t.Setenv("DORF_E2B_TEMPLATE", "dorf:exact-build")
-	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "https://gateway.example/v1")
-	t.Setenv("DORF_E2B_ALLOW_INTERNET", "true")
-	t.Setenv("DORF_E2B_SANDBOX_TIMEOUT", "42m")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.SandboxProfile != SandboxProfileE2B || cfg.E2BTemplate != "dorf:exact-build" || cfg.E2BGatewayURL != "https://gateway.example/v1" || !cfg.E2BAllowInternet || cfg.E2BSandboxTimeout != 42*time.Minute {
-		t.Fatalf("E2B profile = %#v", cfg)
-	}
-}
-
-func TestLoadLeavesE2BRuntimeReadinessToComposition(t *testing.T) {
-	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
-	t.Setenv("E2B_API_KEY", "")
-	t.Setenv("DORF_E2B_TEMPLATE", "")
-	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.SandboxProfile != SandboxProfileE2B || cfg.E2BAPIKey != "" || cfg.E2BTemplate != "" || cfg.E2BGatewayURL != "" {
-		t.Fatalf("incomplete E2B profile was not preserved for command-specific validation")
-	}
-}
-
-func TestLoadE2BProfilePreservesAndAdmitsPi(t *testing.T) {
-	t.Setenv("DORF_SANDBOX_PROFILE", SandboxProfileE2B)
-	t.Setenv("E2B_API_KEY", "secret-test-key")
-	t.Setenv("DORF_E2B_TEMPLATE", "dorf:exact-build")
-	t.Setenv("DORF_E2B_PROVIDER_GATEWAY_URL", "https://gateway.example/v1")
-	t.Setenv("DORF_HARNESS", "pi")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.SandboxProfile != SandboxProfileE2B || cfg.Harness != "pi" {
-		t.Fatalf("profile harness=%q Sandbox=%q", cfg.Harness, cfg.SandboxProfile)
-	}
-}
-
-func TestLoadRejectsUnknownHarness(t *testing.T) {
-	t.Setenv("DORF_HARNESS", "speculative")
-	if _, err := Load(); err == nil {
-		t.Fatal("expected unknown harness to be rejected")
+	if cfg.E2BAPIKey != "secret-test-key" {
+		t.Fatalf("profile selection leaked from environment: %#v", cfg)
 	}
 }
 
 func TestLoadUsesHarnessIndependentTurnTimeout(t *testing.T) {
-	t.Setenv("DORF_HARNESS", "pi")
 	t.Setenv("DORF_TURN_TIMEOUT", "90s")
 	cfg, err := Load()
 	if err != nil {

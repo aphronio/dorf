@@ -21,10 +21,22 @@ scripts/e2b/build-template.sh
 
 The command writes the exact build reference and its source/base/recipe identities to the ignored
 `dist/e2b-template/profile.json`. The E2B API key is not copied into the template. Mutable template
-names and tags are never runtime profile identities.
+names and tags are never runtime profile identities. A deployment adopts the resulting exact build
+with the deployment-owned Gateway endpoint, runs verification, and may then select it as the default:
 
-Qualify the manifest's exact build through Dorf's native adapter, then confirm its owned Sandbox was
-removed:
+```bash
+dorf profile create managed-codex \
+  --provider e2b \
+  --template '<exact-template-build-reference>' \
+  --gateway-url 'https://<deployment-owned-host>/v1' \
+  --harness codex
+dorf profile verify managed-codex
+dorf profile set-default managed-codex
+```
+
+The following environment variables are only for repository live tests; runtime deployment selection
+comes from the named PostgreSQL profile. Qualify the manifest's exact build through Dorf's native
+adapter, then confirm its owned Sandbox was removed:
 
 ```bash
 DORF_E2B_PROFILE_LIVE=1 \
@@ -47,4 +59,4 @@ DORF_E2B_PROVIDER_GATEWAY_URL='https://<deployment-owned-host>/v1' \
 The test does not start or own the tunnel. It requires the configured Gateway Connection, admits only
 the exact HTTPS hostname to E2B egress, revokes the exact route before Sandbox cleanup, and never
 prints route or provider credentials. The [Gateway authority](../project/provider-gateway.md) owns
-deployment reachability; D067 records the accepted durable E2B profile boundary.
+deployment reachability; D067 records the provider seam and D070 the named-profile boundary.

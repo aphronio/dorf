@@ -24,6 +24,26 @@ type inventoryRunner struct {
 	calls     [][]string
 }
 
+type imageInfoRunner struct{ result Result }
+
+func (r imageInfoRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
+	if command != "incus" || strings.Join(args, " ") != "image info custom" {
+		return Result{ExitCode: 1, Stderr: "unexpected command"}, nil
+	}
+	return r.result, nil
+}
+
+func TestResolveImageFingerprintTurnsAliasIntoExactIdentity(t *testing.T) {
+	fingerprint := strings.Repeat("a", 64)
+	got, err := ResolveImageFingerprint(context.Background(), "custom", imageInfoRunner{result: Result{Stdout: "Fingerprint: " + fingerprint + "\n"}})
+	if err != nil || got != fingerprint {
+		t.Fatalf("fingerprint=%q err=%v", got, err)
+	}
+	if _, err := ResolveImageFingerprint(context.Background(), "custom", imageInfoRunner{result: Result{Stdout: "Aliases:\n- custom\n"}}); err == nil {
+		t.Fatal("missing exact fingerprint was accepted")
+	}
+}
+
 func (r *inventoryRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
 	r.calls = append(r.calls, append([]string{command}, args...))
 	joined := strings.Join(args, " ")

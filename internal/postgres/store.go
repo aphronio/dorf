@@ -247,17 +247,28 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	rows, err := queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
-		ID: id, AdmissionKey: input.AdmissionKey, WorkflowName: input.Workflow, WorkflowRevision: input.WorkflowRevision,
-		Goal: input.Goal, Repository: input.Repository,
-		Revision: input.Revision, Branch: input.Branch, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
-		Model: input.Model, ReasoningEffort: input.ReasoningEffort, GithubRepository: nullableString(input.GitHubRepository),
-		GithubInstallationID: nullableString(input.GitHubInstallation), BaseBranch: nullableString(input.BaseBranch),
-	})
-	if err != nil {
-		return spine.Job{}, false, err
-	}
 	storedRow, err := queries.GetAdmittedJobForUpdate(ctx, input.AdmissionKey)
+	var rows int64
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := queries.LockVerifiedSandboxProfileForAdmission(ctx, dbsql.LockVerifiedSandboxProfileForAdmissionParams{
+			Name: input.SandboxProfile, ContractVersion: spine.BaseProfileContract,
+		}); errors.Is(err, sql.ErrNoRows) {
+			return spine.Job{}, false, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", input.SandboxProfile, spine.BaseProfileContract)
+		} else if err != nil {
+			return spine.Job{}, false, err
+		}
+		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
+			ID: id, AdmissionKey: input.AdmissionKey, WorkflowName: input.Workflow, WorkflowRevision: input.WorkflowRevision,
+			Goal: input.Goal, Repository: input.Repository,
+			Revision: input.Revision, Branch: input.Branch, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
+			Model: input.Model, ReasoningEffort: input.ReasoningEffort, GithubRepository: nullableString(input.GitHubRepository),
+			GithubInstallationID: nullableString(input.GitHubInstallation), BaseBranch: nullableString(input.BaseBranch),
+		})
+		if err != nil {
+			return spine.Job{}, false, err
+		}
+		storedRow, err = queries.GetAdmittedJobForUpdate(ctx, input.AdmissionKey)
+	}
 	if err != nil {
 		return spine.Job{}, false, err
 	}
