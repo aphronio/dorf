@@ -294,6 +294,11 @@ func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spin
 }
 
 func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
+	if delivery.AgentRun.Role == "investigate" {
+		return fmt.Sprintf(`%s
+
+Dorf codebase-investigation contract: inspect the repository at exact Revision %s. Do not modify the checkout. Return a nonblank Markdown report grounded in exact repository paths and line numbers. If there is no useful finding, say that plainly in the report.`, delivery.Message.Input, job.Revision)
+	}
 	if delivery.AgentRun.Role != "implement" {
 		return delivery.Message.Input
 	}

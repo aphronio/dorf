@@ -21,6 +21,14 @@ type DorfAction struct {
 	SettledAt sql.NullTime
 }
 
+// Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in Evidence storage
+type DorfCodebaseInvestigationReport struct {
+	JobID            string
+	AgentRunID       string
+	ReportEvidenceID string
+	ObservedAt       time.Time
+}
+
 // One exact-Revision GitHub proposal projection per Job
 type DorfGithubProposal struct {
 	JobID            string

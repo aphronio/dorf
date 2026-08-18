@@ -1,5 +1,5 @@
 -- name: GetJob :one
-select j.id,j.admission_key,j.goal,j.repository,j.revision,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
@@ -45,12 +45,13 @@ where id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,goal,repository,revision,branch,
+    id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,
     sandbox_profile,provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
-    sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(goal),sqlc.arg(repository),
+    sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
+    sqlc.arg(goal),sqlc.arg(repository),
     sqlc.arg(revision),sqlc.arg(branch),
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
     sqlc.arg(reasoning_effort),sqlc.arg(github_repository),
@@ -59,7 +60,7 @@ values(
 on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
-select id,admission_key,goal,repository,revision,branch,sandbox_profile,provider_connection,
+select id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,sandbox_profile,provider_connection,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch
@@ -73,7 +74,7 @@ values(sqlc.arg(job_id),sqlc.arg(oid),sqlc.arg(branch),0)
 on conflict do nothing;
 
 -- name: GetJobAdmissionForUpdate :one
-select admission_open,
+select workflow_name,workflow_revision,admission_open,
        exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=sqlc.arg(job_id)

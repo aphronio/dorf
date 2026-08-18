@@ -73,7 +73,7 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 }
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
-select id,admission_key,goal,repository,revision,branch,sandbox_profile,provider_connection,
+select id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,sandbox_profile,provider_connection,
        model,reasoning_effort,coalesce(github_repository,'') as github_repository,
        coalesce(github_installation_id,'') as github_installation_id,
        coalesce(base_branch,'') as base_branch
@@ -85,6 +85,8 @@ for update
 type GetAdmittedJobForUpdateRow struct {
 	ID                   string
 	AdmissionKey         string
+	WorkflowName         spine.WorkflowName
+	WorkflowRevision     string
 	Goal                 string
 	Repository           string
 	Revision             string
@@ -104,6 +106,8 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 	err := row.Scan(
 		&i.ID,
 		&i.AdmissionKey,
+		&i.WorkflowName,
+		&i.WorkflowRevision,
 		&i.Goal,
 		&i.Repository,
 		&i.Revision,
@@ -120,7 +124,7 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 }
 
 const getJob = `-- name: GetJob :one
-select j.id,j.admission_key,j.goal,j.repository,j.revision,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
@@ -138,6 +142,8 @@ where j.id=$1
 type GetJobRow struct {
 	ID                      string
 	AdmissionKey            string
+	WorkflowName            spine.WorkflowName
+	WorkflowRevision        string
 	Goal                    string
 	Repository              string
 	Revision                string
@@ -168,6 +174,8 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.AdmissionKey,
+		&i.WorkflowName,
+		&i.WorkflowRevision,
 		&i.Goal,
 		&i.Repository,
 		&i.Revision,
@@ -195,7 +203,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 }
 
 const getJobAdmissionForUpdate = `-- name: GetJobAdmissionForUpdate :one
-select admission_open,
+select workflow_name,workflow_revision,admission_open,
        exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
@@ -203,14 +211,21 @@ for update
 `
 
 type GetJobAdmissionForUpdateRow struct {
-	AdmissionOpen bool
-	OutcomeExists bool
+	WorkflowName     spine.WorkflowName
+	WorkflowRevision string
+	AdmissionOpen    bool
+	OutcomeExists    bool
 }
 
 func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (GetJobAdmissionForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getJobAdmissionForUpdate, jobID)
 	var i GetJobAdmissionForUpdateRow
-	err := row.Scan(&i.AdmissionOpen, &i.OutcomeExists)
+	err := row.Scan(
+		&i.WorkflowName,
+		&i.WorkflowRevision,
+		&i.AdmissionOpen,
+		&i.OutcomeExists,
+	)
 	return i, err
 }
 
@@ -300,16 +315,17 @@ func (q *Queries) GetSetupRetryJobForUpdate(ctx context.Context, jobID string) (
 
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,goal,repository,revision,branch,
+    id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,
     sandbox_profile,provider_connection,model,reasoning_effort,
     github_repository,github_installation_id,base_branch
 )
 values(
     $1,$2,$3,$4,
     $5,$6,
-    $7,$8,$9,
-    $10,$11,
-    $12,$13
+    $7,$8,
+    $9,$10,$11,
+    $12,$13,
+    $14,$15
 )
 on conflict(admission_key) do nothing
 `
@@ -317,6 +333,8 @@ on conflict(admission_key) do nothing
 type InsertAdmittedJobParams struct {
 	ID                   string
 	AdmissionKey         string
+	WorkflowName         spine.WorkflowName
+	WorkflowRevision     string
 	Goal                 string
 	Repository           string
 	Revision             string
@@ -334,6 +352,8 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 	result, err := q.db.ExecContext(ctx, insertAdmittedJob,
 		arg.ID,
 		arg.AdmissionKey,
+		arg.WorkflowName,
+		arg.WorkflowRevision,
 		arg.Goal,
 		arg.Repository,
 		arg.Revision,

@@ -113,16 +113,17 @@ deterministic Checks, selects only useful review, and publishes an exact-Revisio
 GitHub merge, close, or explicit abandonment supplies the workflow outcome; cleanup remains a
 separate observable fact.
 
-### Research to an evidence-backed answer
+### Codebase investigation to a repository-grounded report
 
-A personal assistant delegates a bounded question with source policy, budget, and report contract.
-The research workflow captures sources and deterministic metadata, uses an AgentRun for search and
-synthesis, checks citations and output shape programmatically where possible, and returns either a
-report, an honest no-result, or precise attention. It owns no branch or pull request. The client may
-use the result to answer the user or admit another Job.
+A client delegates an exact repository Revision and an unstructured investigation brief. The
+workflow creates an isolated exact checkout, uses one bounded AgentRun for inspection and synthesis,
+checks its terminal result and unchanged checkout programmatically, and returns a flexible Markdown
+Report. An honest report may simply explain that no useful finding exists. It owns no publication or
+pull request. The client may use the result to answer the user, seek human acceptance, or admit
+another Job.
 
-The second example is direction, not current support. If implemented later, it can test which
-coding-era mechanisms form a smaller common application boundary.
+The first implementation proves this shape hermetically through PostgreSQL and shared cleanup. It
+becomes supported only after a real Harness/Sandbox dogfood terminal confirms the same boundary.
 
 ## Deterministic and agentic boundary
 
@@ -201,10 +202,11 @@ automation canvas, graph framework, agent builder, or model/tool Harness.
 
 ## Current verified slice
 
-The supported product today is one Go application using PostgreSQL and Absurd, one coding workflow,
-local Incus on the supported host as its Sandbox provider, Codex and Pi as its verified Harness
-profiles, and Git/GitHub as proposal and acceptance authorities. This narrow support claim is
-evidence, not the permanent product boundary.
+The supported product today remains one Go application using PostgreSQL and Absurd, one coding
+workflow, local Incus on the supported host as its Sandbox provider, Codex and Pi as its verified
+Harness profiles, and Git/GitHub as proposal and acceptance authorities. The implemented
+`codebase-investigation` workflow is the next dogfood candidate, not yet an expanded support claim.
+This narrow support claim is evidence, not the permanent product boundary.
 
 The current coding implementation may contain repository, Revision, review, and GitHub fields in
 records that look core-shaped. Do not preserve or make them optional merely to claim generality. A

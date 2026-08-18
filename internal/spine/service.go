@@ -369,8 +369,18 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 // submitting or waiting. The workflow can therefore alternate exact harness
 // inspection with durable message wakes while the Turn remains active.
 func (s Service) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bool, error) {
-	if run.JobID != job.ID || run.Role != "implement" || run.ThreadID == "" || run.TurnID == "" {
-		return false, fmt.Errorf("AgentRun %s is not an exact bound implementation Turn for Job %s", run.ID, job.ID)
+	turn, err := s.ObserveAgentRunTurn(ctx, job, run, "implement")
+	if err != nil {
+		return false, err
+	}
+	return terminalHarness(turn.Status), nil
+}
+
+// ObserveAgentRunTurn reconciles one bound ordinary Harness Turn for the
+// workflow-owned role and returns its current or terminal native result.
+func (s Service) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
+	if run.JobID != job.ID || run.Role != role || run.ThreadID == "" || run.TurnID == "" {
+		return HarnessTurn{}, fmt.Errorf("AgentRun %s is not an exact bound %s Turn for Job %s", run.ID, role, job.ID)
 	}
 	contract := agentRunContract{
 		store:   s.store,
@@ -387,9 +397,22 @@ func (s Service) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bo
 	}
 	turn, err := contract.execute(ctx)
 	if err != nil {
-		return false, err
+		return HarnessTurn{}, err
 	}
-	return terminalHarness(turn.Status), nil
+	return turn, nil
+}
+
+// VerifyRepositoryUnchanged proves the investigation left the admitted exact
+// checkout clean before its report becomes a terminal workflow fact.
+func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job Job) error {
+	observation, err := s.externals.RepositoryRevision(ctx, job)
+	if err != nil {
+		return err
+	}
+	if observation.Revision != job.Revision || observation.ComparisonBase != job.Revision || observation.Branch != job.Branch {
+		return fmt.Errorf("investigation changed the admitted repository checkout")
+	}
+	return nil
 }
 
 func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {

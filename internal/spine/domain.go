@@ -48,9 +48,20 @@ const (
 	AgentRunUncertain   AgentRunState = "uncertain"
 )
 
+type WorkflowName string
+
+const (
+	WorkflowCodingToProposal      WorkflowName = "coding-to-proposal"
+	WorkflowCodebaseInvestigation WorkflowName = "codebase-investigation"
+	CodingToProposalRevision                   = "3"
+	CodebaseInvestigationRevision              = "1"
+)
+
 type Job struct {
 	ID                      string       `json:"id"`
 	AdmissionKey            string       `json:"admission_key"`
+	Workflow                WorkflowName `json:"workflow"`
+	WorkflowRevision        string       `json:"workflow_revision"`
 	Goal                    string       `json:"goal"`
 	Repository              string       `json:"repository"`
 	Revision                string       `json:"revision"`
@@ -246,6 +257,15 @@ type JobOutcome struct {
 	ObservedMerged bool           `json:"observed_merged"`
 	MergeCommitOID string         `json:"merge_commit_oid,omitempty"`
 	ObservedAt     time.Time      `json:"observed_at"`
+}
+
+// CodebaseInvestigationReport is the typed terminal result of one repository-
+// grounded investigation. The Markdown bytes remain in Evidence storage.
+type CodebaseInvestigationReport struct {
+	JobID            string    `json:"job_id"`
+	AgentRunID       string    `json:"agent_run_id"`
+	ReportEvidenceID string    `json:"report_evidence_id"`
+	ObservedAt       time.Time `json:"observed_at"`
 }
 
 type HarnessTurn struct {

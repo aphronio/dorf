@@ -16,6 +16,7 @@ import (
 
 const (
 	RunTaskName             = postgres.MessageTaskName
+	InvestigationTaskName   = "dorf-codebase-investigation-v1"
 	CleanupTaskName         = "dorf-job-cleanup-v3"
 	activeAgentPollInterval = time.Second
 )
@@ -51,7 +52,7 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime, sandboxProfile string) {
+func Register(client *absurd.Client, service spine.Service, store postgres.Store, proposal ProposalRuntime, profile RuntimeProfile) {
 	proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
 	proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
 	if proposal.PollInterval <= 0 {
@@ -61,7 +62,7 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		if err := requireSandboxProfile(ctx, store, params.JobID, sandboxProfile, false); err != nil {
+		if err := requireJobProfile(ctx, store, params.JobID, profile, CodingToProposalDefinition(), false); err != nil {
 			return TaskResultV1{}, err
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
@@ -103,11 +104,67 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
+		if err := verifyAttachedTask(ctx, store, params.JobID, InvestigationTaskName); err != nil {
+			return TaskResultV1{}, err
+		}
+		if err := requireJobProfile(ctx, store, params.JobID, profile, CodebaseInvestigationDefinition(), false); err != nil {
+			return TaskResultV1{}, err
+		}
+		for {
+			work, err := RunCodebaseInvestigation(ctx, service, store, params.JobID)
+			if err != nil {
+				return TaskResultV1{}, err
+			}
+			if work.Kind == InvestigationWorkComplete {
+				report, err := store.CodebaseInvestigationReport(ctx, params.JobID)
+				if err != nil {
+					return TaskResultV1{}, err
+				}
+				if report != nil {
+					task := absurd.MustTaskContext(ctx)
+					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
+						return TaskResultV1{}, err
+					}
+					return TaskResultV1{JobID: params.JobID, Outcome: "report-recorded"}, nil
+				}
+				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
+			}
+			sequence, err := store.NextWakeSequence(ctx, params.JobID)
+			if err != nil {
+				return TaskResultV1{}, err
+			}
+			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v1/%020d", sequence)}
+			if work.Kind == InvestigationWorkObserveAgent {
+				options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v1/%s/%020d", work.FactID, sequence)
+				options.Timeout = activeAgentPollInterval
+			}
+			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
+			if err != nil {
+				var timeout *absurd.TimeoutError
+				if work.Kind == InvestigationWorkObserveAgent && errors.As(err, &timeout) {
+					continue
+				}
+				return TaskResultV1{}, err
+			}
+			if wake.JobID != params.JobID || wake.Sequence != sequence {
+				return TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+			}
+		}
+	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 	client.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, CleanupTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		if err := requireSandboxProfile(ctx, store, params.JobID, sandboxProfile, true); err != nil {
+		job, err := store.Job(ctx, params.JobID)
+		if err != nil {
+			return TaskResultV1{}, err
+		}
+		definition, err := definitionForJob(job)
+		if err != nil {
+			return TaskResultV1{}, err
+		}
+		if err := requireJobProfile(ctx, store, params.JobID, profile, definition, true); err != nil {
 			return TaskResultV1{}, err
 		}
 		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
@@ -117,6 +174,38 @@ func Register(client *absurd.Client, service spine.Service, store postgres.Store
 			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
+}
+
+func requireJobProfile(ctx context.Context, store sandboxProfileStore, jobID string, profile RuntimeProfile, expected Definition, cleanup bool) error {
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
+		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
+		if cleanup {
+			err = store.SetCleanupAttention(ctx, jobID, detail)
+		} else {
+			err = store.SetWorkflowAttention(ctx, jobID, "workflow-profile", detail)
+		}
+		if err != nil {
+			return fmt.Errorf("%s; record workflow mismatch attention: %w", detail, err)
+		}
+		return errors.New(detail)
+	}
+	if err := profile.Require(expected); err != nil {
+		detail := err.Error()
+		if cleanup {
+			err = store.SetCleanupAttention(ctx, jobID, detail)
+		} else {
+			err = store.SetWorkflowAttention(ctx, jobID, "provider-capabilities", detail)
+		}
+		if err != nil {
+			return fmt.Errorf("%s; record provider capability attention: %w", detail, err)
+		}
+		return errors.New(detail)
+	}
+	return requireSandboxProfile(ctx, store, jobID, profile.SandboxProfile, cleanup)
 }
 
 func requireSandboxProfile(ctx context.Context, store sandboxProfileStore, jobID, configured string, cleanup bool) error {
@@ -168,6 +257,18 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 }
 
 func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, input postgres.NewJob) (spine.Job, bool, error) {
+	input.Workflow = spine.WorkflowCodingToProposal
+	input.WorkflowRevision = spine.CodingToProposalRevision
+	return admit(ctx, store, client, providers, ConfiguredRuntimeProfile(input.SandboxProfile), CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input)
+}
+
+func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {
+	input.Workflow = spine.WorkflowCodebaseInvestigation
+	input.WorkflowRevision = spine.CodebaseInvestigationRevision
+	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v1:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input)
+}
+
+func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob) (spine.Job, bool, error) {
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
 		_, err := store.Job(ctx, spine.JobID(key))
@@ -176,6 +277,9 @@ func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 			// An idempotent retry validates the original input below without
 			// depending on the Gateway still being available.
 		case errors.Is(err, postgres.ErrNotFound):
+			if err := profile.Require(definition); err != nil {
+				return spine.Job{}, false, err
+			}
 			if providers == nil {
 				return spine.Job{}, false, fmt.Errorf("provider readiness is not configured")
 			}
@@ -194,7 +298,7 @@ func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 		return job, created, nil
 	}
 	err = store.WithJobFence(ctx, job.ID, func() error {
-		spawned, err := client.Spawn(ctx, RunTaskName, Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
+		spawned, err := client.Spawn(ctx, taskName, Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskKey})
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}

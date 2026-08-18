@@ -12,9 +12,11 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 Product direction and vocabulary live in the [North Star](north-star.md).
 
 The verified implementation is deliberately narrow: one Go application, one coding-to-PR workflow,
-PostgreSQL, Absurd, local Incus on the supported host, Codex and Pi, Git, and GitHub. This
-architecture must keep that real path clear without treating its coding-specific records as the
-permanent public workflow API.
+PostgreSQL, Absurd, local Incus on the supported host, Codex and Pi, Git, and GitHub. A first
+`codebase-investigation` implementation adds a second explicit coordinator and typed Report;
+its hermetic PostgreSQL terminal is proven while live dogfood remains the support gate. This
+architecture must keep both concrete paths clear without treating coding-specific or investigation-
+specific records as the permanent public workflow API.
 
 ## System shape
 
@@ -136,8 +138,8 @@ Workflow facts remain specific:
 
 - coding owns repository authority, Revisions, Checks tied to a Revision, review policy, Proposal,
   GitHub outcome, and coding inspection;
-- a candidate research workflow would own its source policy, captured-source facts, report contract,
-  result or no-result outcome, and research evaluation; and
+- codebase investigation owns its exact repository input, flexible Markdown Report, and post-Turn
+  unchanged-checkout assertion; and
 - future workflows must not inherit Git or research semantics merely to reuse durable custody.
 
 Do not introduce a polymorphic fact owner, generic JSON result, arbitrary Action registry, or common
@@ -176,6 +178,24 @@ implementation path; it is not parsed into a universal policy result or copied i
 Git and GitHub remain authoritative for branch, commits, pull request, comments, merge, and close.
 Exact external observations produce the coding outcome. Explicit abandonment is human authority and
 may occur before a Proposal. Outcome and cleanup remain separate.
+
+## Current codebase-investigation composition
+
+One admitted investigation pins an exact repository Revision, unstructured brief, workflow
+revision, Sandbox profile, and model envelope. Its explicit
+coordinator creates one Job-owned Sandbox, checks out the exact Revision, installs the scoped
+Provider Route, runs one `investigate` AgentRun, verifies the checkout remained exact and clean,
+retains nonblank Markdown as Evidence, records its own typed Report, and enters the same Job cleanup
+path.
+
+Workflow capability requirements name only optional broad provider primitives beyond the baseline
+Sandbox and Harness contracts, such as browser workloads, nested containers, served endpoints,
+snapshots, or GPUs. Repository tools and services belong to its setup script or custom image. The
+two current workflows need no optional provider capability.
+
+This first slice deliberately has no repository setup, Checks, branch mutation, review, GitHub
+authority, publication, follow-up Messages, external source capture, scheduler, or generic workflow
+registry. Those boundaries require later dogfood evidence.
 
 ## Failure and code evolution
 

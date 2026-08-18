@@ -11,10 +11,13 @@ create table dorf.schema_migrations (
 create table dorf.jobs (
     id text primary key,
     admission_key text not null unique,
+    workflow_name text not null check (workflow_name in ('coding-to-proposal','codebase-investigation')),
+    workflow_revision text not null check (length(trim(workflow_revision)) > 0),
     goal text not null check (length(trim(goal)) > 0),
     repository text not null check (length(trim(repository)) > 0),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     branch text not null check (length(trim(branch)) > 0),
+    sandbox_profile text not null check (length(trim(sandbox_profile)) > 0),
     github_repository text,
     github_installation_id text,
     base_branch text,
@@ -102,7 +105,7 @@ create table dorf.agent_runs (
     turn_id text,
     turn_outcome text check (turn_outcome is null or turn_outcome in ('completed','interrupted','failed')),
     attention text,
-    role text not null check (role in ('implement','general','browser-ui','auth-authority','performance','critical-boundary')),
+    role text not null check (role in ('implement','investigate','general','browser-ui','auth-authority','performance','critical-boundary')),
     input_revision text check (input_revision is null or input_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     capability text,
     sandbox_id text not null references dorf.sandboxes(id),
@@ -119,8 +122,9 @@ create table dorf.agent_runs (
     constraint agent_runs_turn_outcome_binding_check check (
         turn_outcome is null or turn_id is not null
     ),
-    constraint agent_runs_review_binding_check check (
+    constraint agent_runs_role_binding_check check (
         (role='implement' and capability is null and submission_nonce is null) or
+        (role='investigate' and input_revision is not null and capability='repository-read-report' and submission_nonce is null) or
         (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
          input_revision is not null and capability='immutable-read-only' and
          submission_nonce ~ '^[0-9a-f]{64}$')
@@ -193,6 +197,13 @@ create table dorf.evidence (
 );
 create unique index evidence_one_agent_run on dorf.evidence(agent_run_id)
     where agent_run_id is not null;
+
+create table dorf.codebase_investigation_reports (
+    job_id text primary key references dorf.jobs(id),
+    agent_run_id text not null unique references dorf.agent_runs(id),
+    report_evidence_id text not null unique references dorf.evidence(id),
+    observed_at timestamptz not null
+);
 
 alter table dorf.revisions
     add constraint revisions_evidence_fk foreign key(evidence_id) references dorf.evidence(id);
@@ -271,5 +282,6 @@ comment on table dorf.evidence is 'Immutable content-addressed Evidence referenc
 comment on table dorf.sandboxes is 'Job-owned isolated workstations used by one or more AgentRuns';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
+comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in Evidence storage';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

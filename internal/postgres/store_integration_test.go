@@ -50,7 +50,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		t.Fatal(err)
 	}
 	service := spine.NewService(store, &integrationExternals{}, evidence.Store{}, nil, func(context.Context) error { return nil })
-	workflow.Register(client, service, store, workflow.ProposalRuntime{}, "incus")
+	workflow.Register(client, service, store, workflow.ProposalRuntime{}, workflow.ConfiguredRuntimeProfile("incus"))
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -61,9 +61,10 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
-	var profileMigration int
-	if err := db.QueryRowContext(ctx, `select count(*) from dorf.schema_migrations where name='002_sandbox_profile.sql'`).Scan(&profileMigration); err != nil || profileMigration != 1 {
-		t.Fatalf("Sandbox profile migration count=%d err=%v", profileMigration, err)
+	var migrationCount int
+	var migrationName string
+	if err := db.QueryRowContext(ctx, `select count(*),min(name) from dorf.schema_migrations`).Scan(&migrationCount, &migrationName); err != nil || migrationCount != 1 || migrationName != "001_baseline.sql" {
+		t.Fatalf("baseline migrations count=%d name=%q err=%v", migrationCount, migrationName, err)
 	}
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
 	input := postgres.NewJob{AdmissionKey: key, Goal: "initial input", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/integration", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
@@ -79,8 +80,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	if job.SandboxProfile != "incus" {
-		t.Fatalf("admitted Sandbox profile=%q", job.SandboxProfile)
+	if job.SandboxProfile != "incus" || job.Workflow != spine.WorkflowCodingToProposal || job.WorkflowRevision != spine.CodingToProposalRevision {
+		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
 	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, input)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.TaskID != job.TaskID {

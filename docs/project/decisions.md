@@ -1724,3 +1724,47 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Different task classes need distinct operator policy, one-attempt rearming is
   insufficient in measured operations, or Absurd exposes a safer first-class repair receipt that
   should replace Dorf's thin projection.
+
+## D069 — Codebase investigation is the second explicit native workflow
+
+- **Status:** Accepted implementation slice; hermetic PostgreSQL terminal proven, live dogfood
+  pending — 2026-08-17
+- **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
+  `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
+  revision, repository Revision, unstructured brief, execution profile, Provider Connection, model,
+  and reasoning envelope. A workflow may declare optional broad provider primitives beyond Dorf's
+  baseline Sandbox and Harness contracts; admission and Worker claim reject missing primitives
+  before a Sandbox call. Repository dependencies remain the responsibility of its setup script or
+  custom image. The current investigation needs no optional provider capability.
+- **Workflow facts:** The workflow has one ordinary Go coordinator over its own dependency chain:
+  main Sandbox create, exact repository checkout, scoped Provider Route, one `investigate` AgentRun,
+  unchanged-checkout verification, typed Report recording, and shared Job cleanup. The Report points
+  to immutable `text/markdown` Evidence and remains flexible Markdown grounded in repository paths
+  and lines. A report may plainly state that no useful finding exists; there is no synthetic Outcome
+  enum or machine-readable first-line marker. Agent prose remains a result, not proof of its claims.
+- **Shared seam:** Jobs now durably pin workflow name and revision. Investigation reuses Job custody,
+  exact Sandbox Actions, runner-neutral AgentRun reconciliation, Evidence storage, Absurd execution,
+  profile fencing, and route-before-delete cleanup. Coding and investigation retain separate
+  coordinators, snapshots, decisions, and terminal facts. There is no workflow registry, JSON result bag,
+  DAG, provider matrix, or workflow DSL.
+- **Client boundary:** `dorf workflow run codebase-investigation` is the first CLI projection of the
+  workflow-as-durable-function boundary. The workflow itself remains independent of whether a future
+  caller is a CLI, schedule, GitHub event, Slack tag, assistant, or another product.
+- **Deliberate omissions:** This slice has no repository setup, coding Checks, branch mutation,
+  review, GitHub authority, publication, follow-up Messages, external web sources, cron scheduling,
+  automatic Job chaining, or persistent researcher identity. Clients own approval and composition;
+  later use must earn each additional capability.
+- **Proof:** Unit coverage proves the independent decision order, flexible nonblank report edge, and
+  optional provider-capability diagnostics. PostgreSQL integration proves immutable workflow admission,
+  cross-workflow idempotency conflict, the investigator Role/capability binding, typed Report and
+  Evidence attachment, one full fake-Harness coordinator terminal, and shared route-before-Sandbox
+  cleanup. A real Codex or Pi Job on a verified profile remains the next acceptance terminal.
+- **Why:** Dorf needs concrete workflows that improve its own development and demonstrate what Core
+  enables. A repository-grounded investigation differs materially from coding-to-proposal because it
+  owns no Revision mutation, Checks, review, Proposal, or GitHub Outcome. That difference is enough
+  to expose workflow identity, optional provider-capability admission, typed Report, and role-neutral AgentRun
+  observation without generalizing the coding coordinator.
+- **Reconsider when:** Live dogfood shows useful investigations require captured external sources or
+  deterministic reference validation, another workflow repeats
+  the same definition/admission/inspection code with identical authority, or a remote client proves a
+  smaller public application boundary.

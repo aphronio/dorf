@@ -99,6 +99,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "admit":
 		return admit(ctx, store, client, cfg, args[1:], stdout, stderr)
+	case "workflow":
+		return workflowCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "setup-retry":
@@ -170,7 +172,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	service := spine.NewService(store, externals, evidence.Store{Root: cfg.EvidenceRoot}, barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
 	publicationService := publication.Service{Store: store, GitHub: githubClient, Repository: publication.GitRepository{Sandbox: sandbox, Workspace: cfg.Workspace, Ownership: ownership}, Evidence: evidence.Store{Root: cfg.EvidenceRoot}, Barrier: barrier}
-	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client}, cfg.SandboxProfile)
+	workflow.Register(client, service, store, workflow.ProposalRuntime{Publication: publicationService, GitHub: githubClient, Outcome: outcomeapp.Service{Store: store, GitHub: githubClient}, Store: store, Client: client}, workflow.ConfiguredRuntimeProfile(cfg.SandboxProfile))
 	return client, nil
 }
 
@@ -456,7 +458,48 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "created": created, "task_id": job.TaskID, "scheduled": true})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.TaskID, "scheduled": true})
+}
+
+func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	if len(args) < 2 || args[0] != "run" {
+		return fmt.Errorf("workflow requires: run codebase-investigation [options]")
+	}
+	if args[1] != string(spine.WorkflowCodebaseInvestigation) {
+		return fmt.Errorf("unsupported workflow %q", args[1])
+	}
+	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable caller admission identity")
+	briefFile := set.String("brief-file", "", "path containing the complete investigation brief")
+	repository := set.String("repo", "", "clone URL")
+	revision := set.String("revision", "", "exact repository Revision")
+	provider := set.String("provider", "", "named Provider Connection")
+	model := set.String("model", "", "Harness model")
+	effort := set.String("reasoning", "high", "Harness reasoning effort")
+	if err := set.Parse(args[2:]); err != nil {
+		return err
+	}
+	brief, err := readInput(*briefFile, "workflow run codebase-investigation", "brief")
+	if err != nil {
+		return err
+	}
+	jobID := spine.JobID(strings.TrimSpace(*key))
+	input := postgres.NewJob{
+		AdmissionKey: *key, Goal: brief, Repository: *repository, Revision: *revision,
+		Branch:         "dorf/investigation-" + strings.TrimPrefix(jobID, "job-"),
+		SandboxProfile: cfg.SandboxProfile, ProviderConnection: *provider,
+		Model: *model, ReasoningEffort: *effort,
+	}
+	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.ConfiguredRuntimeProfile(cfg.SandboxProfile), input)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{
+		"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision,
+		"required_provider_capabilities": workflow.CodebaseInvestigationDefinition().RequiredProviderCapabilities,
+		"created":                        created, "task_id": job.TaskID, "scheduled": true,
+	})
 }
 
 func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -541,11 +584,21 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if set.NArg() != 1 {
 		return fmt.Errorf("inspect requires one Job ID")
 	}
+	job, err := store.Job(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if job.Workflow == spine.WorkflowCodebaseInvestigation {
+		return inspectCodebaseInvestigation(ctx, store, client, evidenceStore, job, *jsonOutput, stdout)
+	}
+	if job.Workflow != spine.WorkflowCodingToProposal {
+		return fmt.Errorf("inspect does not support workflow %q", job.Workflow)
+	}
 	snapshot, err := workflow.LoadSnapshot(ctx, store, set.Arg(0))
 	if err != nil {
 		return err
 	}
-	job := snapshot.Job
+	job = snapshot.Job
 	projection, err := snapshot.Project(evidenceStore)
 	if err != nil {
 		return err
@@ -569,11 +622,12 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			return err
 		}
 		view := map[string]any{
-			"job":          job,
-			"current_work": currentWork,
-			"readiness":    assessment,
-			"proposal":     snapshot.Proposal,
-			"outcome":      snapshot.Outcome,
+			"job":                            job,
+			"current_work":                   currentWork,
+			"readiness":                      assessment,
+			"required_provider_capabilities": workflow.CodingToProposalDefinition().RequiredProviderCapabilities,
+			"proposal":                       snapshot.Proposal,
+			"outcome":                        snapshot.Outcome,
 			"observed_facts": map[string]any{
 				"actions": snapshot.Actions, "agent_runs": agentRuns, "revisions": snapshot.Revisions,
 				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
@@ -588,7 +642,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if assessment.Ready {
 		readiness = "ready"
 	}
-	fmt.Fprintf(stdout, "Job %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Goal, job.Repository, job.Revision, job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.ID, job.Workflow, job.WorkflowRevision, job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -619,6 +673,84 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	renderHistory(stdout, history)
 	return nil
+}
+
+func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, job spine.Job, jsonOutput bool, stdout io.Writer) error {
+	snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, job.ID)
+	if err != nil {
+		return err
+	}
+	work := snapshot.Project()
+	var report string
+	if snapshot.Report != nil {
+		var record *spine.Evidence
+		evidenceRecords, err := store.Evidence(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		for i := range evidenceRecords {
+			if evidenceRecords[i].ID == snapshot.Report.ReportEvidenceID {
+				record = &evidenceRecords[i]
+				break
+			}
+		}
+		if record == nil {
+			return fmt.Errorf("investigation Report Evidence %s is missing", snapshot.Report.ReportEvidenceID)
+		}
+		contents, err := records.ReadVerified(record.Digest, record.ByteSize)
+		if err != nil {
+			return err
+		}
+		report = string(contents)
+	}
+	runEvidence, err := fetchTaskResult(ctx, client, job.TaskID)
+	if err != nil {
+		return err
+	}
+	cleanupEvidence, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
+	if err != nil {
+		return err
+	}
+	definition := workflow.CodebaseInvestigationDefinition()
+	if jsonOutput {
+		return writeJSON(stdout, map[string]any{
+			"job": job, "current_work": work, "report": snapshot.Report, "report_markdown": report,
+			"required_provider_capabilities": definition.RequiredProviderCapabilities,
+			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
+			"absurd_run":                     runEvidence, "absurd_cleanup": cleanupEvidence,
+		})
+	}
+	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s\n  admission: %s\n  cleanup: %s\n  current work: %s",
+		job.ID, job.Workflow, job.WorkflowRevision, job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), job.SandboxProfile, openClosed(job.AdmissionOpen), job.CleanupState, work.Kind)
+	if work.Detail != "" {
+		fmt.Fprintf(stdout, " — %s", work.Detail)
+	}
+	fmt.Fprintln(stdout)
+	if job.WorkflowAttention != "" {
+		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+	}
+	if job.CleanupAttention != "" {
+		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
+	}
+	if snapshot.Report == nil {
+		fmt.Fprintln(stdout, "  report: none")
+		return nil
+	}
+	fmt.Fprintf(stdout, "  report: observed-at=%s Evidence=%s\n", snapshot.Report.ObservedAt.Format(time.RFC3339Nano), snapshot.Report.ReportEvidenceID)
+	fmt.Fprintln(stdout, "\nReport\n------")
+	fmt.Fprint(stdout, report)
+	return nil
+}
+
+func joinProviderCapabilities(capabilities []workflow.ProviderCapability) string {
+	if len(capabilities) == 0 {
+		return "none"
+	}
+	values := make([]string, len(capabilities))
+	for i := range capabilities {
+		values[i] = string(capabilities[i])
+	}
+	return strings.Join(values, ", ")
 }
 
 func retry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -890,6 +1022,6 @@ func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) 
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|image|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

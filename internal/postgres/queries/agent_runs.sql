@@ -13,6 +13,18 @@ left join lateral (
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
+-- name: InsertInvestigationAgentRun :execrows
+insert into dorf.agent_runs(
+    id,job_id,message_id,role,state,input_revision,capability,sandbox_id
+)
+select sqlc.arg(id),j.id,sqlc.arg(message_id),'investigate','pending',
+       sqlc.arg(input_revision),'repository-read-report',sqlc.arg(sandbox_id)
+from dorf.jobs j
+where j.id=sqlc.arg(job_id)
+  and j.workflow_name='codebase-investigation'
+  and j.workflow_revision='1'
+on conflict do nothing;
+
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
@@ -142,6 +154,6 @@ select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.ad
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertain')
-  and ar.role='implement'
+  and ar.role in ('implement','investigate')
 order by m.sequence
 limit 1;
