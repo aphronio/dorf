@@ -96,6 +96,15 @@ dorf worker
 dorf inspect JOB_ID
 ```
 
+To follow the same durable facts without repeatedly invoking inspection, use:
+
+```bash
+dorf inspect --follow JOB_ID
+```
+
+The follower shows current status and durable Job history until attention appears or cleanup
+completes. `Ctrl-C` stops only the local view, not the Job.
+
 `worker` may be restarted after process loss. Use `dorf message` for later input and `--intent steer`
 to target active work. Dorf observes the exact pull request for acceptance or rejection. To stop
 without a GitHub decision:

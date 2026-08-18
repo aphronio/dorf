@@ -43,14 +43,16 @@ func TestSandboxForConfigSelectsOneConcreteAdapter(t *testing.T) {
 
 func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.T) {
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
+	job := spine.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
+	mainSandbox := spine.MainSandboxName(job.ID)
 	entries := workflowHistory(workflow.Snapshot{
-		Job: spine.Job{AdmittedAt: base},
+		Job: job,
 		Deliveries: []spine.Delivery{{
 			Message:  spine.Message{ID: "message-1", Sequence: 1, FromKind: spine.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
 			AgentRun: spine.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
 		}},
 		Actions: []spine.Action{
-			{ID: "action-secret", Kind: spine.ActionSandboxCreate, State: spine.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
+			{ID: "action-secret", Kind: spine.ActionSandboxCreate, Scope: mainSandbox, State: spine.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
 			{Kind: spine.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
 		},
 		Revisions: []spine.Revision{
@@ -65,20 +67,27 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 			t.Fatalf("history is not chronological: %#v", entries)
 		}
 	}
-	wantKinds := []string{"Job", "Revision", "Message", "Action", "Action", "AgentRun", "AgentRun", "Revision", "Evidence", "Action", "Action", "Proposal"}
-	if len(entries) != len(wantKinds) {
-		t.Fatalf("history has %d entries, want semantic events %v: %#v", len(entries), wantKinds, entries)
-	}
-	for i, want := range wantKinds {
-		if entries[i].Kind != want {
-			t.Fatalf("history event %d kind = %q, want %q: %#v", i, entries[i].Kind, want, entries)
-		}
+	if len(entries) != 12 {
+		t.Fatalf("history has %d entries, want 12 human events: %#v", len(entries), entries)
 	}
 	var story strings.Builder
 	for _, entry := range entries {
-		story.WriteString(entry.Kind + " " + entry.Detail + "\n")
+		story.WriteString(entry.Text + "\n")
 	}
-	for _, want := range []string{"revision-0", "revision-1", "Message 1", "#42"} {
+	for _, want := range []string{
+		"Job admitted",
+		"Starting Revision accepted · revision-0",
+		"Message 1 received from Human",
+		"Creating primary Sandbox · E2B",
+		"Primary Sandbox ready · E2B · 1s",
+		"Implementation agent started",
+		"Implementation agent completed · 1s",
+		"Revision generation 1 observed · revision-1",
+		"Git revision evidence recorded · Revision revision-1",
+		"Creating pull request",
+		"Pull request created · 1s",
+		"Pull request #42 ready · Revision revision-1",
+	} {
 		if !strings.Contains(story.String(), want) {
 			t.Fatalf("history is missing factual token %q:\n%s", want, story.String())
 		}
@@ -93,8 +102,34 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		Outcome: &spine.JobOutcome{Kind: spine.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
 	})
 	last := abandoned[len(abandoned)-1]
-	if last.Kind != "Outcome" || !strings.Contains(last.Detail, string(spine.OutcomeAbandoned)) || strings.Contains(last.Detail, "GitHub") {
+	if !strings.Contains(last.Text, "Outcome Abandoned") || strings.Contains(last.Text, "GitHub") {
 		t.Fatalf("pre-Proposal abandonment history = %#v", last)
+	}
+}
+
+func TestRenderHistoryGroupsLocalDatesAndHidesFactCategories(t *testing.T) {
+	first := time.Date(2026, 8, 18, 15, 31, 57, 0, time.Local)
+	entries := []historyEntry{
+		{At: first, Text: "Job admitted"},
+		{At: first.Add(time.Minute), Text: "Creating primary Sandbox · Incus"},
+		{At: first.Add(24 * time.Hour), Text: "Cleanup complete"},
+	}
+	var output strings.Builder
+	renderHistory(&output, entries)
+	got := output.String()
+	for _, want := range []string{
+		"  18 Aug 2026\n    15:31  Job admitted",
+		"    15:32  Creating primary Sandbox · Incus",
+		"  19 Aug 2026\n    15:31  Cleanup complete",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("human history is missing %q:\n%s", want, got)
+		}
+	}
+	for _, machineCopy := range []string{"2026-08-18T", "Action       ", "AgentRun     "} {
+		if strings.Contains(got, machineCopy) {
+			t.Fatalf("human history exposed machine copy %q:\n%s", machineCopy, got)
+		}
 	}
 }
 

@@ -1,0 +1,216 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/workflow"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
+)
+
+func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
+	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
+	job := spine.Job{ID: "job-123", AdmissionOpen: true}
+	job.SandboxProfile = "e2b"
+	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	snapshot := followSnapshot{
+		Job:        job,
+		Definition: workflow.CodingToProposalDefinition(),
+		History:    []historyEntry{{At: now.Add(-11 * time.Minute), Text: "Job admitted"}},
+		Operation:  "Implementation agent running",
+		AgentRuns:  []spine.AgentRun{{Role: "implement", State: spine.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
+		Sandboxes:  []spine.Sandbox{sandbox},
+		Actions: []spine.Action{{
+			Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-10 * time.Minute),
+		}},
+	}
+	var output bytes.Buffer
+	renderer := newFollowRenderer(&output)
+	renderer.Render(now, snapshot, true)
+	for _, want := range []string{
+		followHumanTimestamp(now.Add(-11*time.Minute)) + "  Job admitted",
+		followTimestamp(now) + "  Current      Implementation agent running",
+		followTimestamp(now) + "  Pulse        Implementation agent active 5m0s",
+		followTimestamp(now) + "  Pulse        Sandbox primary · E2B · provisioned 10m0s",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("initial follow output is missing %q:\n%s", want, output.String())
+		}
+	}
+
+	output.Reset()
+	renderer.Render(now.Add(2*time.Second), snapshot, false)
+	if output.Len() != 0 {
+		t.Fatalf("unchanged snapshot emitted output: %q", output.String())
+	}
+
+	snapshot.History = append(snapshot.History, historyEntry{At: now.Add(time.Second), Text: "Implementation agent completed"})
+	snapshot.Operation = "Inspect implementation checkout"
+	snapshot.AgentRuns[0].State = spine.AgentRunCompleted
+	renderer.Render(now.Add(2*time.Second), snapshot, false)
+	if got := output.String(); !strings.Contains(got, "Implementation agent completed") || !strings.Contains(got, "Current      Inspect implementation checkout") || strings.Contains(got, "Pulse") {
+		t.Fatalf("changed follow output:\n%s", got)
+	}
+}
+
+func followTimestamp(value time.Time) string {
+	return value.In(time.Local).Format(time.RFC3339)
+}
+
+func followHumanTimestamp(value time.Time) string {
+	return value.In(time.Local).Format("15:04")
+}
+
+func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAttention(t *testing.T) {
+	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
+	snapshot := followSnapshot{
+		Job:       spine.Job{ID: "job-123", AdmissionOpen: true},
+		Operation: "Clone repository",
+		Execution: taskResultView{State: absurd.TaskFailed, LastError: "Could not resolve host: github.com"},
+	}
+	var output bytes.Buffer
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	for _, want := range []string{
+		"Current      Clone repository",
+		followHumanTimestamp(now) + "  Workflow stopped",
+		"reason: Could not resolve host: github.com",
+		"next: repair the cause, then run dorf retry job-123",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("failure output is missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), followTimestamp(now)+"  Attention") {
+		t.Fatalf("attention used machine timestamp/category formatting:\n%s", output.String())
+	}
+	if !snapshot.followTerminal() {
+		t.Fatal("actionable failed execution did not stop the follower")
+	}
+
+	output.Reset()
+	snapshot.Job.AdmissionOpen = false
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	if strings.Contains(output.String(), "Attention") || strings.Contains(output.String(), "dorf retry") {
+		t.Fatalf("closed Job exposed historical execution as current attention:\n%s", output.String())
+	}
+
+	output.Reset()
+	snapshot.Job.CleanupState = spine.CleanupComplete
+	snapshot.Operation = "Complete"
+	snapshot.OperationDetail = "admission closed"
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	if strings.Contains(output.String(), "Operation") {
+		t.Fatalf("completed cleanup rendered a fresh derived operation:\n%s", output.String())
+	}
+}
+
+func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testing.T) {
+	base := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
+	snapshot := workflow.InvestigationSnapshot{
+		Job: spine.Job{AdmittedAt: base, CleanedAt: base.Add(10 * time.Minute)},
+		Actions: []spine.Action{{
+			Kind: spine.ActionSandboxCreate, State: spine.ActionSucceeded,
+			CreatedAt: base.Add(time.Minute), SettledAt: base.Add(2 * time.Minute),
+		}},
+		Delivery: spine.Delivery{AgentRun: spine.AgentRun{
+			Role: "investigate", State: spine.AgentRunCompleted,
+			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
+		}},
+		Report: &spine.CodebaseInvestigationReport{ObservedAt: base.Add(9 * time.Minute)},
+	}
+	history := investigationHistory(snapshot)
+	if len(history) != 7 {
+		t.Fatalf("history entries=%d: %#v", len(history), history)
+	}
+	for i := 1; i < len(history); i++ {
+		if history[i].At.Before(history[i-1].At) {
+			t.Fatalf("history is not chronological: %#v", history)
+		}
+	}
+	if got := history[4].Text; got != "Investigator completed · 5m0s" {
+		t.Fatalf("terminal AgentRun detail=%q", got)
+	}
+}
+
+func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
+	job := spine.Job{ID: "job-123"}
+	main := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	reviewRun := spine.AgentRun{ID: "review-run"}
+	review := spine.Sandbox{ID: spine.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
+	reviewRun.SandboxID = review.ID
+	now := time.Now()
+	actions := []spine.Action{
+		{Kind: spine.ActionSandboxCreate, Scope: main.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
+		{Kind: spine.ActionSandboxCreate, Scope: review.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
+		{Kind: spine.ActionSandboxDelete, Scope: review.ID, State: spine.ActionSucceeded, SettledAt: now},
+	}
+	active := provisionedSandboxes(job, []spine.AgentRun{reviewRun}, []spine.Sandbox{review, main}, actions)
+	if len(active) != 1 || active[0].Label != "primary" {
+		t.Fatalf("provisioned Sandboxes=%#v", active)
+	}
+	if got := actionSettledText(job, []spine.AgentRun{reviewRun}, actions[2], actions); got != "Reviewer Sandbox deleted · provisioned 1m0s" {
+		t.Fatalf("Sandbox terminal duration=%q", got)
+	}
+}
+
+func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.T) {
+	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
+	job := spine.Job{ID: "job-123", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, SandboxProfile: "incus", AdmittedAt: now.Add(-20 * time.Second)}
+	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	snapshot := followSnapshot{
+		Job: job, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
+		AgentRuns: []spine.AgentRun{{Role: "investigate", State: spine.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
+		Sandboxes: []spine.Sandbox{sandbox},
+		Actions:   []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},
+	}
+	var output bytes.Buffer
+	renderer := newFollowRenderer(&output)
+	renderer.interactive = true
+	renderer.Start(snapshot)
+	output.Reset()
+	renderer.Render(now, snapshot, true)
+	got := output.String()
+	for _, want := range []string{
+		"Current      Investigator running",
+		"Job          elapsed · 20s",
+		"AgentRun     Investigator · active 15s",
+		"Sandbox      primary · Incus · provisioned 18s",
+		"History",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("interactive header is missing %q:\n%q", want, got)
+		}
+	}
+	if strings.Contains(got, "Pulse") {
+		t.Fatalf("interactive header appended a Pulse line:\n%q", got)
+	}
+
+	output.Reset()
+	snapshot.Job.CleanupState = spine.CleanupComplete
+	snapshot.Job.CleanedAt = now.Add(5 * time.Second)
+	snapshot.AgentRuns[0].State = spine.AgentRunCompleted
+	snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: spine.ActionSandboxDelete, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: snapshot.Job.CleanedAt})
+	renderer.Render(snapshot.Job.CleanedAt, snapshot, true)
+	got = output.String()
+	for _, want := range []string{"Complete", "Job          total · 25s", "Cleanup      complete"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("completed header is missing %q:\n%q", want, got)
+		}
+	}
+	if strings.Contains(got, "Live ·") || strings.Contains(got, "Current      Complete") || strings.Contains(got, "Following Job") || strings.Contains(got, "Ctrl-C stops following") {
+		t.Fatalf("completed header still looks live:\n%q", got)
+	}
+}
+
+func TestInspectRejectsJSONFollowCombinationBeforeDatabaseAccess(t *testing.T) {
+	err := inspect(context.Background(), postgres.Store{}, nil, evidence.Store{}, []string{"--json", "--follow", "job-123"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("inspect error=%v", err)
+	}
+}

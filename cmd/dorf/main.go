@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -578,8 +577,12 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
+	followOutput := set.Bool("follow", false, "follow durable Job history until attention or cleanup completes")
 	if err := set.Parse(args); err != nil {
 		return err
+	}
+	if *jsonOutput && *followOutput {
+		return fmt.Errorf("inspect --json and --follow cannot be combined")
 	}
 	if set.NArg() != 1 {
 		return fmt.Errorf("inspect requires one Job ID")
@@ -587,6 +590,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	job, err := store.Job(ctx, set.Arg(0))
 	if err != nil {
 		return err
+	}
+	if *followOutput {
+		followCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return followJob(followCtx, store, client, evidenceStore, job.ID, stdout)
 	}
 	if job.Workflow == spine.WorkflowCodebaseInvestigation {
 		return inspectCodebaseInvestigation(ctx, store, client, evidenceStore, job, *jsonOutput, stdout)
@@ -739,6 +747,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
+	renderHistory(stdout, investigationHistory(snapshot))
 	if snapshot.Report == nil {
 		fmt.Fprintln(stdout, "  report: none")
 		return nil
@@ -907,104 +916,6 @@ func renderWorkflow(output io.Writer, work workflow.Work) {
 		fmt.Fprintf(output, " — %s", work.Detail)
 	}
 	fmt.Fprintln(output)
-}
-
-type historyEntry struct {
-	At     time.Time `json:"at"`
-	Kind   string    `json:"kind"`
-	Detail string    `json:"detail"`
-}
-
-// workflowHistory is a disposable human projection over product facts. It
-// never decides eligibility and is never persisted; CurrentWork remains the
-// execution and inspection authority for what happens next.
-func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
-	job := snapshot.Job
-	deliveries := snapshot.Deliveries
-	actions := snapshot.Actions
-	revisions := snapshot.Revisions
-	checks := snapshot.Checks
-	plans := snapshot.ReviewPlans
-	records := snapshot.Evidence
-	proposal := snapshot.Proposal
-	outcome := snapshot.Outcome
-	entries := make([]historyEntry, 0, 1+3*len(deliveries)+2*len(actions)+len(revisions)+2*len(checks)+len(plans)+len(records)+2)
-	add := func(at time.Time, kind, detail string) {
-		if !at.IsZero() {
-			entries = append(entries, historyEntry{At: at, Kind: kind, Detail: detail})
-		}
-	}
-	add(job.AdmittedAt, "Job", "admitted")
-	add(job.WorkflowAttentionAt, "Attention", job.WorkflowAttention)
-	for _, delivery := range deliveries {
-		message := delivery.Message
-		add(message.AdmittedAt, "Message", fmt.Sprintf("%d admitted from %s", message.Sequence, message.FromKind))
-	}
-	for _, action := range actions {
-		add(action.CreatedAt, "Action", fmt.Sprintf("%s created", action.Kind))
-		add(action.SettledAt, "Action", fmt.Sprintf("%s %s", action.Kind, action.State))
-		if action.Kind == spine.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && proposal != nil && proposal.ProposedRevision == action.Scope {
-			add(action.SettledAt, "Proposal", fmt.Sprintf("#%d recorded for Revision %s", proposal.Number, proposal.ProposedRevision))
-		}
-	}
-	for _, delivery := range deliveries {
-		run := delivery.AgentRun
-		role := run.Role
-		if role == "implement" {
-			role = "implementation"
-		} else {
-			role += " review"
-		}
-		input := ""
-		if delivery.Message.Sequence > 0 {
-			input = fmt.Sprintf(" for Message %d", delivery.Message.Sequence)
-		}
-		if run.InputRevision != "" {
-			input += " at Revision " + run.InputRevision
-		}
-		add(run.StartedAt, "AgentRun", fmt.Sprintf("%s started%s", role, input))
-		add(run.FinishedAt, "AgentRun", fmt.Sprintf("%s %s%s", role, run.State, input))
-	}
-	for _, revision := range revisions {
-		detail := fmt.Sprintf("generation %d observed Revision %s", revision.Generation, revision.OID)
-		if revision.Generation == 0 {
-			detail = "starting Revision " + revision.OID + " accepted"
-		} else if revision.ComparisonBase != "" {
-			detail += " from " + revision.ComparisonBase
-		}
-		add(revision.ObservedAt, "Revision", detail)
-	}
-	for _, check := range checks {
-		add(check.StartedAt, "Check", fmt.Sprintf("%s started for Revision %s", check.Name, check.Revision))
-		add(check.FinishedAt, "Check", fmt.Sprintf("%s %s for Revision %s (exit %d)", check.Name, check.State, check.Revision, check.ExitCode))
-	}
-	for _, plan := range plans {
-		add(plan.RecordedAt, "ReviewPolicy", fmt.Sprintf("%s for Revision %s Roles=%v", plan.Plan.Decision, plan.Revision, plan.Plan.Roles))
-	}
-	for _, record := range records {
-		detail := record.Kind + " recorded"
-		if record.Revision != "" {
-			detail += " for Revision " + record.Revision
-		}
-		add(record.FinishedAt, "Evidence", detail)
-	}
-	if outcome != nil {
-		detail := string(outcome.Kind)
-		if outcome.ObservedState != "" {
-			detail += fmt.Sprintf(" (GitHub state=%s)", outcome.ObservedState)
-		}
-		add(outcome.ObservedAt, "Outcome", detail)
-	}
-	add(job.CleanedAt, "Cleanup", "complete")
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].At.Before(entries[j].At) })
-	return entries
-}
-
-func renderHistory(output io.Writer, entries []historyEntry) {
-	fmt.Fprintln(output, "\nHistory")
-	for _, entry := range entries {
-		fmt.Fprintf(output, "  %s  %-12s %s\n", entry.At.Format(time.RFC3339Nano), entry.Kind, entry.Detail)
-	}
 }
 
 type taskResultView struct {

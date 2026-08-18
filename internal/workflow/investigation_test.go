@@ -19,7 +19,7 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		if work.Kind != InvestigationWorkAction || work.ActionKind != want || work.Scope != sandbox.ID {
 			t.Fatalf("work=%#v want Action %s", work, want)
 		}
-		if want == spine.ActionRepositoryClone && work.Description() != "Clone repository" {
+		if want == spine.ActionRepositoryClone && work.Description() != "Cloning repository" {
 			t.Fatalf("repository clone description=%q", work.Description())
 		}
 		snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: want, Scope: sandbox.ID, State: spine.ActionSucceeded})
@@ -71,5 +71,31 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 	}
 	if err := ConfiguredRuntimeProfile("e2b").Require(CodebaseInvestigationDefinition()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPresentationUsesOptionalCopyWithReadableFallbacks(t *testing.T) {
+	definition := Definition{Presentation: Presentation{
+		Operations: map[string]string{"observe": "Watching carefully"},
+		AgentRoles: map[string]string{"investigate": "Researcher"},
+		Results:    map[string]string{"report": "Research brief"},
+	}}
+	if got := definition.OperationLabel("observe", "Observe"); got != "Watching carefully" {
+		t.Fatalf("operation label=%q", got)
+	}
+	if got := definition.OperationLabel("custom-operation", "Custom operation"); got != "Custom operation" {
+		t.Fatalf("operation fallback=%q", got)
+	}
+	if got := definition.AgentRoleLabel("investigate"); got != "Researcher" {
+		t.Fatalf("agent role label=%q", got)
+	}
+	if got := definition.AgentRoleLabel("security-review"); got != "Security review" {
+		t.Fatalf("agent role fallback=%q", got)
+	}
+	if got := definition.ResultLabel("report"); got != "Research brief" {
+		t.Fatalf("result label=%q", got)
+	}
+	if got := definition.ResultLabel("architecture-note"); got != "Architecture note" {
+		t.Fatalf("result fallback=%q", got)
 	}
 }

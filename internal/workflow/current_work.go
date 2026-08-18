@@ -45,45 +45,20 @@ type Work struct {
 }
 
 func (w Work) Description() string {
-	switch w.Kind {
-	case WorkComplete:
-		return "Complete"
-	case WorkAttention:
-		return "Needs attention"
-	case WorkAction:
-		switch w.ActionKind {
-		case spine.ActionSandboxCreate:
-			return "Provision Sandbox"
-		case spine.ActionRepositoryClone:
-			return "Clone repository"
-		case spine.ActionRouteCreate:
-			return "Create provider Route"
-		case spine.ActionReviewCheckout:
-			return "Check out exact Revision"
-		default:
-			return "Run " + string(w.ActionKind)
-		}
-	case WorkSetupRepository:
-		return "Run repository setup"
-	case WorkRunReviewer:
-		return "Run selected reviewer"
-	case WorkDeliverMessage:
-		return "Deliver Message to implementation agent"
-	case WorkObserveAgent:
-		return "Observe active implementation agent"
-	case WorkObserveRevision:
-		return "Inspect implementation checkout"
-	case WorkRunChecks:
-		return "Run deterministic Checks"
-	case WorkChooseReview:
-		return "Choose deterministic review"
-	case WorkPublishProposal:
-		return "Publish exact-Revision Proposal"
-	case WorkObserveProposal:
-		return "Observe Proposal feedback or outcome"
-	default:
-		return string(w.Kind)
+	definition := CodingToProposalDefinition()
+	if w.Kind == WorkAction {
+		return definition.ActionLabel(w.ActionKind)
 	}
+	if w.Kind == WorkObserveAgent {
+		return definition.AgentRoleLabel("implement") + " running"
+	}
+	if w.Kind == WorkDeliverMessage {
+		return "Delivering Message to " + lowerFirst(definition.AgentRoleLabel("implement"))
+	}
+	if w.Kind == WorkRunReviewer {
+		return "Reviewer running"
+	}
+	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
 
 // Snapshot is Dorf's concrete, coding-specific read model. It is loaded once

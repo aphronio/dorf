@@ -62,6 +62,13 @@ was intentionally quiet but did not offer another bounded transition view.
 Discuss `dorf inspect --follow JOB_ID` or an equivalent client projection that emits durable state
 transitions without streaming transcripts, guessing progress, or becoming a second authority.
 
+Smallest slice implemented on 2026-08-18: `inspect --follow` tails workflow-owned chronological
+history and exits on actionable attention or complete cleanup. An interactive terminal refreshes a
+fixed live block every second with human current state, per-AgentRun elapsed time, and Sandbox role,
+provider profile, and provisioned time; redirected output keeps a bounded one-minute append-only
+pulse. It does not yet expose Harness activity, provider running/paused intervals, billable time,
+notifications, or pause policy; those remain separate dogfood-driven slices.
+
 ### P1 — Development dogfood can collide with integration fixtures
 
 The disposable test database contained many scheduled fixture Jobs. Starting a real Worker against

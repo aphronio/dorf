@@ -30,31 +30,20 @@ type InvestigationWork struct {
 }
 
 func (w InvestigationWork) Description() string {
-	switch w.Kind {
-	case InvestigationWorkComplete:
-		return "Complete"
-	case InvestigationWorkAttention:
-		return "Needs attention"
-	case InvestigationWorkAction:
-		switch w.ActionKind {
-		case spine.ActionSandboxCreate:
-			return "Provision Sandbox"
-		case spine.ActionRepositoryClone:
-			return "Clone repository"
-		case spine.ActionRouteCreate:
-			return "Create provider Route"
-		default:
-			return "Run " + string(w.ActionKind)
-		}
-	case InvestigationWorkDeliver:
-		return "Deliver brief to investigator"
-	case InvestigationWorkObserveAgent:
-		return "Observe active investigator"
-	case InvestigationWorkRecordReport:
-		return "Record investigation Report"
-	default:
-		return string(w.Kind)
+	definition := CodebaseInvestigationDefinition()
+	if w.Kind == InvestigationWorkAction {
+		return definition.ActionLabel(w.ActionKind)
 	}
+	if w.Kind == InvestigationWorkObserveAgent {
+		return definition.AgentRoleLabel("investigate") + " running"
+	}
+	if w.Kind == InvestigationWorkDeliver {
+		return "Delivering brief to " + lowerFirst(definition.AgentRoleLabel("investigate"))
+	}
+	if w.Kind == InvestigationWorkRecordReport {
+		return "Recording " + lowerFirst(definition.ResultLabel("investigation-report"))
+	}
+	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
 
 type InvestigationSnapshot struct {
