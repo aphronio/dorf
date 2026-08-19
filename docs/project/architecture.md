@@ -38,9 +38,9 @@ cancelled. It does not own Dorf's product vocabulary or become the only place wh
 be understood.
 
 The workflow owns semantic ordering and terminal meaning. The durable custody layer owns stable Job
-identity, accepted input, resource ownership, AgentRun and external-effect facts, evidence custody,
-attention, outcome attachment, and cleanup state. Adapters translate existing authorities; they do
-not invent another workflow.
+identity, accepted input, resource ownership, AgentRun and external-effect facts, Artifact and
+Evidence custody, attention, outcome attachment, and cleanup state. Adapters translate existing
+authorities; they do not invent another workflow.
 
 ## Authority model
 
@@ -52,7 +52,8 @@ not invent another workflow.
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
-| Retained observed proof | Content-addressed Evidence linked to the fact it proves |
+| Named workflow deliverables | Typed Artifact records whose bytes live in the content-addressed blob store |
+| Retained observed proof | Evidence linked to the fact it proves; bytes use the same content-addressed blob store |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
 for inspection, but they are disposable and rebuildable. Agent prose and workflow reports are claims
@@ -110,10 +111,15 @@ A workflow observes relevant results at the AgentRun boundary and records natura
 Generic result strings, arbitrary metadata bags, and copied external state are not substitutes for
 domain records.
 
-### Evidence and inspection
+### Artifacts, Evidence, and inspection
 
-Evidence is immutable observed proof linked to an AgentRun, Action, Check, artifact, or
-workflow-specific fact. Its validity follows the claim it supports: a coding Revision change may
+Artifacts are immutable named workflow deliverables. A workflow-specific typed result may point to
+one or more Artifacts, while clients discover them by Job and retrieve exact bytes by Artifact ID.
+Artifact metadata is durable PostgreSQL state; bytes live in the deployment-owned content-addressed
+blob store and survive Sandbox cleanup. Artifact content may contain claims and is not its own proof.
+
+Evidence is immutable observed proof linked to the supported fact it proves, currently an AgentRun,
+Action, Check, or Revision. Its validity follows the claim it supports: a coding Revision change may
 invalidate Revision-bound evidence, while a captured source or lifecycle observation may remain
 valid.
 
@@ -125,8 +131,8 @@ into Dorf's product history.
 ## Durable core and workflow facts
 
 The intended reusable custody concepts are Job identity, admission, Messages, AgentRuns, Sandbox
-ownership, stable external effects, evidence storage, attention, recovery, and cleanup. Their exact
-public shape is not yet accepted.
+ownership, stable external effects, Artifact and Evidence storage, attention, recovery, and cleanup.
+Their exact public shape is not yet accepted.
 
 The current implementation still places repository, branch, Revision, review, Proposal, and GitHub
 assumptions in records near the spine. That is evidence from the first workflow, not a reason to make
@@ -185,8 +191,8 @@ One admitted investigation pins an exact repository Revision, unstructured brief
 revision, Sandbox profile, and model envelope. Its explicit
 coordinator creates one Job-owned Sandbox, checks out the exact Revision, installs the scoped
 Provider Route, runs one `investigate` AgentRun, verifies the checkout remained exact and clean,
-retains nonblank Markdown as Evidence, records its own typed Report, and enters the same Job cleanup
-path.
+retains nonblank Markdown as the named `report.md` Artifact, records a typed Report pointing to that
+Artifact, and enters the same Job cleanup path.
 
 Workflow capability requirements name only optional broad provider primitives beyond the baseline
 Sandbox and Harness contracts, such as browser workloads, nested containers, served endpoints,

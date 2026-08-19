@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -209,7 +209,7 @@ func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.
 }
 
 func TestInspectRejectsJSONFollowCombinationBeforeDatabaseAccess(t *testing.T) {
-	err := inspect(context.Background(), postgres.Store{}, nil, evidence.Store{}, []string{"--json", "--follow", "job-123"}, &bytes.Buffer{}, &bytes.Buffer{})
+	err := inspect(context.Background(), postgres.Store{}, nil, blob.Store{}, []string{"--json", "--follow", "job-123"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
 		t.Fatalf("inspect error=%v", err)
 	}

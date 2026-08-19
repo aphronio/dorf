@@ -174,6 +174,7 @@ create table dorf.agent_runs (
 );
 create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,input_revision,role)
     where role<>'implement';
+alter table dorf.agent_runs add constraint agent_runs_job_id_id_key unique(job_id,id);
 
 create table dorf.revisions (
     job_id text not null references dorf.jobs(id),
@@ -235,11 +236,25 @@ create table dorf.evidence (
 create unique index evidence_one_agent_run on dorf.evidence(agent_run_id)
     where agent_run_id is not null;
 
+create table dorf.artifacts (
+    id text primary key,
+    job_id text not null references dorf.jobs(id),
+    name text not null check (length(trim(name))>0 and length(name)<=255),
+    digest text not null check (digest ~ '^[0-9a-f]{64}$'),
+    byte_size bigint not null check (byte_size>=0),
+    media_type text not null check (length(trim(media_type))>0),
+    producer text not null check (length(trim(producer))>0),
+    agent_run_id text not null,
+    created_at timestamptz not null,
+    unique(job_id,name),
+    unique(job_id,id),
+    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id)
+);
+
 create table dorf.codebase_investigation_reports (
     job_id text primary key references dorf.jobs(id),
-    agent_run_id text not null unique references dorf.agent_runs(id),
-    report_evidence_id text not null unique references dorf.evidence(id),
-    observed_at timestamptz not null
+    report_artifact_id text not null,
+    foreign key(job_id,report_artifact_id) references dorf.artifacts(job_id,id)
 );
 
 alter table dorf.revisions
@@ -321,6 +336,6 @@ comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider
 comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
-comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in Evidence storage';
+comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in the referenced Artifact';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

@@ -1727,8 +1727,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D069 — Codebase investigation is the second explicit native workflow
 
-- **Status:** Accepted implementation slice; hermetic PostgreSQL terminal proven, live dogfood
-  pending — 2026-08-17
+- **Status:** Accepted implementation slice; hermetic and live dogfood terminals proven — 2026-08-17
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
   revision, repository Revision, unstructured brief, execution profile, Provider Connection, model,
@@ -1739,11 +1738,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Workflow facts:** The workflow has one ordinary Go coordinator over its own dependency chain:
   main Sandbox create, exact repository checkout, scoped Provider Route, one `investigate` AgentRun,
   unchanged-checkout verification, typed Report recording, and shared Job cleanup. The Report points
-  to immutable `text/markdown` Evidence and remains flexible Markdown grounded in repository paths
+  to an immutable `text/markdown` Artifact and remains flexible Markdown grounded in repository paths
   and lines. A report may plainly state that no useful finding exists; there is no synthetic Outcome
   enum or machine-readable first-line marker. Agent prose remains a result, not proof of its claims.
 - **Shared seam:** Jobs now durably pin workflow name and revision. Investigation reuses Job custody,
-  exact Sandbox Actions, runner-neutral AgentRun reconciliation, Evidence storage, Absurd execution,
+  exact Sandbox Actions, runner-neutral AgentRun reconciliation, content-addressed blob storage,
   profile fencing, and route-before-delete cleanup. Coding and investigation retain separate
   coordinators, snapshots, decisions, and terminal facts. There is no workflow registry, JSON result bag,
   DAG, provider matrix, or workflow DSL.
@@ -1757,8 +1756,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Proof:** Unit coverage proves the independent decision order, flexible nonblank report edge, and
   optional provider-capability diagnostics. PostgreSQL integration proves immutable workflow admission,
   cross-workflow idempotency conflict, the investigator Role/capability binding, typed Report and
-  Evidence attachment, one full fake-Harness coordinator terminal, and shared route-before-Sandbox
-  cleanup. A real Codex or Pi Job on a verified profile remains the next acceptance terminal.
+  Artifact attachment, one full fake-Harness coordinator terminal, and shared route-before-Sandbox
+  cleanup. Live Codex dogfood produced a Markdown Report and completed route-before-Sandbox cleanup.
 - **Why:** Dorf needs concrete workflows that improve its own development and demonstrate what Core
   enables. A repository-grounded investigation differs materially from coding-to-proposal because it
   owns no Revision mutation, Checks, review, Proposal, or GitHub Outcome. That difference is enough
@@ -1841,3 +1840,26 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Docker is absent on a supported non-Ubuntu host with real users, a remote
   deployment needs first-class database configuration, or container lifecycle or backup
   requirements exceed this bounded local custody.
+
+## D072 — Workflow deliverables are first-class Artifacts
+
+- **Status:** Accepted investigation-result retrieval slice — 2026-08-19
+- **Decision:** Add Artifact as the durable, immutable, named workflow-deliverable primitive. A
+  workflow-specific typed result points to Artifact IDs; clients list Artifacts by Job and retrieve
+  exact bytes by Artifact ID. Artifact metadata lives in PostgreSQL and its bytes share one neutral
+  deployment-owned content-addressed blob store with Evidence. Sandbox cleanup does not remove
+  Artifacts.
+- **First slice:** `codebase-investigation` records `report.md` as `text/markdown`; its typed Report
+  references that Artifact instead of misclassifying agent prose as Evidence. `dorf artifact list
+  JOB_ID` discovers deliverables and `dorf artifact get ARTIFACT_ID` writes exact bytes.
+  Inspection links to retrieval but does not inline potentially large or binary content.
+- **Boundary:** Artifacts are results or claims, not proof of their own correctness. Evidence remains
+  immutable observed proof linked to the fact it supports. There is no generic result JSON bag,
+  artifact publication policy, retention service, archive format, streaming API, or interaction-layer
+  destination in this slice.
+- **Why:** Live investigation dogfood produced a useful durable report but required extracting a
+  workflow-specific JSON field. A named retrievable deliverable is the repeated client need, while
+  “result” remains workflow-specific semantic meaning and Evidence has a stricter proof role.
+- **Reconsider when:** Large or streaming deliverables exceed the bounded blob API, external object
+  storage becomes deployment authority, or multiple producers require a richer typed ownership
+  relation than the current AgentRun-produced Artifact.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/publication"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -66,7 +66,7 @@ func TestPostgresInvalidEvidenceNeverReachesPushExternals(t *testing.T) {
 	}
 	github := &forbiddenPublicationGitHub{}
 	repository := &forbiddenPublicationRepository{}
-	service := (publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: evidence.Store{Root: t.TempDir()}}).WithClaimCheck(func(context.Context) error { return nil })
+	service := (publication.Service{Store: store, GitHub: github, Repository: repository, Evidence: blob.Store{Root: t.TempDir()}}).WithClaimCheck(func(context.Context) error { return nil })
 	err = service.Push(context.Background(), job.ID, revision)
 	if err == nil || !strings.Contains(err.Error(), "publication lost exact-Revision readiness") {
 		t.Fatalf("Push readiness error=%v", err)

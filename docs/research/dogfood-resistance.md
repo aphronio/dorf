@@ -13,8 +13,8 @@ attached task exhausted its five attempts. Dorf then recorded an abandoned outco
 route, deleted its Sandbox, and completed cleanup without a Report.
 
 After replacing only that stale UFW route, a fresh Incus VM proved numeric TCP, DNS, HTTPS, and Git
-access. A second investigation Job completed its AgentRun, retained an 8,312-byte Markdown Report as
-typed Evidence, completed its Absurd task with `report-recorded`, revoked its route, deleted its
+access. A second investigation Job completed its AgentRun, retained an 8,312-byte Markdown Report,
+completed its Absurd task with `report-recorded`, revoked its route, deleted its
 Sandbox, and reached complete cleanup.
 
 ## Resistance to discuss
@@ -108,8 +108,13 @@ ambient host mounts.
 The investigation Report was durable and inspectable, but retrieving its Markdown required
 `dorf inspect --json JOB_ID | jq -r .report_markdown`.
 
-Discuss a workflow-owned result projection or a more discoverable Evidence command. Dorf should
+Discuss a workflow-owned result projection or a discoverable Artifact command. Dorf should
 expose the result contract without becoming the interaction layer that decides where to publish it.
+
+Smallest slice implemented on 2026-08-19: workflow deliverables are immutable named Artifacts, not
+Evidence or a generic result bag. Investigation records `report.md`; `dorf artifact list JOB_ID`
+lists metadata and `dorf artifact get ARTIFACT_ID` emits exact verified bytes. Inspection
+points to retrieval without embedding potentially large or binary content.
 
 ### P2 — Report citations are Sandbox-local
 

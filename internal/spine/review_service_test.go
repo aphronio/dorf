@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 )
 
 func TestLostClaimCannotRecordReviewFeedback(t *testing.T) {
@@ -63,7 +63,7 @@ func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
 }
 
 func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedback(t *testing.T) {
-	blobs := evidence.Store{Root: t.TempDir()}
+	blobs := blob.Store{Root: t.TempDir()}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	post := ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
@@ -73,7 +73,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 		TurnOutcome: "completed", State: AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
 
-	record, err := (Service{evidence: blobs}).reviewEvidence(run, post)
+	record, err := (Service{blobs: blobs}).reviewEvidence(run, post)
 	if err != nil {
 		t.Fatal(err)
 	}

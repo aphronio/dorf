@@ -29,20 +29,22 @@ func (q *Queries) CloseAdmissionForCodebaseInvestigation(ctx context.Context, jo
 }
 
 const getCodebaseInvestigationReport = `-- name: GetCodebaseInvestigationReport :one
-select job_id,agent_run_id,report_evidence_id,observed_at
-from dorf.codebase_investigation_reports
-where job_id=$1
+select r.job_id,r.report_artifact_id,a.created_at as observed_at
+from dorf.codebase_investigation_reports r
+join dorf.artifacts a on a.job_id=r.job_id and a.id=r.report_artifact_id
+where r.job_id=$1
 `
 
-func (q *Queries) GetCodebaseInvestigationReport(ctx context.Context, jobID string) (DorfCodebaseInvestigationReport, error) {
+type GetCodebaseInvestigationReportRow struct {
+	JobID            string
+	ReportArtifactID string
+	ObservedAt       time.Time
+}
+
+func (q *Queries) GetCodebaseInvestigationReport(ctx context.Context, jobID string) (GetCodebaseInvestigationReportRow, error) {
 	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationReport, jobID)
-	var i DorfCodebaseInvestigationReport
-	err := row.Scan(
-		&i.JobID,
-		&i.AgentRunID,
-		&i.ReportEvidenceID,
-		&i.ObservedAt,
-	)
+	var i GetCodebaseInvestigationReportRow
+	err := row.Scan(&i.JobID, &i.ReportArtifactID, &i.ObservedAt)
 	return i, err
 }
 
@@ -99,36 +101,23 @@ func (q *Queries) GetCodebaseInvestigationRunForUpdate(ctx context.Context, arg 
 	return i, err
 }
 
-const insertCodebaseInvestigationReport = `-- name: InsertCodebaseInvestigationReport :one
+const insertCodebaseInvestigationReport = `-- name: InsertCodebaseInvestigationReport :execrows
 insert into dorf.codebase_investigation_reports(
-    job_id,agent_run_id,report_evidence_id,observed_at
+    job_id,report_artifact_id
 ) values(
-    $1,$2,
-    $3,$4
+    $1,$2
 )
-returning job_id,agent_run_id,report_evidence_id,observed_at
 `
 
 type InsertCodebaseInvestigationReportParams struct {
 	JobID            string
-	AgentRunID       string
-	ReportEvidenceID string
-	ObservedAt       time.Time
+	ReportArtifactID string
 }
 
-func (q *Queries) InsertCodebaseInvestigationReport(ctx context.Context, arg InsertCodebaseInvestigationReportParams) (DorfCodebaseInvestigationReport, error) {
-	row := q.db.QueryRowContext(ctx, insertCodebaseInvestigationReport,
-		arg.JobID,
-		arg.AgentRunID,
-		arg.ReportEvidenceID,
-		arg.ObservedAt,
-	)
-	var i DorfCodebaseInvestigationReport
-	err := row.Scan(
-		&i.JobID,
-		&i.AgentRunID,
-		&i.ReportEvidenceID,
-		&i.ObservedAt,
-	)
-	return i, err
+func (q *Queries) InsertCodebaseInvestigationReport(ctx context.Context, arg InsertCodebaseInvestigationReportParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationReport, arg.JobID, arg.ReportArtifactID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

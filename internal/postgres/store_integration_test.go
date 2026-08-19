@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
-	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
@@ -79,7 +79,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	service := spine.NewService(store, &integrationExternals{}, evidence.Store{}, nil, func(context.Context) error { return nil })
+	service := spine.NewService(store, &integrationExternals{}, blob.Store{}, nil, func(context.Context) error { return nil })
 	workflow.Register(client, store, integrationRuntimeResolver{runtime: workflow.Runtime{
 		Service: service, Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
 	}})
@@ -1583,7 +1583,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
 	claimLost := errors.New("cleanup claim lost")
-	stale := spine.NewService(store, externals, evidence.Store{}, nil, func(context.Context) error { return claimLost })
+	stale := spine.NewService(store, externals, blob.Store{}, nil, func(context.Context) error { return claimLost })
 	if _, _, err := stale.PrepareCleanup(ctx, job.ID); !errors.Is(err, claimLost) {
 		t.Fatalf("stale cleanup error = %v", err)
 	}
@@ -1604,7 +1604,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if !found {
 		t.Fatalf("active AgentRun %s disappeared", delivery.AgentRun.ID)
 	}
-	service := spine.NewService(store, externals, evidence.Store{}, nil, func(context.Context) error { return nil })
+	service := spine.NewService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	cleanupOnce := func() error {
 		cleaning, sandboxes, err := service.PrepareCleanup(ctx, job.ID)
 		if err != nil || cleaning.CleanupState == spine.CleanupComplete {

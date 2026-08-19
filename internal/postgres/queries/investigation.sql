@@ -1,7 +1,8 @@
 -- name: GetCodebaseInvestigationReport :one
-select job_id,agent_run_id,report_evidence_id,observed_at
-from dorf.codebase_investigation_reports
-where job_id=sqlc.arg(job_id);
+select r.job_id,r.report_artifact_id,a.created_at as observed_at
+from dorf.codebase_investigation_reports r
+join dorf.artifacts a on a.job_id=r.job_id and a.id=r.report_artifact_id
+where r.job_id=sqlc.arg(job_id);
 
 -- name: GetCodebaseInvestigationRunForUpdate :one
 select j.workflow_name,j.workflow_revision,j.revision,j.admission_open,j.cleanup_state,
@@ -13,14 +14,12 @@ join dorf.agent_runs ar on ar.job_id=j.id
 where j.id=sqlc.arg(job_id) and ar.id=sqlc.arg(agent_run_id)
 for update of j,ar;
 
--- name: InsertCodebaseInvestigationReport :one
+-- name: InsertCodebaseInvestigationReport :execrows
 insert into dorf.codebase_investigation_reports(
-    job_id,agent_run_id,report_evidence_id,observed_at
+    job_id,report_artifact_id
 ) values(
-    sqlc.arg(job_id),sqlc.arg(agent_run_id),
-    sqlc.arg(report_evidence_id),sqlc.arg(observed_at)
-)
-returning job_id,agent_run_id,report_evidence_id,observed_at;
+    sqlc.arg(job_id),sqlc.arg(report_artifact_id)
+);
 
 -- name: CloseAdmissionForCodebaseInvestigation :execrows
 update dorf.jobs

@@ -24,7 +24,7 @@ type Config struct {
 	Workspace        string
 	AppServerPort    int
 	TurnTimeout      time.Duration
-	EvidenceRoot     string
+	BlobRoot         string
 	GitHubMetadata   string
 	GitHubPrivateKey string
 	GitHubAPIURL     string
@@ -43,7 +43,7 @@ func Load() (Config, error) {
 		Workspace:        "/workspace/job",
 		AppServerPort:    4500,
 		TurnTimeout:      45 * time.Minute,
-		EvidenceRoot:     value("DORF_EVIDENCE_ROOT", filepath.Join(home, ".local", "state", "dorf", "evidence")),
+		BlobRoot:         value("DORF_BLOB_ROOT", filepath.Join(home, ".local", "state", "dorf", "blobs")),
 		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
 		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
 		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
@@ -69,8 +69,8 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("resolve Provider Gateway state locator: %w", err)
 	}
 	cfg.GatewayStatePath = filepath.Clean(cfg.GatewayStatePath)
-	if !filepath.IsAbs(cfg.EvidenceRoot) {
-		return Config{}, fmt.Errorf("DORF_EVIDENCE_ROOT must be an absolute deployment-owned path")
+	if !filepath.IsAbs(cfg.BlobRoot) {
+		return Config{}, fmt.Errorf("DORF_BLOB_ROOT must be an absolute deployment-owned path")
 	}
 	if raw := strings.TrimSpace(os.Getenv("DORF_TURN_TIMEOUT")); raw != "" {
 		duration, err := time.ParseDuration(raw)

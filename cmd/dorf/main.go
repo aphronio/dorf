@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"charm.land/huh/v2"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
-	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/hostsetup"
@@ -84,6 +84,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		defer client.Close()
 		return retry(ctx, store, client, args[1:], stdout, stderr)
+	case "artifact":
+		return artifactCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
+	case "inspect":
+		client, err := absurdClient(db)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		return inspect(ctx, store, client, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	}
 	client, err := application(db, cfg)
 	if err != nil {
@@ -101,11 +110,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return setupRetry(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
-	case "inspect":
-		evidenceStore := evidence.Store{Root: cfg.EvidenceRoot}
-		return inspect(ctx, store, client, evidenceStore, args[1:], stdout, stderr)
 	case "evidence":
-		return evidenceCommand(ctx, store, evidence.Store{Root: cfg.EvidenceRoot}, args[1:], stdout, stderr)
+		return evidenceCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, args[1:], stdout, stderr)
 	case "abandon":
@@ -594,7 +600,7 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	return err
 }
 
-func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore blob.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("inspect", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	jsonOutput := set.Bool("json", false, "render JSON")
@@ -622,7 +628,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		return followJob(followCtx, store, client, evidenceStore, job.ID, stdout)
 	}
 	if job.Workflow == spine.WorkflowCodebaseInvestigation {
-		return inspectCodebaseInvestigation(ctx, store, client, evidenceStore, job, profile, *jsonOutput, stdout)
+		return inspectCodebaseInvestigation(ctx, store, client, job, profile, *jsonOutput, stdout)
 	}
 	if job.Workflow != spine.WorkflowCodingToProposal {
 		return fmt.Errorf("inspect does not support workflow %q", job.Workflow)
@@ -713,33 +719,18 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	return nil
 }
 
-func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, job spine.Job, profile spine.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
+func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, job spine.Job, profile spine.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
 	snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, job.ID)
 	if err != nil {
 		return err
 	}
 	work := snapshot.Project()
-	var report string
-	if snapshot.Report != nil {
-		var record *spine.Evidence
-		evidenceRecords, err := store.Evidence(ctx, job.ID)
-		if err != nil {
-			return err
-		}
-		for i := range evidenceRecords {
-			if evidenceRecords[i].ID == snapshot.Report.ReportEvidenceID {
-				record = &evidenceRecords[i]
-				break
-			}
-		}
-		if record == nil {
-			return fmt.Errorf("investigation Report Evidence %s is missing", snapshot.Report.ReportEvidenceID)
-		}
-		contents, err := records.ReadVerified(record.Digest, record.ByteSize)
-		if err != nil {
-			return err
-		}
-		report = string(contents)
+	artifacts, err := store.Artifacts(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	if artifacts == nil {
+		artifacts = []spine.Artifact{}
 	}
 	runExecution, err := fetchTaskResult(ctx, client, job.TaskID)
 	if err != nil {
@@ -752,7 +743,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	definition := workflow.CodebaseInvestigationDefinition()
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
-			"job": job, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "report_markdown": report,
+			"job": job, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
 			"execution":                      map[string]any{"main": runExecution, "cleanup": cleanupExecution},
@@ -778,9 +769,8 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		fmt.Fprintln(stdout, "  report: none")
 		return nil
 	}
-	fmt.Fprintf(stdout, "  report: observed-at=%s Evidence=%s\n", snapshot.Report.ObservedAt.Format(time.RFC3339Nano), snapshot.Report.ReportEvidenceID)
-	fmt.Fprintln(stdout, "\nReport\n------")
-	fmt.Fprint(stdout, report)
+	fmt.Fprintf(stdout, "  report: observed-at=%s Artifact=%s\n", snapshot.Report.ObservedAt.Format(time.RFC3339Nano), snapshot.Report.ReportArtifactID)
+	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", snapshot.Report.ReportArtifactID)
 	return nil
 }
 
@@ -811,7 +801,7 @@ func retry(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	return writeJSON(stdout, receipt)
 }
 
-func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore evidence.Store, args []string, stdout, stderr io.Writer) error {
+func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore blob.Store, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("evidence", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	if err := set.Parse(args); err != nil {
@@ -1008,6 +998,6 @@ func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

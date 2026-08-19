@@ -148,10 +148,11 @@ remain targeted terminals for changes that touch those authorities, not default 
 
 ## Evidence over narration
 
-Agent prose is a Message, not Evidence. Process state, command results, commits, harness observation,
-external authority, and retained artifacts are observed facts. Evidence records those observed facts
-and must identify the AgentRun, Check, Action, or Revision it proves. Do not duplicate reviewer prose
-as Evidence. A fluent agent must never silently become the authority for its own success.
+Agent prose is a Message or workflow Artifact, not Evidence. Process state, command results, commits,
+harness observation, external authority, and retained content identity are observed facts. Evidence
+records those observed facts and must use a supported typed relation to identify the fact it proves.
+Do not duplicate reviewer prose as Evidence. A fluent agent must never silently become the authority
+for its own success.
 
 Evidence also guides product changes. Dogfood workflows early. Prefer measured human attention,
 useful-outcome rate, rework, cost, and observed failures over agent narratives. Change direction

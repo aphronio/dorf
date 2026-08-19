@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -300,7 +300,7 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 	if tentative.Kind != WorkPublishProposal {
 		t.Fatalf("tentative CurrentWork = %#v, want publication", tentative)
 	}
-	projection, err := facts.Project(evidence.Store{})
+	projection, err := facts.Project(blob.Store{})
 	if err != nil {
 		t.Fatal(err)
 	}

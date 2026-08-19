@@ -226,20 +226,17 @@ func recordInvestigationReport(ctx context.Context, service spine.Service, store
 	if err := service.VerifyRepositoryUnchanged(ctx, snapshot.Job); err != nil {
 		return investigationContractError("investigator changed or dirtied the admitted checkout: " + err.Error())
 	}
-	blob, err := service.EvidenceStore().Put([]byte(report))
+	blob, err := service.BlobStore().Put([]byte(report))
 	if err != nil {
 		return err
 	}
-	evidence := spine.Evidence{
-		ID: spine.EvidenceID(run.ID, "investigation-report"), Digest: blob.Digest, ByteSize: blob.ByteSize,
-		MediaType: "text/markdown", Producer: "dorf-codebase-investigation", Kind: "investigation-report",
-		AgentRunID: run.ID, Revision: snapshot.Job.Revision, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
+	artifact := spine.Artifact{
+		ID:    spine.ArtifactID(snapshot.Job.ID, spine.CodebaseInvestigationReportArtifactName),
+		JobID: snapshot.Job.ID, Name: spine.CodebaseInvestigationReportArtifactName,
+		Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "text/markdown",
+		Producer: "dorf-codebase-investigation", AgentRunID: run.ID, CreatedAt: run.FinishedAt,
 	}
-	receipt := spine.CodebaseInvestigationReport{
-		JobID: snapshot.Job.ID, AgentRunID: run.ID,
-		ReportEvidenceID: evidence.ID, ObservedAt: run.FinishedAt,
-	}
-	_, _, err = store.RecordCodebaseInvestigationReport(ctx, receipt, evidence)
+	_, _, err = store.RecordCodebaseInvestigationReport(ctx, artifact)
 	return err
 }
 

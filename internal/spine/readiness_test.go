@@ -8,19 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	policy "github.com/aphronio/dorf/internal/review"
 )
 
 func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		mutate func(*testing.T, evidence.Store, *Check, *Evidence)
+		mutate func(*testing.T, blob.Store, *Check, *Evidence)
 		want   string
 	}{
 		{
 			name: "missing blob",
-			mutate: func(t *testing.T, store evidence.Store, _ *Check, record *Evidence) {
+			mutate: func(t *testing.T, store blob.Store, _ *Check, record *Evidence) {
 				t.Helper()
 				if err := os.Remove(evidencePath(store.Root, record.Digest)); err != nil {
 					t.Fatal(err)
@@ -30,7 +30,7 @@ func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *test
 		},
 		{
 			name: "tampered blob",
-			mutate: func(t *testing.T, store evidence.Store, _ *Check, record *Evidence) {
+			mutate: func(t *testing.T, store blob.Store, _ *Check, record *Evidence) {
 				t.Helper()
 				path := evidencePath(store.Root, record.Digest)
 				if err := os.Chmod(path, 0o600); err != nil {
@@ -44,7 +44,7 @@ func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *test
 		},
 		{
 			name: "blob versus row",
-			mutate: func(t *testing.T, store evidence.Store, check *Check, record *Evidence) {
+			mutate: func(t *testing.T, store blob.Store, check *Check, record *Evidence) {
 				t.Helper()
 				observation := CommandObservation{Command: "go vet ./...", StartedAt: check.StartedAt, FinishedAt: check.FinishedAt}
 				contents, err := commandArtifact(check.ID, check.Revision, observation)
@@ -111,7 +111,7 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		AgentRun: AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
 		Request:  Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
 	}
-	observed, err := (Service{evidence: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
+	observed, err := (Service{blobs: store}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *test
 	}
 }
 
-func gitObservationEvidence(t *testing.T, store evidence.Store, job Job, run AgentRun, started time.Time) Evidence {
+func gitObservationEvidence(t *testing.T, store blob.Store, job Job, run AgentRun, started time.Time) Evidence {
 	t.Helper()
 	observation := RevisionObservation{
 		ComparisonBase: run.InputRevision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch,
@@ -187,9 +187,9 @@ func gitObservationEvidence(t *testing.T, store evidence.Store, job Job, run Age
 	}
 }
 
-func readinessFixture(t *testing.T) (evidence.Store, string, string, []DeclaredCheck, Check, Evidence) {
+func readinessFixture(t *testing.T) (blob.Store, string, string, []DeclaredCheck, Check, Evidence) {
 	t.Helper()
-	store := evidence.Store{Root: t.TempDir()}
+	store := blob.Store{Root: t.TempDir()}
 	jobID, revision := "job-readiness", strings.Repeat("a", 40)
 	declared := []DeclaredCheck{{Name: "check", Command: "go test ./..."}}
 	checkID := CheckID(jobID, revision, "check")

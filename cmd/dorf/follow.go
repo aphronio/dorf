@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -37,7 +37,7 @@ type followSnapshot struct {
 	Execution       taskResultView
 }
 
-func followJob(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, jobID string, output io.Writer) error {
+func followJob(ctx context.Context, store postgres.Store, client *absurd.Client, records blob.Store, jobID string, output io.Writer) error {
 	load := func(loadCtx context.Context) (followSnapshot, error) {
 		return loadFollowSnapshot(loadCtx, store, client, records, jobID)
 	}
@@ -81,7 +81,7 @@ func followJob(ctx context.Context, store postgres.Store, client *absurd.Client,
 	}
 }
 
-func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absurd.Client, records evidence.Store, jobID string) (followSnapshot, error) {
+func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absurd.Client, records blob.Store, jobID string) (followSnapshot, error) {
 	job, err := store.Job(ctx, jobID)
 	if err != nil {
 		return followSnapshot{}, err

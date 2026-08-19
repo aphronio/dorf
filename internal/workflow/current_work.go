@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -92,7 +92,7 @@ type Projection struct {
 // Project derives readiness and the one next coding operation once. Once
 // publication starts, its admitted input boundary is retained so a later
 // accepted Message cannot strand reconciliation.
-func (s Snapshot) Project(evidenceStore evidence.Store) (Projection, error) {
+func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
 	deliveries := spine.PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
 	reviewRuns, err := s.currentReviewRuns()
 	if err != nil {

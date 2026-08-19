@@ -35,7 +35,7 @@ func RunJob(ctx context.Context, service spine.Service, store postgres.Store, pr
 		if err != nil {
 			return Work{}, err
 		}
-		projection, err := snapshot.Project(service.EvidenceStore())
+		projection, err := snapshot.Project(service.BlobStore())
 		if err != nil {
 			return Work{}, err
 		}

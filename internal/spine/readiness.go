@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 )
 
 type ReadinessAssessment struct {
@@ -27,7 +27,7 @@ func StartsImplementationTurn(message Message, run AgentRun) bool {
 		message.Intent == MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
 }
 
-type commandEvidenceArtifact struct {
+type commandEvidenceObservation struct {
 	Identity        string    `json:"identity"`
 	Revision        string    `json:"revision"`
 	Producer        string    `json:"producer"`
@@ -42,7 +42,7 @@ type commandEvidenceArtifact struct {
 	Redactions      []string  `json:"redactions"`
 }
 
-func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store) error {
+func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store) error {
 	checksByID := make(map[string]Check, len(checks))
 	for _, check := range checks {
 		checksByID[check.ID] = check
@@ -90,15 +90,15 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 		if err != nil {
 			return fail("immutable Evidence blob is unavailable or invalid: %v", err)
 		}
-		var artifact commandEvidenceArtifact
+		var observation commandEvidenceObservation
 		decoder := json.NewDecoder(bytes.NewReader(contents))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&artifact); err != nil {
+		if err := decoder.Decode(&observation); err != nil {
 			return fail("observation artifact is invalid: %v", err)
 		} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
 			return fail("observation artifact has trailing content")
 		}
-		if artifact.Identity != check.ID || artifact.Revision != revision || artifact.Producer != record.Producer || artifact.Command != check.Command || artifact.ExitCode != check.ExitCode || !artifact.StartedAt.Equal(check.StartedAt) || !artifact.FinishedAt.Equal(check.FinishedAt) {
+		if observation.Identity != check.ID || observation.Revision != revision || observation.Producer != record.Producer || observation.Command != check.Command || observation.ExitCode != check.ExitCode || !observation.StartedAt.Equal(check.StartedAt) || !observation.FinishedAt.Equal(check.FinishedAt) {
 			return fail("observation artifact facts do not match the persisted Check row")
 		}
 	}
@@ -108,7 +108,7 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 	return nil
 }
 
-func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs evidence.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
+func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
 	err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
 	assessment := ReadinessAssessment{Revision: job.Revision}
 	if err != nil {
@@ -240,7 +240,7 @@ func PublicationDeliveries(deliveries []Delivery, startedAt time.Time) []Deliver
 	return retained
 }
 
-func verifyGitRevisionObservation(job Job, run AgentRun, records []Evidence, blobs evidence.Store) error {
+func verifyGitRevisionObservation(job Job, run AgentRun, records []Evidence, blobs blob.Store) error {
 	expectedID := EvidenceID(run.ID, "git-revision")
 	var observed Evidence
 	for _, record := range records {
@@ -274,7 +274,7 @@ func verifyGitRevisionObservation(job Job, run AgentRun, records []Evidence, blo
 	return nil
 }
 
-func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs evidence.Store) error {
+func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs blob.Store) error {
 	expectedEvidenceID := EvidenceID(run.ID, "review-observation")
 	if run.State != AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
 		return fmt.Errorf("terminal harness binding, exact Revision, or least-capability envelope is incomplete")

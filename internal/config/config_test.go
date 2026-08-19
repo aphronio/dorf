@@ -77,6 +77,20 @@ func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadUsesNeutralBlobStoreForEvidenceAndArtifacts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
+	t.Setenv("DORF_BLOB_ROOT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(home, ".local", "state", "dorf", "blobs"); cfg.BlobRoot != want {
+		t.Fatalf("blob root=%q want=%q", cfg.BlobRoot, want)
+	}
+}
+
 func TestLoadUsesPersistedDockerDatabase(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)

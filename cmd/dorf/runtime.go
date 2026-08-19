@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/e2b"
-	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
@@ -63,12 +63,12 @@ func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workf
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	service := spine.NewService(r.store, externals, evidence.Store{Root: r.cfg.EvidenceRoot}, r.barrier, absurdruntime.RequireClaim)
+	service := spine.NewService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
 		Repository: publication.GitRepository{Sandbox: sandbox, Workspace: r.cfg.Workspace, Ownership: ownership},
-		Evidence:   evidence.Store{Root: r.cfg.EvidenceRoot}, Barrier: r.barrier,
+		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}
 	return workflow.Runtime{
 		Service: service,

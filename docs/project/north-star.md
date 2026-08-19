@@ -69,6 +69,7 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Role** | The bounded responsibility and capability envelope of an AgentRun |
 | **Action** | Code-owned work that changes external state and must be reconciled safely |
 | **Check** | Code-owned observation or assertion |
+| **Artifact** | An immutable named deliverable produced by a workflow and retrievable by clients |
 | **Evidence** | Immutable observed proof tied to the fact it supports |
 | **Outcome** | The workflow-specific terminal result, separate from resource cleanup |
 
@@ -89,14 +90,14 @@ flowchart TD
     Admit --> Contract["Pin workflow version, capabilities, budget, and expected outcomes"]
     Contract --> Sandbox["Create isolated Sandbox when needed"]
     Sandbox --> Work["Run deterministic operations and bounded AgentRuns"]
-    Work --> Observe["Observe facts, Checks, artifacts, and external effects"]
+    Work --> Observe["Observe facts, Checks, Artifacts, and external effects"]
     Observe --> Decide{"Workflow decision"}
     Decide -->|"more work"| Work
     Decide -->|"human judgment"| Attention["Ask one precise question"]
     Attention --> Work
     Decide -->|"terminal"| Outcome["Record workflow Outcome"]
     Outcome --> Cleanup["Reconcile cleanup separately"]
-    Cleanup --> Receipt["Return result, Evidence, and cleanup state"]
+    Cleanup --> Receipt["Return result, Artifacts, Evidence, and cleanup state"]
 ```
 
 Each workflow keeps its decision small and explicit in ordinary code. Dorf is not a configurable DAG
@@ -133,14 +134,15 @@ becomes supported only after a real Harness/Sandbox dogfood terminal confirms th
 | Create, inspect, and destroy Sandboxes | Choose an approach within the accepted envelope |
 | Sequence durable input and reconcile retries | Implement, investigate, synthesize, or review |
 | Run declared commands, schemas, probes, and policy rules | Interpret evidence that has no complete mechanical rule |
-| Observe external authorities and retain artifacts | Explain uncertainty and material decisions |
+| Observe external authorities and retain Artifacts | Explain uncertainty and material decisions |
 | Hash, pin, invalidate, and render Evidence | Decide how to respond to human, Check, or reviewer Messages |
 | Reconcile external effects and cleanup | Request human judgment when no safe default exists |
 
 This boundary is a product promise: agent context is not spent rediscovering facts that code can
 establish, and deterministic mechanisms do not pretend to answer questions requiring judgment.
 
-Agent prose remains a Message or workflow result, not Evidence. Evidence proves observed facts: a
+Agent prose remains a Message, workflow result, or Artifact, not Evidence. Evidence proves observed
+facts: a
 Harness completed a Turn, a command returned an exit status, a source was captured, a Revision was
 observed, or an external authority contains an exact object. Fluent output never becomes its own
 proof.
@@ -156,7 +158,7 @@ proof.
 - **Dangerous work, bounded:** secrets, network, filesystem access, external writes, spend, and
   destructive operations are explicit capabilities.
 - **Situation first:** inspection shows the goal, observed history, current work or attention,
-  result, Evidence, and cleanup without exposing executor internals by default.
+  result, Artifacts, Evidence, and cleanup without exposing executor internals by default.
 - **Precise interruption:** humans are asked only for consequential decisions or genuine ambiguity
   without a safe default.
 - **Honest terminal:** workflow outcome and cleanup remain separate until both have converged.
@@ -168,7 +170,7 @@ proof.
 ```text
 L0  Existing tools       Harnesses, Sandbox providers, source hosts, APIs, provider SDKs
 L1  Deterministic edge   Actions, Checks, capability enforcement, adapters
-L2  Durable custody      Job identity, inbox, AgentRuns, Evidence, recovery, cleanup
+L2  Durable custody      Job identity, inbox, AgentRuns, Artifacts, Evidence, recovery, cleanup
 L3  Core consumers        clients, external products, and native workflows
 L4  Triggers and views    translate intent and render the same Job facts
 ```
@@ -229,7 +231,8 @@ second workflow should add its natural facts first; only observed duplication ea
 ## Proof that the North Star is real
 
 Dorf's durable custody is real when a client can admit a bounded Job, disappear, and later recover
-an evidence-backed outcome without duplicate agent Turns, Sandboxes, external effects, or results.
+its typed result, Artifacts, and supporting Evidence without duplicate agent Turns, Sandboxes,
+external effects, or results.
 Messages accepted during work remain ordered, ambiguous effects reconcile against their authority,
 and cleanup is retryable and honest.
 

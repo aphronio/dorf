@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -9,8 +10,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
-	"github.com/aphronio/dorf/internal/evidence"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -51,6 +52,21 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
 	}
 	run := deliveries[0].AgentRun
+	otherInput := input
+	otherInput.AdmissionKey += "-other"
+	otherInput.Branch += "-other"
+	otherJob, created, err := store.Admit(ctx, otherInput)
+	if err != nil || !created {
+		t.Fatalf("other Job=%#v created=%v err=%v", otherJob, created, err)
+	}
+	otherDeliveries, err := store.Deliveries(ctx, otherJob.ID)
+	if err != nil || len(otherDeliveries) != 1 {
+		t.Fatalf("other deliveries=%#v err=%v", otherDeliveries, err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `insert into dorf.artifacts(id,job_id,name,digest,byte_size,media_type,producer,agent_run_id,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		"artifact-cross-job", job.ID, "cross-job.txt", strings.Repeat("f", 64), 1, "text/plain", "test", otherDeliveries[0].AgentRun.ID, time.Now().UTC()); err == nil {
+		t.Fatal("Artifact accepted an AgentRun owned by another Job")
+	}
 	if err := store.PrepareAgentRun(ctx, run.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -62,27 +78,28 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = deliveries[0].AgentRun
-	evidence := spine.Evidence{
-		ID: spine.EvidenceID(run.ID, "investigation-report"), Digest: strings.Repeat("b", 64), ByteSize: 16,
-		MediaType: "text/markdown", Producer: "dorf-codebase-investigation", Kind: "investigation-report",
-		AgentRunID: run.ID, Revision: job.Revision, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
+	artifact := spine.Artifact{
+		ID: spine.ArtifactID(job.ID, spine.CodebaseInvestigationReportArtifactName), JobID: job.ID,
+		Name: spine.CodebaseInvestigationReportArtifactName, Digest: strings.Repeat("b", 64), ByteSize: 16,
+		MediaType: "text/markdown", Producer: "dorf-codebase-investigation",
+		AgentRunID: run.ID, CreatedAt: run.FinishedAt,
 	}
-	receipt := spine.CodebaseInvestigationReport{
-		JobID: job.ID, AgentRunID: run.ID,
-		ReportEvidenceID: evidence.ID, ObservedAt: run.FinishedAt,
-	}
-	stored, created, err := store.RecordCodebaseInvestigationReport(ctx, receipt, evidence)
-	if err != nil || !created || stored.JobID != receipt.JobID || stored.AgentRunID != receipt.AgentRunID || stored.ReportEvidenceID != receipt.ReportEvidenceID || !stored.ObservedAt.Equal(receipt.ObservedAt) {
+	stored, created, err := store.RecordCodebaseInvestigationReport(ctx, artifact)
+	if err != nil || !created || stored.JobID != artifact.JobID || stored.ReportArtifactID != artifact.ID || !stored.ObservedAt.Equal(artifact.CreatedAt) {
 		t.Fatalf("Report=%#v created=%v err=%v", stored, created, err)
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || job.AdmissionOpen {
 		t.Fatalf("terminal Job=%#v err=%v", job, err)
 	}
-	receipt.ObservedAt = receipt.ObservedAt.Add(time.Hour)
-	replayed, created, err := store.RecordCodebaseInvestigationReport(ctx, receipt, evidence)
-	if err != nil || created || replayed.JobID != stored.JobID || replayed.AgentRunID != stored.AgentRunID || replayed.ReportEvidenceID != stored.ReportEvidenceID || !replayed.ObservedAt.Equal(stored.ObservedAt) {
+	replayed, created, err := store.RecordCodebaseInvestigationReport(ctx, artifact)
+	if err != nil || created || replayed != stored {
 		t.Fatalf("idempotent Report=%#v created=%v err=%v", replayed, created, err)
+	}
+	changedArtifact := artifact
+	changedArtifact.Digest = strings.Repeat("c", 64)
+	if _, _, err := store.RecordCodebaseInvestigationReport(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
+		t.Fatalf("changed Artifact replay error=%v", err)
 	}
 }
 
@@ -141,7 +158,7 @@ func (*investigationExternals) RepositoryRevision(_ context.Context, job spine.J
 func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	records := evidence.Store{Root: t.TempDir()}
+	records := blob.Store{Root: t.TempDir()}
 	externals := &investigationExternals{}
 	service := spine.NewService(store, externals, records, nil, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -181,13 +198,21 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if err != nil || report == nil {
 		t.Fatalf("Report=%#v err=%v", report, err)
 	}
-	allEvidence, err := store.Evidence(ctx, job.ID)
-	if err != nil || len(allEvidence) != 1 || allEvidence[0].ID != report.ReportEvidenceID {
-		t.Fatalf("Evidence=%#v err=%v", allEvidence, err)
+	artifacts, err := store.Artifacts(ctx, job.ID)
+	if err != nil || len(artifacts) != 1 || artifacts[0].ID != report.ReportArtifactID || artifacts[0].Name != spine.CodebaseInvestigationReportArtifactName {
+		t.Fatalf("Artifacts=%#v err=%v", artifacts, err)
 	}
-	contents, err := records.ReadVerified(allEvidence[0].Digest, allEvidence[0].ByteSize)
+	contents, err := records.ReadVerified(artifacts[0].Digest, artifacts[0].ByteSize)
 	if err != nil || !strings.Contains(string(contents), "# Finding") {
 		t.Fatalf("report=%q err=%v", contents, err)
+	}
+	allEvidence, err := store.Evidence(ctx, job.ID)
+	if err != nil || len(allEvidence) != 0 {
+		t.Fatalf("agent prose was recorded as Evidence: %#v err=%v", allEvidence, err)
+	}
+	artifact, err := store.Artifact(ctx, report.ReportArtifactID)
+	if err != nil || artifact != artifacts[0] {
+		t.Fatalf("Artifact=%#v err=%v want=%#v", artifact, err, artifacts[0])
 	}
 
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
@@ -217,5 +242,13 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	cleaned, err := store.Job(ctx, job.ID)
 	if err != nil || cleaned.CleanupState != spine.CleanupComplete {
 		t.Fatalf("cleaned Job=%#v err=%v", cleaned, err)
+	}
+	afterCleanup, err := store.Artifact(ctx, report.ReportArtifactID)
+	if err != nil || afterCleanup != artifact {
+		t.Fatalf("Artifact did not survive cleanup: %#v err=%v", afterCleanup, err)
+	}
+	afterCleanupContents, err := records.ReadVerified(afterCleanup.Digest, afterCleanup.ByteSize)
+	if err != nil || !bytes.Equal(afterCleanupContents, contents) {
+		t.Fatalf("Artifact bytes did not survive cleanup: %q err=%v", afterCleanupContents, err)
 	}
 }

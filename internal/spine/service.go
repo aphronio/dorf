@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 )
 
 type Store interface {
@@ -96,21 +96,21 @@ type Service struct {
 	store      ServiceStore
 	externals  ServiceExternals
 	barrier    FaultBarrier
-	evidence   evidence.Store
+	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewService(store ServiceStore, externals ServiceExternals, records evidence.Store, barrier FaultBarrier, claimCheck func(context.Context) error) Service {
+func NewService(store ServiceStore, externals ServiceExternals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) Service {
 	return Service{
 		store:      store,
 		externals:  externals,
 		barrier:    barrier,
-		evidence:   records,
+		blobs:      records,
 		claimCheck: claimCheck,
 	}
 }
 
-func (s Service) EvidenceStore() evidence.Store { return s.evidence }
+func (s Service) BlobStore() blob.Store { return s.blobs }
 
 func (s Service) requireClaim(ctx context.Context) error {
 	if s.claimCheck == nil {
@@ -293,7 +293,7 @@ func commandArtifact(identity, revision string, observation CommandObservation) 
 }
 
 func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
-	blob, err := s.evidence.Put(contents)
+	blob, err := s.blobs.Put(contents)
 	if err != nil {
 		return Evidence{}, err
 	}

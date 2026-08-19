@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -191,7 +191,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			service := spine.NewService(
 				store,
 				faultActionExternals{effect: effect, runID: runID},
-				evidence.Store{},
+				blob.Store{},
 				nil,
 				func(claimCtx context.Context) error {
 					err := absurdruntime.RequireClaim(claimCtx)

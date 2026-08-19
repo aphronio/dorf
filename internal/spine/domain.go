@@ -51,10 +51,11 @@ const (
 type WorkflowName string
 
 const (
-	WorkflowCodingToProposal      WorkflowName = "coding-to-proposal"
-	WorkflowCodebaseInvestigation WorkflowName = "codebase-investigation"
-	CodingToProposalRevision                   = "3"
-	CodebaseInvestigationRevision              = "1"
+	WorkflowCodingToProposal                WorkflowName = "coding-to-proposal"
+	WorkflowCodebaseInvestigation           WorkflowName = "codebase-investigation"
+	CodingToProposalRevision                             = "3"
+	CodebaseInvestigationRevision                        = "1"
+	CodebaseInvestigationReportArtifactName              = "report.md"
 )
 
 type SandboxProvider string
@@ -278,6 +279,21 @@ type Evidence struct {
 	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
+// Artifact is one immutable, named deliverable produced by a workflow. Its
+// bytes live in the deployment-owned content-addressed store; this record is
+// the durable Job-scoped identity used for discovery and retrieval.
+type Artifact struct {
+	ID         string    `json:"id"`
+	JobID      string    `json:"job_id"`
+	Name       string    `json:"name"`
+	Digest     string    `json:"digest"`
+	ByteSize   int64     `json:"byte_size"`
+	MediaType  string    `json:"media_type"`
+	Producer   string    `json:"producer"`
+	AgentRunID string    `json:"agent_run_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type GitHubProposal struct {
 	JobID            string `json:"job_id"`
 	Number           int64  `json:"pr_number"`
@@ -304,11 +320,10 @@ type JobOutcome struct {
 }
 
 // CodebaseInvestigationReport is the typed terminal result of one repository-
-// grounded investigation. The Markdown bytes remain in Evidence storage.
+// grounded investigation. Its Markdown is the referenced Artifact.
 type CodebaseInvestigationReport struct {
 	JobID            string    `json:"job_id"`
-	AgentRunID       string    `json:"agent_run_id"`
-	ReportEvidenceID string    `json:"report_evidence_id"`
+	ReportArtifactID string    `json:"report_artifact_id"`
 	ObservedAt       time.Time `json:"observed_at"`
 }
 
@@ -351,6 +366,10 @@ func MessageID(jobID string, fromKind MessageFromKind, fromID string) string {
 
 func AgentRunID(messageID string) string {
 	return "agent-run-" + digest(messageID, 24)
+}
+
+func ArtifactID(jobID, name string) string {
+	return "artifact-" + digest(jobID+"\x00"+name, 24)
 }
 
 func ReviewRequestFromID(revision, role string) string {

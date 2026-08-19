@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/aphronio/dorf/internal/evidence"
+	"github.com/aphronio/dorf/internal/blob"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -41,7 +41,7 @@ type Service struct {
 	Store      postgres.Store
 	GitHub     GitHub
 	Repository Repository
-	Evidence   evidence.Store
+	Evidence   blob.Store
 	Barrier    WorkflowBarrier
 	claimCheck func(context.Context) error
 }

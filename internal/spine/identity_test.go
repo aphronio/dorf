@@ -28,6 +28,9 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if AgentRunID(messageA) != AgentRunID(messageA) {
 		t.Fatal("per-input AgentRun identity is not stable")
 	}
+	if ArtifactID(jobA, "report.md") != ArtifactID(jobA, "report.md") || ArtifactID(jobA, "report.md") == ArtifactID(jobA, "trace.json") || ArtifactID(jobA, "report.md") == ArtifactID(jobB+"-other", "report.md") {
+		t.Fatal("Artifact identity is not stable and Job/name-scoped")
+	}
 	revisionA := strings.Repeat("a", 40)
 	revisionB := strings.Repeat("b", 40)
 	role := "critical-boundary"
