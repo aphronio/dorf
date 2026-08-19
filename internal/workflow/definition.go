@@ -77,6 +77,8 @@ func (d Definition) ActionLabel(kind spine.ActionKind) string {
 		return "Provisioning Sandbox"
 	case spine.ActionRepositoryClone:
 		return "Cloning repository"
+	case spine.ActionRepositoryRestore:
+		return "Restoring retained repository"
 	case spine.ActionRepositorySetup:
 		return "Setting up repository"
 	case spine.ActionRepositoryPush:

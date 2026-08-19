@@ -101,6 +101,37 @@ func (q *Queries) GetCodebaseInvestigationRunForUpdate(ctx context.Context, arg 
 	return i, err
 }
 
+const getCodebaseInvestigationSource = `-- name: GetCodebaseInvestigationSource :one
+select s.job_id,s.kind,j.repository,j.revision,
+       coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
+from dorf.codebase_investigation_sources s
+join dorf.jobs j on j.id=s.job_id
+where s.job_id=$1
+`
+
+type GetCodebaseInvestigationSourceRow struct {
+	JobID          string
+	Kind           string
+	Repository     string
+	Revision       string
+	BundleDigest   string
+	BundleByteSize int64
+}
+
+func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID string) (GetCodebaseInvestigationSourceRow, error) {
+	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationSource, jobID)
+	var i GetCodebaseInvestigationSourceRow
+	err := row.Scan(
+		&i.JobID,
+		&i.Kind,
+		&i.Repository,
+		&i.Revision,
+		&i.BundleDigest,
+		&i.BundleByteSize,
+	)
+	return i, err
+}
+
 const insertCodebaseInvestigationReport = `-- name: InsertCodebaseInvestigationReport :execrows
 insert into dorf.codebase_investigation_reports(
     job_id,report_artifact_id
@@ -116,6 +147,35 @@ type InsertCodebaseInvestigationReportParams struct {
 
 func (q *Queries) InsertCodebaseInvestigationReport(ctx context.Context, arg InsertCodebaseInvestigationReportParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationReport, arg.JobID, arg.ReportArtifactID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCodebaseInvestigationSource = `-- name: InsertCodebaseInvestigationSource :execrows
+insert into dorf.codebase_investigation_sources(
+    job_id,kind,bundle_digest,bundle_byte_size
+) values(
+    $1,$2,$3,$4
+)
+on conflict(job_id) do nothing
+`
+
+type InsertCodebaseInvestigationSourceParams struct {
+	JobID          string
+	Kind           string
+	BundleDigest   sql.NullString
+	BundleByteSize sql.NullInt64
+}
+
+func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg InsertCodebaseInvestigationSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationSource,
+		arg.JobID,
+		arg.Kind,
+		arg.BundleDigest,
+		arg.BundleByteSize,
+	)
 	if err != nil {
 		return 0, err
 	}

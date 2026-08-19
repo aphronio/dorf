@@ -116,15 +116,15 @@ separate observable fact.
 
 ### Codebase investigation to a repository-grounded report
 
-A client delegates an exact repository Revision and an unstructured investigation brief. The
+A client delegates an exact reachable or locally committed repository Revision and an unstructured investigation brief. The
 workflow creates an isolated exact checkout, uses one bounded AgentRun for inspection and synthesis,
 checks its terminal result and unchanged checkout programmatically, and returns a flexible Markdown
 Report. An honest report may simply explain that no useful finding exists. It owns no publication or
 pull request. The client may use the result to answer the user, seek human acceptance, or admit
 another Job.
 
-The first implementation proves this shape hermetically through PostgreSQL and shared cleanup. It
-becomes supported only after a real Harness/Sandbox dogfood terminal confirms the same boundary.
+The implementation proves this shape through PostgreSQL, shared cleanup, and a real Incus/Codex
+dogfood terminal.
 
 ## Deterministic and agentic boundary
 
@@ -208,7 +208,8 @@ The supported product today remains one Go application using PostgreSQL and Absu
 workflow, named verified Sandbox profiles, local Incus on the supported host, Codex and Pi, and
 Git/GitHub as proposal and acceptance authorities. E2B has proved the same complete workflow seam
 but still requires a stable deployment-owned remote Gateway route. The implemented
-`codebase-investigation` workflow is the next dogfood candidate, not yet an expanded support claim.
+`codebase-investigation` workflow has a live Incus/Codex terminal; the same workflow through E2B
+remains an unproved portability follow-up.
 This narrow support claim is evidence, not the permanent product boundary.
 
 The current coding implementation may contain repository, Revision, review, and GitHub fields in

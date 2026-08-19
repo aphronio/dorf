@@ -228,6 +228,12 @@ func (e *Executor) sendStdin(ctx context.Context, pid uint32, input []byte) <-ch
 					Stdin: append([]byte(nil), input...),
 				}},
 			}))
+			// A command may exit successfully without consuming its advertised
+			// stdin before envd handles the second RPC. The Start stream's End
+			// event remains authoritative in that race.
+			if connect.CodeOf(err) == connect.CodeNotFound {
+				err = nil
+			}
 			if err != nil {
 				done <- err
 				return

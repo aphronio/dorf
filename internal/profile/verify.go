@@ -51,7 +51,11 @@ func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFacto
 		if err := runtime.ReconcileOwnedCreate(ctx, owner); err != nil {
 			return spine.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("create verification Sandbox: %w", err))
 		}
-		version, err := runBaseProbe(ctx, runtime, owner, profile.Harness)
+		putProbe := runtime.Workspace() + "/.dorf-profile-put-file"
+		if err := runtime.PutFile(ctx, owner, putProbe, []byte("dorf-"+spine.BaseProfileContract+"\n")); err != nil {
+			return spine.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("run Dorf %s atomic file probe: %w", spine.BaseProfileContract, err))
+		}
+		version, err := runBaseProbe(ctx, runtime, owner, profile.Harness, putProbe)
 		if err != nil {
 			return spine.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, err)
 		}
@@ -70,22 +74,26 @@ func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFacto
 	return store.SandboxProfile(ctx, profile.Name)
 }
 
-func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, harness string) (string, error) {
+func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, harness, putProbe string) (string, error) {
 	script := `set -eu
 workspace=$1
 harness=$2
+put_probe=$3
+put_expected=$4
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 test -d "$workspace" || fail "workspace does not exist: $workspace"
 test -w "$workspace" || fail "workspace is not writable: $workspace"
 probe="$workspace/.dorf-profile-probe"
 : > "$probe" || fail "workspace write probe failed: $workspace"
 rm -f -- "$probe"
+test "$(cat "$put_probe")" = "$put_expected" || fail "atomic file probe returned unexpected bytes"
+rm -f -- "$put_probe"
 command -v bash >/dev/null || fail "required command is missing: bash"
 command -v git >/dev/null || fail "required command is missing: git"
 command -v rg >/dev/null || fail "required command is missing: rg"
 command -v "$harness" >/dev/null || fail "required Harness command is missing: $harness"
 "$harness" --version`
-	result, err := runtime.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-profile-base-1", runtime.Workspace(), harness)
+	result, err := runtime.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-profile-"+spine.BaseProfileContract, runtime.Workspace(), harness, putProbe, "dorf-"+spine.BaseProfileContract)
 	if err != nil {
 		return "", fmt.Errorf("run Dorf %s profile probe: %w", spine.BaseProfileContract, err)
 	}

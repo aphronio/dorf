@@ -19,6 +19,7 @@ type ActionKind string
 const (
 	ActionSandboxCreate     ActionKind = "sandbox-create"
 	ActionRepositoryClone   ActionKind = "repository-clone"
+	ActionRepositoryRestore ActionKind = "repository-restore"
 	ActionRepositorySetup   ActionKind = "repository-setup"
 	ActionRepositoryPush    ActionKind = "repository-push"
 	ActionGitHubPullRequest ActionKind = "github-pull-request"
@@ -27,6 +28,24 @@ const (
 	ActionRouteRevoke       ActionKind = "provider-route-revoke"
 	ActionSandboxDelete     ActionKind = "sandbox-delete"
 )
+
+type CodebaseInvestigationSourceKind string
+
+const (
+	InvestigationSourceRemote    CodebaseInvestigationSourceKind = "remote"
+	InvestigationSourceGitBundle CodebaseInvestigationSourceKind = "git-bundle"
+)
+
+// CodebaseInvestigationSource is the immutable materialization input for one
+// investigation. A retained bundle is input custody, not an output Artifact.
+type CodebaseInvestigationSource struct {
+	JobID          string                          `json:"job_id,omitempty"`
+	Kind           CodebaseInvestigationSourceKind `json:"kind"`
+	Repository     string                          `json:"repository,omitempty"`
+	Revision       string                          `json:"revision"`
+	BundleDigest   string                          `json:"bundle_digest,omitempty"`
+	BundleByteSize int64                           `json:"bundle_byte_size,omitempty"`
+}
 
 type ActionState string
 

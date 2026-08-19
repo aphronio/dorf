@@ -12,6 +12,17 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (spine.CodebaseInvestigationSource, error) {
+	row, err := dbsql.New(s.DB).GetCodebaseInvestigationSource(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return spine.CodebaseInvestigationSource{}, ErrNotFound
+	}
+	if err != nil {
+		return spine.CodebaseInvestigationSource{}, err
+	}
+	return investigationSourceFromValues(row.JobID, row.Kind, row.Repository, row.Revision, row.BundleDigest, row.BundleByteSize), nil
+}
+
 func (s Store) CodebaseInvestigationReport(ctx context.Context, jobID string) (*spine.CodebaseInvestigationReport, error) {
 	row, err := dbsql.New(s.DB).GetCodebaseInvestigationReport(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {

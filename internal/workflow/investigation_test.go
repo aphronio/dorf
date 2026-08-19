@@ -41,6 +41,21 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	}
 }
 
+func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
+	job := spine.Job{ID: "job-local", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true, Revision: strings.Repeat("b", 40)}
+	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	snapshot := InvestigationSnapshot{
+		Job: job, MainSandbox: sandbox,
+		Source:   spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: job.Revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
+		Delivery: spine.Delivery{AgentRun: spine.AgentRun{ID: "run-local", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}},
+		Actions:  []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded}},
+	}
+	work := snapshot.Project()
+	if work.Kind != InvestigationWorkAction || work.ActionKind != spine.ActionRepositoryRestore || work.Description() != "Restoring retained repository" {
+		t.Fatalf("work=%#v description=%q", work, work.Description())
+	}
+}
+
 func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
 	tests := []string{
 		"# Finding\n\nSee `internal/workflow/workflow.go:54`.\n",

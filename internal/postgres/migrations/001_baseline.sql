@@ -51,7 +51,7 @@ create table dorf.jobs (
     workflow_name text not null check (workflow_name in ('coding-to-proposal','codebase-investigation')),
     workflow_revision text not null check (length(trim(workflow_revision)) > 0),
     goal text not null check (length(trim(goal)) > 0),
-    repository text not null check (length(trim(repository)) > 0),
+    repository text not null,
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     branch text not null check (length(trim(branch)) > 0),
     sandbox_profile text not null references dorf.sandbox_profiles(name),
@@ -75,10 +75,25 @@ create table dorf.jobs (
     constraint jobs_workflow_attention_check check (
         num_nonnulls(workflow_attention,workflow_attention_source,workflow_attention_at) in (0,3)
     ),
+    constraint jobs_repository_check check (
+        workflow_name='codebase-investigation' or length(trim(repository))>0
+    ),
     constraint jobs_github_authority_complete_check check (
         (github_repository is null and github_installation_id is null and base_branch is null) or
         (github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$' and
          github_installation_id ~ '^[1-9][0-9]*$' and length(base_branch) > 0 and base_branch <> branch)
+    )
+);
+
+create table dorf.codebase_investigation_sources (
+    job_id text primary key references dorf.jobs(id),
+    kind text not null check (kind in ('remote','git-bundle')),
+    bundle_digest text,
+    bundle_byte_size bigint,
+    check (
+        (kind='remote' and bundle_digest is null and bundle_byte_size is null) or
+        (kind='git-bundle' and bundle_digest is not null and bundle_byte_size is not null and
+         bundle_digest ~ '^[0-9a-f]{64}$' and bundle_byte_size>0)
     )
 );
 
@@ -105,7 +120,7 @@ create table dorf.actions (
     id text primary key,
     job_id text not null references dorf.jobs(id),
     kind text not null check (kind in (
-        'sandbox-create','repository-clone','repository-setup',
+        'sandbox-create','repository-clone','repository-restore','repository-setup',
         'repository-push','github-pull-request','review-checkout',
         'provider-route-create','provider-route-revoke','sandbox-delete'
     )),
@@ -337,5 +352,6 @@ comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
 comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in the referenced Artifact';
+comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

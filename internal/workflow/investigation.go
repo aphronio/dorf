@@ -52,6 +52,7 @@ type InvestigationSnapshot struct {
 	Actions     []spine.Action
 	Delivery    spine.Delivery
 	Report      *spine.CodebaseInvestigationReport
+	Source      spine.CodebaseInvestigationSource
 }
 
 func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID string) (InvestigationSnapshot, error) {
@@ -63,6 +64,13 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 	}
 	if snapshot.Job.Workflow != spine.WorkflowCodebaseInvestigation || snapshot.Job.WorkflowRevision != spine.CodebaseInvestigationRevision {
 		return snapshot, fmt.Errorf("Job %s is not codebase-investigation revision %s", jobID, spine.CodebaseInvestigationRevision)
+	}
+	snapshot.Source, err = store.CodebaseInvestigationSource(ctx, jobID)
+	if err != nil {
+		return snapshot, err
+	}
+	if snapshot.Source.JobID != snapshot.Job.ID || snapshot.Source.Revision != snapshot.Job.Revision {
+		return snapshot, fmt.Errorf("codebase-investigation source conflicts with its exact Job")
 	}
 	sandboxes, err := store.Sandboxes(ctx, jobID)
 	if err != nil {
@@ -115,8 +123,12 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	if !actionSucceeded(s.Actions, spine.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(spine.ActionSandboxCreate)
 	}
-	if !actionSucceeded(s.Actions, spine.ActionRepositoryClone, s.MainSandbox.ID) {
-		return action(spine.ActionRepositoryClone)
+	repositoryAction := spine.ActionRepositoryClone
+	if s.Source.Kind == spine.InvestigationSourceGitBundle {
+		repositoryAction = spine.ActionRepositoryRestore
+	}
+	if !actionSucceeded(s.Actions, repositoryAction, s.MainSandbox.ID) {
+		return action(repositoryAction)
 	}
 	if !actionSucceeded(s.Actions, spine.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(spine.ActionRouteCreate)
@@ -202,6 +214,9 @@ func runInvestigationAction(ctx context.Context, service spine.Service, store po
 		return nil
 	}
 	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
+		if work.ActionKind == spine.ActionRepositoryRestore {
+			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
+		}
 		return service.ExecuteSandboxAction(workCtx, snapshot.Job, snapshot.MainSandbox, action)
 	})
 }

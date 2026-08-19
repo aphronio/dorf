@@ -50,6 +50,13 @@ func (a Adapter) ReconcileClone(ctx context.Context, owner provider.Ownership, r
 	return a.Sandbox.ReconcileClone(ctx, owner.SandboxID, repository, revision, branch)
 }
 
+func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {
+	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
+		return err
+	}
+	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
+}
+
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
 	return a.Sandbox.Exec(ctx, owner.SandboxID, input, args...)
 }

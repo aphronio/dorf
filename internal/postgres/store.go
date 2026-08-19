@@ -23,6 +23,7 @@ var migrationFiles embed.FS
 var ErrNotFound = errors.New("Dorf Job not found")
 var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
 var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
@@ -57,20 +58,21 @@ func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
 }
 
 type NewJob struct {
-	AdmissionKey       string
-	Workflow           spine.WorkflowName
-	WorkflowRevision   string
-	Goal               string
-	Repository         string
-	Revision           string
-	Branch             string
-	SandboxProfile     string
-	ProviderConnection string
-	Model              string
-	ReasoningEffort    string
-	GitHubRepository   string
-	GitHubInstallation string
-	BaseBranch         string
+	AdmissionKey        string
+	Workflow            spine.WorkflowName
+	WorkflowRevision    string
+	Goal                string
+	Repository          string
+	Revision            string
+	Branch              string
+	SandboxProfile      string
+	ProviderConnection  string
+	Model               string
+	ReasoningEffort     string
+	GitHubRepository    string
+	GitHubInstallation  string
+	BaseBranch          string
+	InvestigationSource spine.CodebaseInvestigationSource
 }
 
 type NewMessage struct {
@@ -213,12 +215,13 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
 	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
-	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.Repository == "" || input.Branch == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, repository, branch, Sandbox profile, Provider Connection, and model")
+	input.InvestigationSource = normalizeInvestigationSource(input.InvestigationSource)
+	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.Branch == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, branch, Sandbox profile, Provider Connection, and model")
 	}
 	switch input.Workflow {
 	case spine.WorkflowCodingToProposal:
-		if input.WorkflowRevision != spine.CodingToProposalRevision || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" {
+		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (spine.CodebaseInvestigationSource{}) {
 			return spine.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", spine.CodingToProposalRevision)
 		}
 		if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
@@ -231,6 +234,17 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		if input.GitHubRepository != "" || input.GitHubInstallation != "" || input.BaseBranch != "" {
 			return spine.Job{}, false, fmt.Errorf("codebase-investigation does not accept GitHub publication authority")
 		}
+		if err := validateInvestigationSource(input.InvestigationSource); err != nil {
+			return spine.Job{}, false, err
+		}
+		if input.Repository != "" && input.Repository != input.InvestigationSource.Repository {
+			return spine.Job{}, false, fmt.Errorf("codebase-investigation repository conflicts with its typed source")
+		}
+		if input.Revision != "" && input.Revision != input.InvestigationSource.Revision {
+			return spine.Job{}, false, fmt.Errorf("codebase-investigation Revision conflicts with its typed source")
+		}
+		input.Repository = input.InvestigationSource.Repository
+		input.Revision = input.InvestigationSource.Revision
 	default:
 		return spine.Job{}, false, fmt.Errorf("unsupported workflow %q", input.Workflow)
 	}
@@ -279,7 +293,25 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
 		GitHubRepository: storedRow.GithubRepository, GitHubInstallation: storedRow.GithubInstallationID, BaseBranch: storedRow.BaseBranch,
 	}
-	if storedRow.ID != id || stored != input {
+	expectedBase := input
+	expectedBase.InvestigationSource = spine.CodebaseInvestigationSource{}
+	if storedRow.ID != id || stored != expectedBase {
+		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
+	}
+	if input.Workflow == spine.WorkflowCodebaseInvestigation {
+		if _, err := queries.InsertCodebaseInvestigationSource(ctx, investigationSourceParams(id, input.InvestigationSource)); err != nil {
+			return spine.Job{}, false, err
+		}
+		sourceRow, err := queries.GetCodebaseInvestigationSource(ctx, id)
+		if err != nil {
+			return spine.Job{}, false, err
+		}
+		if sourceRow.JobID != id {
+			return spine.Job{}, false, fmt.Errorf("codebase-investigation source conflicts with its exact Job")
+		}
+		stored.InvestigationSource = investigationSourceFromValues("", sourceRow.Kind, sourceRow.Repository, sourceRow.Revision, sourceRow.BundleDigest, sourceRow.BundleByteSize)
+	}
+	if stored != input {
 		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
 	}
 	messageID := spine.MessageID(id, "human", initialFromID)
@@ -323,6 +355,45 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	}
 	job, err := s.Job(ctx, id)
 	return job, rows == 1, err
+}
+
+func normalizeInvestigationSource(source spine.CodebaseInvestigationSource) spine.CodebaseInvestigationSource {
+	source.JobID = ""
+	source.Kind = spine.CodebaseInvestigationSourceKind(strings.TrimSpace(string(source.Kind)))
+	source.Repository = strings.TrimSpace(source.Repository)
+	source.Revision = strings.TrimSpace(source.Revision)
+	source.BundleDigest = strings.TrimSpace(source.BundleDigest)
+	return source
+}
+
+func validateInvestigationSource(source spine.CodebaseInvestigationSource) error {
+	if !ValidRevision(source.Revision) {
+		return fmt.Errorf("codebase-investigation source requires a lowercase full commit OID")
+	}
+	switch source.Kind {
+	case spine.InvestigationSourceRemote:
+		if source.Repository == "" || source.BundleDigest != "" || source.BundleByteSize != 0 {
+			return fmt.Errorf("remote investigation source requires only a repository URL and exact Revision")
+		}
+	case spine.InvestigationSourceGitBundle:
+		if source.Repository != "" || !sha256Digest.MatchString(source.BundleDigest) || source.BundleByteSize <= 0 {
+			return fmt.Errorf("Git-bundle investigation source requires exact retained digest, byte size, and Revision")
+		}
+	default:
+		return fmt.Errorf("codebase-investigation requires a remote or git-bundle source")
+	}
+	return nil
+}
+
+func investigationSourceParams(jobID string, source spine.CodebaseInvestigationSource) dbsql.InsertCodebaseInvestigationSourceParams {
+	return dbsql.InsertCodebaseInvestigationSourceParams{
+		JobID: jobID, Kind: string(source.Kind), BundleDigest: nullableString(source.BundleDigest),
+		BundleByteSize: sql.NullInt64{Int64: source.BundleByteSize, Valid: source.BundleByteSize > 0},
+	}
+}
+
+func investigationSourceFromValues(jobID, kind, repository, revision, digest string, byteSize int64) spine.CodebaseInvestigationSource {
+	return spine.CodebaseInvestigationSource{JobID: jobID, Kind: spine.CodebaseInvestigationSourceKind(kind), Repository: repository, Revision: revision, BundleDigest: digest, BundleByteSize: byteSize}
 }
 
 func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
@@ -598,7 +669,7 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 		return spine.Action{}, err
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRepositoryRestore, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
 	default:
 		return spine.Action{}, fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}
@@ -1164,7 +1235,7 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate,
+	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRepositoryRestore, spine.ActionRouteCreate,
 		spine.ActionRouteRevoke, spine.ActionReviewCheckout, spine.ActionSandboxDelete:
 	default:
 		return fmt.Errorf("unsupported Sandbox Action %q", kind)

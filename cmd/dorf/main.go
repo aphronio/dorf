@@ -493,8 +493,9 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable caller admission identity")
 	briefFile := set.String("brief-file", "", "path containing the complete investigation brief")
-	repository := set.String("repo", "", "clone URL")
-	revision := set.String("revision", "", "exact repository Revision")
+	repositoryURL := set.String("repo", "", "clone URL")
+	localRepository := set.String("local-repo", "", "local Git repository containing the committed Revision")
+	revision := set.String("revision", "", "exact repository Revision (default HEAD with --local-repo)")
 	provider := set.String("provider", "", "named Provider Connection")
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
@@ -511,11 +512,15 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 		return err
 	}
 	jobID := spine.JobID(strings.TrimSpace(*key))
+	source, workingTreeChangesExcluded, err := prepareInvestigationSource(ctx, blob.Store{Root: cfg.BlobRoot}, *repositoryURL, *localRepository, *revision)
+	if err != nil {
+		return err
+	}
 	input := postgres.NewJob{
-		AdmissionKey: *key, Goal: brief, Repository: *repository, Revision: *revision,
+		AdmissionKey: *key, Goal: brief, Repository: source.Repository, Revision: source.Revision,
 		Branch:         "dorf/investigation-" + strings.TrimPrefix(jobID, "job-"),
 		SandboxProfile: profile.Name, ProviderConnection: *provider,
-		Model: *model, ReasoningEffort: *effort,
+		Model: *model, ReasoningEffort: *effort, InvestigationSource: source,
 	}
 	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.RuntimeProfile{SandboxProfile: profile.Name}, input)
 	if err != nil {
@@ -525,6 +530,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 		"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision,
 		"required_provider_capabilities": workflow.CodebaseInvestigationDefinition().RequiredProviderCapabilities,
 		"created":                        created, "task_id": job.TaskID, "scheduled": true,
+		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
 }
 
@@ -743,7 +749,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	definition := workflow.CodebaseInvestigationDefinition()
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
-			"job": job, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
+			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
 			"execution":                      map[string]any{"main": runExecution, "cleanup": cleanupExecution},
@@ -751,8 +757,8 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderWorkflowExecutionAttention(stdout, job, runExecution, work.Description())
-	fmt.Fprintf(stdout, "  brief: %s\n  repository: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
-		job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
+	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
+		job.Goal, investigationSourceSummary(snapshot.Source), job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
@@ -772,6 +778,13 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	fmt.Fprintf(stdout, "  report: observed-at=%s Artifact=%s\n", snapshot.Report.ObservedAt.Format(time.RFC3339Nano), snapshot.Report.ReportArtifactID)
 	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", snapshot.Report.ReportArtifactID)
 	return nil
+}
+
+func investigationSourceSummary(source spine.CodebaseInvestigationSource) string {
+	if source.Kind == spine.InvestigationSourceGitBundle {
+		return fmt.Sprintf("retained Git bundle sha256:%s (%d bytes)", source.BundleDigest, source.BundleByteSize)
+	}
+	return "remote Git " + source.Repository
 }
 
 func joinProviderCapabilities(capabilities []workflow.ProviderCapability) string {

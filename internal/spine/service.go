@@ -30,6 +30,7 @@ type Externals interface {
 	Harness() string
 	SandboxCreate(context.Context, Job, Sandbox) error
 	RepositoryClone(context.Context, Job, Sandbox) error
+	RepositoryRestore(context.Context, Job, Sandbox, CodebaseInvestigationSource, []byte) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
 	AgentInitialTurn(context.Context, Job, Delivery) (HarnessBinding, error)
 	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
@@ -695,4 +696,24 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 		return err
 	}
 	return nil
+}
+
+// ExecuteRepositoryRestore reconciles a retained exact repository input and
+// records the same scoped Action only after the provider checkout converges.
+func (s Service) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox Sandbox, action Action, source CodebaseInvestigationSource) error {
+	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
+		source.JobID != job.ID || source.Kind != InvestigationSourceGitBundle || source.Revision != job.Revision {
+		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
+	}
+	contents, err := s.blobs.ReadVerified(source.BundleDigest, source.BundleByteSize)
+	if err != nil {
+		return fmt.Errorf("read retained repository bundle: %w", err)
+	}
+	if err := s.externals.RepositoryRestore(ctx, job, sandbox, source, contents); err != nil {
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
 }

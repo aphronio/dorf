@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 		Goal: "Find one unnecessary coding-workflow dependency.", Repository: "https://github.com/aphronio/dorf.git",
 		Revision: strings.Repeat("a", 40), Branch: "dorf/investigation-test",
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		InvestigationSource: spine.CodebaseInvestigationSource{Kind: spine.InvestigationSourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	job, created, err := store.Admit(ctx, input)
 	if err != nil || !created || job.Workflow != input.Workflow || job.WorkflowRevision != input.WorkflowRevision {
@@ -35,6 +37,19 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 	repeated, created, err := store.Admit(ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
 		t.Fatalf("idempotent Job=%#v created=%v err=%v", repeated, created, err)
+	}
+	source, err := store.CodebaseInvestigationSource(ctx, job.ID)
+	if err != nil || source.JobID != job.ID || source.Kind != spine.InvestigationSourceRemote || source.Repository != input.Repository || source.Revision != input.Revision {
+		t.Fatalf("source=%#v err=%v", source, err)
+	}
+	changedSource := input
+	changedSource.Repository = ""
+	changedSource.InvestigationSource = spine.CodebaseInvestigationSource{
+		Kind: spine.InvestigationSourceGitBundle, Revision: input.Revision,
+		BundleDigest: strings.Repeat("e", 64), BundleByteSize: 123,
+	}
+	if _, _, err := store.Admit(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
+		t.Fatalf("same admission key changed source identity: %v", err)
 	}
 	changed := input
 	changed.Workflow = spine.WorkflowCodingToProposal
@@ -103,6 +118,34 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 	}
 }
 
+func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	revision := strings.Repeat("9", 40)
+	supplied := spine.CodebaseInvestigationSource{
+		Kind: spine.InvestigationSourceGitBundle, Revision: revision,
+		BundleDigest: strings.Repeat("8", 64), BundleByteSize: 4096,
+	}
+	job, created, err := store.Admit(ctx, postgres.NewJob{
+		AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
+		Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+		Goal: "Inspect an unpublished commit.", Revision: revision, Branch: "dorf/local-investigation",
+		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		InvestigationSource: supplied,
+	})
+	if err != nil || !created || job.Repository != "" || job.Revision != revision {
+		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
+	}
+	stored, err := store.CodebaseInvestigationSource(ctx, job.ID)
+	supplied.JobID = job.ID
+	if err != nil || stored != supplied {
+		t.Fatalf("source=%#v want=%#v err=%v", stored, supplied, err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `update dorf.codebase_investigation_sources set bundle_digest=null where job_id=$1`, job.ID); err == nil {
+		t.Fatal("database accepted incomplete Git-bundle source identity")
+	}
+}
+
 type investigationExternals struct {
 	spine.ServiceExternals
 	mu      sync.Mutex
@@ -123,6 +166,12 @@ func (e *investigationExternals) SandboxCreate(context.Context, spine.Job, spine
 }
 func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
 	return e.effect(spine.ActionRepositoryClone)
+}
+func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source spine.CodebaseInvestigationSource, contents []byte) error {
+	if source.JobID != job.ID || source.Revision != job.Revision || string(contents) != "retained repository input" {
+		return fmt.Errorf("unexpected retained repository restore")
+	}
+	return e.effect(spine.ActionRepositoryRestore)
 }
 func (e *investigationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
 	return e.effect(spine.ActionRouteCreate)
@@ -159,15 +208,23 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	records := blob.Store{Root: t.TempDir()}
+	retained, err := records.Put([]byte("retained repository input"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	externals := &investigationExternals{}
 	service := spine.NewService(store, externals, records, nil, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.Admit(ctx, postgres.NewJob{
 		AdmissionKey: "investigation-terminal-" + suffix,
 		Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
-		Goal: "Find one concrete simplification.", Repository: "https://github.com/aphronio/dorf.git",
+		Goal:     "Find one concrete simplification.",
 		Revision: strings.Repeat("d", 40), Branch: "dorf/investigation-terminal-" + suffix,
 		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		InvestigationSource: spine.CodebaseInvestigationSource{
+			Kind: spine.InvestigationSourceGitBundle, Revision: strings.Repeat("d", 40),
+			BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
+		},
 	})
 	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
@@ -193,6 +250,13 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-terminal", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
+	}
+	externals.mu.Lock()
+	effects := append([]spine.ActionKind(nil), externals.effects...)
+	externals.mu.Unlock()
+	wantEffects := []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryRestore, spine.ActionRouteCreate}
+	if !slices.Equal(effects, wantEffects) {
+		t.Fatalf("effects=%v want=%v", effects, wantEffects)
 	}
 	report, err := store.CodebaseInvestigationReport(ctx, job.ID)
 	if err != nil || report == nil {

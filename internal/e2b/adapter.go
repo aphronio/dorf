@@ -103,12 +103,8 @@ func (a Adapter) AttachReviewMetadata(ctx context.Context, owner provider.Owners
 		return err
 	}
 	payload = append(payload, '\n')
-	result, err := a.Exec(ctx, owner, payload, "bash", "-lc", "umask 077; install -d -m 700 /tmp/dorf; cat > "+reviewAttestationPath)
-	if err != nil {
-		return err
-	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("attach review Sandbox metadata: %s", strings.TrimSpace(result.Stderr))
+	if err := a.PutFile(ctx, owner, reviewAttestationPath, payload); err != nil {
+		return fmt.Errorf("attach review Sandbox metadata: %w", err)
 	}
 	return a.AttestReview(ctx, owner, review)
 }
@@ -150,6 +146,10 @@ func (a Adapter) ReconcileClone(ctx context.Context, owner provider.Ownership, r
 		return err
 	}
 	return reconcileClone(ctx, a, owner, repository, revision, branch)
+}
+
+func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {
+	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
 }
 
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {

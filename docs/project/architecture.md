@@ -12,9 +12,9 @@ state, SQLite schemas, Python APIs, CLI shapes, and document formats are not sup
 Product direction and vocabulary live in the [North Star](north-star.md).
 
 The verified implementation is deliberately narrow: one Go application, two explicit workflows,
-PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. A first
-`codebase-investigation` implementation adds a second explicit coordinator and typed Report;
-its hermetic PostgreSQL terminal is proven while live dogfood remains the support gate. This
+PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. The
+`codebase-investigation` workflow has an independent coordinator, typed Report, and live Incus
+dogfood terminal. This
 architecture must keep both concrete paths clear without treating coding-specific or investigation-
 specific records as the permanent public workflow API.
 
@@ -187,9 +187,11 @@ may occur before a Proposal. Outcome and cleanup remain separate.
 
 ## Current codebase-investigation composition
 
-One admitted investigation pins an exact repository Revision, unstructured brief, workflow
-revision, Sandbox profile, and model envelope. Its explicit
-coordinator creates one Job-owned Sandbox, checks out the exact Revision, installs the scoped
+One admitted investigation pins an exact repository source and Revision, unstructured brief,
+workflow revision, Sandbox profile, and model envelope. A source is either a reachable remote Git
+repository or a content-addressed Git bundle retained before admission; retained inputs are not
+workflow-output Artifacts. Its explicit coordinator creates one Job-owned Sandbox, materializes the
+exact Revision through the provider-neutral file boundary when required, installs the scoped
 Provider Route, runs one `investigate` AgentRun, verifies the checkout remained exact and clean,
 retains nonblank Markdown as the named `report.md` Artifact, records a typed Report pointing to that
 Artifact, and enters the same Job cleanup path.
@@ -243,7 +245,9 @@ an update clears verification and default status. Credentials remain host config
 
 ## Harness and Sandbox adapters
 
-Incus and E2B implement one provider-neutral Sandbox contract. E2B has proved lifecycle, command,
+Incus and E2B implement one provider-neutral Sandbox contract. Its file operation reconciles one
+bounded byte sequence at an absolute regular-file path through verified temporary write and atomic
+replacement; it does not claim directory synchronization, mounts, or streaming. E2B has proved lifecycle, command,
 exact ownership recovery, authenticated endpoints, remote scoped routes, Codex and Pi, coding-to-PR,
 terminal Outcome observation, and cleanup through that seam.
 Every operation carries Dorf's Job ID, durable Sandbox ID, and ownership nonce while provider

@@ -1,3 +1,18 @@
+-- name: InsertCodebaseInvestigationSource :execrows
+insert into dorf.codebase_investigation_sources(
+    job_id,kind,bundle_digest,bundle_byte_size
+) values(
+    sqlc.arg(job_id),sqlc.arg(kind),sqlc.arg(bundle_digest),sqlc.arg(bundle_byte_size)
+)
+on conflict(job_id) do nothing;
+
+-- name: GetCodebaseInvestigationSource :one
+select s.job_id,s.kind,j.repository,j.revision,
+       coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
+from dorf.codebase_investigation_sources s
+join dorf.jobs j on j.id=s.job_id
+where s.job_id=sqlc.arg(job_id);
+
 -- name: GetCodebaseInvestigationReport :one
 select r.job_id,r.report_artifact_id,a.created_at as observed_at
 from dorf.codebase_investigation_reports r

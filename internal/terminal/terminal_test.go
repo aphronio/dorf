@@ -3,7 +3,9 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,9 +13,134 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/repository"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
+
+type localRestoreSandbox struct {
+	provider.Sandbox
+	root      string
+	workspace string
+}
+
+func (s localRestoreSandbox) Workspace() string { return s.workspace }
+
+func (s localRestoreSandbox) physical(path string) string {
+	switch {
+	case path == s.workspace || strings.HasPrefix(path, s.workspace+"/"):
+		return filepath.Join(s.root, strings.TrimPrefix(path, "/"))
+	case path == "/tmp/dorf" || strings.HasPrefix(path, "/tmp/dorf/"):
+		return filepath.Join(s.root, strings.TrimPrefix(path, "/"))
+	default:
+		return path
+	}
+}
+
+func (s localRestoreSandbox) PutFile(_ context.Context, _ provider.Ownership, destination string, contents []byte) error {
+	destination = s.physical(destination)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(destination, contents, 0o600)
+}
+
+func (s localRestoreSandbox) Exec(ctx context.Context, _ provider.Ownership, input []byte, argv ...string) (provider.Result, error) {
+	argv = append([]string(nil), argv...)
+	for i := range argv {
+		argv[i] = s.physical(argv[i])
+	}
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// A real Sandbox command does not inherit Dorf's repository as its current
+	// directory. Keep this fake outside any Git repository so bundle operations
+	// must establish their own explicit repository context.
+	command.Dir = s.root
+	command.Stdin = bytes.NewReader(input)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	err := command.Run()
+	result := provider.Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if exit, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = exit.ExitCode()
+		return result, nil
+	}
+	return result, err
+}
+
+func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *testing.T) {
+	local := t.TempDir()
+	run := func(directory string, args ...string) string {
+		command := exec.Command("git", args...)
+		command.Dir = directory
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	run("", "init", "--quiet", local)
+	run(local, "config", "user.name", "Dorf Test")
+	run(local, "config", "user.email", "dorf-test@localhost")
+	if err := os.WriteFile(filepath.Join(local, "unpublished.txt"), []byte("exact committed source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run(local, "add", "unpublished.txt")
+	run(local, "commit", "--quiet", "-m", "unpublished")
+	bundle, err := repository.BundleLocalRevision(context.Background(), local, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(bundle.Contents))
+	job := spine.Job{ID: "job-local-source", Revision: bundle.Revision, Branch: "dorf/investigation-local"}
+	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	source := spine.CodebaseInvestigationSource{
+		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: bundle.Revision,
+		BundleDigest: digest, BundleByteSize: int64(len(bundle.Contents)),
+	}
+	sandbox := localRestoreSandbox{root: t.TempDir(), workspace: "/workspace/job"}
+	externals := Externals{Sandbox: sandbox}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := externals.RepositoryRestore(context.Background(), job, owned, source, bundle.Contents); err != nil {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+	}
+	checkout := sandbox.physical(sandbox.workspace)
+	if got := run(checkout, "rev-parse", "HEAD"); got != bundle.Revision {
+		t.Fatalf("HEAD=%s want=%s", got, bundle.Revision)
+	}
+	if got := run(checkout, "branch", "--show-current"); got != job.Branch {
+		t.Fatalf("branch=%s want=%s", got, job.Branch)
+	}
+	contents, err := os.ReadFile(filepath.Join(checkout, "unpublished.txt"))
+	if err != nil || string(contents) != "exact committed source\n" {
+		t.Fatalf("contents=%q err=%v", contents, err)
+	}
+}
+
+func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
+	sandbox := localRestoreSandbox{root: t.TempDir(), workspace: "/workspace/job"}
+	workspace := sandbox.physical(sandbox.workspace)
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "foreign.txt"), []byte("do not delete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	job := spine.Job{ID: "job-foreign", Revision: strings.Repeat("a", 40), Branch: "dorf/investigation-foreign"}
+	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("b", 64)}
+	source := spine.CodebaseInvestigationSource{
+		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: job.Revision,
+		BundleDigest: strings.Repeat("c", 64), BundleByteSize: 1,
+	}
+	err := (Externals{Sandbox: sandbox}).RepositoryRestore(context.Background(), job, owned, source, []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatalf("restore error=%v", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(workspace, "foreign.txt"))
+	if readErr != nil || string(contents) != "do not delete\n" {
+		t.Fatalf("foreign contents=%q err=%v", contents, readErr)
+	}
+}
 
 func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 	run := spine.ReviewRunView{

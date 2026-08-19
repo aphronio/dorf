@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 func TestLiveEnvdExecPreservesProcessSemantics(t *testing.T) {
@@ -46,6 +48,19 @@ func TestLiveEnvdExecPreservesProcessSemantics(t *testing.T) {
 	executor, err := NewExecutor(connection, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	adapter := Adapter{Client: client, Config: AdapterConfig{Workspace: "/workspace/job", SandboxTimeout: 10 * time.Minute, ProcessTimeout: 30 * time.Second}}
+	owned := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	fileContents := []byte{'b', 'u', 'n', 'd', 'l', 'e', 0, 0xff}
+	if err := adapter.PutFile(ctx, owned, "/tmp/dorf/live-put-file.bin", fileContents); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.PutFile(ctx, owned, "/tmp/dorf/live-put-file.bin", fileContents); err != nil {
+		t.Fatal(err)
+	}
+	observedFile, err := adapter.Exec(ctx, owned, nil, "cat", "/tmp/dorf/live-put-file.bin")
+	if err != nil || observedFile.ExitCode != 0 || !bytes.Equal([]byte(observedFile.Stdout), fileContents) {
+		t.Fatalf("PutFile bytes=%v exit=%d err=%v", []byte(observedFile.Stdout), observedFile.ExitCode, err)
 	}
 
 	input := []byte{'i', 0, 0xff, 'n'}

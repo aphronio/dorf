@@ -1785,8 +1785,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   provenance or security attestation merely by being admitted.
 - **Verification boundary:** Dorf owns one mandatory, versioned `base-1` functional probe before a
   profile may become default or admit a Job. The explicit, potentially billable operation reconciles
-  one durably owned disposable Sandbox, verifies a writable workspace, `bash`, `git`, `rg`, and the
-  selected Harness/version, then ownership-deletes the Sandbox and confirms absence. Its stable
+  one durably owned disposable Sandbox, verifies a writable workspace, the baseline atomic file
+  operation, `bash`, `git`, `rg`, and the selected Harness/version, then ownership-deletes the
+  Sandbox and confirms absence. Its stable
   ownership tuple and typed receipt make process-loss recovery converge through cleanup rather than
   leak a proof resource. Repository-specific dependencies remain the repository setup or custom
   artifact's responsibility. Optional capabilities stay broad and are added only when an actual
@@ -1863,3 +1864,33 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Large or streaming deliverables exceed the bounded blob API, external object
   storage becomes deployment authority, or multiple producers require a richer typed ownership
   relation than the current AgentRun-produced Artifact.
+
+## D073 — Local committed investigation sources are retained Git bundles
+
+- **Status:** Accepted provider-neutral local-source slice — 2026-08-19
+- **Decision:** `codebase-investigation` accepts exactly one source: a reachable remote repository
+  with an exact full commit OID, or `--local-repo` with an optional revision that defaults to `HEAD`.
+  Dorf resolves the local revision to an exact commit, rejects submodules and Git LFS pointers,
+  creates a self-contained Git bundle capped at 128 MiB, durably stores its bytes by SHA-256 before
+  Job admission, and binds digest, byte size, and Revision as one immutable workflow-specific source.
+  Local index, tracked-worktree, and untracked changes are excluded and reported to the caller.
+- **Execution:** A retained source projects a distinct `repository-restore` Action. Dorf reads and
+  verifies the retained bytes, uses the common Sandbox `PutFile` operation to reconcile an exact
+  temporary bundle, verifies it with Git, and converges the admitted branch and Revision before the
+  investigator runs. An ownership marker distinguishes a retryable partial restore from a foreign
+  pre-existing checkout. Remote sources keep the existing `repository-clone` Action.
+- **File boundary:** `PutFile` reconciles one bounded byte slice at one clean absolute regular-file
+  destination through an adjacent verified temporary file and atomic rename. Incus and E2B retain
+  their private transports. The operation is safe to retry after an indeterminate response, but it
+  does not claim streaming, directory transfer, mounts, stat/list, or provider filesystem parity.
+- **Authority:** A retained source is accepted input custody, not an Artifact, Result, or Evidence.
+  Artifacts remain workflow-produced deliverables; Evidence remains observed proof. A crash after
+  blob retention but before admission may leave an unreferenced deduplicated blob, while every
+  admitted Job is independent of the original host checkout.
+- **Why:** Investigation dogfood against an unpublished local commit otherwise required pushing it
+  to a remote authority. The existing review handoff also wrote bundles directly through command
+  stdin; the earned atomic file primitive removes that unsafe destination write without turning the
+  Sandbox contract into a speculative filesystem API.
+- **Reconsider when:** A real input exceeds the bounded in-memory transport, a provider-native
+  streaming upload materially reduces memory or protocol risk, submodules or LFS become required,
+  or another workflow earns a more general typed input-blob relation.

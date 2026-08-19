@@ -63,6 +63,8 @@ type verificationSandbox struct {
 	deleteErr           error
 	deleteLeavesPresent bool
 	presentErr          error
+	putCall             int
+	putErr              error
 	execResult          provider.Result
 	execErr             error
 }
@@ -93,6 +95,10 @@ func (*verificationSandbox) AttestReview(context.Context, provider.Ownership, pr
 func (*verificationSandbox) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return nil
 }
+func (s *verificationSandbox) PutFile(context.Context, provider.Ownership, string, []byte) error {
+	s.putCall++
+	return s.putErr
+}
 func (s *verificationSandbox) Exec(context.Context, provider.Ownership, []byte, ...string) (provider.Result, error) {
 	return s.execResult, s.execErr
 }
@@ -113,8 +119,17 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.deleteCall != 1 || runtime.present {
+	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 || runtime.present {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
+	}
+}
+
+func TestVerifyBaseRejectsFailedAtomicFileProbe(t *testing.T) {
+	store := newVerificationStore()
+	runtime := &verificationSandbox{putErr: errors.New("upload unavailable")}
+	_, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	if err == nil || !strings.Contains(err.Error(), "atomic file probe") || runtime.deleteCall != 1 || store.profile.BaseVerified() {
+		t.Fatalf("profile=%#v runtime=%#v error=%v", store.profile, runtime, err)
 	}
 }
 
