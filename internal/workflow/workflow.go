@@ -350,8 +350,8 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
-		if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err != nil {
-			return fmt.Errorf("attach Job message task: %w", err)
+		if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+			return fmt.Errorf("attach Job task: %w", err)
 		}
 		return nil
 	})
@@ -437,7 +437,7 @@ func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if err != nil {
 			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
 		}
-		if err := store.SetCleanupTaskID(ctx, jobID, spawned.TaskID); err != nil {
+		if err := store.AttachCleanupTask(ctx, jobID, current.CurrentTaskID, spawned.TaskID, CleanupTaskName); err != nil {
 			return err
 		}
 		result, err = store.Job(ctx, jobID)
@@ -447,20 +447,19 @@ func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 }
 
 func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.Job, skipTaskID string) error {
-	for _, taskID := range []string{job.TaskID} {
-		if taskID == "" || taskID == skipTaskID {
-			continue
-		}
-		if err := client.CancelTask(ctx, client.QueueName(), taskID); err != nil {
-			return fmt.Errorf("cancel attached Absurd task %s: %w", taskID, err)
-		}
-		snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), taskID)
-		if err != nil {
-			return err
-		}
-		if snapshot == nil || !snapshot.IsTerminal() {
-			return fmt.Errorf("attached Absurd task %s did not reach a public terminal result", taskID)
-		}
+	taskID := job.CurrentTaskID
+	if taskID == "" || taskID == skipTaskID {
+		return nil
+	}
+	if err := client.CancelTask(ctx, client.QueueName(), taskID); err != nil {
+		return fmt.Errorf("cancel attached Absurd task %s: %w", taskID, err)
+	}
+	snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), taskID)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil || !snapshot.IsTerminal() {
+		return fmt.Errorf("attached Absurd task %s did not reach a public terminal result", taskID)
 	}
 	return nil
 }
@@ -481,29 +480,40 @@ func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {
 
 func verifyAttachedTask(ctx context.Context, store postgres.Store, jobID, taskName string) error {
 	return store.WithJobFence(ctx, jobID, func() error {
+		task, ok := absurd.TaskFromContext(ctx)
+		if !ok {
+			return absurd.ErrNoTaskContext
+		}
 		job, err := store.Job(ctx, jobID)
 		if err != nil {
 			return err
 		}
-		attachedID := job.TaskID
-		if taskName == CleanupTaskName {
-			attachedID = job.CleanupTaskID
+		attachments, err := store.JobTasks(ctx, jobID)
+		if err != nil {
+			return err
 		}
-		if attachedID == "" {
-			task, ok := absurd.TaskFromContext(ctx)
-			if !ok {
-				return absurd.ErrNoTaskContext
+		for _, attachment := range attachments {
+			if attachment.TaskID != task.TaskID() {
+				continue
 			}
+			if attachment.TaskID != job.CurrentTaskID {
+				return fmt.Errorf("%s task %s is no longer the Job's current attachment", taskName, task.TaskID())
+			}
+			if attachment.TaskName != taskName {
+				return fmt.Errorf("task %s is durably attached as %s, not %s", task.TaskID(), attachment.TaskName, taskName)
+			}
+			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
+		}
+		if job.CurrentTaskID != task.TaskID() {
 			if taskName == CleanupTaskName {
-				err = store.SetCleanupTaskID(ctx, jobID, task.TaskID())
+				err = store.AttachCleanupTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
 			} else {
-				err = store.AttachMessageTask(ctx, jobID, task.TaskID())
+				err = store.AttachJobTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
 			}
 			if err != nil {
 				return fmt.Errorf("recover public Spawn attachment for %s: %w", taskName, err)
 			}
-			attachedID = task.TaskID()
 		}
-		return verifyTaskContext(ctx, attachedID, taskName)
+		return verifyTaskContext(ctx, task.TaskID(), taskName)
 	})
 }

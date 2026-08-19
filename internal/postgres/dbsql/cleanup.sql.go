@@ -66,7 +66,8 @@ func (q *Queries) CountUnsettledSandboxCleanupActions(ctx context.Context, jobID
 }
 
 const getCleanupJobForUpdate = `-- name: GetCleanupJobForUpdate :one
-select admission_open,cleanup_state,coalesce(cleanup_task_id,'') as cleanup_task_id,
+select admission_open,cleanup_state,
+       coalesce((select task_id from dorf.job_tasks where job_id=dorf.jobs.id order by sequence desc limit 1),'') as current_task_id,
        coalesce(cleanup_attention,'') as cleanup_attention
 from dorf.jobs
 where id=$1
@@ -76,7 +77,7 @@ for update
 type GetCleanupJobForUpdateRow struct {
 	AdmissionOpen    bool
 	CleanupState     spine.CleanupState
-	CleanupTaskID    string
+	CurrentTaskID    interface{}
 	CleanupAttention string
 }
 
@@ -86,7 +87,7 @@ func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (Get
 	err := row.Scan(
 		&i.AdmissionOpen,
 		&i.CleanupState,
-		&i.CleanupTaskID,
+		&i.CurrentTaskID,
 		&i.CleanupAttention,
 	)
 	return i, err

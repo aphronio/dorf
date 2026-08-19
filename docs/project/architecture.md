@@ -70,6 +70,10 @@ One admission creates one Job with complete bounded intent, a stable idempotency
 pinned workflow version. If recording and scheduling cannot share one transaction, recovery
 reconciles the boundary rather than assuming both happened.
 
+A Job records an append-only ordered chain of Absurd task attachments. The latest attachment is its
+current execution task; task names are observations, not hard-coded Job phases. A workflow may hand
+off to another task without adding another task-ID column or changing retry semantics.
+
 Each workflow has one readable coordinator over its natural facts. It asks what work is currently
 missing, performs one bounded operation, records the resulting fact, reloads, and continues or waits.
 Execution and human inspection derive from the same authoritative facts. Dorf does not persist a
@@ -214,10 +218,10 @@ registry. Those boundaries require later dogfood evidence.
 - **External ambiguity:** inspect the external authority; never infer success from timeout or retry
   blindly.
 - **Poison work:** bounded attempts, time, cost, and attention stop infinite agent or provider spend.
-- **Operator retry:** after repairing the cause of an attached main task's terminal failure,
-  `dorf retry JOB_ID` uses Absurd's public retry API to add exactly one bounded attempt to that same
-  task. Existing checkpoints and Dorf facts remain authoritative; scheduling is not reported as
-  successful resumption.
+- **Operator retry:** after repairing the cause of the Job's latest attached execution task's
+  terminal failure, `dorf retry JOB_ID` uses Absurd's public retry API to add exactly one bounded
+  attempt to that same task. Existing checkpoints and Dorf facts remain authoritative; scheduling
+  is not reported as successful resumption.
 - **Code changes:** prefer short-lived Jobs, additive compatible task results where practical, and
   versioned workflow code. Let active Jobs drain on their pinned version rather than translating
   opaque execution history.

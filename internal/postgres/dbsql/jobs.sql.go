@@ -33,26 +33,6 @@ func (q *Queries) AdvanceJobRevision(ctx context.Context, arg AdvanceJobRevision
 	return result.RowsAffected()
 }
 
-const attachMessageTask = `-- name: AttachMessageTask :execrows
-update dorf.jobs
-set task_id=coalesce(task_id,$1)
-where id=$2 and admission_open
-  and (task_id is null or task_id=$1)
-`
-
-type AttachMessageTaskParams struct {
-	TaskID sql.NullString
-	JobID  string
-}
-
-func (q *Queries) AttachMessageTask(ctx context.Context, arg AttachMessageTaskParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, attachMessageTask, arg.TaskID, arg.JobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const clearWorkflowAttention = `-- name: ClearWorkflowAttention :execrows
 update dorf.jobs
 set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
@@ -123,19 +103,48 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 	return i, err
 }
 
+const getCurrentJobTaskForUpdate = `-- name: GetCurrentJobTaskForUpdate :one
+select coalesce(current_task.task_id,'') as task_id,
+       coalesce(current_task.task_name,'') as task_name,
+       coalesce(current_task.sequence,0)::bigint as sequence
+from dorf.jobs j
+left join lateral (
+    select task_id,task_name,sequence
+    from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
+where j.id=$1
+for update of j
+`
+
+type GetCurrentJobTaskForUpdateRow struct {
+	TaskID   string
+	TaskName string
+	Sequence int64
+}
+
+func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) (GetCurrentJobTaskForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getCurrentJobTaskForUpdate, jobID)
+	var i GetCurrentJobTaskForUpdateRow
+	err := row.Scan(&i.TaskID, &i.TaskName, &i.Sequence)
+	return i, err
+}
+
 const getJob = `-- name: GetJob :one
 select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.repository,j.revision,
        initial.oid as starting_revision,j.branch,
        coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
        coalesce(j.base_branch,'') as base_branch,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
-       j.cleanup_state,coalesce(j.task_id,'') as task_id,coalesce(j.cleanup_task_id,'') as cleanup_task_id,
+       j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
        coalesce(j.workflow_attention_source,'') as workflow_attention_source,
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
 join dorf.revisions initial on initial.job_id=j.id and initial.generation=0
+left join lateral (
+    select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
 where j.id=$1
 `
 
@@ -158,8 +167,7 @@ type GetJobRow struct {
 	ReasoningEffort         string
 	AdmissionOpen           bool
 	CleanupState            spine.CleanupState
-	TaskID                  string
-	CleanupTaskID           string
+	CurrentTaskID           string
 	WorkflowAttention       string
 	WorkflowAttentionSource string
 	WorkflowAttentionAt     sql.NullTime
@@ -190,8 +198,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.ReasoningEffort,
 		&i.AdmissionOpen,
 		&i.CleanupState,
-		&i.TaskID,
-		&i.CleanupTaskID,
+		&i.CurrentTaskID,
 		&i.WorkflowAttention,
 		&i.WorkflowAttentionSource,
 		&i.WorkflowAttentionAt,
@@ -389,6 +396,32 @@ func (q *Queries) InsertInitialRevision(ctx context.Context, arg InsertInitialRe
 	return err
 }
 
+const insertJobTask = `-- name: InsertJobTask :execrows
+insert into dorf.job_tasks(job_id,sequence,task_id,task_name)
+values($1,$2,$3,$4)
+on conflict(task_id) do nothing
+`
+
+type InsertJobTaskParams struct {
+	JobID    string
+	Sequence int64
+	TaskID   string
+	TaskName string
+}
+
+func (q *Queries) InsertJobTask(ctx context.Context, arg InsertJobTaskParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertJobTask,
+		arg.JobID,
+		arg.Sequence,
+		arg.TaskID,
+		arg.TaskName,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertRevision = `-- name: InsertRevision :exec
 insert into dorf.revisions(job_id,oid,comparison_base_oid,tree_oid,branch,generation,evidence_id)
 values($1,$2,$3::text,$4::text,
@@ -416,6 +449,42 @@ func (q *Queries) InsertRevision(ctx context.Context, arg InsertRevisionParams) 
 		arg.EvidenceID,
 	)
 	return err
+}
+
+const listJobTasks = `-- name: ListJobTasks :many
+select job_id,sequence,task_id,task_name,attached_at
+from dorf.job_tasks
+where job_id=$1
+order by sequence
+`
+
+func (q *Queries) ListJobTasks(ctx context.Context, jobID string) ([]DorfJobTask, error) {
+	rows, err := q.db.QueryContext(ctx, listJobTasks, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DorfJobTask
+	for rows.Next() {
+		var i DorfJobTask
+		if err := rows.Scan(
+			&i.JobID,
+			&i.Sequence,
+			&i.TaskID,
+			&i.TaskName,
+			&i.AttachedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRevisions = `-- name: ListRevisions :many
@@ -468,6 +537,20 @@ func (q *Queries) ListRevisions(ctx context.Context, jobID string) ([]ListRevisi
 		return nil, err
 	}
 	return items, nil
+}
+
+const markCleanupScheduled = `-- name: MarkCleanupScheduled :execrows
+update dorf.jobs
+set cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end
+where id=$1
+`
+
+func (q *Queries) MarkCleanupScheduled(ctx context.Context, jobID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markCleanupScheduled, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const nextRevisionGeneration = `-- name: NextRevisionGeneration :one
@@ -542,27 +625,6 @@ type SetCleanupAttentionParams struct {
 
 func (q *Queries) SetCleanupAttention(ctx context.Context, arg SetCleanupAttentionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setCleanupAttention, arg.Detail, arg.JobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setCleanupTaskID = `-- name: SetCleanupTaskID :execrows
-update dorf.jobs
-set cleanup_task_id=coalesce(cleanup_task_id,$1),
-    cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end
-where id=$2
-  and (cleanup_task_id is null or cleanup_task_id=$1)
-`
-
-type SetCleanupTaskIDParams struct {
-	CleanupTaskID sql.NullString
-	JobID         string
-}
-
-func (q *Queries) SetCleanupTaskID(ctx context.Context, arg SetCleanupTaskIDParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setCleanupTaskID, arg.CleanupTaskID, arg.JobID)
 	if err != nil {
 		return 0, err
 	}

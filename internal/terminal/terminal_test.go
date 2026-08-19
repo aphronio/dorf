@@ -24,6 +24,32 @@ type localRestoreSandbox struct {
 	workspace string
 }
 
+func TestInvestigationTurnInputRequiresPortableRepositoryCitations(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	input := codingTurnInput(
+		spine.Job{Revision: revision},
+		spine.Delivery{
+			Message:  spine.Message{Input: "Find one architectural weakness."},
+			AgentRun: spine.AgentRun{Role: "investigate"},
+		},
+	)
+
+	for _, required := range []string{
+		"current working directory is its root",
+		"repository-relative paths with 1-based line numbers",
+		"<path>:<line> or <path>:<start>-<end>",
+		"Do not include absolute Sandbox paths",
+		revision,
+	} {
+		if !strings.Contains(input, required) {
+			t.Fatalf("investigation input lacks %q:\n%s", required, input)
+		}
+	}
+	if strings.Contains(input, "/workspace/job") || strings.Contains(input, "internal/workflow") {
+		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
+	}
+}
+
 func (s localRestoreSandbox) Workspace() string { return s.workspace }
 
 func (s localRestoreSandbox) physical(path string) string {

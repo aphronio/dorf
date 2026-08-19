@@ -553,11 +553,26 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
 		SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
 		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
-		TaskID: row.TaskID, CleanupTaskID: row.CleanupTaskID,
+		CurrentTaskID:     row.CurrentTaskID,
 		WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
 		WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
 		AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
 	}, nil
+}
+
+func (s Store) JobTasks(ctx context.Context, jobID string) ([]spine.JobTask, error) {
+	rows, err := dbsql.New(s.DB).ListJobTasks(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]spine.JobTask, 0, len(rows))
+	for _, row := range rows {
+		tasks = append(tasks, spine.JobTask{
+			JobID: row.JobID, Sequence: row.Sequence, TaskID: row.TaskID,
+			TaskName: row.TaskName, AttachedAt: row.AttachedAt,
+		})
+	}
+	return tasks, nil
 }
 
 func (s Store) Revisions(ctx context.Context, jobID string) ([]spine.Revision, error) {
@@ -601,11 +616,10 @@ func acquireJobFenceTx(ctx context.Context, tx *sql.Tx, jobID string) error {
 	return nil
 }
 
-// AttachMessageTask binds the public Spawn result for the one exact consumer
-// admitted for this Job. The deterministic Absurd idempotency key supplies
-// task identity; Dorf only compare-and-sets its cross-authority binding.
-func (s Store) AttachMessageTask(ctx context.Context, jobID, proposedTaskID string) error {
-	return expectOneRows(dbsql.New(s.DB).AttachMessageTask(ctx, dbsql.AttachMessageTaskParams{JobID: jobID, TaskID: sql.NullString{String: proposedTaskID, Valid: true}}))
+// AttachJobTask appends one exact Absurd task handoff. The deterministic Absurd
+// idempotency key supplies task identity; Dorf records only ordered attachment.
+func (s Store) AttachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
+	return s.attachJobTask(ctx, jobID, expectedCurrentTaskID, taskID, taskName, false)
 }
 
 func messageFromValues(id, jobID string, fromKind spine.MessageFromKind, fromID string, sequence int64, input string, intent spine.MessageDeliveryIntent, targetTurnID string) spine.Message {
@@ -659,8 +673,56 @@ func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error
 	return tx.Commit()
 }
 
-func (s Store) SetCleanupTaskID(ctx context.Context, jobID, taskID string) error {
-	return expectOneRows(dbsql.New(s.DB).SetCleanupTaskID(ctx, dbsql.SetCleanupTaskIDParams{CleanupTaskID: sql.NullString{String: taskID, Valid: true}, JobID: jobID}))
+func (s Store) AttachCleanupTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
+	return s.attachJobTask(ctx, jobID, expectedCurrentTaskID, taskID, taskName, true)
+}
+
+func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string, cleanup bool) error {
+	jobID = strings.TrimSpace(jobID)
+	expectedCurrentTaskID = strings.TrimSpace(expectedCurrentTaskID)
+	taskID = strings.TrimSpace(taskID)
+	taskName = strings.TrimSpace(taskName)
+	if jobID == "" || taskID == "" || taskName == "" {
+		return fmt.Errorf("Job task attachment requires exact Job, task, and task-name identities")
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if current.TaskID == taskID {
+		if current.TaskName != taskName {
+			return fmt.Errorf("Absurd task %s is already attached as %s", taskID, current.TaskName)
+		}
+	} else {
+		if current.TaskID != expectedCurrentTaskID {
+			return fmt.Errorf("Job %s current task is %q, not expected predecessor %q", jobID, current.TaskID, expectedCurrentTaskID)
+		}
+		inserted, err := queries.InsertJobTask(ctx, dbsql.InsertJobTaskParams{
+			JobID: jobID, Sequence: current.Sequence + 1, TaskID: taskID, TaskName: taskName,
+		})
+		if err != nil {
+			return err
+		}
+		if inserted != 1 {
+			return fmt.Errorf("Absurd task %s is already attached to another Job", taskID)
+		}
+	}
+	if cleanup {
+		updated, err := queries.MarkCleanupScheduled(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return fmt.Errorf("Job %s cleanup scheduling did not settle", jobID)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, kind spine.ActionKind) (spine.Action, error) {
@@ -1527,8 +1589,8 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if job.AdmissionOpen || job.CleanupState != spine.CleanupScheduled {
 		return fmt.Errorf("cleanup cannot complete while admission or cleanup scheduling remains unsettled")
 	}
-	if job.CleanupTaskID == "" {
-		return fmt.Errorf("cleanup cannot complete without its exact attached cleanup task")
+	if job.CurrentTaskID == "" {
+		return fmt.Errorf("cleanup cannot complete without the Job's current attached execution task")
 	}
 	deliveries, err := queries.ListDeliveries(ctx, jobID)
 	if err != nil {

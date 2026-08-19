@@ -63,8 +63,6 @@ create table dorf.jobs (
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
     admission_open boolean not null default true,
     cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
-    task_id text unique,
-    cleanup_task_id text unique,
     workflow_attention text,
     workflow_attention_source text,
     workflow_attention_at timestamptz,
@@ -83,6 +81,15 @@ create table dorf.jobs (
         (github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$' and
          github_installation_id ~ '^[1-9][0-9]*$' and length(base_branch) > 0 and base_branch <> branch)
     )
+);
+
+create table dorf.job_tasks (
+    job_id text not null references dorf.jobs(id),
+    sequence bigint not null check (sequence > 0),
+    task_id text not null unique check (length(trim(task_id)) > 0),
+    task_name text not null check (length(trim(task_name)) > 0),
+    attached_at timestamptz not null default clock_timestamp(),
+    primary key (job_id,sequence)
 );
 
 create table dorf.codebase_investigation_sources (

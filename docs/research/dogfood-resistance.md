@@ -6,7 +6,16 @@ Dorf. Resolved items are removed: accepted boundaries belong in the
 
 ## Resistance to discuss
 
-### P0 — Workflow-specific network failures arrive late
+### P1 — Follow exits on active cleanup reconciliation
+
+Live investigation briefly rendered `Cleanup needs attention · reconciling provider-route-revoke`
+and exited while ordinary cleanup was actively succeeding. Durable inspection moments later showed
+the route revoke, Sandbox delete, cleanup task, and Job cleanup all complete.
+
+Discuss distinguishing active cleanup operation from actionable cleanup attention in the derived
+human view. Do not weaken real cleanup-attention exit behavior or add another persisted state.
+
+### P1 — Workflow-specific network failures arrive late
 
 The broad profile probe verifies provider lifecycle, the baseline file operation, required tools,
 Harness startup, and cleanup. It deliberately cannot prove every repository clone, dependency
@@ -16,22 +25,6 @@ consumed all bounded task attempts during early investigation dogfood.
 Discuss the smallest workflow-owned readiness or failure-classification improvement that shortens
 this feedback loop without turning profiles into repository dependency manifests, silently changing
 host firewall policy, or adding a fine-grained provider capability matrix.
-
-### P1 — Identical infrastructure failures consume attempts quickly
-
-One repeated clone/network failure consumed every automatic attempt in roughly ninety seconds.
-Existing retry semantics remained truthful, but the operator had little time to intervene.
-
-Discuss bounded backoff and observable repeated-failure attention at the task boundary. Do not add
-workflow branches that reinterpret Absurd attempt authority or claim a failed task resumed
-automatically.
-
-### P2 — Report citations are Sandbox-local
-
-Useful investigation Reports cite exact files and lines, but links currently use
-`/workspace/job/...`, which is not a durable consumer location after Sandbox deletion.
-
-Discuss repository-relative citations or canonical links pinned to the admitted Revision.
 
 ### P2 — Empty capability lists serialize as `null`
 
@@ -64,8 +57,7 @@ Do not treat this backlog as justification to:
 
 Re-rank only from new dogfood evidence:
 
-1. repeated-failure backoff;
+1. truthful cleanup following;
 2. workflow-specific network failure feedback;
-3. durable repository-relative Report citations;
-4. stable empty-collection JSON; and
-5. thin interaction clients outside Core.
+3. stable empty-collection JSON; and
+4. thin interaction clients outside Core.

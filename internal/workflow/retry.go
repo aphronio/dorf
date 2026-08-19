@@ -19,9 +19,11 @@ type RetryReceipt struct {
 	Attempt int    `json:"attempt"`
 }
 
-// RetryFailedJob schedules one additional bounded attempt on an admission-open
-// Job's existing failed main task. Absurd retains task, run, checkpoint, and
-// retry authority; Dorf does not copy or reinterpret that execution state.
+// RetryFailedJob schedules one additional bounded attempt on the Job's current
+// attached execution task. The current task is simply the latest durable
+// attachment, regardless of which workflow phase or task name produced it.
+// Absurd retains task, run, checkpoint, and retry authority; Dorf does not
+// copy or reinterpret that execution state.
 func RetryFailedJob(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (RetryReceipt, error) {
 	jobID = strings.TrimSpace(jobID)
 	if jobID == "" {
@@ -31,19 +33,17 @@ func RetryFailedJob(ctx context.Context, store postgres.Store, client *absurd.Cl
 	if err != nil {
 		return RetryReceipt{}, err
 	}
-	if !job.AdmissionOpen {
-		return RetryReceipt{}, fmt.Errorf("Job %s admission is closed; its main task cannot be retried", job.ID)
-	}
-	if job.TaskID == "" {
-		return RetryReceipt{}, fmt.Errorf("Job %s has no attached main task", job.ID)
+	taskID := job.CurrentTaskID
+	if taskID == "" {
+		return RetryReceipt{}, fmt.Errorf("Job %s has no attached execution task", job.ID)
 	}
 
 	// With no max-attempt override, Absurd atomically extends the same failed
 	// task's existing bounded ceiling by exactly one attempt. It also owns the
 	// atomic failed-state check, so Dorf does not pre-read or mirror task state.
-	scheduled, err := client.RetryTask(ctx, client.QueueName(), job.TaskID)
+	scheduled, err := client.RetryTask(ctx, client.QueueName(), taskID)
 	if err != nil {
-		return RetryReceipt{}, fmt.Errorf("retry Job %s main task: %w", job.ID, err)
+		return RetryReceipt{}, fmt.Errorf("retry Job %s attached task %s: %w", job.ID, taskID, err)
 	}
 	return RetryReceipt{
 		JobID: job.ID, TaskID: scheduled.TaskID, Retry: "scheduled",

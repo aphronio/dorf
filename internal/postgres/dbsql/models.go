@@ -42,6 +42,14 @@ type DorfGithubProposal struct {
 	BodyDigest       string
 }
 
+type DorfJobTask struct {
+	JobID      string
+	Sequence   int64
+	TaskID     string
+	TaskName   string
+	AttachedAt time.Time
+}
+
 type DorfReviewRunProjection struct {
 	ID                    string
 	JobID                 string

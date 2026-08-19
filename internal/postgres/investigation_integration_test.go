@@ -244,7 +244,7 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err != nil {
+	if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
@@ -283,7 +283,7 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CleanupTaskID) })
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CurrentTaskID) })
 	cleanupService := spine.NewService(store, externals, records, nil, func(context.Context) error { return nil })
 	cleaning, sandboxes, err := cleanupService.PrepareCleanup(ctx, job.ID)
 	if err != nil {

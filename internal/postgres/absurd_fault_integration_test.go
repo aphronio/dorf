@@ -38,7 +38,7 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err != nil {
+	if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
 	job, err = store.Job(ctx, job.ID)
@@ -48,7 +48,7 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := client.FetchTaskResult(ctx, queueName, job.TaskID)
+	failed, err := client.FetchTaskResult(ctx, queueName, job.CurrentTaskID)
 	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
 		t.Fatalf("failed task=%#v err=%v", failed, err)
 	}
@@ -56,10 +56,10 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.JobID != job.ID || receipt.TaskID != job.TaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
+	if receipt.JobID != job.ID || receipt.TaskID != job.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
 		t.Fatalf("retry receipt=%#v", receipt)
 	}
-	pending, err := client.FetchTaskResult(ctx, queueName, job.TaskID)
+	pending, err := client.FetchTaskResult(ctx, queueName, job.CurrentTaskID)
 	if err != nil || pending == nil || pending.State != absurd.TaskPending {
 		t.Fatalf("scheduled task=%#v err=%v", pending, err)
 	}
@@ -72,6 +72,76 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	}
 	if after != job {
 		t.Fatalf("retry mutated Dorf Job facts: before=%#v after=%#v", job, after)
+	}
+}
+
+func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
+	_, store, defaultClient := testDatabase(t)
+	defaultClient.Close()
+	ctx := context.Background()
+	queueName := fmt.Sprintf("dorf_cleanup_retry_%d", time.Now().UnixNano())
+	client := newFaultClient(t, store, queueName)
+	const taskName = "dorf-cleanup-retry-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
+		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable cleanup outage")
+	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
+
+	job := admitFaultJob(t, store, fmt.Sprintf("cleanup-retry-%d", time.Now().UnixNano()))
+	mainTaskID := "main-task-" + job.ID
+	if err := store.AttachJobTask(ctx, job.ID, "", mainTaskID, "dorf-main-proof-v1"); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "cleanup-retry-proof-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := client.FetchTaskResult(ctx, queueName, before.CurrentTaskID)
+	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
+		t.Fatalf("failed cleanup task=%#v err=%v", failed, err)
+	}
+	attachments, err := store.JobTasks(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attachments) != 2 || attachments[0].TaskID != mainTaskID || attachments[0].Sequence != 1 ||
+		attachments[1].TaskID != before.CurrentTaskID || attachments[1].TaskName != taskName || attachments[1].Sequence != 2 {
+		t.Fatalf("ordered task attachments=%#v", attachments)
+	}
+
+	receipt, err := workflow.RetryFailedJob(ctx, store, client, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.JobID != job.ID || receipt.TaskID != before.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
+		t.Fatalf("cleanup retry receipt=%#v", receipt)
+	}
+	pending, err := client.FetchTaskResult(ctx, queueName, before.CurrentTaskID)
+	if err != nil || pending == nil || pending.State != absurd.TaskPending {
+		t.Fatalf("scheduled cleanup task=%#v err=%v", pending, err)
+	}
+	after, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("cleanup retry mutated Dorf Job facts: before=%#v after=%#v", before, after)
 	}
 }
 

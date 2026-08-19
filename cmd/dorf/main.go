@@ -607,7 +607,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.TaskID, "scheduled": true})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.CurrentTaskID, "scheduled": true})
 }
 
 func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -657,7 +657,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	return writeJSON(stdout, map[string]any{
 		"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision,
 		"required_provider_capabilities": workflow.CodebaseInvestigationDefinition().RequiredProviderCapabilities,
-		"created":                        created, "task_id": job.TaskID, "scheduled": true,
+		"created":                        created, "task_id": job.CurrentTaskID, "scheduled": true,
 		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
 }
@@ -779,14 +779,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
 	history := workflowHistory(snapshot)
-	runExecution, err := fetchTaskResult(ctx, client, job.TaskID)
+	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
 	}
-	cleanupExecution, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
-	if err != nil {
-		return err
-	}
+	currentExecution := currentTaskExecution(executions)
 	if *jsonOutput {
 		messages := make([]spine.Message, 0, len(snapshot.Deliveries))
 		agentRuns := make([]spine.AgentRun, 0, len(snapshot.Deliveries))
@@ -807,10 +804,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
 				"sandboxes": snapshot.Sandboxes, "messages": messages,
 			},
-			"execution": map[string]any{
-				"main":    runExecution,
-				"cleanup": cleanupExecution,
-			},
+			"execution": executions,
 		}
 		return writeJSON(stdout, view)
 	}
@@ -819,7 +813,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		readiness = "ready"
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, runExecution, currentWork.Description())
+	renderWorkflowExecutionAttention(stdout, job, currentExecution, currentWork.Description())
 	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
@@ -866,25 +860,22 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	if artifacts == nil {
 		artifacts = []spine.Artifact{}
 	}
-	runExecution, err := fetchTaskResult(ctx, client, job.TaskID)
+	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
 	}
-	cleanupExecution, err := fetchTaskResult(ctx, client, job.CleanupTaskID)
-	if err != nil {
-		return err
-	}
+	currentExecution := currentTaskExecution(executions)
 	definition := workflow.CodebaseInvestigationDefinition()
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
 			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
-			"execution":                      map[string]any{"main": runExecution, "cleanup": cleanupExecution},
+			"execution":                      executions,
 		})
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, runExecution, work.Description())
+	renderWorkflowExecutionAttention(stdout, job, currentExecution, work.Description())
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
@@ -993,7 +984,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CleanupTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
 }
 
 func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
@@ -1011,7 +1002,7 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	if err != nil {
 		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
 	}
-	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "cleanup_task_id": job.CleanupTaskID})
+	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID})
 }
 
 func readInput(path, command, noun string) (string, error) {
@@ -1080,6 +1071,41 @@ type taskResultView struct {
 	State     absurd.TaskResultState `json:"state,omitempty"`
 	Result    json.RawMessage        `json:"result,omitempty"`
 	LastError string                 `json:"last_error,omitempty"`
+}
+
+type jobTaskExecutionView struct {
+	Attachment spine.JobTask  `json:"attachment"`
+	Current    bool           `json:"current"`
+	Execution  taskResultView `json:"execution"`
+}
+
+func fetchJobTaskExecutions(ctx context.Context, store postgres.Store, client *absurd.Client, job spine.Job) ([]jobTaskExecutionView, error) {
+	attachments, err := store.JobTasks(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	executions := make([]jobTaskExecutionView, 0, len(attachments))
+	for _, attachment := range attachments {
+		execution, err := fetchTaskResult(ctx, client, attachment.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		executions = append(executions, jobTaskExecutionView{
+			Attachment: attachment,
+			Current:    attachment.TaskID == job.CurrentTaskID,
+			Execution:  execution,
+		})
+	}
+	return executions, nil
+}
+
+func currentTaskExecution(executions []jobTaskExecutionView) taskResultView {
+	for i := len(executions) - 1; i >= 0; i-- {
+		if executions[i].Current {
+			return executions[i].Execution
+		}
+	}
+	return taskResultView{}
 }
 
 func fetchTaskResult(ctx context.Context, client *absurd.Client, taskID string) (taskResultView, error) {

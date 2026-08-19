@@ -116,7 +116,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
 	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
-	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.TaskID != job.TaskID {
+	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
 		t.Fatalf("idempotent Job admission=%#v created=%v err=%v", repeatedJob, created, err)
 	}
 	changedJob := input
@@ -129,7 +129,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
 		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
 	}
-	taskIDs := []string{job.TaskID}
+	taskIDs := []string{job.CurrentTaskID}
 	t.Cleanup(func() {
 		for _, id := range taskIDs {
 			_ = client.CancelTask(context.Background(), config.QueueName, id)
@@ -267,7 +267,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatal(cleanup.err)
 	}
 	cleaning := cleanup.job
-	taskIDs = append(taskIDs, cleaning.CleanupTaskID)
+	taskIDs = append(taskIDs, cleaning.CurrentTaskID)
 	if cleaning.AdmissionOpen {
 		t.Fatal("cleanup did not durably close admission")
 	}
@@ -1559,7 +1559,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err := store.RecordSandboxActionSuccess(ctx, route.ID); err != nil {
 		t.Fatal(err)
 	}
-	taskIDs := []string{job.TaskID}
+	taskIDs := []string{job.CurrentTaskID}
 	t.Cleanup(func() {
 		for _, id := range taskIDs {
 			_ = client.CancelTask(context.Background(), config.QueueName, id)
@@ -1586,7 +1586,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskIDs = append(taskIDs, cleaning.CleanupTaskID)
+	taskIDs = append(taskIDs, cleaning.CurrentTaskID)
 	if cleaning.AdmissionOpen {
 		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
@@ -1659,7 +1659,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if got := externals.effectKinds(); fmt.Sprint(got) != "[provider-route-revoke sandbox-delete]" {
 		t.Fatalf("cleanup effects=%v", got)
 	}
-	snapshot, err := client.FetchTaskResult(ctx, config.QueueName, job.TaskID)
+	snapshot, err := client.FetchTaskResult(ctx, config.QueueName, job.CurrentTaskID)
 	if err != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled {
 		t.Fatalf("cancelled public run result=%#v err=%v", snapshot, err)
 	}
@@ -1752,7 +1752,7 @@ func (e *integrationExternals) effectKinds() []spine.ActionKind {
 	return append([]spine.ActionKind(nil), e.effects...)
 }
 
-func TestMessageTaskAttachmentCompareAndSetRejectsAnotherStoredTask(t *testing.T) {
+func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -1766,7 +1766,7 @@ func TestMessageTaskAttachmentCompareAndSetRejectsAnotherStoredTask(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, unrelated.TaskID) })
-	if err := store.AttachMessageTask(ctx, job.ID, unrelated.TaskID); err != nil {
+	if err := store.AttachJobTask(ctx, job.ID, "", unrelated.TaskID, "unrelated-task"); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, postgres.MessageTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
@@ -1774,7 +1774,7 @@ func TestMessageTaskAttachmentCompareAndSetRejectsAnotherStoredTask(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
-	if err := store.AttachMessageTask(ctx, job.ID, spawned.TaskID); err == nil {
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, postgres.MessageTaskName); err == nil {
 		t.Fatal("a second public Spawn result replaced the stored task binding")
 	}
 }
@@ -1881,7 +1881,7 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCleanupTaskID(ctx, job.ID, "cleanup-task-"+job.ID); err != nil {
+	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, "cleanup-task-"+job.ID, workflow.CleanupTaskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteCleanup(ctx, job.ID); err != nil {

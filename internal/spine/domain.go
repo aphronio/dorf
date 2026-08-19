@@ -14,6 +14,17 @@ const (
 	CleanupComplete  CleanupState = "complete"
 )
 
+// JobTask is one immutable attachment from a Dorf Job to an Absurd task.
+// Sequence expresses handoff order; Absurd remains authoritative for task
+// execution, attempts, checkpoints, and terminal state.
+type JobTask struct {
+	JobID      string    `json:"job_id"`
+	Sequence   int64     `json:"sequence"`
+	TaskID     string    `json:"task_id"`
+	TaskName   string    `json:"task_name"`
+	AttachedAt time.Time `json:"attached_at"`
+}
+
 type ActionKind string
 
 const (
@@ -140,8 +151,7 @@ type Job struct {
 	ReasoningEffort         string       `json:"reasoning_effort"`
 	AdmissionOpen           bool         `json:"admission_open"`
 	CleanupState            CleanupState `json:"cleanup_state"`
-	TaskID                  string       `json:"task_id"`
-	CleanupTaskID           string       `json:"cleanup_task_id,omitempty"`
+	CurrentTaskID           string       `json:"current_task_id,omitempty"`
 	WorkflowAttention       string       `json:"workflow_attention,omitempty"`
 	WorkflowAttentionSource string       `json:"workflow_attention_source,omitempty"`
 	WorkflowAttentionAt     time.Time    `json:"workflow_attention_at,omitempty"`

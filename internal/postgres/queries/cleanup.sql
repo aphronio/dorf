@@ -1,5 +1,6 @@
 -- name: GetCleanupJobForUpdate :one
-select admission_open,cleanup_state,coalesce(cleanup_task_id,'') as cleanup_task_id,
+select admission_open,cleanup_state,
+       coalesce((select task_id from dorf.job_tasks where job_id=dorf.jobs.id order by sequence desc limit 1),'') as current_task_id,
        coalesce(cleanup_attention,'') as cleanup_attention
 from dorf.jobs
 where id=sqlc.arg(job_id)

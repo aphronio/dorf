@@ -90,7 +90,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 	if err != nil {
 		return followSnapshot{}, err
 	}
-	execution, err := fetchTaskResult(ctx, client, job.TaskID)
+	execution, err := fetchTaskResult(ctx, client, job.CurrentTaskID)
 	if err != nil {
 		return followSnapshot{}, err
 	}

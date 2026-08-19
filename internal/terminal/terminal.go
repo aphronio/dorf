@@ -360,7 +360,12 @@ func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
 	if delivery.AgentRun.Role == "investigate" {
 		return fmt.Sprintf(`%s
 
-Dorf codebase-investigation contract: inspect the repository at exact Revision %s. Do not modify the checkout. Return a nonblank Markdown report grounded in exact repository paths and line numbers. If there is no useful finding, say that plainly in the report.`, delivery.Message.Input, job.Revision)
+Dorf codebase-investigation contract:
+- Inspect the repository at exact Revision %s; the current working directory is its root.
+- Do not modify the checkout.
+- Return a nonblank Markdown report grounded in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
+- Do not include absolute Sandbox paths.
+- If there is no useful finding, say that plainly in the report.`, delivery.Message.Input, job.Revision)
 	}
 	if delivery.AgentRun.Role != "implement" {
 		return delivery.Message.Input
