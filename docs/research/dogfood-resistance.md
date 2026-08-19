@@ -26,16 +26,6 @@ Discuss bounded backoff and observable repeated-failure attention at the task bo
 workflow branches that reinterpret Absurd attempt authority or claim a failed task resumed
 automatically.
 
-### P1 — Provider Gateway lifecycle is not obvious
-
-`provider connect` reconciles and starts the private broker, but discovering whether the broker is
-stopped, healthy, or intentionally persistent requires knowledge beyond the command surface.
-Disposable remote tunnels make this especially visible because a syntactically valid profile can
-outlive its reverse route.
-
-Discuss explicit provider status and lifecycle ergonomics or supervised deployment ownership.
-Retain the Gateway as a sibling authority rather than folding it into Job sequencing.
-
 ### P2 — Report citations are Sandbox-local
 
 Useful investigation Reports cite exact files and lines, but links currently use
@@ -74,7 +64,7 @@ Do not treat this backlog as justification to:
 
 Re-rank only from new dogfood evidence:
 
-1. Provider Gateway lifecycle visibility and repeated-failure backoff;
+1. repeated-failure backoff;
 2. workflow-specific network failure feedback;
 3. durable repository-relative Report citations;
 4. stable empty-collection JSON; and

@@ -187,19 +187,55 @@ func (g Gateway) Check(ctx context.Context, connectionName string) error {
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/v1/models", nil)
+	return g.checkModels(ctx, origin+"/v1", auth.GuardKey, "provider gateway")
+}
+
+// CheckRemote observes whether the exact deployment-owned HTTPS route reaches
+// a protected Gateway API. It deliberately sends no credential and succeeds
+// only when anonymous access is rejected. It does not create a consumer route,
+// restart the broker, or otherwise mutate Gateway state.
+func (g Gateway) CheckRemote(ctx context.Context, baseURL string) error {
+	baseURL = strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return fmt.Errorf("remote provider gateway route URL is empty")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		return err
 	}
-	request.Header.Set("Authorization", "Bearer "+auth.GuardKey)
 	response, err := g.client().Do(request)
 	if err != nil {
-		return fmt.Errorf("provider gateway is unavailable: %w", err)
+		return fmt.Errorf("remote provider gateway route is unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	switch response.StatusCode {
+	case http.StatusUnauthorized:
+		return nil
+	case http.StatusOK:
+		return fmt.Errorf("remote provider gateway route accepted an unauthenticated request")
+	default:
+		return fmt.Errorf("remote provider gateway route returned HTTP %d, want the Gateway's unauthenticated HTTP 401", response.StatusCode)
+	}
+}
+
+func (g Gateway) checkModels(ctx context.Context, baseURL, apiKey, noun string) error {
+	if baseURL == "" {
+		return fmt.Errorf("%s URL is empty", noun)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
+	response, err := g.client().Do(request)
+	if err != nil {
+		return fmt.Errorf("%s is unavailable: %w", noun, err)
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("provider gateway readiness returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("%s readiness returned HTTP %d", noun, response.StatusCode)
 	}
 	return nil
 }

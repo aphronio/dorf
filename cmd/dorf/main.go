@@ -193,10 +193,13 @@ func migrate(ctx context.Context, store postgres.Store, args []string, stdout, s
 
 func providerCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("provider requires: connect chatgpt --name NAME [--profile INCUS_PROFILE] [--bind IP]")
+		return fmt.Errorf("provider requires: connect chatgpt or status")
+	}
+	if args[0] == "status" {
+		return providerStatusCommand(ctx, store, cfg, args[1:], stdout, stderr)
 	}
 	if args[0] != "connect" || len(args) < 2 || args[1] != "chatgpt" {
-		return fmt.Errorf("the supported provider command is: provider connect chatgpt --name NAME [--profile INCUS_PROFILE] [--bind IP]")
+		return fmt.Errorf("the supported provider commands are: provider connect chatgpt and provider status")
 	}
 	set := flag.NewFlagSet("provider connect chatgpt", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -233,6 +236,131 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 	}
 	fmt.Fprintf(stdout, "Provider Connection ready: %s (ChatGPT subscription; broker %s on %s)\n", *name, gateway.BackendVersion, *bind)
 	return nil
+}
+
+type providerGatewayCheckView struct {
+	Status string `json:"status"`
+	Target string `json:"target,omitempty"`
+	Detail string `json:"detail"`
+}
+
+type providerGatewayStatusView struct {
+	Profile           string                   `json:"profile"`
+	SandboxProvider   spine.SandboxProvider    `json:"sandbox_provider"`
+	ProfileVerified   bool                     `json:"profile_verified"`
+	ProfileVerifiedAt *time.Time               `json:"profile_verified_at,omitempty"`
+	Connection        string                   `json:"connection"`
+	Lifecycle         string                   `json:"lifecycle"`
+	Authority         providerGatewayCheckView `json:"authority"`
+	SandboxPath       providerGatewayCheckView `json:"sandbox_path"`
+	Ready             bool                     `json:"ready"`
+	Impact            string                   `json:"impact"`
+	Next              string                   `json:"next,omitempty"`
+}
+
+func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("provider status", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	connection := set.String("name", "personal-chatgpt", "stable Provider Connection name")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	jsonOutput := set.Bool("json", false, "emit machine-readable status")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("provider status received unexpected arguments")
+	}
+	profile, err := sandboxProfileByNameOrDefault(ctx, store, *profileName)
+	if err != nil {
+		return err
+	}
+	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	authorityErr := g.Check(ctx, *connection)
+	var sandboxPathErr error
+	if profile.Provider == spine.SandboxProviderE2B {
+		sandboxPathErr = g.CheckRemote(ctx, profile.E2BGatewayURL)
+	}
+	view := newProviderGatewayStatusView(profile, strings.TrimSpace(*connection), authorityErr, sandboxPathErr)
+	if *jsonOutput {
+		if err := writeJSON(stdout, view); err != nil {
+			return err
+		}
+	} else {
+		renderProviderGatewayStatus(stdout, view)
+	}
+	if !view.Ready {
+		return fmt.Errorf("provider gateway status is not ready")
+	}
+	return nil
+}
+
+func newProviderGatewayStatusView(profile spine.SandboxProfile, connection string, authorityErr, sandboxPathErr error) providerGatewayStatusView {
+	check := func(target string, err error) providerGatewayCheckView {
+		if err != nil {
+			return providerGatewayCheckView{Status: "failed", Target: target, Detail: err.Error()}
+		}
+		return providerGatewayCheckView{Status: "ready", Target: target, Detail: "ready"}
+	}
+	view := providerGatewayStatusView{
+		Profile: profile.Name, SandboxProvider: profile.Provider, ProfileVerified: profile.BaseVerified(),
+		Connection: connection, Lifecycle: "persistent host process started by provider connect",
+		Authority: check("private broker and named Provider Connection", authorityErr),
+	}
+	if profile.BaseVerified() {
+		verifiedAt := profile.Verification.ProbeCompletedAt
+		view.ProfileVerifiedAt = &verifiedAt
+	}
+	if profile.Provider == spine.SandboxProviderE2B {
+		view.SandboxPath = check(profile.E2BGatewayURL, sandboxPathErr)
+		if sandboxPathErr == nil {
+			view.SandboxPath.Detail = "reachable; anonymous access rejected"
+		}
+	} else {
+		view.SandboxPath = providerGatewayCheckView{
+			Status: "historical", Target: "private Incus network " + profile.IncusNetwork,
+			Detail: "covered by profile verification; no Sandbox was created for this status check",
+		}
+	}
+	view.Ready = view.ProfileVerified && view.Authority.Status == "ready" &&
+		(profile.Provider != spine.SandboxProviderE2B || view.SandboxPath.Status == "ready")
+	switch {
+	case !view.ProfileVerified:
+		view.Impact = "new Jobs cannot use this Sandbox profile"
+		view.Next = "run dorf profile verify " + profile.Name
+	case view.Authority.Status != "ready":
+		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
+		view.Next = "restore the named Provider Connection and private broker, then rerun provider status"
+	case profile.Provider == spine.SandboxProviderE2B && view.SandboxPath.Status != "ready":
+		view.Impact = "remote Sandboxes using this profile cannot reach inference"
+		view.Next = "restore the configured HTTPS route, or update and reverify the profile"
+	default:
+		view.Impact = "none"
+	}
+	return view
+}
+
+func renderProviderGatewayStatus(output io.Writer, view providerGatewayStatusView) {
+	verification := "not verified"
+	if view.ProfileVerifiedAt != nil {
+		verification = "verified previously · " + view.ProfileVerifiedAt.Local().Format(time.RFC3339)
+	}
+	fmt.Fprintln(output, "Provider Gateway")
+	fmt.Fprintf(output, "  Profile       %s · %s\n", view.Profile, strings.ToUpper(string(view.SandboxProvider)))
+	fmt.Fprintf(output, "  Verification  %s\n", verification)
+	fmt.Fprintf(output, "  Connection    %s\n", view.Connection)
+	fmt.Fprintf(output, "  Lifecycle     %s\n", view.Lifecycle)
+	fmt.Fprintf(output, "  Authority     %s\n", view.Authority.Status)
+	if view.Authority.Status != "ready" {
+		fmt.Fprintf(output, "                %s\n", view.Authority.Detail)
+	}
+	fmt.Fprintf(output, "  Sandbox path  %s · %s\n", view.SandboxPath.Status, view.SandboxPath.Target)
+	if view.SandboxPath.Status == "failed" {
+		fmt.Fprintf(output, "                %s\n", view.SandboxPath.Detail)
+	}
+	fmt.Fprintf(output, "  Impact        %s\n", view.Impact)
+	if view.Next != "" {
+		fmt.Fprintf(output, "  Next          %s\n", view.Next)
+	}
 }
 
 func releaseManifest(args []string, stdout, stderr io.Writer) error {

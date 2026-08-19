@@ -51,6 +51,52 @@ func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	}
 }
 
+func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReachability(t *testing.T) {
+	verifiedAt := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
+	profile := spine.SandboxProfile{
+		Name: "managed", Provider: spine.SandboxProviderE2B, E2BGatewayURL: "https://gateway.example/v1",
+		Verification: &spine.ProfileVerification{
+			ContractVersion: spine.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+		},
+	}
+	view := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, context.DeadlineExceeded)
+	if view.Ready || !view.ProfileVerified || view.ProfileVerifiedAt == nil || view.SandboxPath.Status != "failed" {
+		t.Fatalf("status=%#v", view)
+	}
+	if !strings.Contains(view.Impact, "remote Sandboxes") || !strings.Contains(view.Next, "update and reverify") {
+		t.Fatalf("unhelpful status impact=%q next=%q", view.Impact, view.Next)
+	}
+	var output strings.Builder
+	renderProviderGatewayStatus(&output, view)
+	for _, want := range []string{
+		"managed · E2B", "verified previously ·", "Authority     ready",
+		"Sandbox path  failed · https://gateway.example/v1", "remote Sandboxes using this profile cannot reach inference",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("status output omitted %q:\n%s", want, output.String())
+		}
+	}
+
+	ready := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, nil)
+	if !ready.Ready || ready.Impact != "none" || ready.Next != "" {
+		t.Fatalf("ready status=%#v", ready)
+	}
+	profile.Verification = nil
+	unverified := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, nil)
+	if unverified.Ready || !strings.Contains(unverified.Next, "profile verify managed") {
+		t.Fatalf("unverified status=%#v", unverified)
+	}
+	local := newProviderGatewayStatusView(spine.SandboxProfile{
+		Name: "local", Provider: spine.SandboxProviderIncus, IncusNetwork: "incusbr0",
+		Verification: &spine.ProfileVerification{
+			ContractVersion: spine.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+		},
+	}, "personal-chatgpt", nil, nil)
+	if !local.Ready || local.SandboxPath.Status != "historical" || !strings.Contains(local.SandboxPath.Detail, "no Sandbox was created") {
+		t.Fatalf("local status overclaimed live Sandbox reachability: %#v", local)
+	}
+}
+
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
 	options, err := parseSetupOptions([]string{"--yes", "--provider", "personal-chatgpt", "--profile", "local-codex"}, &stderr)

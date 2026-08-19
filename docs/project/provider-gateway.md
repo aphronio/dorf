@@ -29,6 +29,14 @@ TryCloudflare Quick Tunnel only to validate this path. Quick Tunnels are not a s
 they have no stable hostname or uptime guarantee, and durable tunnel/domain selection remains a
 deployment decision.
 
+`dorf provider status --profile NAME [--name CONNECTION]` is the observational deployment check. It
+verifies the named Provider Connection and private broker locally, then, for a remote profile,
+requests the exact configured `/v1/models` path without a credential and requires the Gateway's HTTP
+401 rejection. It never starts the broker, repairs a tunnel, or creates a consumer route. Profile
+verification remains historical proof of the selected runtime artifact; status reports current
+Gateway reachability separately and exits unsuccessfully when either authority is not ready. Use
+`--json` for the same machine-readable facts.
+
 ## Security and recovery
 
 - Upstream OAuth state stays in the host broker's protected `auth` directory.
@@ -37,6 +45,7 @@ deployment decision.
 - A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
   rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
 - Route creation and revocation use stable Action identities and authenticated management calls.
+- Remote status probes send no Gateway credential and reject open or intermediary-blocked endpoints.
 - Missing, ambiguous, stale, or non-WebSocket authentication fails before Sandbox mutation.
 - Cleanup is incomplete until the exact Sandbox route is revoked or attention remains observable.
 - Logs and CLI output never render upstream, management, guard, route, GitHub, or Harness control

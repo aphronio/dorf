@@ -237,6 +237,58 @@ func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	}
 }
 
+func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRoutes(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("remote status probe sent a credential")
+		}
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	state := gatewayState(t, server.URL)
+	gateway := Gateway{StatePath: state, Client: server.Client()}
+
+	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("remote requests=%d, want 1", requests)
+	}
+	var routes []Route
+	if err := readJSON(filepath.Join(state, "routes.json"), &routes); err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("remote status probe mutated routes: %#v", routes)
+	}
+
+	openServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer openServer.Close()
+	if err := gateway.CheckRemote(context.Background(), openServer.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "accepted an unauthenticated request") {
+		t.Fatalf("unprotected remote route error=%v", err)
+	}
+	blockedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "intermediary policy", http.StatusForbidden)
+	}))
+	defer blockedServer.Close()
+	if err := gateway.CheckRemote(context.Background(), blockedServer.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "want the Gateway's unauthenticated HTTP 401") {
+		t.Fatalf("intermediary rejection error=%v", err)
+	}
+
+	server.Close()
+	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "remote provider gateway route is unavailable") {
+		t.Fatalf("unreachable remote route error=%v", err)
+	}
+}
+
 func TestAPIRoutesDoNotRequireChatGPTSubscriptionCapability(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v0/management/auth-files" {
