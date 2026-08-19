@@ -26,6 +26,31 @@ func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
 	}
 }
 
+func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
+	var stderr strings.Builder
+	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{
+		"--gateway-url", "https://replacement.example/v1", "--allow-internet=false",
+	}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.E2BGatewayURL == nil || *patch.E2BGatewayURL != "https://replacement.example/v1" ||
+		patch.E2BAllowInternet == nil || *patch.E2BAllowInternet || patch.E2BArtifact != nil ||
+		patch.E2BSandboxTimeout != nil || patch.Harness != nil ||
+		patch.IncusArtifact != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil {
+		t.Fatalf("patch contains omitted or incorrect fields: %#v", patch)
+	}
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
+		t.Fatalf("empty patch error=%v", err)
+	}
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{"--provider", "e2b"}, &stderr); err == nil {
+		t.Fatal("profile update accepted a provider change")
+	}
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
+		t.Fatalf("E2B Incus-field error=%v", err)
+	}
+}
+
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
 	options, err := parseSetupOptions([]string{"--yes", "--provider", "personal-chatgpt", "--profile", "local-codex"}, &stderr)

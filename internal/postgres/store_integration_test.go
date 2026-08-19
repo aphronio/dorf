@@ -285,7 +285,7 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	name := fmt.Sprintf("managed-%d", time.Now().UnixNano())
 	profile := spine.SandboxProfile{
 		Name: name, Provider: spine.SandboxProviderE2B, Harness: "pi", Artifact: "dorf:exact-build",
-		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
+		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 71 * time.Minute, E2BAllowInternet: true,
 	}
 	stored, created, err := store.CreateSandboxProfile(ctx, profile)
 	if err != nil || !created || stored.BaseVerified() {
@@ -320,20 +320,28 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	changed := profile
-	changed.Artifact = "dorf:other-build"
-	if _, err := store.UpdateSandboxProfile(ctx, changed); err == nil || !strings.Contains(err.Error(), "immutable") {
+	sameGateway := profile.E2BGatewayURL
+	unchanged, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &sameGateway})
+	if err != nil || updated || !unchanged.Default || !unchanged.BaseVerified() {
+		t.Fatalf("no-op patch changed verified default profile: updated=%v profile=%#v err=%v", updated, unchanged, err)
+	}
+	changedGateway := "https://replacement.example/v1"
+	if _, _, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway}); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("in-use profile update error=%v", err)
 	}
 	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id=$1`, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.UpdateSandboxProfile(ctx, changed)
-	if err != nil {
+	changed, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway})
+	if err != nil || !updated {
 		t.Fatal(err)
 	}
-	if updated.Artifact != changed.Artifact || updated.Default || updated.Verification != nil {
-		t.Fatalf("update did not require fresh verification: %#v", updated)
+	if changed.E2BGatewayURL != changedGateway || changed.Artifact != profile.Artifact || changed.Harness != profile.Harness ||
+		changed.E2BSandboxTimeout != profile.E2BSandboxTimeout || changed.E2BAllowInternet != profile.E2BAllowInternet || changed.Default || changed.Verification != nil {
+		t.Fatalf("patch changed omitted fields or retained verification: %#v", changed)
+	}
+	if !changed.CreatedAt.Equal(stored.CreatedAt) {
+		t.Fatalf("patch changed profile creation time: got=%s want=%s", changed.CreatedAt, stored.CreatedAt)
 	}
 	repeated, created, err := store.Admit(ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
@@ -362,22 +370,22 @@ func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
 	if err != nil || started.Artifact != original.Artifact {
 		t.Fatalf("started profile=%#v err=%v", started, err)
 	}
-	updated := original
-	updated.Artifact = strings.Repeat("c", 64)
-	if _, err := store.UpdateSandboxProfile(ctx, updated); err == nil || !strings.Contains(err.Error(), "verification Sandbox cleanup is incomplete") {
+	updatedArtifact := strings.Repeat("c", 64)
+	patch := postgres.SandboxProfilePatch{IncusArtifact: &updatedArtifact}
+	if _, _, err := store.UpdateSandboxProfile(ctx, name, patch); err == nil || !strings.Contains(err.Error(), "verification Sandbox cleanup is incomplete") {
 		t.Fatalf("active verification update error=%v", err)
 	}
 	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdateSandboxProfile(ctx, updated); err != nil {
+	if _, changed, err := store.UpdateSandboxProfile(ctx, name, patch); err != nil || !changed {
 		t.Fatal(err)
 	}
 	if err := store.RecordSandboxProfileProbe(ctx, verification, "codex stale"); err == nil {
 		t.Fatal("stale verification certified the updated profile definition")
 	}
 	stored, err := store.SandboxProfile(ctx, name)
-	if err != nil || stored.Artifact != updated.Artifact || stored.Verification != nil || stored.BaseVerified() {
+	if err != nil || stored.Artifact != updatedArtifact || stored.Verification != nil || stored.BaseVerified() {
 		t.Fatalf("updated profile=%#v err=%v", stored, err)
 	}
 }

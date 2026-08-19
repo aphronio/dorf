@@ -1792,10 +1792,17 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   leak a proof resource. Repository-specific dependencies remain the repository setup or custom
   artifact's responsibility. Optional capabilities stay broad and are added only when an actual
   workflow requires them.
-- **Mutation rule:** A profile may be updated only while no Job using its name has incomplete
-  cleanup. An update clears its default and verification receipt, forcing explicit re-verification.
-  Exact profile revisions are deliberately deferred; immutable-while-in-use is sufficient until
-  measured operations require historical profile definitions beyond completed Jobs.
+- **Mutation rule:** `profile update` applies only explicitly supplied fields to the latest locked
+  definition; provider changes require a new named profile. A changed profile may be updated only
+  while no Job using its name has incomplete cleanup, and the change clears its default and
+  verification receipt, forcing explicit re-verification. A no-op patch preserves both. Exact
+  profile revisions are deliberately deferred; immutable-while-in-use is sufficient until measured
+  operations require historical profile definitions beyond completed Jobs.
+- **Proof:** Live E2B dogfood preserved the exact verified definition on a no-op, invalidated only a
+  changed Gateway field, failed setup until re-verification, then restored and investigated a
+  retained unpublished commit after its source checkout was removed. Cleanup left zero matching E2B
+  Sandboxes. The investigation caught an update resetting public `created_at`; the SQL now preserves
+  creation time and PostgreSQL integration guards it.
 - **Supersedes:** D067's process-wide `DORF_SANDBOX_PROFILE`/`DORF_HARNESS` selection and
   differently-configured-worker fence. The durable Job fence is now the named profile itself, and
   every Worker may recover Jobs across configured Incus and E2B profiles when their deployment

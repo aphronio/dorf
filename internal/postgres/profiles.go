@@ -19,6 +19,17 @@ var ErrProfileNotFound = errors.New("Dorf Sandbox profile not found")
 var profileNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var incusFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+type SandboxProfilePatch struct {
+	Harness           *string
+	IncusArtifact     *string
+	IncusNetwork      *string
+	IncusDiskSize     *string
+	E2BArtifact       *string
+	E2BGatewayURL     *string
+	E2BSandboxTimeout *time.Duration
+	E2BAllowInternet  *bool
+}
+
 func (s Store) CreateSandboxProfile(ctx context.Context, profile spine.SandboxProfile) (spine.SandboxProfile, bool, error) {
 	profile, err := normalizeSandboxProfile(profile)
 	if err != nil {
@@ -38,50 +49,113 @@ func (s Store) CreateSandboxProfile(ctx context.Context, profile spine.SandboxPr
 	return stored, rows == 1, nil
 }
 
-func (s Store) UpdateSandboxProfile(ctx context.Context, profile spine.SandboxProfile) (spine.SandboxProfile, error) {
-	profile, err := normalizeSandboxProfile(profile)
-	if err != nil {
-		return spine.SandboxProfile{}, err
-	}
+func (s Store) UpdateSandboxProfile(ctx context.Context, name string, patch SandboxProfilePatch) (spine.SandboxProfile, bool, error) {
+	name = strings.TrimSpace(name)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(tx)
-	if _, err := queries.LockSandboxProfile(ctx, profile.Name); errors.Is(err, sql.ErrNoRows) {
-		return spine.SandboxProfile{}, ErrProfileNotFound
+	locked, err := queries.LockSandboxProfile(ctx, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return spine.SandboxProfile{}, false, ErrProfileNotFound
 	} else if err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
 	}
-	inUse, err := queries.ProfileHasIncompleteJobs(ctx, profile.Name)
+	current := profileFromLockRow(locked)
+	profile, err := applySandboxProfilePatch(current, patch)
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
+	}
+	profile, err = normalizeSandboxProfile(profile)
+	if err != nil {
+		return spine.SandboxProfile{}, false, err
+	}
+	if sameProfileDefinition(current, profile) {
+		row, err := queries.GetSandboxProfile(ctx, name)
+		if err != nil {
+			return spine.SandboxProfile{}, false, err
+		}
+		stored := profileFromGetRow(row)
+		if err := tx.Commit(); err != nil {
+			return spine.SandboxProfile{}, false, err
+		}
+		return stored, false, nil
+	}
+	inUse, err := queries.ProfileHasIncompleteJobs(ctx, name)
+	if err != nil {
+		return spine.SandboxProfile{}, false, err
 	}
 	if inUse {
-		return spine.SandboxProfile{}, fmt.Errorf("Sandbox profile %q is immutable while a Job using it has incomplete cleanup", profile.Name)
+		return spine.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q is immutable while a Job using it has incomplete cleanup", name)
 	}
-	needsCleanup, err := queries.ProfileVerificationNeedsCleanup(ctx, profile.Name)
+	needsCleanup, err := queries.ProfileVerificationNeedsCleanup(ctx, name)
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
 	}
 	if needsCleanup {
-		return spine.SandboxProfile{}, fmt.Errorf("Sandbox profile %q cannot be updated while its verification Sandbox cleanup is incomplete; rerun dorf profile verify %s", profile.Name, profile.Name)
+		return spine.SandboxProfile{}, false, fmt.Errorf("Sandbox profile %q cannot be updated while its verification Sandbox cleanup is incomplete; rerun dorf profile verify %s", name, name)
 	}
-	if err := queries.DeleteProfileVerification(ctx, profile.Name); err != nil {
-		return spine.SandboxProfile{}, err
+	if err := queries.DeleteProfileVerification(ctx, name); err != nil {
+		return spine.SandboxProfile{}, false, err
 	}
 	rows, err := queries.UpdateSandboxProfile(ctx, updateProfileParams(profile))
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
 	}
 	if rows != 1 {
-		return spine.SandboxProfile{}, fmt.Errorf("update Sandbox profile %q affected %d rows", profile.Name, rows)
+		return spine.SandboxProfile{}, false, fmt.Errorf("update Sandbox profile %q affected %d rows", name, rows)
 	}
+	row, err := queries.GetSandboxProfile(ctx, name)
+	if err != nil {
+		return spine.SandboxProfile{}, false, err
+	}
+	stored := profileFromGetRow(row)
 	if err := tx.Commit(); err != nil {
-		return spine.SandboxProfile{}, err
+		return spine.SandboxProfile{}, false, err
 	}
-	return s.SandboxProfile(ctx, profile.Name)
+	return stored, true, nil
+}
+
+func applySandboxProfilePatch(profile spine.SandboxProfile, patch SandboxProfilePatch) (spine.SandboxProfile, error) {
+	if patch.Harness != nil {
+		profile.Harness = *patch.Harness
+	}
+	switch profile.Provider {
+	case spine.SandboxProviderIncus:
+		if patch.E2BArtifact != nil || patch.E2BGatewayURL != nil || patch.E2BSandboxTimeout != nil || patch.E2BAllowInternet != nil {
+			return spine.SandboxProfile{}, fmt.Errorf("Incus profile update does not accept E2B fields")
+		}
+		if patch.IncusArtifact != nil {
+			profile.Artifact = *patch.IncusArtifact
+		}
+		if patch.IncusNetwork != nil {
+			profile.IncusNetwork = *patch.IncusNetwork
+		}
+		if patch.IncusDiskSize != nil {
+			profile.IncusDiskSize = *patch.IncusDiskSize
+		}
+	case spine.SandboxProviderE2B:
+		if patch.IncusArtifact != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil {
+			return spine.SandboxProfile{}, fmt.Errorf("E2B profile update does not accept Incus fields")
+		}
+		if patch.E2BArtifact != nil {
+			profile.Artifact = *patch.E2BArtifact
+		}
+		if patch.E2BGatewayURL != nil {
+			profile.E2BGatewayURL = *patch.E2BGatewayURL
+		}
+		if patch.E2BSandboxTimeout != nil {
+			profile.E2BSandboxTimeout = *patch.E2BSandboxTimeout
+		}
+		if patch.E2BAllowInternet != nil {
+			profile.E2BAllowInternet = *patch.E2BAllowInternet
+		}
+	default:
+		return spine.SandboxProfile{}, fmt.Errorf("unsupported Sandbox provider %q", profile.Provider)
+	}
+	return profile, nil
 }
 
 func (s Store) SandboxProfile(ctx context.Context, name string) (spine.SandboxProfile, error) {
@@ -336,6 +410,15 @@ func profileFromListRow(row dbsql.ListSandboxProfilesRow) spine.SandboxProfile {
 		row.E2bGatewayURL, row.E2bSandboxTimeoutSeconds, row.E2bAllowInternet, row.IsDefault, row.CreatedAt,
 		row.VerificationContract, row.VerificationSandboxID, row.VerificationOwnershipNonce, row.VerificationHarnessVersion,
 		row.AttemptedAt, row.ProbeCompletedAt, row.CleanedAt, row.VerificationLastError)
+}
+
+func profileFromLockRow(row dbsql.LockSandboxProfileRow) spine.SandboxProfile {
+	return spine.SandboxProfile{
+		Name: row.Name, Provider: spine.SandboxProvider(row.Provider), Harness: row.Harness, Artifact: row.Artifact,
+		IncusNetwork: row.IncusNetwork, IncusDiskSize: row.IncusDiskSize,
+		E2BGatewayURL: row.E2bGatewayURL, E2BSandboxTimeout: time.Duration(row.E2bSandboxTimeoutSeconds) * time.Second,
+		E2BAllowInternet: row.E2bAllowInternet, Default: row.IsDefault, CreatedAt: row.CreatedAt,
+	}
 }
 
 func profileFromColumns(name, provider, harness, artifact, network, disk, gatewayURL string, timeoutSeconds int64, allowInternet, isDefault bool, createdAt time.Time,

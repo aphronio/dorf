@@ -25,26 +25,36 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 	switch args[0] {
 	case "install":
 		return installOfficialIncusProfile(ctx, store, args[1:], stdout, stderr)
-	case "create", "update":
+	case "create":
 		if len(args) < 2 {
-			return fmt.Errorf("profile %s requires NAME", args[0])
+			return fmt.Errorf("profile create requires NAME")
 		}
-		profile, err := parseSandboxProfile(ctx, args[0]+" "+args[1], args[1], args[2:], stderr)
+		profile, err := parseSandboxProfile(ctx, "create "+args[1], args[1], args[2:], stderr)
 		if err != nil {
 			return err
 		}
-		if args[0] == "create" {
-			stored, created, err := store.CreateSandboxProfile(ctx, profile)
-			if err != nil {
-				return err
-			}
-			return writeJSON(stdout, map[string]any{"profile": profileView(stored), "created": created})
-		}
-		stored, err := store.UpdateSandboxProfile(ctx, profile)
+		stored, created, err := store.CreateSandboxProfile(ctx, profile)
 		if err != nil {
 			return err
 		}
-		return writeJSON(stdout, map[string]any{"profile": profileView(stored), "updated": true})
+		return writeJSON(stdout, map[string]any{"profile": profileView(stored), "created": created})
+	case "update":
+		if len(args) < 2 {
+			return fmt.Errorf("profile update requires NAME")
+		}
+		current, err := store.SandboxProfile(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		patch, err := parseSandboxProfilePatch(ctx, "update "+args[1], current.Provider, args[2:], stderr)
+		if err != nil {
+			return err
+		}
+		stored, updated, err := store.UpdateSandboxProfile(ctx, args[1], patch)
+		if err != nil {
+			return err
+		}
+		return writeJSON(stdout, map[string]any{"profile": profileView(stored), "updated": updated})
 	case "verify":
 		if len(args) != 2 {
 			return fmt.Errorf("profile verify requires NAME")
@@ -227,6 +237,72 @@ func parseSandboxProfile(ctx context.Context, command, name string, args []strin
 		return spine.SandboxProfile{}, fmt.Errorf("profile requires --provider incus or --provider e2b")
 	}
 	return profile, nil
+}
+
+func parseSandboxProfilePatch(ctx context.Context, command string, provider spine.SandboxProvider, args []string, stderr io.Writer) (postgres.SandboxProfilePatch, error) {
+	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
+	set.SetOutput(stderr)
+	harness := set.String("harness", "", "Harness: codex or pi")
+	image := set.String("image", "", "existing Incus image alias or fingerprint")
+	network := set.String("network", "", "Incus network")
+	diskSize := set.String("disk-size", "", "Incus root disk size")
+	template := set.String("template", "", "exact E2B template build reference")
+	gatewayURL := set.String("gateway-url", "", "deployment-owned HTTPS Provider Gateway URL")
+	sandboxTimeout := set.Duration("sandbox-timeout", 0, "E2B running timeout")
+	allowInternet := set.Bool("allow-internet", false, "allow E2B Sandbox internet egress")
+	if err := set.Parse(args); err != nil {
+		return postgres.SandboxProfilePatch{}, err
+	}
+	if set.NArg() != 0 {
+		return postgres.SandboxProfilePatch{}, fmt.Errorf("profile %s received unexpected arguments", command)
+	}
+	visited := map[string]bool{}
+	set.Visit(func(value *flag.Flag) { visited[value.Name] = true })
+	if len(visited) == 0 {
+		return postgres.SandboxProfilePatch{}, fmt.Errorf("profile %s requires at least one field flag", command)
+	}
+	switch provider {
+	case spine.SandboxProviderIncus:
+		if visited["template"] || visited["gateway-url"] || visited["sandbox-timeout"] || visited["allow-internet"] {
+			return postgres.SandboxProfilePatch{}, fmt.Errorf("Incus profile update does not accept E2B fields")
+		}
+	case spine.SandboxProviderE2B:
+		if visited["image"] || visited["network"] || visited["disk-size"] {
+			return postgres.SandboxProfilePatch{}, fmt.Errorf("E2B profile update does not accept Incus fields")
+		}
+	default:
+		return postgres.SandboxProfilePatch{}, fmt.Errorf("unsupported Sandbox provider %q", provider)
+	}
+	var patch postgres.SandboxProfilePatch
+	if visited["harness"] {
+		patch.Harness = harness
+	}
+	if visited["image"] {
+		fingerprint, err := incus.ResolveImageFingerprint(ctx, *image, nil)
+		if err != nil {
+			return postgres.SandboxProfilePatch{}, err
+		}
+		patch.IncusArtifact = &fingerprint
+	}
+	if visited["network"] {
+		patch.IncusNetwork = network
+	}
+	if visited["disk-size"] {
+		patch.IncusDiskSize = diskSize
+	}
+	if visited["template"] {
+		patch.E2BArtifact = template
+	}
+	if visited["gateway-url"] {
+		patch.E2BGatewayURL = gatewayURL
+	}
+	if visited["sandbox-timeout"] {
+		patch.E2BSandboxTimeout = sandboxTimeout
+	}
+	if visited["allow-internet"] {
+		patch.E2BAllowInternet = allowInternet
+	}
+	return patch, nil
 }
 
 func selectedSandboxProfile(ctx context.Context, store postgres.Store, name string) (spine.SandboxProfile, error) {

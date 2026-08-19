@@ -484,8 +484,7 @@ set provider=$1,harness=$2,artifact=$3,
     incus_network=$4,incus_disk_size=$5,
     e2b_gateway_url=$6,
     e2b_sandbox_timeout_seconds=$7,
-    e2b_allow_internet=$8,is_default=false,
-    created_at=clock_timestamp()
+    e2b_allow_internet=$8,is_default=false
 where name=$9
 `
 

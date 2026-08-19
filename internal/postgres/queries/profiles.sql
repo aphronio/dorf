@@ -84,8 +84,7 @@ set provider=sqlc.arg(provider),harness=sqlc.arg(harness),artifact=sqlc.arg(arti
     incus_network=sqlc.arg(incus_network),incus_disk_size=sqlc.arg(incus_disk_size),
     e2b_gateway_url=sqlc.arg(e2b_gateway_url),
     e2b_sandbox_timeout_seconds=sqlc.arg(e2b_sandbox_timeout_seconds),
-    e2b_allow_internet=sqlc.arg(e2b_allow_internet),is_default=false,
-    created_at=clock_timestamp()
+    e2b_allow_internet=sqlc.arg(e2b_allow_internet),is_default=false
 where name=sqlc.arg(name);
 
 -- name: DeleteProfileVerification :exec
