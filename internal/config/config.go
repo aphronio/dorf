@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aphronio/dorf/internal/deployment"
 )
 
 const (
@@ -16,6 +18,8 @@ const (
 
 type Config struct {
 	DatabaseURL      string
+	DatabaseExternal bool
+	DeploymentPath   string
 	GatewayStatePath string
 	Workspace        string
 	AppServerPort    int
@@ -32,8 +36,9 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve user home for provider gateway state: %w", err)
 	}
+	deploymentPath := deployment.Path(home)
 	cfg := Config{
-		DatabaseURL:      value("DORF_DATABASE_URL", "postgresql:///dorf?host=/var/run/postgresql"),
+		DeploymentPath:   deploymentPath,
 		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
 		Workspace:        "/workspace/job",
 		AppServerPort:    4500,
@@ -43,6 +48,21 @@ func Load() (Config, error) {
 		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
 		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
 		E2BAPIKey:        strings.TrimSpace(os.Getenv("E2B_API_KEY")),
+	}
+	if raw := strings.TrimSpace(os.Getenv("DORF_DATABASE_URL")); raw != "" {
+		cfg.DatabaseURL = raw
+		cfg.DatabaseExternal = true
+	} else {
+		stored, found, loadErr := deployment.Load(deploymentPath)
+		if loadErr != nil {
+			return Config{}, loadErr
+		}
+		if found {
+			cfg.DatabaseURL, err = stored.Database.URL()
+			if err != nil {
+				return Config{}, err
+			}
+		}
 	}
 	cfg.GatewayStatePath, err = filepath.Abs(cfg.GatewayStatePath)
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/evidence"
@@ -53,8 +54,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if args[0] == "host" {
-		return hostCommand(ctx, args[1:], stdout, stderr)
+	if args[0] == "setup" {
+		return setupCommand(ctx, cfg, args[1:], stdout, stderr)
+	}
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return fmt.Errorf("PostgreSQL is not configured; run dorf setup")
 	}
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
@@ -67,8 +71,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return migrate(ctx, store, args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, db, cfg, args[1:], stdout, stderr)
-	case "setup":
-		return setup(ctx, store, db, cfg, args[1:], stdout, stderr)
 	case "provider":
 		return providerCommand(ctx, store, cfg, args[1:], stdout, stderr)
 	case "profile":
@@ -112,19 +114,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	default:
 		return usage(stderr)
 	}
-}
-
-func hostCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || args[0] != "install" {
-		return fmt.Errorf("host requires: install [--yes]")
-	}
-	set := flag.NewFlagSet("host install", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	yes := set.Bool("yes", false, "approve the displayed Ubuntu 24.04 package, service, and group changes")
-	if err := set.Parse(args[1:]); err != nil {
-		return err
-	}
-	return hostsetup.Ubuntu(ctx, *yes, stdout, stderr)
 }
 
 func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
@@ -259,30 +248,78 @@ func releaseManifest(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+type setupOptions struct {
+	Yes          bool
+	Connection   string
+	ProfileName  string
+	AbsurdSchema string
+}
+
+func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	yes := set.Bool("yes", false, "approve every host change shown by setup")
 	connection := set.String("provider", "", "named Provider Connection")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
 	if err := set.Parse(args); err != nil {
+		return setupOptions{}, err
+	}
+	return setupOptions{
+		Yes: *yes, Connection: strings.TrimSpace(*connection),
+		ProfileName: strings.TrimSpace(*profileName), AbsurdSchema: strings.TrimSpace(*absurdSchema),
+	}, nil
+}
+
+func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	options, err := parseSetupOptions(args, stderr)
+	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(*connection) == "" {
-		return fmt.Errorf("setup requires --provider; create one with dorf provider connect")
+	plan, err := hostsetup.ObserveHost(ctx, !cfg.DatabaseExternal)
+	if err != nil {
+		return err
 	}
+	if !plan.Empty() {
+		if err := approveHostPlan(ctx, plan, options.Yes, stdout); err != nil {
+			return err
+		}
+	}
+	if err := hostsetup.ApplyHost(ctx, plan, stdout, stderr); err != nil {
+		return err
+	}
+	if !cfg.DatabaseExternal {
+		database, err := hostsetup.EnsureDatabase(ctx, cfg.DeploymentPath, stdout)
+		if err != nil {
+			return err
+		}
+		cfg.DatabaseURL, err = database.URL()
+		if err != nil {
+			return err
+		}
+	}
+	db, err := sql.Open("pgx", cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open PostgreSQL: %w", err)
+	}
+	defer db.Close()
+	store := postgres.Store{DB: db}
 	migrateArgs := []string{}
-	if *absurdSchema != "" {
-		migrateArgs = append(migrateArgs, "--absurd-schema", *absurdSchema)
+	if options.AbsurdSchema != "" {
+		migrateArgs = append(migrateArgs, "--absurd-schema", options.AbsurdSchema)
 	}
 	if err := migrate(ctx, store, migrateArgs, stdout, stderr); err != nil {
 		return err
 	}
-	profile, err := sandboxProfileByNameOrDefault(ctx, store, *profileName)
+	if options.Connection == "" {
+		fmt.Fprintln(stdout, "Dorf storage is ready. Next: create and verify a Sandbox profile, connect a Provider, then rerun dorf setup --provider NAME")
+		return nil
+	}
+	profile, err := sandboxProfileByNameOrDefault(ctx, store, options.ProfileName)
 	if err != nil {
 		return err
 	}
-	checks := doctor.Run(ctx, db, cfg, profile, *connection)
+	checks := doctor.Run(ctx, db, cfg, profile, options.Connection)
 	checks = appendProfileVerificationCheck(checks, profile)
 	if err := json.NewEncoder(stdout).Encode(checks); err != nil {
 		return err
@@ -292,6 +329,43 @@ func setup(ctx context.Context, store postgres.Store, db *sql.DB, cfg config.Con
 	}
 	fmt.Fprintf(stdout, "Dorf is ready: PostgreSQL, Absurd, Sandbox profile %s, Harness %s, and Provider Gateway checks passed\n", profile.Name, profile.Harness)
 	return nil
+}
+
+func approveHostPlan(ctx context.Context, plan hostsetup.HostPlan, yes bool, output io.Writer) error {
+	if yes || plan.Empty() {
+		return nil
+	}
+	inputFile := os.Stdin
+	outputFile, outputIsFile := output.(*os.File)
+	if !outputIsFile || !isTerminal(inputFile) || !isTerminal(outputFile) {
+		fmt.Fprintln(output, "Host changes required:")
+		fmt.Fprintln(output, plan.Description())
+		return fmt.Errorf("host changes require approval; rerun dorf setup --yes")
+	}
+	approved := false
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Apply these host changes?").
+			Description(plan.Description()).
+			Affirmative("Apply").
+			Negative("Cancel").
+			Value(&approved),
+	)).WithInput(inputFile).WithOutput(outputFile).WithAccessible(strings.TrimSpace(os.Getenv("ACCESSIBLE")) != "")
+	if err := form.RunWithContext(ctx); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return fmt.Errorf("setup cancelled")
+		}
+		return fmt.Errorf("confirm host changes: %w", err)
+	}
+	if !approved {
+		return fmt.Errorf("setup cancelled")
+	}
+	return nil
+}
+
+func isTerminal(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -934,6 +1008,6 @@ func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|host|setup|migrate|doctor|provider|profile|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

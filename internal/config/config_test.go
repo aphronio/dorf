@@ -66,6 +66,7 @@ func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
 }
 
 func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("E2B_API_KEY", "secret-test-key")
 	cfg, err := Load()
 	if err != nil {
@@ -76,7 +77,29 @@ func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadUsesPersistedDockerDatabase(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Setenv("DORF_DATABASE_URL", "")
+	path := filepath.Join(configHome, "dorf", "deployment.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := `{"database":{"host":"127.0.0.1","port":54329,"name":"dorf","user":"dorf","password":"secret","image":"postgres:17.10-bookworm","image_id":"sha256:exact"}}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseExternal || !strings.Contains(cfg.DatabaseURL, "127.0.0.1:54329/dorf") {
+		t.Fatalf("cfg=%#v", cfg)
+	}
+}
+
 func TestLoadUsesHarnessIndependentTurnTimeout(t *testing.T) {
+	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
 	t.Setenv("DORF_TURN_TIMEOUT", "90s")
 	cfg, err := Load()
 	if err != nil {

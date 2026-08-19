@@ -143,6 +143,15 @@ func TestVerifyBaseCleansFailedProbeAndKeepsProfileUnverified(t *testing.T) {
 	}
 }
 
+func TestVerifyBaseReportsFailedPredicateDetail(t *testing.T) {
+	store := newVerificationStore()
+	runtime := &verificationSandbox{execResult: provider.Result{ExitCode: 1, Stderr: "required command is missing: rg\n"}}
+	_, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	if err == nil || !strings.Contains(err.Error(), "required command is missing: rg") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestVerifyBaseRequiresConfirmedCleanup(t *testing.T) {
 	tests := []struct {
 		name       string

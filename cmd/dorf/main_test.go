@@ -26,6 +26,20 @@ func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
 	}
 }
 
+func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
+	var stderr strings.Builder
+	options, err := parseSetupOptions([]string{"--yes", "--provider", "personal-chatgpt", "--profile", "local-codex"}, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.Yes || options.Connection != "personal-chatgpt" || options.ProfileName != "local-codex" {
+		t.Fatalf("options=%#v", options)
+	}
+	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {
+		t.Fatal("removed database selection was accepted")
+	}
+}
+
 func TestProfileInstallValidatesIdentityBeforeArtifactMutation(t *testing.T) {
 	for _, args := range [][]string{
 		{"Invalid_Name", "--release", "v1.2.3", "--harness", "codex"},

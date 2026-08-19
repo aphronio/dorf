@@ -2,34 +2,31 @@
 
 Check [Support and diagnostics](support.md) before installing Dorf.
 
-## 1. Install the application and host services
+## 1. Install the application and initialize storage
 
 Download the application archive and checksum from an immutable Dorf release, verify them, and put
 `dorf` on `PATH`. Contributors building from source should use the repository-managed toolchain in
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-On the validated clean-machine host, review and apply the native installation plan:
+Run the convergent setup entry point. It observes the host first. When supported Ubuntu 24.04 host
+changes are needed, the interactive prompt lists only those exact changes and applies them after
+approval. Automation may approve the same observed plan explicitly:
 
 ```bash
-dorf host install
-dorf host install --yes
+dorf setup
+dorf setup --yes
 ```
 
-Sign out and back in if requested, then rerun the command. Dorf only initializes a pristine Incus
-daemon; preserve operator-owned storage and networking.
+Sign out and back in if setup adds Docker or Incus group access, then run the same command again.
+Setup initializes only a pristine Incus daemon and preserves operator-owned storage and networking.
+It owns only the labeled `dorf-postgres` container and `dorf-postgres-data` volume, exposes
+PostgreSQL on loopback, and never gives a Sandbox the host Docker socket.
 
-Set the deployment database when the default local PostgreSQL DSN is not appropriate:
-
-```bash
-export DORF_DATABASE_URL='postgresql:///dorf?host=/var/run/postgresql'
-```
-
-## 2. Initialize storage and install a Sandbox profile
+## 2. Install a Sandbox profile
 
 Use the same release tag as the application:
 
 ```bash
-dorf migrate
 dorf profile install local-codex --release vX.Y.Z --harness codex
 dorf profile verify local-codex
 dorf profile set-default local-codex

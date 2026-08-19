@@ -9,6 +9,12 @@ readonly MISE_BINARY="$PROJECT_ROOT/.dorf/mise/bin/mise"
 readonly OS_ID="$(. /etc/os-release; printf '%s' "${ID:-}")"
 readonly POSTGRES_MAJOR="17"
 readonly POSTGRES_SOCKET="/var/run/postgresql"
+readonly TEST_DATABASE_FILE="$PROJECT_ROOT/.dorf/test-database-url"
+
+if [[ -z "${DORF_TEST_DATABASE_URL:-}" && -f "$TEST_DATABASE_FILE" ]]; then
+  DORF_TEST_DATABASE_URL="$(<"$TEST_DATABASE_FILE")"
+  export DORF_TEST_DATABASE_URL
+fi
 
 as_root() {
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -131,10 +137,13 @@ if [[ -z "$test_database_url" ]]; then
   test_database_url="$(converge_debian_database)"
 fi
 mkdir -p "$PROJECT_ROOT/.dorf"
-printf '%s\n' "$test_database_url" > "$PROJECT_ROOT/.dorf/test-database-url"
+temporary_database_url="$(mktemp "$PROJECT_ROOT/.dorf/.test-database-url.XXXXXX")"
+printf '%s\n' "$test_database_url" > "$temporary_database_url"
+chmod 0600 "$temporary_database_url"
+mv -f -- "$temporary_database_url" "$TEST_DATABASE_FILE"
 
 if ! psql "$test_database_url" -Atqc 'select 1' | grep -qx 1; then
-  echo "Cannot connect to the disposable Dorf test database: $test_database_url" >&2
+  echo "Cannot connect to the configured disposable Dorf test database." >&2
   exit 1
 fi
 if ! mise_exec absurdctl schema-version -d "$test_database_url" >/dev/null 2>&1; then
@@ -150,5 +159,5 @@ printf '%s\n' \
   "  Go: $(mise_exec go version)" \
   "  sqlc: $(mise_exec sqlc version)" \
   "  PostgreSQL: $(psql --version)" \
-  "  DORF_TEST_DATABASE_URL=$test_database_url" \
+  "  DORF_TEST_DATABASE_URL configured" \
   "Run checks with: .dorf/bin/mise run check"

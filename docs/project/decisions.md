@@ -1807,3 +1807,37 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A real workflow earns browser, nested-container, served-endpoint, snapshot, or
   GPU admission; completed Job audit needs immutable historical profile definitions; or a provider
   cannot support the stable verification ownership and cleanup contract.
+
+## D071 — Setup converges one Docker PostgreSQL deployment
+
+- **Status:** Accepted portability and bootstrap slice, simplified to one setup path — 2026-08-19
+- **Decision:** Keep Dorf as a native Go binary with PostgreSQL as its external durability authority.
+  The supported ordinary deployment has one database shape: Dorf-owned Docker PostgreSQL. There is
+  no backend selection, native PostgreSQL installer, Compose wrapper, or separate host-install
+  command. `dorf setup` is the one convergent entry point.
+- **Docker custody:** Dorf owns one labeled `dorf-postgres` container and one labeled persistent
+  `dorf-postgres-data` volume. It uses the reviewed PostgreSQL 17.10 Bookworm image tag, retains and
+  re-attests the exact resolved image identity, binds the database only to loopback, stores its
+  generated credential in the mode-0600 deployment record, starts a stopped owned container, and
+  refuses same-named resources without exact Dorf ownership or configuration. The host Docker socket
+  remains control-plane authority and is never exposed to a Sandbox or AgentRun.
+- **Bootstrap:** Setup first observes Docker, Incus, QEMU, services, and required group access. If
+  supported Ubuntu 24.04 changes are missing, one Huh prompt renders directly from the exact plan
+  that will be applied; `--yes` approves that same plan for automation. A new login is reported only
+  when newly granted group membership cannot affect the current process. Already-ready non-Ubuntu
+  hosts are accepted, but Dorf does not mutate their packages. Setup then reconciles PostgreSQL and
+  migrates Absurd and Dorf storage before profile or Provider Connection validation. With no
+  Provider Connection supplied, it truthfully reports the next profile and connection operations;
+  a later `dorf setup --provider NAME` proves complete readiness.
+- **Deliberate omission:** `DORF_DATABASE_URL` remains the existing advanced and test override, but
+  there is no database-provider registry, native database path, Compose project,
+  external-database command, database migration command, or automatic backend conversion. Those
+  require measured deployment needs.
+- **Why:** Clean Omarchy dogfood showed that an otherwise portable binary could not begin because
+  PostgreSQL was absent, while adding distribution-specific package installation would expand host
+  support without improving reproducibility. Docker supplies one consistent local PostgreSQL
+  environment across already-Docker-capable hosts without containerizing Dorf or compromising its
+  direct Incus and host authority boundaries.
+- **Reconsider when:** Docker is absent on a supported non-Ubuntu host with real users, a remote
+  deployment needs first-class database configuration, or container lifecycle or backup
+  requirements exceed this bounded local custody.

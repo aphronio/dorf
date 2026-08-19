@@ -39,7 +39,11 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile spine.Sandb
 		checks = append(checks, Check{Name: name, Status: "failed", Detail: detail})
 	}
 	add("host-capacity", HostCapacity(), "provide at least 4 GiB total memory and 20 GiB free on /")
-	add("postgresql", db.PingContext(ctx), "verify DORF_DATABASE_URL and local PostgreSQL is running")
+	databaseRepair := "run dorf setup to reconcile the selected PostgreSQL deployment"
+	if cfg.DatabaseExternal {
+		databaseRepair = "verify DORF_DATABASE_URL and the external PostgreSQL service"
+	}
+	add("postgresql", db.PingContext(ctx), databaseRepair)
 	var version string
 	err := db.QueryRowContext(ctx, `select absurd.get_schema_version()`).Scan(&version)
 	if err == nil && version != "0.5.0" {

@@ -74,15 +74,16 @@ func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.
 	script := `set -eu
 workspace=$1
 harness=$2
-test -d "$workspace"
-test -w "$workspace"
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+test -d "$workspace" || fail "workspace does not exist: $workspace"
+test -w "$workspace" || fail "workspace is not writable: $workspace"
 probe="$workspace/.dorf-profile-probe"
-: > "$probe"
+: > "$probe" || fail "workspace write probe failed: $workspace"
 rm -f -- "$probe"
-command -v bash >/dev/null
-command -v git >/dev/null
-command -v rg >/dev/null
-command -v "$harness" >/dev/null
+command -v bash >/dev/null || fail "required command is missing: bash"
+command -v git >/dev/null || fail "required command is missing: git"
+command -v rg >/dev/null || fail "required command is missing: rg"
+command -v "$harness" >/dev/null || fail "required Harness command is missing: $harness"
 "$harness" --version`
 	result, err := runtime.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-profile-base-1", runtime.Workspace(), harness)
 	if err != nil {

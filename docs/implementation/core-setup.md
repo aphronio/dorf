@@ -3,7 +3,9 @@
 Operator installation and diagnosis live in [Getting started](../getting-started.md) and
 [Support](../support.md). This page maps setup behavior to its code authorities.
 
-- Host package and service convergence: [`internal/hostsetup`](../../internal/hostsetup)
+- Observed Ubuntu host planning, interactive approval, and Docker database reconciliation:
+  [`internal/hostsetup`](../../internal/hostsetup)
+- Deployment-owned database selection and credentials: [`internal/deployment`](../../internal/deployment)
 - PostgreSQL and durable-runtime initialization: [`cmd/dorf/main.go`](../../cmd/dorf/main.go) and
   [`internal/postgres`](../../internal/postgres)
 - Readiness observations and remediation: [`internal/doctor`](../../internal/doctor)
@@ -18,6 +20,14 @@ Setup must remain convergent and observational: rerunning it rechecks current au
 performs idempotent initialization. It must not commandeer operator-owned Incus configuration,
 expose credentials, or infer external proof from unit tests. Explicit profile verification retains
 its own typed functional-proof and cleanup receipt; ordinary doctor observations are not persisted.
+
+A fresh deployment uses one Docker PostgreSQL shape. Before creating it, setup observes the local
+Docker, Incus, QEMU, service, and group requirements. On Ubuntu 24.04 it presents only missing
+changes through the interactive approval boundary; `--yes` approves the same derived plan for
+automation. Docker reconciliation owns only the stable labeled container and volume, retains the
+resolved image identity, binds PostgreSQL to loopback, and refuses same-named foreign resources.
+`DORF_DATABASE_URL` remains an advanced deployment/test override rather than another managed
+backend.
 
 PostgreSQL owns named profiles and the one verified default. Each profile binds an exact Incus image
 fingerprint or E2B template build, Codex or Pi, and provider-specific settings. Only `E2B_API_KEY`
