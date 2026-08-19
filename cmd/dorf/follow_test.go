@@ -95,18 +95,64 @@ func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAtt
 
 	output.Reset()
 	snapshot.Job.AdmissionOpen = false
+	snapshot.Job.CleanupState = spine.CleanupComplete
 	newFollowRenderer(&output).Render(now, snapshot, false)
 	if strings.Contains(output.String(), "Attention") || strings.Contains(output.String(), "dorf retry") {
-		t.Fatalf("closed Job exposed historical execution as current attention:\n%s", output.String())
+		t.Fatalf("completed Job exposed historical execution as current attention:\n%s", output.String())
 	}
 
 	output.Reset()
-	snapshot.Job.CleanupState = spine.CleanupComplete
 	snapshot.Operation = "Complete"
 	snapshot.OperationDetail = "admission closed"
 	newFollowRenderer(&output).Render(now, snapshot, false)
 	if strings.Contains(output.String(), "Operation") {
 		t.Fatalf("completed cleanup rendered a fresh derived operation:\n%s", output.String())
+	}
+}
+
+func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
+	now := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
+	job := spine.Job{ID: "job-cleanup", CleanupState: spine.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}
+	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	snapshot := followSnapshot{
+		Job: job, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Complete",
+		Sandboxes: []spine.Sandbox{sandbox},
+		Actions: []spine.Action{{
+			Kind: spine.ActionRouteRevoke, Scope: sandbox.ID, State: spine.ActionUnsettled,
+		}},
+		Execution: taskResultView{State: absurd.TaskRunning},
+	}.withCleanupOperation()
+
+	if snapshot.Operation != "Revoking model access" || snapshot.followTerminal() {
+		t.Fatalf("active cleanup snapshot=%#v", snapshot)
+	}
+	var output bytes.Buffer
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	if got := output.String(); !strings.Contains(got, "Current      Revoking model access") || strings.Contains(got, "needs attention") || strings.Contains(got, "dorf retry") {
+		t.Fatalf("active cleanup output:\n%s", got)
+	}
+
+	snapshot.Actions[0].State = spine.ActionSucceeded
+	snapshot = snapshot.withCleanupOperation()
+	if snapshot.Operation != "Deleting Sandbox" {
+		t.Fatalf("post-revoke cleanup operation=%q", snapshot.Operation)
+	}
+	snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: spine.ActionSandboxDelete, Scope: sandbox.ID, State: spine.ActionSucceeded})
+	snapshot = snapshot.withCleanupOperation()
+	if snapshot.Operation != "Finalizing cleanup" {
+		t.Fatalf("post-delete cleanup operation=%q", snapshot.Operation)
+	}
+
+	snapshot.Execution = taskResultView{State: absurd.TaskFailed, LastError: "delete Sandbox: provider unavailable"}
+	if !snapshot.followTerminal() {
+		t.Fatal("failed cleanup task did not stop the follower")
+	}
+	output.Reset()
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	for _, want := range []string{"Cleanup stopped", "reason: delete Sandbox: provider unavailable", "dorf retry " + job.ID} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("failed cleanup output lacks %q:\n%s", want, output.String())
+		}
 	}
 }
 

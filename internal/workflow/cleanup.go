@@ -27,6 +27,17 @@ func cleanupTargets(sandboxes []spine.Sandbox) []cleanupTarget {
 	return targets
 }
 
+// CurrentCleanupAction projects the next required cleanup mutation from the
+// same ordered targets used by execution. It records no additional status.
+func CurrentCleanupAction(sandboxes []spine.Sandbox, actions []spine.Action) (spine.ActionKind, string, bool) {
+	for _, target := range cleanupTargets(sandboxes) {
+		if !actionSucceeded(actions, target.Kind, target.Sandbox.ID) {
+			return target.Kind, target.Sandbox.ID, true
+		}
+	}
+	return "", "", false
+}
+
 func runCleanup(ctx context.Context, service spine.Service, store postgres.Store, jobID string) error {
 	job, sandboxes, err := service.PrepareCleanup(ctx, jobID)
 	if err != nil {
@@ -34,6 +45,14 @@ func runCleanup(ctx context.Context, service spine.Service, store postgres.Store
 	}
 	if job.CleanupState == spine.CleanupComplete {
 		return nil
+	}
+	// cleanup_attention is an operator diagnostic, not a progress field. A
+	// retried cleanup attempt clears the prior failure before reconciling from
+	// durable Actions again.
+	if job.CleanupAttention != "" {
+		if err := store.SetCleanupAttention(ctx, jobID, ""); err != nil {
+			return err
+		}
 	}
 
 	for _, target := range cleanupTargets(sandboxes) {
@@ -46,9 +65,6 @@ func runCleanup(ctx context.Context, service spine.Service, store postgres.Store
 		}
 
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
-		if err := store.SetCleanupAttention(ctx, jobID, detail); err != nil {
-			return err
-		}
 		err = runActionStep(ctx, action.ID, func(workCtx context.Context) error {
 			return service.ExecuteSandboxAction(workCtx, job, target.Sandbox, action)
 		})
@@ -59,9 +75,6 @@ func runCleanup(ctx context.Context, service spine.Service, store postgres.Store
 	}
 
 	detail := "verifying no owned resource or non-cleanup Job claim remains unsettled"
-	if err := store.SetCleanupAttention(ctx, jobID, detail); err != nil {
-		return err
-	}
 	if err := store.CompleteCleanup(ctx, jobID); err != nil {
 		_ = store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err

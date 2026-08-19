@@ -112,7 +112,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			Job: snapshot.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == workflow.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
-		}, nil
+		}.withCleanupOperation(), nil
 	case spine.WorkflowCodebaseInvestigation:
 		snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, jobID)
 		if err != nil {
@@ -123,14 +123,36 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			Job: snapshot.Job, Profile: profile, Definition: workflow.CodebaseInvestigationDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
 			NeedsAttention: work.Kind == workflow.InvestigationWorkAttention, AgentRuns: []spine.AgentRun{snapshot.Delivery.AgentRun},
 			Sandboxes: []spine.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
-		}, nil
+		}.withCleanupOperation(), nil
 	default:
 		return followSnapshot{}, fmt.Errorf("inspect --follow does not support workflow %q", job.Workflow)
 	}
 }
 
 func (s followSnapshot) followTerminal() bool {
-	return s.Job.CleanupState == spine.CleanupComplete || s.NeedsAttention || s.Job.CleanupAttention != "" || (s.Execution.State == absurd.TaskFailed && s.Job.AdmissionOpen)
+	return s.Job.CleanupState == spine.CleanupComplete || s.NeedsAttention || s.executionFailed()
+}
+
+func (s followSnapshot) executionFailed() bool {
+	return s.Execution.State == absurd.TaskFailed && s.Job.CleanupState != spine.CleanupComplete
+}
+
+func (s followSnapshot) withCleanupOperation() followSnapshot {
+	if operation, ok := cleanupOperation(s.Definition, s.Job, s.Sandboxes, s.Actions); ok {
+		s.Operation = operation
+		s.OperationDetail = ""
+	}
+	return s
+}
+
+func cleanupOperation(definition workflow.Definition, job spine.Job, sandboxes []spine.Sandbox, actions []spine.Action) (string, bool) {
+	if job.CleanupState != spine.CleanupScheduled {
+		return "", false
+	}
+	if kind, _, pending := workflow.CurrentCleanupAction(sandboxes, actions); pending {
+		return definition.ActionLabel(kind), true
+	}
+	return "Finalizing cleanup", true
 }
 
 type followRenderer struct {
@@ -195,21 +217,21 @@ func (r *followRenderer) Render(observedAt time.Time, snapshot followSnapshot, p
 func (r *followRenderer) renderAttention(observedAt time.Time, snapshot followSnapshot) {
 	var summary string
 	switch {
-	case snapshot.Execution.State == absurd.TaskFailed && snapshot.Job.AdmissionOpen:
+	case snapshot.executionFailed() && snapshot.Job.CleanupState == spine.CleanupScheduled:
+		summary = "Cleanup stopped"
+	case snapshot.executionFailed():
 		summary = "Workflow stopped"
 	case snapshot.NeedsAttention && snapshot.Job.WorkflowAttention != "":
 		summary = "Needs attention · " + snapshot.Job.WorkflowAttention
 	case snapshot.NeedsAttention:
 		summary = "Workflow needs attention"
-	case snapshot.Job.CleanupAttention != "":
-		summary = "Cleanup needs attention · " + snapshot.Job.CleanupAttention
 	}
 	if summary == "" || summary == r.lastAttention {
 		return
 	}
 	r.lastAttention = summary
 	renderHumanHistoryEntry(r.output, historyEntry{At: observedAt, Text: summary}, &r.lastHistoryDate, "")
-	if snapshot.Execution.State == absurd.TaskFailed && snapshot.Job.AdmissionOpen {
+	if snapshot.executionFailed() {
 		if snapshot.Execution.LastError != "" {
 			fmt.Fprintf(r.output, "         reason: %s\n", snapshot.Execution.LastError)
 		}

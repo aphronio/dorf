@@ -285,9 +285,15 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123"}, execution, "Complete")
+	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123", CleanupState: spine.CleanupComplete}, execution, "Complete")
 	if output.Len() != 0 {
-		t.Fatalf("closed Job rendered non-actionable attention: %q", output.String())
+		t.Fatalf("completed Job rendered non-actionable attention: %q", output.String())
+	}
+
+	output.Reset()
+	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123", CleanupState: spine.CleanupScheduled}, execution, "Deleting Sandbox")
+	if got := output.String(); !strings.Contains(got, "attention: cleanup stopped") || !strings.Contains(got, "operation: Deleting Sandbox") || !strings.Contains(got, "dorf retry job-123") {
+		t.Fatalf("failed cleanup attention:\n%s", got)
 	}
 
 	output.Reset()

@@ -779,11 +779,16 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
 	history := workflowHistory(snapshot)
+	definition := workflow.CodingToProposalDefinition()
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
 	}
 	currentExecution := currentTaskExecution(executions)
+	executionOperation := currentWork.Description()
+	if operation, ok := cleanupOperation(definition, job, snapshot.Sandboxes, snapshot.Actions); ok {
+		executionOperation = operation
+	}
 	if *jsonOutput {
 		messages := make([]spine.Message, 0, len(snapshot.Deliveries))
 		agentRuns := make([]spine.AgentRun, 0, len(snapshot.Deliveries))
@@ -813,8 +818,8 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		readiness = "ready"
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, currentExecution, currentWork.Description())
-	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(workflow.CodingToProposalDefinition().RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
+	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -866,6 +871,10 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	currentExecution := currentTaskExecution(executions)
 	definition := workflow.CodebaseInvestigationDefinition()
+	executionOperation := work.Description()
+	if operation, ok := cleanupOperation(definition, job, []spine.Sandbox{snapshot.MainSandbox}, snapshot.Actions); ok {
+		executionOperation = operation
+	}
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
 			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
@@ -875,7 +884,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		})
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, currentExecution, work.Description())
+	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
@@ -1151,10 +1160,14 @@ func boundedTaskError(raw json.RawMessage) string {
 }
 
 func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution taskResultView, operation string) {
-	if execution.State != absurd.TaskFailed || !job.AdmissionOpen {
+	if execution.State != absurd.TaskFailed || job.CleanupState == spine.CleanupComplete {
 		return
 	}
-	fmt.Fprintln(output, "  attention: workflow stopped")
+	label := "workflow stopped"
+	if job.CleanupState == spine.CleanupScheduled {
+		label = "cleanup stopped"
+	}
+	fmt.Fprintln(output, "  attention: "+label)
 	if operation = strings.TrimSpace(operation); operation != "" {
 		fmt.Fprintf(output, "  operation: %s\n", operation)
 	}

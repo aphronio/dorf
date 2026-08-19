@@ -6,15 +6,6 @@ Dorf. Resolved items are removed: accepted boundaries belong in the
 
 ## Resistance to discuss
 
-### P1 — Follow exits on active cleanup reconciliation
-
-Live investigation briefly rendered `Cleanup needs attention · reconciling provider-route-revoke`
-and exited while ordinary cleanup was actively succeeding. Durable inspection moments later showed
-the route revoke, Sandbox delete, cleanup task, and Job cleanup all complete.
-
-Discuss distinguishing active cleanup operation from actionable cleanup attention in the derived
-human view. Do not weaken real cleanup-attention exit behavior or add another persisted state.
-
 ### P1 — Workflow-specific network failures arrive late
 
 The broad profile probe verifies provider lifecycle, the baseline file operation, required tools,
@@ -57,7 +48,6 @@ Do not treat this backlog as justification to:
 
 Re-rank only from new dogfood evidence:
 
-1. truthful cleanup following;
-2. workflow-specific network failure feedback;
-3. stable empty-collection JSON; and
-4. thin interaction clients outside Core.
+1. workflow-specific network failure feedback;
+2. stable empty-collection JSON; and
+3. thin interaction clients outside Core.
