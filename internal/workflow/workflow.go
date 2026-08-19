@@ -19,6 +19,9 @@ const (
 	InvestigationTaskName   = "dorf-codebase-investigation-v1"
 	CleanupTaskName         = "dorf-job-cleanup-v3"
 	activeAgentPollInterval = time.Second
+	retryBaseDelaySeconds   = 5
+	retryBackoffFactor      = 2
+	retryMaxDelaySeconds    = 60
 )
 
 type Params struct {
@@ -63,6 +66,21 @@ type RuntimeResolver interface {
 
 func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
+}
+
+// taskSpawnOptions keeps Dorf's bounded task retry policy explicit at the
+// Absurd authority boundary. Absurd persists and applies the resulting
+// schedule; Dorf does not mirror attempt timing in its own facts.
+func taskSpawnOptions(idempotencyKey string) absurd.SpawnOptions {
+	return absurd.SpawnOptions{
+		IdempotencyKey: idempotencyKey,
+		RetryStrategy: &absurd.RetryStrategy{
+			Kind:        "exponential",
+			BaseSeconds: retryBaseDelaySeconds,
+			Factor:      retryBackoffFactor,
+			MaxSeconds:  retryMaxDelaySeconds,
+		},
+	}
 }
 
 func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver) {
@@ -328,7 +346,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 		return job, created, nil
 	}
 	err = store.WithJobFence(ctx, job.ID, func() error {
-		spawned, err := client.Spawn(ctx, taskName, Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskKey})
+		spawned, err := client.Spawn(ctx, taskName, Params{JobID: job.ID}, taskSpawnOptions(taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
@@ -415,7 +433,7 @@ func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.C
 		if err := cancelAttachedTasks(ctx, client, current, skipTaskID); err != nil {
 			return err
 		}
-		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, absurd.SpawnOptions{IdempotencyKey: "cleanup:v3:" + jobID})
+		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, taskSpawnOptions("cleanup:v3:"+jobID))
 		if err != nil {
 			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
 		}

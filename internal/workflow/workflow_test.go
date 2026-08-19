@@ -129,6 +129,30 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	}
 }
 
+func TestTaskSpawnOptionsUseBoundedExponentialRetry(t *testing.T) {
+	first := taskSpawnOptions("job-key")
+	second := taskSpawnOptions("cleanup-key")
+
+	if first.IdempotencyKey != "job-key" {
+		t.Fatalf("idempotency key = %q", first.IdempotencyKey)
+	}
+	if first.RetryStrategy == nil {
+		t.Fatal("retry strategy is missing")
+	}
+	if first.RetryStrategy.Kind != "exponential" ||
+		first.RetryStrategy.BaseSeconds != 5 ||
+		first.RetryStrategy.Factor != 2 ||
+		first.RetryStrategy.MaxSeconds != 60 {
+		t.Fatalf("retry strategy = %#v", first.RetryStrategy)
+	}
+	if second.IdempotencyKey != "cleanup-key" || second.RetryStrategy == nil {
+		t.Fatalf("second spawn options = %#v", second)
+	}
+	if first.RetryStrategy == second.RetryStrategy {
+		t.Fatal("spawn options share a mutable retry strategy")
+	}
+}
+
 func TestActiveAgentObservationUsesInterruptiblePoll(t *testing.T) {
 	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2, 30*time.Second)
 	if options.StepName != "dorf/agent-run-wake/v1/run-1/00000000000000000002" {
