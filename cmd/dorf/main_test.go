@@ -9,10 +9,10 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -29,7 +29,7 @@ func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
 
 func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	var stderr strings.Builder
-	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{
+	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{
 		"--gateway-url", "https://replacement.example/v1", "--allow-internet=false",
 	}, &stderr)
 	if err != nil {
@@ -41,23 +41,23 @@ func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 		patch.IncusArtifact != nil || patch.IncusNetwork != nil || patch.IncusDiskSize != nil {
 		t.Fatalf("patch contains omitted or incorrect fields: %#v", patch)
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
 		t.Fatalf("empty patch error=%v", err)
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{"--provider", "e2b"}, &stderr); err == nil {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--provider", "e2b"}, &stderr); err == nil {
 		t.Fatal("profile update accepted a provider change")
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", spine.SandboxProviderE2B, []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
 		t.Fatalf("E2B Incus-field error=%v", err)
 	}
 }
 
 func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReachability(t *testing.T) {
 	verifiedAt := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
-	profile := spine.SandboxProfile{
-		Name: "managed", Provider: spine.SandboxProviderE2B, E2BGatewayURL: "https://gateway.example/v1",
-		Verification: &spine.ProfileVerification{
-			ContractVersion: spine.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+	profile := core.SandboxProfile{
+		Name: "managed", Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://gateway.example/v1",
+		Verification: &core.ProfileVerification{
+			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
 		},
 	}
 	view := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, context.DeadlineExceeded)
@@ -87,10 +87,10 @@ func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReac
 	if unverified.Ready || !strings.Contains(unverified.Next, "profile verify managed") {
 		t.Fatalf("unverified status=%#v", unverified)
 	}
-	local := newProviderGatewayStatusView(spine.SandboxProfile{
-		Name: "local", Provider: spine.SandboxProviderIncus, IncusNetwork: "incusbr0",
-		Verification: &spine.ProfileVerification{
-			ContractVersion: spine.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
+	local := newProviderGatewayStatusView(core.SandboxProfile{
+		Name: "local", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0",
+		Verification: &core.ProfileVerification{
+			ContractVersion: core.BaseProfileContract, ProbeCompletedAt: verifiedAt, CleanedAt: verifiedAt.Add(time.Second),
 		},
 	}, "personal-chatgpt", nil, nil)
 	if !local.Ready || local.SandboxPath.Status != "historical" || !strings.Contains(local.SandboxPath.Detail, "no Sandbox was created") {
@@ -126,8 +126,8 @@ func TestProfileInstallValidatesIdentityBeforeArtifactMutation(t *testing.T) {
 }
 
 func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
-	local, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, spine.SandboxProfile{
-		Name: "local", Provider: spine.SandboxProviderIncus, Artifact: strings.Repeat("a", 64),
+	local, err := sandboxForProfile(config.Config{Workspace: "/workspace/job"}, core.SandboxProfile{
+		Name: "local", Provider: core.SandboxProviderIncus, Artifact: strings.Repeat("a", 64),
 		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
 	})
 	if err != nil {
@@ -136,8 +136,8 @@ func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
 	if _, ok := local.(incus.Adapter); !ok {
 		t.Fatalf("local adapter = %T", local)
 	}
-	managedProfile := spine.SandboxProfile{
-		Name: "managed", Provider: spine.SandboxProviderE2B, Artifact: "dorf:exact-build",
+	managedProfile := core.SandboxProfile{
+		Name: "managed", Provider: core.SandboxProviderE2B, Artifact: "dorf:exact-build",
 		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: 55 * time.Minute,
 	}
 	managed, err := sandboxForProfile(config.Config{E2BAPIKey: "test-key", Workspace: "/workspace/job", TurnTimeout: 45 * time.Minute}, managedProfile)
@@ -158,23 +158,23 @@ func TestSandboxForProfileSelectsOneConcreteAdapter(t *testing.T) {
 
 func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.T) {
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
-	mainSandbox := spine.MainSandboxName(job.ID)
+	job := core.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
+	mainSandbox := core.MainSandboxName(job.ID)
 	entries := workflowHistory(workflow.Snapshot{
 		Job: coding.Job{Job: job},
-		Deliveries: []spine.Delivery{{
-			Message:  spine.Message{ID: "message-1", Sequence: 1, FromKind: spine.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
-			AgentRun: spine.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
+		Deliveries: []core.Delivery{{
+			Message:  core.Message{ID: "message-1", Sequence: 1, FromKind: core.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
+			AgentRun: core.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: core.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
 		}},
-		Actions: []spine.Action{
-			{ID: "action-secret", Kind: spine.ActionSandboxCreate, Scope: mainSandbox, State: spine.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
-			{Kind: coding.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
+		Actions: []core.Action{
+			{ID: "action-secret", Kind: core.ActionSandboxCreate, Scope: mainSandbox, State: core.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
+			{Kind: coding.ActionGitHubPullRequest, State: core.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
 		},
 		Revisions: []coding.Revision{
 			{Generation: 0, OID: "revision-0", ObservedAt: base},
 			{Generation: 1, OID: "revision-1", ComparisonBase: "revision-0", ObservedAt: base.Add(6 * time.Second)},
 		},
-		Evidence: []spine.Evidence{{ID: "evidence-secret", Kind: "git-revision", Revision: "revision-1", FinishedAt: base.Add(6500 * time.Millisecond)}},
+		Evidence: []core.Evidence{{ID: "evidence-secret", Kind: "git-revision", Revision: "revision-1", FinishedAt: base.Add(6500 * time.Millisecond)}},
 		Proposal: &coding.Proposal{Number: 42, ProposedRevision: "revision-1"},
 	})
 	for i := 1; i < len(entries); i++ {
@@ -213,7 +213,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		}
 	}
 	abandoned := workflowHistory(workflow.Snapshot{
-		Job:     coding.Job{Job: spine.Job{AdmittedAt: base}},
+		Job:     coding.Job{Job: core.Job{AdmittedAt: base}},
 		Outcome: &coding.Outcome{Kind: coding.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
 	})
 	last := abandoned[len(abandoned)-1]
@@ -273,7 +273,7 @@ func TestTaskResultProjectionPublishesOnlyBoundedFailureMessage(t *testing.T) {
 }
 
 func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
-	job := spine.Job{ID: "job-123", AdmissionOpen: true}
+	job := core.Job{ID: "job-123", AdmissionOpen: true}
 	execution := taskResultView{TaskID: "task-1", State: absurd.TaskFailed, LastError: "clone repository: DNS failed"}
 	var output strings.Builder
 	renderWorkflowExecutionAttention(&output, job, execution, "Clone repository")
@@ -286,13 +286,13 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123", CleanupState: spine.CleanupComplete}, execution, "Complete")
+	renderWorkflowExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupComplete}, execution, "Complete")
 	if output.Len() != 0 {
 		t.Fatalf("completed Job rendered non-actionable attention: %q", output.String())
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, spine.Job{ID: "job-123", CleanupState: spine.CleanupScheduled}, execution, "Deleting Sandbox")
+	renderWorkflowExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupScheduled}, execution, "Deleting Sandbox")
 	if got := output.String(); !strings.Contains(got, "attention: cleanup stopped") || !strings.Contains(got, "operation: Deleting Sandbox") || !strings.Contains(got, "dorf retry job-123") {
 		t.Fatalf("failed cleanup attention:\n%s", got)
 	}

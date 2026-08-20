@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func TestProposalObservationRequiresExactIdentity(t *testing.T) {
@@ -44,8 +44,8 @@ func TestOnlyRepositoryAuthoritiesSupplyHumanFeedback(t *testing.T) {
 }
 
 func TestAdmittedGitHubCommentRemainsImmutableAfterEdit(t *testing.T) {
-	admitted := admittedGitHubComments([]spine.Delivery{{Message: spine.Message{
-		FromKind: spine.MessageFromHuman,
+	admitted := admittedGitHubComments([]core.Delivery{{Message: core.Message{
+		FromKind: core.MessageFromHuman,
 		FromID:   "github-comment:42",
 		Input:    "first admitted text",
 	}}})

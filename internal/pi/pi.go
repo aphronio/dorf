@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 const (
@@ -67,38 +67,38 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 	return nil
 }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID string, input, model, effort string) (core.HarnessBinding, error) {
 	threadID := owner.SandboxID
 	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return a.latestBinding(ctx, owner, threadID)
 }
 
-func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, _ string) (spine.HarnessHistory, error) {
+func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, _ string) (core.HarnessHistory, error) {
 	return a.readHistory(ctx, owner, owner.SandboxID, true)
 }
 
-func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessHistory, error) {
+func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessHistory, error) {
 	return a.readHistory(ctx, owner, threadID, false)
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID string, input, model, effort string) (core.HarnessBinding, error) {
 	before, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if err := a.runTurn(ctx, owner, workspace, threadID, agentRunID, input, model, effort, false); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	after, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if len(after.Turns) != len(before.Turns)+1 {
-		return spine.HarnessBinding{}, fmt.Errorf("Pi follow-up did not create exactly one native Turn")
+		return core.HarnessBinding{}, fmt.Errorf("Pi follow-up did not create exactly one native Turn")
 	}
-	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: after.Turns[len(after.Turns)-1]}, nil
+	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: after.Turns[len(after.Turns)-1]}, nil
 }
 
 func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string, targetTurnID, agentRunID, input string) (string, error) {
@@ -114,13 +114,13 @@ func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, _ string
 	return targetTurnID, nil
 }
 
-func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (spine.HarnessBinding, error) {
+func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	for {
 		history, err := a.readHistory(ctx, owner, threadID, false)
 		if err != nil {
-			return spine.HarnessBinding{}, err
+			return core.HarnessBinding{}, err
 		}
 		found := false
 		for _, turn := range history.Turns {
@@ -129,63 +129,63 @@ func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID,
 			}
 			found = true
 			if turn.Status != "running" && turn.Status != "inProgress" {
-				return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
+				return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
 			}
 		}
 		if !found {
-			return spine.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
+			return core.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
 		}
 		select {
 		case <-ctx.Done():
-			return spine.HarnessBinding{}, ctx.Err()
+			return core.HarnessBinding{}, ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce string, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce string, input, model, effort string) (core.HarnessBinding, error) {
 	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if err := a.runTurn(ctx, owner, workspace, owner.SandboxID, submissionNonce, input, model, effort, true); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return a.latestBinding(ctx, owner, owner.SandboxID)
 }
 
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, _ string, _, _, _ string) (spine.HarnessBinding, error) {
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, _ string, _, _, _ string) (core.HarnessBinding, error) {
 	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	history, err := a.readHistory(ctx, owner, owner.SandboxID, true)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if len(history.Turns) == 0 {
-		return spine.HarnessBinding{}, nil
+		return core.HarnessBinding{}, nil
 	}
-	return spine.HarnessBinding{Harness: Harness, ThreadID: owner.SandboxID, Turn: history.Turns[len(history.Turns)-1]}, nil
+	return core.HarnessBinding{Harness: Harness, ThreadID: owner.SandboxID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (spine.HarnessBinding, error) {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (core.HarnessBinding, error) {
 	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return a.WaitTurn(ctx, owner, threadID, turnID)
 }
 
-func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessBinding, error) {
+func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessBinding, error) {
 	history, err := a.readHistory(ctx, owner, threadID, false)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	if len(history.Turns) == 0 {
-		return spine.HarnessBinding{}, fmt.Errorf("Pi Thread %s contains no Turn", threadID)
+		return core.HarnessBinding{}, fmt.Errorf("Pi Thread %s contains no Turn", threadID)
 	}
-	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: history.Turns[len(history.Turns)-1]}, nil
+	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
 func (a Agent) runTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, requestID, input, model, effort string, readOnly bool) error {
@@ -322,29 +322,29 @@ func (a Agent) waitRPCResponse(ctx context.Context, owner provider.Ownership, re
 	}
 }
 
-func (a Agent) readHistory(ctx context.Context, owner provider.Ownership, threadID string, allowMissing bool) (spine.HarnessHistory, error) {
+func (a Agent) readHistory(ctx context.Context, owner provider.Ownership, threadID string, allowMissing bool) (core.HarnessHistory, error) {
 	script := "set -eu; shopt -s nullglob; files=(" + sessionDir + "/*_\"$1\".jsonl); if (( ${#files[@]} == 0 )); then exit 0; fi; if (( ${#files[@]} != 1 )); then echo 'ambiguous Pi session identity' >&2; exit 2; fi; cat -- \"${files[0]}\""
 	result, err := a.Sandbox.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-pi-history", threadID)
 	if err != nil {
-		return spine.HarnessHistory{}, err
+		return core.HarnessHistory{}, err
 	}
 	if result.ExitCode != 0 {
-		return spine.HarnessHistory{}, fmt.Errorf("inspect Pi Thread: %s", strings.TrimSpace(result.Stderr))
+		return core.HarnessHistory{}, fmt.Errorf("inspect Pi Thread: %s", strings.TrimSpace(result.Stderr))
 	}
 	if strings.TrimSpace(result.Stdout) == "" {
 		if allowMissing {
-			return spine.HarnessHistory{Harness: Harness}, nil
+			return core.HarnessHistory{Harness: Harness}, nil
 		}
-		return spine.HarnessHistory{}, fmt.Errorf("Pi Thread %s is missing", threadID)
+		return core.HarnessHistory{}, fmt.Errorf("Pi Thread %s is missing", threadID)
 	}
 	observedThread, turns, err := parseSession(result.Stdout)
 	if err != nil {
-		return spine.HarnessHistory{}, err
+		return core.HarnessHistory{}, err
 	}
 	if observedThread != threadID {
-		return spine.HarnessHistory{}, fmt.Errorf("Pi returned Thread %s for %s", observedThread, threadID)
+		return core.HarnessHistory{}, fmt.Errorf("Pi returned Thread %s for %s", observedThread, threadID)
 	}
-	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, nil
+	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, nil
 }
 
 func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -368,11 +368,11 @@ type sessionMessage struct {
 	ErrorMessage string `json:"errorMessage"`
 }
 
-func parseSession(raw string) (string, []spine.HarnessTurn, error) {
+func parseSession(raw string) (string, []core.HarnessTurn, error) {
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	scanner.Buffer(make([]byte, 64*1024), 16<<20)
 	threadID, previousID := "", ""
-	turns := make([]spine.HarnessTurn, 0)
+	turns := make([]core.HarnessTurn, 0)
 	for scanner.Scan() {
 		var entry sessionEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
@@ -405,7 +405,7 @@ func parseSession(raw string) (string, []spine.HarnessTurn, error) {
 				// user entry after settlement starts a follow-up Turn.
 				continue
 			}
-			turns = append(turns, spine.HarnessTurn{ID: entry.ID, Status: "running"})
+			turns = append(turns, core.HarnessTurn{ID: entry.ID, Status: "running"})
 		case "assistant":
 			if len(turns) == 0 {
 				return "", nil, fmt.Errorf("Pi session contains an assistant response without a Turn")

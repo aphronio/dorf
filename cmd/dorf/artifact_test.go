@@ -12,16 +12,16 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type artifactFixture struct {
-	job       spine.Job
-	artifacts []spine.Artifact
+	job       core.Job
+	artifacts []core.Artifact
 }
 
 func TestArtifactListKeepsEmptyOutputStable(t *testing.T) {
-	fixture := artifactFixture{job: spine.Job{ID: "job-empty"}}
+	fixture := artifactFixture{job: core.Job{ID: "job-empty"}}
 	var human bytes.Buffer
 	if err := artifactCommand(context.Background(), fixture, blob.Store{}, []string{"list", fixture.job.ID}, &human, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -38,33 +38,33 @@ func TestArtifactListKeepsEmptyOutputStable(t *testing.T) {
 	}
 }
 
-func (f artifactFixture) Job(_ context.Context, jobID string) (spine.Job, error) {
+func (f artifactFixture) Job(_ context.Context, jobID string) (core.Job, error) {
 	if jobID != f.job.ID {
-		return spine.Job{}, fmt.Errorf("missing Job")
+		return core.Job{}, fmt.Errorf("missing Job")
 	}
 	return f.job, nil
 }
 
-func (f artifactFixture) Artifacts(_ context.Context, jobID string) ([]spine.Artifact, error) {
+func (f artifactFixture) Artifacts(_ context.Context, jobID string) ([]core.Artifact, error) {
 	if jobID != f.job.ID {
 		return nil, fmt.Errorf("missing Job")
 	}
 	return f.artifacts, nil
 }
 
-func (f artifactFixture) Artifact(_ context.Context, artifactID string) (spine.Artifact, error) {
+func (f artifactFixture) Artifact(_ context.Context, artifactID string) (core.Artifact, error) {
 	for _, artifact := range f.artifacts {
 		if artifact.ID == artifactID {
 			return artifact, nil
 		}
 	}
-	return spine.Artifact{}, fmt.Errorf("missing Artifact")
+	return core.Artifact{}, fmt.Errorf("missing Artifact")
 }
 
 func TestArtifactListRendersHumanAndJSONDiscovery(t *testing.T) {
 	fixture := artifactFixture{
-		job: spine.Job{ID: "job-example"},
-		artifacts: []spine.Artifact{{
+		job: core.Job{ID: "job-example"},
+		artifacts: []core.Artifact{{
 			ID: "artifact-report", JobID: "job-example", Name: "report.md",
 			MediaType: "text/markdown", ByteSize: 42, CreatedAt: time.Unix(10, 0).UTC(),
 		}},
@@ -81,8 +81,8 @@ func TestArtifactListRendersHumanAndJSONDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		JobID     string           `json:"job_id"`
-		Artifacts []spine.Artifact `json:"artifacts"`
+		JobID     string          `json:"job_id"`
+		Artifacts []core.Artifact `json:"artifacts"`
 	}
 	if err := json.Unmarshal(machine.Bytes(), &decoded); err != nil || decoded.JobID != fixture.job.ID || len(decoded.Artifacts) != 1 || decoded.Artifacts[0].ID != "artifact-report" {
 		t.Fatalf("JSON=%q decoded=%#v err=%v", machine.String(), decoded, err)
@@ -96,8 +96,8 @@ func TestArtifactGetWritesExactVerifiedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	artifact := spine.Artifact{ID: "artifact-report", Digest: ref.Digest, ByteSize: ref.ByteSize}
-	fixture := artifactFixture{artifacts: []spine.Artifact{artifact}}
+	artifact := core.Artifact{ID: "artifact-report", Digest: ref.Digest, ByteSize: ref.ByteSize}
+	fixture := artifactFixture{artifacts: []core.Artifact{artifact}}
 	var output bytes.Buffer
 	if err := artifactCommand(context.Background(), fixture, records, []string{"get", artifact.ID}, &output, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
@@ -110,16 +110,16 @@ func TestArtifactGetWritesExactVerifiedBytes(t *testing.T) {
 func TestArtifactGetRefusesUnverifiedBytesWithoutWriting(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		mutate func(string, *spine.Artifact) error
+		mutate func(string, *core.Artifact) error
 	}{
-		{name: "missing", mutate: func(path string, _ *spine.Artifact) error { return os.Remove(path) }},
-		{name: "corrupt", mutate: func(path string, _ *spine.Artifact) error {
+		{name: "missing", mutate: func(path string, _ *core.Artifact) error { return os.Remove(path) }},
+		{name: "corrupt", mutate: func(path string, _ *core.Artifact) error {
 			if err := os.Chmod(path, 0o600); err != nil {
 				return err
 			}
 			return os.WriteFile(path, []byte("corrupt"), 0o600)
 		}},
-		{name: "wrong size", mutate: func(_ string, artifact *spine.Artifact) error {
+		{name: "wrong size", mutate: func(_ string, artifact *core.Artifact) error {
 			artifact.ByteSize++
 			return nil
 		}},
@@ -131,12 +131,12 @@ func TestArtifactGetRefusesUnverifiedBytesWithoutWriting(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			artifact := spine.Artifact{ID: "artifact-report", Digest: ref.Digest, ByteSize: ref.ByteSize}
+			artifact := core.Artifact{ID: "artifact-report", Digest: ref.Digest, ByteSize: ref.ByteSize}
 			path := filepath.Join(records.Root, "sha256", ref.Digest[:2], ref.Digest[2:])
 			if err := test.mutate(path, &artifact); err != nil {
 				t.Fatal(err)
 			}
-			fixture := artifactFixture{artifacts: []spine.Artifact{artifact}}
+			fixture := artifactFixture{artifacts: []core.Artifact{artifact}}
 			var output bytes.Buffer
 			if err := artifactCommand(context.Background(), fixture, records, []string{"get", artifact.ID}, &output, &bytes.Buffer{}); err == nil {
 				t.Fatal("artifact get accepted unverified bytes")

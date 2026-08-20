@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 // authorizeCodingMessage implements the coding workflow's delivery policy
@@ -16,8 +16,8 @@ func authorizeCodingMessage(ctx context.Context, queries *dbsql.Queries, job dbs
 	if job.OutcomeExists {
 		return admittedAgentRun{}, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
 	}
-	run := admittedAgentRun{Role: "implement", SandboxID: spine.MainSandboxName(input.JobID)}
-	if input.Intent == spine.MessageSteer {
+	run := admittedAgentRun{Role: "implement", SandboxID: core.MainSandboxName(input.JobID)}
+	if input.Intent == core.MessageSteer {
 		active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return admittedAgentRun{}, fmt.Errorf("steer delivery requires an exact active regular harness Turn")

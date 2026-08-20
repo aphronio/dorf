@@ -9,7 +9,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const nextDeliveryCandidate = `-- name: NextDeliveryCandidate :one
@@ -48,11 +48,11 @@ order by c.priority,c.sequence limit 1
 type NextDeliveryCandidateRow struct {
 	ID                string
 	JobID             string
-	FromKind          spine.MessageFromKind
+	FromKind          core.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
+	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
 }

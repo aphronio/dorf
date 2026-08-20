@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -59,7 +59,7 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 		if len(args) != 2 {
 			return fmt.Errorf("profile verify requires NAME")
 		}
-		verified, err := profileapp.VerifyBase(ctx, store, func(profile spine.SandboxProfile) (provider.Sandbox, error) {
+		verified, err := profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
 			return sandboxForProfile(cfg, profile)
 		}, args[1])
 		if err != nil {
@@ -136,8 +136,8 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 	if err != nil {
 		return err
 	}
-	profile, created, err := store.CreateSandboxProfile(ctx, spine.SandboxProfile{
-		Name: name, Provider: spine.SandboxProviderIncus, Harness: *harness,
+	profile, created, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderIncus, Harness: *harness,
 		Artifact: installed.ImageFingerprint, IncusNetwork: *network, IncusDiskSize: *diskSize,
 	})
 	if err != nil {
@@ -151,7 +151,7 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 
 type sandboxProfileView struct {
 	Name              string                   `json:"name"`
-	Provider          spine.SandboxProvider    `json:"provider"`
+	Provider          core.SandboxProvider     `json:"provider"`
 	Harness           string                   `json:"harness"`
 	Artifact          string                   `json:"artifact"`
 	IncusNetwork      string                   `json:"incus_network,omitempty"`
@@ -174,7 +174,7 @@ type profileVerificationView struct {
 	LastError       string    `json:"last_error,omitempty"`
 }
 
-func profileView(profile spine.SandboxProfile) sandboxProfileView {
+func profileView(profile core.SandboxProfile) sandboxProfileView {
 	view := sandboxProfileView{
 		Name: profile.Name, Provider: profile.Provider, Harness: profile.Harness, Artifact: profile.Artifact,
 		IncusNetwork: profile.IncusNetwork, IncusDiskSize: profile.IncusDiskSize,
@@ -184,7 +184,7 @@ func profileView(profile spine.SandboxProfile) sandboxProfileView {
 	if profile.E2BSandboxTimeout > 0 {
 		view.E2BSandboxTimeout = profile.E2BSandboxTimeout.String()
 	}
-	if profile.Provider == spine.SandboxProviderE2B {
+	if profile.Provider == core.SandboxProviderE2B {
 		allowInternet := profile.E2BAllowInternet
 		view.E2BAllowInternet = &allowInternet
 	}
@@ -198,7 +198,7 @@ func profileView(profile spine.SandboxProfile) sandboxProfileView {
 	return view
 }
 
-func parseSandboxProfile(ctx context.Context, command, name string, args []string, stderr io.Writer) (spine.SandboxProfile, error) {
+func parseSandboxProfile(ctx context.Context, command, name string, args []string, stderr io.Writer) (core.SandboxProfile, error) {
 	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
 	set.SetOutput(stderr)
 	provider := set.String("provider", "", "Sandbox provider: incus or e2b")
@@ -211,35 +211,35 @@ func parseSandboxProfile(ctx context.Context, command, name string, args []strin
 	sandboxTimeout := set.Duration("sandbox-timeout", 55*time.Minute, "E2B running timeout")
 	allowInternet := set.Bool("allow-internet", false, "allow E2B Sandbox internet egress")
 	if err := set.Parse(args); err != nil {
-		return spine.SandboxProfile{}, err
+		return core.SandboxProfile{}, err
 	}
 	if set.NArg() != 0 {
-		return spine.SandboxProfile{}, fmt.Errorf("profile %s received unexpected arguments", command)
+		return core.SandboxProfile{}, fmt.Errorf("profile %s received unexpected arguments", command)
 	}
-	profile := spine.SandboxProfile{Name: name, Provider: spine.SandboxProvider(strings.TrimSpace(*provider)), Harness: strings.TrimSpace(*harness)}
+	profile := core.SandboxProfile{Name: name, Provider: core.SandboxProvider(strings.TrimSpace(*provider)), Harness: strings.TrimSpace(*harness)}
 	switch profile.Provider {
-	case spine.SandboxProviderIncus:
+	case core.SandboxProviderIncus:
 		if strings.TrimSpace(*template) != "" || strings.TrimSpace(*gatewayURL) != "" {
-			return spine.SandboxProfile{}, fmt.Errorf("Incus profile does not accept E2B template or Gateway flags")
+			return core.SandboxProfile{}, fmt.Errorf("Incus profile does not accept E2B template or Gateway flags")
 		}
 		fingerprint, err := incus.ResolveImageFingerprint(ctx, *image, nil)
 		if err != nil {
-			return spine.SandboxProfile{}, err
+			return core.SandboxProfile{}, err
 		}
 		profile.Artifact, profile.IncusNetwork, profile.IncusDiskSize = fingerprint, *network, *diskSize
-	case spine.SandboxProviderE2B:
+	case core.SandboxProviderE2B:
 		if strings.TrimSpace(*image) != "" {
-			return spine.SandboxProfile{}, fmt.Errorf("E2B profile does not accept --image")
+			return core.SandboxProfile{}, fmt.Errorf("E2B profile does not accept --image")
 		}
 		profile.Artifact, profile.E2BGatewayURL = *template, *gatewayURL
 		profile.E2BSandboxTimeout, profile.E2BAllowInternet = *sandboxTimeout, *allowInternet
 	default:
-		return spine.SandboxProfile{}, fmt.Errorf("profile requires --provider incus or --provider e2b")
+		return core.SandboxProfile{}, fmt.Errorf("profile requires --provider incus or --provider e2b")
 	}
 	return profile, nil
 }
 
-func parseSandboxProfilePatch(ctx context.Context, command string, provider spine.SandboxProvider, args []string, stderr io.Writer) (postgres.SandboxProfilePatch, error) {
+func parseSandboxProfilePatch(ctx context.Context, command string, provider core.SandboxProvider, args []string, stderr io.Writer) (postgres.SandboxProfilePatch, error) {
 	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
 	set.SetOutput(stderr)
 	harness := set.String("harness", "", "Harness: codex or pi")
@@ -262,11 +262,11 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider spin
 		return postgres.SandboxProfilePatch{}, fmt.Errorf("profile %s requires at least one field flag", command)
 	}
 	switch provider {
-	case spine.SandboxProviderIncus:
+	case core.SandboxProviderIncus:
 		if visited["template"] || visited["gateway-url"] || visited["sandbox-timeout"] || visited["allow-internet"] {
 			return postgres.SandboxProfilePatch{}, fmt.Errorf("Incus profile update does not accept E2B fields")
 		}
-	case spine.SandboxProviderE2B:
+	case core.SandboxProviderE2B:
 		if visited["image"] || visited["network"] || visited["disk-size"] {
 			return postgres.SandboxProfilePatch{}, fmt.Errorf("E2B profile update does not accept Incus fields")
 		}
@@ -305,19 +305,19 @@ func parseSandboxProfilePatch(ctx context.Context, command string, provider spin
 	return patch, nil
 }
 
-func selectedSandboxProfile(ctx context.Context, store postgres.Store, name string) (spine.SandboxProfile, error) {
+func selectedSandboxProfile(ctx context.Context, store postgres.Store, name string) (core.SandboxProfile, error) {
 	profile, err := sandboxProfileByNameOrDefault(ctx, store, name)
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return core.SandboxProfile{}, err
 	}
 	if !profile.BaseVerified() {
-		return spine.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup; run dorf profile verify %s", profile.Name, spine.BaseProfileContract, profile.Name)
+		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
 	}
 	return profile, nil
 }
 
-func sandboxProfileByNameOrDefault(ctx context.Context, store postgres.Store, name string) (spine.SandboxProfile, error) {
-	var profile spine.SandboxProfile
+func sandboxProfileByNameOrDefault(ctx context.Context, store postgres.Store, name string) (core.SandboxProfile, error) {
+	var profile core.SandboxProfile
 	var err error
 	if strings.TrimSpace(name) == "" {
 		profile, err = store.DefaultSandboxProfile(ctx)
@@ -325,18 +325,18 @@ func sandboxProfileByNameOrDefault(ctx context.Context, store postgres.Store, na
 		profile, err = store.SandboxProfile(ctx, name)
 	}
 	if err != nil {
-		return spine.SandboxProfile{}, err
+		return core.SandboxProfile{}, err
 	}
 	return profile, nil
 }
 
-func appendProfileVerificationCheck(checks []doctor.Check, profile spine.SandboxProfile) []doctor.Check {
+func appendProfileVerificationCheck(checks []doctor.Check, profile core.SandboxProfile) []doctor.Check {
 	check := doctor.Check{Name: "sandbox-profile-verification", Status: "failed"}
 	if profile.BaseVerified() {
 		check.Status = "ready"
-		check.Detail = fmt.Sprintf("%s verified; Harness %s", spine.BaseProfileContract, profile.Verification.HarnessVersion)
+		check.Detail = fmt.Sprintf("%s verified; Harness %s", core.BaseProfileContract, profile.Verification.HarnessVersion)
 	} else {
-		check.Detail = fmt.Sprintf("profile %s has not completed %s verification and cleanup; run dorf profile verify %s", profile.Name, spine.BaseProfileContract, profile.Name)
+		check.Detail = fmt.Sprintf("profile %s has not completed %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
 	}
 	return append(checks, check)
 }

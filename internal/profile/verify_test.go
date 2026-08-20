@@ -8,38 +8,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type verificationStore struct {
-	profile      spine.SandboxProfile
-	verification spine.ProfileVerification
+	profile      core.SandboxProfile
+	verification core.ProfileVerification
 	errorDetail  string
 	cleanupErr   error
 }
 
 func newVerificationStore() *verificationStore {
 	return &verificationStore{
-		profile: spine.SandboxProfile{Name: "local", Harness: "codex"},
-		verification: spine.ProfileVerification{
-			ProfileName: "local", ContractVersion: spine.BaseProfileContract,
+		profile: core.SandboxProfile{Name: "local", Harness: "codex"},
+		verification: core.ProfileVerification{
+			ProfileName: "local", ContractVersion: core.BaseProfileContract,
 			SandboxID: "dorf-profile-local", OwnershipNonce: "nonce", AttemptedAt: time.Now(),
 		},
 	}
 }
 
-func (s *verificationStore) BeginSandboxProfileVerification(context.Context, string) (spine.SandboxProfile, spine.ProfileVerification, error) {
+func (s *verificationStore) BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error) {
 	s.profile.Verification = &s.verification
 	return s.profile, s.verification, nil
 }
-func (s *verificationStore) RecordSandboxProfileProbe(_ context.Context, verification spine.ProfileVerification, version string) error {
+func (s *verificationStore) RecordSandboxProfileProbe(_ context.Context, verification core.ProfileVerification, version string) error {
 	s.verification = verification
 	s.verification.HarnessVersion = version
 	s.verification.ProbeCompletedAt = time.Now()
 	return nil
 }
-func (s *verificationStore) RecordSandboxProfileVerificationCleanup(_ context.Context, verification spine.ProfileVerification) error {
+func (s *verificationStore) RecordSandboxProfileVerificationCleanup(_ context.Context, verification core.ProfileVerification) error {
 	if s.cleanupErr != nil {
 		return s.cleanupErr
 	}
@@ -47,11 +47,11 @@ func (s *verificationStore) RecordSandboxProfileVerificationCleanup(_ context.Co
 	s.profile.Verification = &s.verification
 	return nil
 }
-func (s *verificationStore) RecordSandboxProfileVerificationError(_ context.Context, _ spine.ProfileVerification, err error) error {
+func (s *verificationStore) RecordSandboxProfileVerificationError(_ context.Context, _ core.ProfileVerification, err error) error {
 	s.errorDetail = err.Error()
 	return nil
 }
-func (s *verificationStore) SandboxProfile(context.Context, string) (spine.SandboxProfile, error) {
+func (s *verificationStore) SandboxProfile(context.Context, string) (core.SandboxProfile, error) {
 	s.profile.Verification = &s.verification
 	return s.profile, nil
 }
@@ -109,7 +109,7 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	store.profile.Artifact = "exact-artifact"
 	runtime := &verificationSandbox{execResult: provider.Result{Stdout: "codex 1.2.3\n"}}
 	observedArtifact := ""
-	profile, err := VerifyBase(context.Background(), store, func(profile spine.SandboxProfile) (provider.Sandbox, error) {
+	profile, err := VerifyBase(context.Background(), store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
 		observedArtifact = profile.Artifact
 		return runtime, nil
 	}, store.profile.Name)
@@ -124,7 +124,7 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 func TestVerifyBaseRejectsFailedAtomicFileProbe(t *testing.T) {
 	store := newVerificationStore()
 	runtime := &verificationSandbox{putErr: errors.New("upload unavailable")}
-	_, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
 	if err == nil || !strings.Contains(err.Error(), "atomic file probe") || runtime.deleteCall != 1 || store.profile.BaseVerified() {
 		t.Fatalf("profile=%#v runtime=%#v error=%v", store.profile, runtime, err)
 	}
@@ -135,7 +135,7 @@ func TestVerifyBaseResumesCleanupWithoutRepeatingProbe(t *testing.T) {
 	store.verification.ProbeCompletedAt = time.Now()
 	store.verification.HarnessVersion = "codex 1.2.3"
 	runtime := &verificationSandbox{present: true, execErr: errors.New("probe must not repeat")}
-	profile, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	profile, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestVerifyBaseResumesCleanupWithoutRepeatingProbe(t *testing.T) {
 func TestVerifyBaseCleansFailedProbeAndKeepsProfileUnverified(t *testing.T) {
 	store := newVerificationStore()
 	runtime := &verificationSandbox{execErr: errors.New("transport failed")}
-	if _, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil {
+	if _, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil {
 		t.Fatal("failed probe was accepted")
 	}
 	if runtime.deleteCall != 1 || runtime.present || store.verification.CleanedAt.IsZero() || store.errorDetail == "" || store.profile.BaseVerified() {
@@ -158,7 +158,7 @@ func TestVerifyBaseCleansFailedProbeAndKeepsProfileUnverified(t *testing.T) {
 func TestVerifyBaseReportsFailedPredicateDetail(t *testing.T) {
 	store := newVerificationStore()
 	runtime := &verificationSandbox{execResult: provider.Result{ExitCode: 1, Stderr: "required command is missing: rg\n"}}
-	_, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
 	if err == nil || !strings.Contains(err.Error(), "required command is missing: rg") {
 		t.Fatalf("error=%v", err)
 	}
@@ -190,7 +190,7 @@ func TestVerifyBaseRequiresConfirmedCleanup(t *testing.T) {
 			store.verification.HarnessVersion = "codex 1.2.3"
 			runtime := &verificationSandbox{present: true}
 			test.configure(store, runtime)
-			_, err := VerifyBase(context.Background(), store, func(spine.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+			_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
 			if err == nil || !strings.Contains(err.Error(), test.wantDetail) {
 				t.Fatalf("error=%v, want %q", err, test.wantDetail)
 			}

@@ -6,12 +6,12 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Externals struct {
@@ -27,22 +27,22 @@ func (e Externals) gitWorkspace() gitworkspace.Workspace {
 	return gitworkspace.Workspace{Sandbox: e.Sandbox, Workspace: e.Sandbox.Workspace()}
 }
 
-func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
+func (e Externals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
 	if sandbox.JobID != job.ID {
 		return fmt.Errorf("Sandbox does not belong to exact Job %s", job.ID)
 	}
 	return e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
 }
 
-func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, repository, revision, branch string) error {
-	if sandbox.JobID != job.ID || sandbox.ID != spine.MainSandboxName(job.ID) {
+func (e Externals) RepositoryClone(ctx context.Context, job core.Job, sandbox core.Sandbox, repository, revision, branch string) error {
+	if sandbox.JobID != job.ID || sandbox.ID != core.MainSandboxName(job.ID) {
 		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
 	return e.gitWorkspace().ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
 }
 
-func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source investigation.Source, contents []byte) error {
-	if owned.JobID != job.ID || owned.ID != spine.MainSandboxName(job.ID) || source.JobID != job.ID ||
+func (e Externals) RepositoryRestore(ctx context.Context, job core.Job, owned core.Sandbox, source investigation.Source, contents []byte) error {
+	if owned.JobID != job.ID || owned.ID != core.MainSandboxName(job.ID) || source.JobID != job.ID ||
 		source.Kind != investigation.SourceGitBundle || len(contents) == 0 {
 		return fmt.Errorf("repository restore requires the exact retained source and main Sandbox")
 	}
@@ -102,8 +102,8 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch, revision string) (gitworkspace.Observation, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+func (e Externals) RepositoryRevision(ctx context.Context, job core.Job, branch, revision string) (gitworkspace.Observation, error) {
+	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
 		return gitworkspace.Observation{}, err
 	}
@@ -111,7 +111,7 @@ func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch
 }
 
 func (e Externals) RepositoryChangeFacts(ctx context.Context, job coding.Job) (policy.ChangeFacts, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
 		return policy.ChangeFacts{}, err
 	}
@@ -135,7 +135,7 @@ workspace=$1; revision=$2
 	test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 	git -C "$workspace" cat-file -e "$revision^{commit}"
 	git -C "$workspace" bundle create - HEAD`
-	mainOwner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+	mainOwner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
 		return err
 	}
@@ -203,38 +203,38 @@ printf '%s %s clean\n' "$head" "$tree"`
 	return coding.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewInitialTurn(ctx context.Context, job coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	binding, err := e.Agent.StartStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessHistory, error) {
+func (e Externals) ReviewTurns(ctx context.Context, job coding.Job, run coding.ReviewRunView) (core.HarnessHistory, error) {
 	binding, err := e.ReviewWait(ctx, job, run, run.TurnID)
-	return spine.HarnessHistory{
+	return core.HarnessHistory{
 		Harness: binding.Harness, ThreadID: binding.ThreadID,
-		Turns: []spine.HarnessTurn{binding.Turn}, ControllerID: binding.ControllerID,
+		Turns: []core.HarnessTurn{binding.Turn}, ControllerID: binding.ControllerID,
 	}, err
 }
 
-func (e Externals) ReviewRecover(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewRecover(ctx context.Context, job coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job coding.Job, run coding.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
+func (e Externals) ReviewWait(ctx context.Context, job coding.Job, run coding.ReviewRunView, turnID string) (core.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	binding, err := e.Agent.WaitStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	binding.ControllerID = reviewControllerID(run)
@@ -251,7 +251,7 @@ func (e reviewInputError) Error() string         { return string(e) }
 func (e reviewInputError) AttentionNeeded() bool { return true }
 
 func reviewInput(run coding.ReviewRunView) (string, error) {
-	if run.MessageID == "" || run.Request.ID != run.MessageID || run.Request.JobID != run.JobID || run.Request.FromKind != spine.MessageFromWorkflow || strings.TrimSpace(run.Request.Input) == "" {
+	if run.MessageID == "" || run.Request.ID != run.MessageID || run.Request.JobID != run.JobID || run.Request.FromKind != core.MessageFromWorkflow || strings.TrimSpace(run.Request.Input) == "" {
 		return "", reviewInputError("review AgentRun request Message is missing or conflicts with its workflow input")
 	}
 	return run.Request.Input, nil
@@ -261,7 +261,7 @@ func reviewMetadata(job coding.Job, run coding.ReviewRunView) provider.ReviewMet
 	return provider.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
 }
 
-func ownershipMetadata(sandbox spine.Sandbox) provider.Ownership {
+func ownershipMetadata(sandbox core.Sandbox) provider.Ownership {
 	return provider.Ownership{JobID: sandbox.JobID, SandboxID: sandbox.ID, OwnershipNonce: sandbox.OwnershipNonce}
 }
 
@@ -272,7 +272,7 @@ func reviewEffort(role, implementationEffort string) string {
 	return "medium"
 }
 
-func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox, expected spine.Route) error {
+func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.Sandbox, expected core.Route) error {
 	if sandbox.JobID != job.ID || expected.SandboxID != sandbox.ID || expected.ID == "" {
 		return fmt.Errorf("provider Route does not belong to exact Job Sandbox")
 	}
@@ -300,39 +300,39 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	return nil
 }
 
-func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery, input string) (spine.HarnessBinding, error) {
+func (e Externals) AgentInitialTurn(ctx context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
-func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (spine.HarnessHistory, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+func (e Externals) AgentInitialTurns(ctx context.Context, job core.Job) (core.HarnessHistory, error) {
+	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
-		return spine.HarnessHistory{}, err
+		return core.HarnessHistory{}, err
 	}
 	return e.Agent.ReadInitialTurns(ctx, owner, e.Sandbox.Workspace())
 }
 
-func (e Externals) AgentTurns(ctx context.Context, job spine.Job, threadID string) (spine.HarnessHistory, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+func (e Externals) AgentTurns(ctx context.Context, job core.Job, threadID string) (core.HarnessHistory, error) {
+	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
-		return spine.HarnessHistory{}, err
+		return core.HarnessHistory{}, err
 	}
 	return e.Agent.ReadTurns(ctx, owner, threadID)
 }
 
-func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery, input string) (spine.HarnessBinding, error) {
+func (e Externals) AgentSubmit(ctx context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return e.Agent.StartTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ThreadID, delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
-func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {
+func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.Delivery) (string, error) {
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
 		return "", err
@@ -340,15 +340,15 @@ func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine
 	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
 }
 
-func (e Externals) AgentWait(ctx context.Context, job spine.Job, threadID, turnID string) (spine.HarnessBinding, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
+func (e Externals) AgentWait(ctx context.Context, job core.Job, threadID, turnID string) (core.HarnessBinding, error) {
+	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
 	if err != nil {
-		return spine.HarnessBinding{}, err
+		return core.HarnessBinding{}, err
 	}
 	return e.Agent.WaitTurn(ctx, owner, threadID, turnID)
 }
 
-func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine.Sandbox, route spine.Route) error {
+func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {
 	if sandbox.JobID != job.ID || route.SandboxID != sandbox.ID || route.ID == "" {
 		return fmt.Errorf("Route cleanup has no exact Job-owned identity")
 	}
@@ -367,14 +367,14 @@ func (e Externals) RouteRevoke(ctx context.Context, job spine.Job, sandbox spine
 	return nil
 }
 
-func (e Externals) SandboxDelete(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
+func (e Externals) SandboxDelete(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
 	if sandbox.JobID != job.ID || sandbox.ID == "" {
 		return fmt.Errorf("Sandbox cleanup has no exact Job-owned identity")
 	}
 	return e.Sandbox.DeleteOwned(ctx, ownershipMetadata(sandbox))
 }
 
-func routeConsumer(sandbox spine.Sandbox) string { return "sandbox:" + sandbox.ID }
+func routeConsumer(sandbox core.Sandbox) string { return "sandbox:" + sandbox.ID }
 
 func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Ownership, error) {
 	if e.Ownership == nil {
@@ -384,7 +384,7 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 }
 
 var (
-	_ spine.Externals           = Externals{}
+	_ core.Externals            = Externals{}
 	_ gitworkspace.GitExternals = Externals{}
 	_ coding.Externals          = Externals{}
 	_ investigation.Externals   = Externals{}

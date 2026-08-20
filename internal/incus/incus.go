@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Config struct {
@@ -95,7 +95,7 @@ func ownershipErrorf(format string, args ...any) error {
 }
 
 func (s Sandbox) Name(jobID string) string {
-	return spine.MainSandboxName(jobID)
+	return core.MainSandboxName(jobID)
 }
 
 func validateOwnership(metadata OwnershipMetadata) error {

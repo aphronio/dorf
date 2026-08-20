@@ -1115,7 +1115,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted workflow boundary — 2026-08-10; transitional phase removed by D061
 - **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
-  single spine operations in product order. `CurrentWork` selects the exact owning fact. Each external
+  bounded operations in product order. `CurrentWork` selects the exact owning fact. Each external
   Action runs in its own `dorf/action/v1/<ActionID>` Step and returns
   `ActionStepResultV1{ActionID}`; AgentRun, Revision, Check, and policy operations retain their own
   stable versioned Step names and typed results. Absurd owns durable execution mechanics; PostgreSQL
@@ -1176,8 +1176,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   into a committed private `database/sql` package. Keep the baseline schema and named query files as
   generator inputs. `postgres.Store` remains the application boundary: handwritten Store methods own
   transactions, compare-and-set expectations, product invariants, error translation, and explicit
-  conversion to `spine` types. Generated records and parameter structs do not cross that boundary.
-- **Type boundary:** Narrow column overrides may reuse existing non-null `spine` scalar types for
+  conversion to `core` types. Generated records and parameter structs do not cross that boundary.
+- **Type boundary:** Narrow column overrides may reuse existing non-null `core` scalar types for
   cleanup, Message sender and intent, Action kind and state, AgentRun state, and Job outcome. This is
   an inward adapter dependency and does not make generated records into domain types. Nullable values,
   projections, and timestamps continue to be mapped explicitly.
@@ -2016,10 +2016,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   and unchanged detached-checkout proof into `internal/investigation`. Its typed runtime composes
   that service over shared Git workspace execution. The base runtime now grants only execution;
   coding and investigation each add their own Git-backed authority explicitly.
-- **Why:** Keeping investigation types and restore rules in `spine` made the second workflow look
+- **Why:** Keeping investigation types and restore rules in the shared Core package made the second workflow look
   like shared Core semantics. Core owns the Action, Sandbox, AgentRun, blob, and cleanup mechanisms;
   the investigation workflow owns what its retained source and draft mean.
-- **Proof:** `internal/spine` contains no investigation source, draft, restore, or unchanged-report
+- **Proof:** `internal/core` contains no investigation source, draft, restore, or unchanged-report
   policy. PostgreSQL, CLI, terminal, coordinator, and typed runtime consume the investigation-owned
   contract directly; real bundle materialization and PostgreSQL workflow tests retain their prior
   behavioral coverage.
@@ -2077,7 +2077,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   stable Sandbox Actions, cleanup reconciliation, and durable Core storage. Native workflows
   consume those interfaces through typed runtime compositions. Repository materialization is a
   workflow-module composition over Core execution, not a Core capability. The composition root
-  alone constructs the current `spine` and PostgreSQL implementations.
+  alone constructs the current `core` and PostgreSQL implementations.
 - **Why:** Depending on concrete `ExecutionService`, `RepositoryService`, and `postgres.Store`
   implementations made in-process workflow reuse look like a privileged path and prevented a
   workflow-owned service from importing the Core contract without an import cycle. Interfaces must
@@ -2094,7 +2094,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D083 — Git and coding behavior are workflow modules, not Core
 
-- **Status:** Refined by D084 and D085 — 2026-08-20
+- **Status:** Refined by D084, D085, and D086 — 2026-08-20
 - **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action,
   Artifact, Evidence, recovery, and requested-cleanup custody described by the North Star. Place
   exact Git checkout and Revision observation in `internal/gitworkspace`. Place review execution and
@@ -2160,3 +2160,26 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   outcome, CLI, and workflow tests compile against the owning modules and pass unchanged behavior.
 - **Reconsider when:** Two independent consumers prove identical semantics for one of these records;
   extract only that earned shared contract rather than moving a whole workflow model back into Core.
+
+## D086 — One package owns the in-process Core boundary
+
+- **Status:** Accepted package simplification — 2026-08-20
+- **Decision:** Merge the former shared-record `spine` package and application-facing `controlplane`
+  package into `internal/core`. Core owns its provider-neutral records, narrow execution interfaces,
+  recovery implementation, Absurd task attachment, and requested cleanup in one package. Workflows
+  import this boundary and compose their own Git, coding, investigation, and publication modules over
+  it.
+- **Why:** Splitting Core's records and implementation behind two package names implied two product
+  layers that did not exist. It also left a coding-specific `ObserveAgentRun` shortcut in the common
+  contract. One package makes the actual boundary visible and lets workflows state their AgentRun
+  role explicitly.
+- **Durability:** This is an in-process package merge only. PostgreSQL remains authoritative for
+  durable facts, Absurd remains authoritative for task execution and checkpoints, and stable IDs,
+  task names, schema, retry behavior, provider behavior, and cleanup ordering are unchanged.
+- **Proof:** `internal/spine` and `internal/controlplane` no longer exist; `internal/core` imports no
+  workflow module or concrete Sandbox provider; coding and investigation compile against the same
+  narrow Core interfaces; the SQL generator, full Go suite, PostgreSQL integrations, vet, build, and
+  version checks pass.
+- **Not included:** No public transport, SDK, plugin system, or new product vocabulary is introduced.
+- **Reconsider when:** A real external transport earns a separate public resource contract or a Core
+  capability proves independently useful enough to justify another package boundary.

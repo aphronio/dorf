@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type outcomeStore struct {
@@ -50,7 +50,7 @@ func (g *outcomeGitHub) PullRequest(_ context.Context, authority githubapi.Autho
 func outcomeFixture() (*outcomeStore, *outcomeGitHub, Service) {
 	revision := strings.Repeat("a", 40)
 	store := &outcomeStore{
-		job:      coding.Job{Job: spine.Job{ID: "job-exact"}, Revision: revision, GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield", Branch: "dorf/issue-39"},
+		job:      coding.Job{Job: core.Job{ID: "job-exact"}, Revision: revision, GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield", Branch: "dorf/issue-39"},
 		proposal: &coding.Proposal{JobID: "job-exact", Number: 39, URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision},
 	}
 	github := &outcomeGitHub{pull: githubapi.PullRequest{Number: 39, URL: store.proposal.URL, Repository: "aphronio/dorf", Head: "dorf/issue-39", Base: "greenfield", HeadSHA: revision}}

@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const getCodebaseInvestigationRunForUpdate = `-- name: GetCodebaseInvestigationRunForUpdate :one
@@ -31,14 +31,14 @@ type GetCodebaseInvestigationRunForUpdateParams struct {
 }
 
 type GetCodebaseInvestigationRunForUpdateRow struct {
-	WorkflowName     spine.WorkflowName
+	WorkflowName     core.WorkflowName
 	WorkflowRevision string
 	Revision         string
 	AdmissionOpen    bool
-	CleanupState     spine.CleanupState
+	CleanupState     core.CleanupState
 	AgentRunID       string
 	Role             string
-	State            spine.AgentRunState
+	State            core.AgentRunState
 	TurnID           string
 	TurnOutcome      string
 	InputRevision    string
@@ -114,7 +114,7 @@ type GetLatestInvestigationRunAndDraftRow struct {
 	AgentRunID string
 	Harness    string
 	ThreadID   string
-	State      spine.AgentRunState
+	State      core.AgentRunState
 	ArtifactID string
 }
 

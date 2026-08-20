@@ -11,9 +11,9 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
@@ -216,24 +216,24 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // this fault story. The nil embedded interface makes any unexpected external
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
-	spine.Externals
+	core.Externals
 	gitworkspace.GitExternals
 	effect *reconcilingFaultEffect
 	runID  string
 }
 
-func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
+func (e faultActionExternals) RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error {
 	e.effect.reconcile(e.runID)
 	return nil
 }
 
-func repositoryCloneAction(actions []spine.Action) (spine.Action, bool) {
+func repositoryCloneAction(actions []core.Action) (core.Action, bool) {
 	for _, action := range actions {
 		if action.Kind == gitworkspace.ActionRepositoryClone {
 			return action, true
 		}
 	}
-	return spine.Action{}, false
+	return core.Action{}, false
 }
 
 func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskName string, effect *reconcilingFaultEffect) {
@@ -251,16 +251,16 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			sandbox, err := store.Sandbox(workCtx, spine.MainSandboxName(params.JobID))
+			sandbox, err := store.Sandbox(workCtx, core.MainSandboxName(params.JobID))
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), gitworkspace.ActionRepositoryClone)
+			action, err := store.GetOrCreateSandboxAction(workCtx, core.MainSandboxName(params.JobID), gitworkspace.ActionRepositoryClone)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
 			runID := task.RunID()
-			execution := spine.NewExecutionService(
+			execution := core.NewExecutionService(
 				store,
 				faultActionExternals{effect: effect, runID: runID},
 				blob.Store{},
@@ -288,7 +288,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 	}, absurd.TaskOptions{DefaultMaxAttempts: 2}))
 }
 
-func admitFaultJob(t *testing.T, store postgres.Store, suffix string) spine.Job {
+func admitFaultJob(t *testing.T, store postgres.Store, suffix string) core.Job {
 	t.Helper()
 	job, created, err := store.AdmitCoding(context.Background(), codingJobInput(
 		"absurd-fault-"+suffix,
@@ -351,7 +351,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	actions, actionsErr := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
 	passed, failed := effect.claims()
-	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != spine.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 0 || len(failed) != 1 || failed[0] != firstRunID {
+	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 0 || len(failed) != 1 || failed[0] != firstRunID {
 		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", snapshot, actions, effect.mutationCount(), passed, failed, err, actionsErr)
 	}
 }
@@ -419,7 +419,7 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	actions, err := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
 	passed, failed := effect.claims()
-	if err != nil || !found || action.State != spine.ActionSucceeded || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] == firstRunID || len(failed) != 1 || failed[0] != firstRunID {
+	if err != nil || !found || action.State != core.ActionSucceeded || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] == firstRunID || len(failed) != 1 || failed[0] != firstRunID {
 		t.Fatalf("reconciled actions=%#v mutations=%d claims passed=%v failed=%v err=%v", actions, effect.mutationCount(), passed, failed, err)
 	}
 }

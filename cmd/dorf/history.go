@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 )
 
@@ -80,13 +80,13 @@ func investigationHistory(snapshot workflow.InvestigationSnapshot) []historyEntr
 	return sortedHistory(entries)
 }
 
-func commonHistory(job spine.Job, deliveries []spine.Delivery, actions []spine.Action) []historyEntry {
+func commonHistory(job core.Job, deliveries []core.Delivery, actions []core.Action) []historyEntry {
 	entries := make([]historyEntry, 0, 3+2*len(actions))
 	addHistoryEntry(&entries, job.AdmittedAt, "Job admitted")
 	if strings.TrimSpace(job.WorkflowAttention) != "" {
 		addHistoryEntry(&entries, job.WorkflowAttentionAt, "Needs attention · "+job.WorkflowAttention)
 	}
-	runs := make([]spine.AgentRun, 0, len(deliveries))
+	runs := make([]core.AgentRun, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		runs = append(runs, delivery.AgentRun)
 	}
@@ -100,7 +100,7 @@ func commonHistory(job spine.Job, deliveries []spine.Delivery, actions []spine.A
 	return entries
 }
 
-func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition, delivery spine.Delivery) {
+func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition, delivery core.Delivery) {
 	run := delivery.AgentRun
 	role := agentRunHumanRole(definition, run)
 	context := ""
@@ -118,7 +118,7 @@ func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition,
 	addHistoryEntry(entries, run.FinishedAt, text+context)
 }
 
-func agentRunHumanRole(definition workflow.Definition, run spine.AgentRun) string {
+func agentRunHumanRole(definition workflow.Definition, run core.AgentRun) string {
 	role := definition.AgentRoleLabel(run.Role)
 	if run.Capability == coding.ReviewReadOnlyCapability && !strings.Contains(strings.ToLower(role), "reviewer") {
 		role += " reviewer"
@@ -126,11 +126,11 @@ func agentRunHumanRole(definition workflow.Definition, run spine.AgentRun) strin
 	return role
 }
 
-func actionStartedText(job spine.Job, runs []spine.AgentRun, action spine.Action) string {
+func actionStartedText(job core.Job, runs []core.AgentRun, action core.Action) string {
 	role := sandboxHumanRole(job, runs, action.Scope)
 	sandbox := role + " Sandbox"
 	switch action.Kind {
-	case spine.ActionSandboxCreate:
+	case core.ActionSandboxCreate:
 		return withHumanDetails("Creating "+sandbox, sandboxProviderName(job.SandboxProfile))
 	case gitworkspace.ActionRepositoryClone:
 		return "Cloning repository"
@@ -140,26 +140,26 @@ func actionStartedText(job spine.Job, runs []spine.AgentRun, action spine.Action
 		return "Creating pull request"
 	case coding.ActionReviewCheckout:
 		return "Preparing reviewer checkout"
-	case spine.ActionRouteCreate:
+	case core.ActionRouteCreate:
 		return "Connecting model access"
-	case spine.ActionRouteRevoke:
+	case core.ActionRouteRevoke:
 		return "Revoking model access"
-	case spine.ActionSandboxDelete:
+	case core.ActionSandboxDelete:
 		return "Deleting " + sandbox
 	default:
 		return humanIdentifier(string(action.Kind)) + " started"
 	}
 }
 
-func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action, actions []spine.Action) string {
+func actionSettledText(job core.Job, runs []core.AgentRun, action core.Action, actions []core.Action) string {
 	role := sandboxHumanRole(job, runs, action.Scope)
 	sandbox := titleFirst(role) + " Sandbox"
-	if action.State == spine.ActionFailed {
+	if action.State == core.ActionFailed {
 		return actionFailureSubject(action.Kind, sandbox) + " failed"
 	}
 	duration := actionDuration(action)
 	switch action.Kind {
-	case spine.ActionSandboxCreate:
+	case core.ActionSandboxCreate:
 		return withHumanDetails(sandbox+" ready", sandboxProviderName(job.SandboxProfile), duration)
 	case gitworkspace.ActionRepositoryClone:
 		return withHumanDetails("Repository cloned", duration)
@@ -169,12 +169,12 @@ func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action
 		return withHumanDetails("Pull request created", duration)
 	case coding.ActionReviewCheckout:
 		return withHumanDetails("Reviewer checkout ready", duration)
-	case spine.ActionRouteCreate:
+	case core.ActionRouteCreate:
 		return withHumanDetails("Model access connected", duration)
-	case spine.ActionRouteRevoke:
+	case core.ActionRouteRevoke:
 		return withHumanDetails("Model access revoked", duration)
-	case spine.ActionSandboxDelete:
-		createdAt, created := settledActionAt(actions, spine.ActionSandboxCreate, action.Scope)
+	case core.ActionSandboxDelete:
+		createdAt, created := settledActionAt(actions, core.ActionSandboxCreate, action.Scope)
 		if created && !createdAt.IsZero() {
 			return withHumanDetails(sandbox+" deleted", "provisioned "+formatElapsed(action.SettledAt.Sub(createdAt)))
 		}
@@ -184,9 +184,9 @@ func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action
 	}
 }
 
-func actionFailureSubject(kind spine.ActionKind, sandbox string) string {
+func actionFailureSubject(kind core.ActionKind, sandbox string) string {
 	switch kind {
-	case spine.ActionSandboxCreate:
+	case core.ActionSandboxCreate:
 		return sandbox + " creation"
 	case gitworkspace.ActionRepositoryClone:
 		return "Repository clone"
@@ -196,18 +196,18 @@ func actionFailureSubject(kind spine.ActionKind, sandbox string) string {
 		return "Pull request creation"
 	case coding.ActionReviewCheckout:
 		return "Reviewer checkout"
-	case spine.ActionRouteCreate:
+	case core.ActionRouteCreate:
 		return "Model access connection"
-	case spine.ActionRouteRevoke:
+	case core.ActionRouteRevoke:
 		return "Model access revocation"
-	case spine.ActionSandboxDelete:
+	case core.ActionSandboxDelete:
 		return sandbox + " deletion"
 	default:
 		return humanIdentifier(string(kind))
 	}
 }
 
-func actionDuration(action spine.Action) string {
+func actionDuration(action core.Action) string {
 	if action.CreatedAt.IsZero() || action.SettledAt.IsZero() {
 		return ""
 	}
@@ -218,8 +218,8 @@ func actionDuration(action spine.Action) string {
 	return formatElapsed(duration)
 }
 
-func sandboxHumanRole(job spine.Job, runs []spine.AgentRun, sandboxID string) string {
-	if sandboxID != "" && sandboxID == spine.MainSandboxName(job.ID) {
+func sandboxHumanRole(job core.Job, runs []core.AgentRun, sandboxID string) string {
+	if sandboxID != "" && sandboxID == core.MainSandboxName(job.ID) {
 		return "primary"
 	}
 	for _, run := range runs {
@@ -230,9 +230,9 @@ func sandboxHumanRole(job spine.Job, runs []spine.AgentRun, sandboxID string) st
 	return "sandbox"
 }
 
-func settledActionAt(actions []spine.Action, kind spine.ActionKind, scope string) (time.Time, bool) {
+func settledActionAt(actions []core.Action, kind core.ActionKind, scope string) (time.Time, bool) {
 	for _, action := range actions {
-		if action.Kind == kind && action.Scope == scope && action.State == spine.ActionSucceeded {
+		if action.Kind == kind && action.Scope == scope && action.State == core.ActionSucceeded {
 			return action.SettledAt, true
 		}
 	}
@@ -302,7 +302,7 @@ func proposalActionSettledAt(s workflow.Snapshot) time.Time {
 		return time.Time{}
 	}
 	for _, action := range s.Actions {
-		if action.Kind == coding.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && action.Scope == s.Proposal.ProposedRevision {
+		if action.Kind == coding.ActionGitHubPullRequest && action.State == core.ActionSucceeded && action.Scope == s.Proposal.ProposedRevision {
 			return action.SettledAt
 		}
 	}

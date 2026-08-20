@@ -1,4 +1,4 @@
-package spine
+package core
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 )
 
-type Store interface {
+type ExecutionStore interface {
 	Job(context.Context, string) (Job, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	Deliveries(context.Context, string) ([]Delivery, error)
@@ -54,14 +54,14 @@ const (
 )
 
 type ExecutionService struct {
-	store      Store
+	store      ExecutionStore
 	externals  Externals
 	barrier    FaultBarrier
 	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewExecutionService(store Store, externals Externals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
+func NewExecutionService(store ExecutionStore, externals Externals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
 	return ExecutionService{
 		store:      store,
 		externals:  externals,
@@ -185,17 +185,6 @@ func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery
 	return err
 }
 
-// ObserveAgentRun reconciles one already-bound implementation Turn without
-// submitting or waiting. The workflow can therefore alternate exact harness
-// inspection with durable message wakes while the Turn remains active.
-func (s ExecutionService) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bool, error) {
-	turn, err := s.ObserveAgentRunTurn(ctx, job, run, "implement")
-	if err != nil {
-		return false, err
-	}
-	return terminalHarness(turn.Status), nil
-}
-
 // ObserveAgentRunTurn reconciles one bound ordinary Harness Turn for the
 // workflow-owned role and returns its current or terminal native result.
 func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
@@ -316,7 +305,7 @@ func (s ExecutionService) PrepareCleanup(ctx context.Context, jobID string) (Job
 	if job.CleanupState == CleanupComplete {
 		return job, nil, nil
 	}
-	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled implementation harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
+	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
 		return Job{}, nil, err
 	}
 	deliveries, err := s.store.Deliveries(ctx, job.ID)

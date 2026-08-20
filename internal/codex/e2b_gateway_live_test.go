@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
-	"github.com/aphronio/dorf/internal/spine"
 	terminalapp "github.com/aphronio/dorf/internal/terminal"
 )
 
@@ -80,9 +80,9 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	}
 
 	externals := terminalapp.Externals{Sandbox: sandbox, Gateway: providerGateway, Agent: agent}
-	job := spine.Job{ID: owner.JobID, ProviderConnection: connectionName, Model: "gpt-5.6-sol"}
-	durableSandbox := spine.Sandbox{ID: owner.SandboxID, JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
-	if err := externals.RouteCreate(ctx, job, durableSandbox, spine.Route{ID: routeID, SandboxID: owner.SandboxID}); err != nil {
+	job := core.Job{ID: owner.JobID, ProviderConnection: connectionName, Model: "gpt-5.6-sol"}
+	durableSandbox := core.Sandbox{ID: owner.SandboxID, JobID: owner.JobID, OwnershipNonce: owner.OwnershipNonce}
+	if err := externals.RouteCreate(ctx, job, durableSandbox, core.Route{ID: routeID, SandboxID: owner.SandboxID}); err != nil {
 		t.Fatal(err)
 	}
 	routeCreated = true

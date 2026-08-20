@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const closeAdmissionForOutcome = `-- name: CloseAdmissionForOutcome :execrows
@@ -68,7 +68,7 @@ for update of j,c
 type GetOutcomeJobForUpdateRow struct {
 	Revision      string
 	AdmissionOpen bool
-	CleanupState  spine.CleanupState
+	CleanupState  core.CleanupState
 }
 
 func (q *Queries) GetOutcomeJobForUpdate(ctx context.Context, jobID string) (GetOutcomeJobForUpdateRow, error) {

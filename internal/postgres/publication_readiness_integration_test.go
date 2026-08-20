@@ -8,10 +8,10 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/publication"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type forbiddenPublicationGitHub struct{ calls int }
@@ -76,7 +76,7 @@ func TestPostgresInvalidEvidenceNeverReachesPushExternals(t *testing.T) {
 		t.Fatalf("invalid Evidence reached externals: GitHub calls=%d repository calls=%d", github.calls, repository.calls)
 	}
 	storedPush, _, err := store.PublicationActions(context.Background(), job.ID, revision)
-	if err != nil || storedPush.ID != push.ID || storedPush.State != spine.ActionUnsettled {
+	if err != nil || storedPush.ID != push.ID || storedPush.State != core.ActionUnsettled {
 		t.Fatalf("Push Action=%#v err=%v", storedPush, err)
 	}
 }

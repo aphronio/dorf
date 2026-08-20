@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/controlplane"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 var _ CodingExecution = coding.Service{}
 
 type profileGuardStore struct {
-	job               spine.Job
+	job               core.Job
 	jobCalls          int
 	workflowAttention string
 	attentionErr      error
@@ -40,14 +39,14 @@ func (r *profileRuntimeResolverStub) ResolveInvestigation(_ context.Context, nam
 	return r.investigationRuntime, r.err
 }
 
-func (s *profileGuardStore) Job(context.Context, string) (spine.Job, error) {
+func (s *profileGuardStore) Job(context.Context, string) (core.Job, error) {
 	s.jobCalls++
 	return s.job, nil
 }
 
 func TestCodingRuntimeResolutionUsesOnlyCodingAuthority(t *testing.T) {
 	definition := CodingToProposalDefinition()
-	store := &profileGuardStore{job: spine.Job{
+	store := &profileGuardStore{job: core.Job{
 		ID: "job-1", SandboxProfile: "managed", Workflow: definition.Name, WorkflowRevision: definition.Revision,
 	}}
 	resolver := &profileRuntimeResolverStub{codingRuntime: CodingRuntime{
@@ -68,7 +67,7 @@ func (s *profileGuardStore) SetWorkflowAttention(_ context.Context, _, _, detail
 
 func TestSandboxProfileGuardStopsMismatchedWork(t *testing.T) {
 	definition := CodebaseInvestigationDefinition()
-	store := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}}
+	store := &profileGuardStore{job: core.Job{ID: "job-1", SandboxProfile: "incus"}}
 	err := requireJobProfile(context.Background(), store, store.job, RuntimeProfile{SandboxProfile: "e2b"}, definition)
 	if err == nil || !strings.Contains(err.Error(), `requires Sandbox profile "incus"`) {
 		t.Fatalf("mismatch error=%v", err)
@@ -76,14 +75,14 @@ func TestSandboxProfileGuardStopsMismatchedWork(t *testing.T) {
 	if store.workflowAttention == "" {
 		t.Fatalf("profile mismatch did not persist attention: %#v", store)
 	}
-	matching := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "e2b"}}
+	matching := &profileGuardStore{job: core.Job{ID: "job-1", SandboxProfile: "e2b"}}
 	if err := requireJobProfile(context.Background(), matching, matching.job, RuntimeProfile{SandboxProfile: "e2b"}, definition); err != nil {
 		t.Fatal(err)
 	}
 	if matching.workflowAttention != "" {
 		t.Fatalf("matching profile wrote attention: %#v", matching)
 	}
-	failedAttention := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}, attentionErr: errors.New("write failed")}
+	failedAttention := &profileGuardStore{job: core.Job{ID: "job-1", SandboxProfile: "incus"}, attentionErr: errors.New("write failed")}
 	if err := requireJobProfile(context.Background(), failedAttention, failedAttention.job, RuntimeProfile{SandboxProfile: "e2b"}, definition); err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("attention persistence error=%v", err)
 	}
@@ -95,7 +94,7 @@ func TestPersistedWorkflowContractsV1(t *testing.T) {
 		value any
 		want  string
 	}{
-		{"task result", controlplane.TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
+		{"task result", core.TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
 		{"wake", WakeV1{JobID: "job-1", Sequence: 2}, `{"job_id":"job-1","sequence":2}`},
 		{"fact step result", FactStepResultV1{FactID: "action-1"}, `{"fact_id":"action-1"}`},
 	}

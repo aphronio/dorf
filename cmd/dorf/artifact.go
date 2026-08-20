@@ -7,16 +7,16 @@ import (
 	"io"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type artifactListStore interface {
-	Job(context.Context, string) (spine.Job, error)
-	Artifacts(context.Context, string) ([]spine.Artifact, error)
+	Job(context.Context, string) (core.Job, error)
+	Artifacts(context.Context, string) ([]core.Artifact, error)
 }
 
 type artifactGetStore interface {
-	Artifact(context.Context, string) (spine.Artifact, error)
+	Artifact(context.Context, string) (core.Artifact, error)
 }
 
 type artifactCommandStore interface {
@@ -57,7 +57,7 @@ func artifactList(ctx context.Context, store artifactListStore, args []string, s
 		return err
 	}
 	if artifacts == nil {
-		artifacts = []spine.Artifact{}
+		artifacts = []core.Artifact{}
 	}
 	if *jsonOutput {
 		return writeJSON(stdout, map[string]any{"job_id": job.ID, "artifacts": artifacts})

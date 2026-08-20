@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aphronio/dorf/internal/controlplane"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type ActionStore interface {
@@ -13,30 +12,30 @@ type ActionStore interface {
 }
 
 type GitExternals interface {
-	RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error
-	RepositoryRevision(context.Context, spine.Job, string, string) (Observation, error)
+	RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error
+	RepositoryRevision(context.Context, core.Job, string, string) (Observation, error)
 }
 
 // Executor composes Core execution with deterministic Git workspace operations
 // for Git-backed workflows.
 type Executor struct {
-	controlplane.Execution
+	core.Execution
 	store      ActionStore
 	externals  GitExternals
 	claimCheck func(context.Context) error
 }
 
-func NewExecutor(execution controlplane.Execution, store ActionStore, externals GitExternals, claimCheck func(context.Context) error) Executor {
+func NewExecutor(execution core.Execution, store ActionStore, externals GitExternals, claimCheck func(context.Context) error) Executor {
 	return Executor{Execution: execution, store: store, externals: externals, claimCheck: claimCheck}
 }
 
-func (s Executor) ObserveRevision(ctx context.Context, job spine.Job, branch, revision string) (Observation, error) {
+func (s Executor) ObserveRevision(ctx context.Context, job core.Job, branch, revision string) (Observation, error) {
 	return s.externals.RepositoryRevision(ctx, job, branch, revision)
 }
 
 // ExecuteRepositoryClone reconciles one workflow-owned remote Git input and
 // records the scoped Action only after the checkout converges.
-func (s Executor) ExecuteRepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, remote, revision, branch string) error {
+func (s Executor) ExecuteRepositoryClone(ctx context.Context, job core.Job, sandbox core.Sandbox, action core.Action, remote, revision, branch string) error {
 	if action.Kind != ActionRepositoryClone {
 		return fmt.Errorf("repository clone requires the exact repository-clone Action")
 	}

@@ -13,11 +13,11 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type GitHub interface {
@@ -59,7 +59,7 @@ func (e *AttentionError) Error() string { return e.Reason }
 
 type readinessView struct {
 	Assessment coding.ReadinessAssessment
-	Evidence   []spine.Evidence
+	Evidence   []core.Evidence
 	Plan       *coding.ReviewPlanRecord
 	ReviewRuns []coding.ReviewRunView
 }
@@ -114,7 +114,7 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 	if job.Revision != revision {
 		return fmt.Errorf("publication scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
 	}
-	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
 		return fmt.Errorf("publication cannot mutate Git or GitHub after cleanup begins")
 	}
 	pushAction, _, err := s.Store.PublicationActions(ctx, job.ID, job.Revision)
@@ -158,11 +158,11 @@ func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
 		if err := s.Repository.Push(ctx, job, token); err != nil {
 			return err
 		}
-		if err := s.reach(ctx, spine.BarrierPushAccepted, job.ID, pushAction.ID); err != nil {
+		if err := s.reach(ctx, core.BarrierPushAccepted, job.ID, pushAction.ID); err != nil {
 			return err
 		}
 	}
-	if pushAction.State != spine.ActionSucceeded {
+	if pushAction.State != core.ActionSucceeded {
 		if err := s.recordAfterClaim(ctx, func() error {
 			return s.Store.RecordPush(ctx, pushAction.ID, job.Revision)
 		}); err != nil {
@@ -187,7 +187,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if job.Revision != revision {
 		return fmt.Errorf("publication scope Revision=%s conflicts with Job Revision=%s", revision, job.Revision)
 	}
-	if !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
 		return fmt.Errorf("publication cannot mutate GitHub after cleanup begins")
 	}
 	stored, err := s.Store.Proposal(ctx, job.ID)
@@ -245,7 +245,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 		return s.block(ctx, job, pullAction, "GitHub pull-request response did not retain the exact projected body")
 	}
 	if mutated {
-		if err := s.reach(ctx, spine.BarrierPullRequestAccepted, job.ID, pullAction.ID); err != nil {
+		if err := s.reach(ctx, core.BarrierPullRequestAccepted, job.ID, pullAction.ID); err != nil {
 			return err
 		}
 	}
@@ -288,7 +288,7 @@ func planPull(job coding.Job, pulls []githubapi.PullRequest, stored *coding.Prop
 	return "adopt", pull, nil
 }
 
-func (s Service) block(ctx context.Context, job coding.Job, action spine.Action, reason string) error {
+func (s Service) block(ctx context.Context, job coding.Job, action core.Action, reason string) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
@@ -366,7 +366,7 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []spine.Evidence, plan *coding.ReviewPlanRecord, runs []coding.ReviewRunView) string {
+func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []core.Evidence, plan *coding.ReviewPlanRecord, runs []coding.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
@@ -388,8 +388,8 @@ func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []spine
 		if !ok {
 			continue
 		}
-		observedEvidenceID := spine.EvidenceID(run.ID, "review-observation")
-		feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, run.ID)
+		observedEvidenceID := core.EvidenceID(run.ID, "review-observation")
+		feedbackMessageID := core.MessageID(job.ID, core.MessageFromAgent, run.ID)
 		lines = append(lines, fmt.Sprintf("- %s: AgentRun `%s` completed with observed Evidence `%s`, sha256 `%s`; feedback Message `%s` handled by an implementation AgentRun", run.Role, run.ID, observedEvidenceID, digests[observedEvidenceID], feedbackMessageID))
 	}
 	if len(selectedRoles) == 0 {
@@ -537,7 +537,7 @@ func (r GitRepository) owner(ctx context.Context, jobID string) (provider.Owners
 	if r.Ownership == nil {
 		return provider.Ownership{}, fmt.Errorf("Sandbox ownership resolver is not configured")
 	}
-	return r.Ownership(ctx, spine.MainSandboxName(jobID))
+	return r.Ownership(ctx, core.MainSandboxName(jobID))
 }
 
 func runGit(ctx context.Context, additions, args []string) ([]byte, []byte, error) {

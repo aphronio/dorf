@@ -1,4 +1,7 @@
-package spine
+// Package core owns Dorf's in-process control-plane contract, durable custody
+// records, and recovery services. Workflows consume this boundary without
+// inheriting provider, harness, or persistence implementations.
+package core
 
 import (
 	"crypto/sha256"
@@ -238,6 +241,11 @@ type HarnessTurn struct {
 	Status             string   `json:"status"`
 	AcceptedMessageIDs []string `json:"accepted_message_ids,omitempty"`
 	Output             string   `json:"output,omitempty"`
+}
+
+// Terminal reports whether the Harness has settled this Turn.
+func (t HarnessTurn) Terminal() bool {
+	return t.Status == "completed" || t.Status == "failed" || t.Status == "interrupted"
 }
 
 // HarnessBinding is the complete runner-neutral identity of one harness turn.

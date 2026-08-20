@@ -8,7 +8,7 @@ package dbsql
 import (
 	"context"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const getAction = `-- name: GetAction :one
@@ -20,7 +20,7 @@ where id=$1 and job_id=$2 and kind=$3
 type GetActionParams struct {
 	ID    string
 	JobID string
-	Kind  spine.ActionKind
+	Kind  core.ActionKind
 }
 
 func (q *Queries) GetAction(ctx context.Context, arg GetActionParams) (DorfAction, error) {
@@ -70,7 +70,7 @@ for update
 type GetActionForUpdateParams struct {
 	ID    string
 	JobID string
-	Kind  spine.ActionKind
+	Kind  core.ActionKind
 }
 
 func (q *Queries) GetActionForUpdate(ctx context.Context, arg GetActionForUpdateParams) (DorfAction, error) {
@@ -96,7 +96,7 @@ where job_id=$1 and kind=$2 and scope_key=$3
 
 type GetScopedActionParams struct {
 	JobID    string
-	Kind     spine.ActionKind
+	Kind     core.ActionKind
 	ScopeKey string
 }
 
@@ -124,7 +124,7 @@ on conflict do nothing
 type InsertActionIfAbsentParams struct {
 	ID    string
 	JobID string
-	Kind  spine.ActionKind
+	Kind  core.ActionKind
 }
 
 func (q *Queries) InsertActionIfAbsent(ctx context.Context, arg InsertActionIfAbsentParams) error {
@@ -141,7 +141,7 @@ on conflict do nothing
 type InsertScopedActionParams struct {
 	ID       string
 	JobID    string
-	Kind     spine.ActionKind
+	Kind     core.ActionKind
 	ScopeKey string
 }
 

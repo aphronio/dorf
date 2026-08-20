@@ -10,10 +10,9 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
-	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -34,7 +33,7 @@ type ProviderChecker interface {
 }
 
 type sandboxProfileStore interface {
-	Job(context.Context, string) (spine.Job, error)
+	Job(context.Context, string) (core.Job, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
 }
 
@@ -58,14 +57,14 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver, core controlplane.Application) {
-	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
-		if err := core.VerifyAttachedTask(ctx, params.JobID, RunTaskName); err != nil {
-			return controlplane.TaskResultV1{}, err
+func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver, application core.Application) {
+	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := application.VerifyAttachedTask(ctx, params.JobID, RunTaskName); err != nil {
+			return core.TaskResultV1{}, err
 		}
 		runtime, err := codingRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
-			return controlplane.TaskResultV1{}, err
+			return core.TaskResultV1{}, err
 		}
 		proposal := runtime.Proposal
 		proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
@@ -78,24 +77,24 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		for {
 			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			if work.Kind == WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
-					return controlplane.TaskResultV1{}, err
+					return core.TaskResultV1{}, err
 				}
 				if outcome != nil {
-					if _, err := core.RequestCleanup(ctx, params.JobID); err != nil {
-						return controlplane.TaskResultV1{}, err
+					if _, err := application.RequestCleanup(ctx, params.JobID); err != nil {
+						return core.TaskResultV1{}, err
 					}
-					return controlplane.TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
+					return core.TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
 				}
-				return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
+				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			options := wakeOptions(work, sequence, proposal.PollInterval)
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
@@ -104,32 +103,32 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
 					continue
 				}
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return controlplane.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+				return core.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
-		if err := core.VerifyAttachedTask(ctx, params.JobID, InvestigationTaskName); err != nil {
-			return controlplane.TaskResultV1{}, err
+	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := application.VerifyAttachedTask(ctx, params.JobID, InvestigationTaskName); err != nil {
+			return core.TaskResultV1{}, err
 		}
 		runtime, err := investigationRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
-			return controlplane.TaskResultV1{}, err
+			return core.TaskResultV1{}, err
 		}
 		for {
 			work, err := RunCodebaseInvestigation(ctx, runtime.Investigation, store, params.JobID)
 			if err != nil {
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			if work.Kind == InvestigationWorkComplete {
-				return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
+				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
 			if work.Kind == InvestigationWorkObserveAgent {
@@ -142,10 +141,10 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				if work.Kind == InvestigationWorkObserveAgent && errors.As(err, &timeout) {
 					continue
 				}
-				return controlplane.TaskResultV1{}, err
+				return core.TaskResultV1{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return controlplane.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+				return core.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
@@ -195,7 +194,7 @@ func investigationRuntimeForJob(ctx context.Context, store sandboxProfileStore, 
 	return runtime, nil
 }
 
-func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.Job, expected Definition) error {
+func requireWorkflow(ctx context.Context, store sandboxProfileStore, job core.Job, expected Definition) error {
 	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
 		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
 		attentionErr := store.SetWorkflowAttention(ctx, job.ID, "workflow-profile", detail)
@@ -207,7 +206,7 @@ func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.J
 	return nil
 }
 
-func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine.Job, profile RuntimeProfile, expected Definition) error {
+func requireJobProfile(ctx context.Context, store sandboxProfileStore, job core.Job, profile RuntimeProfile, expected Definition) error {
 	configured := strings.TrimSpace(profile.SandboxProfile)
 	if job.SandboxProfile != configured {
 		detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, configured)
@@ -254,53 +253,53 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 	return result, nil
 }
 
-func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewCodingJob) (spine.Job, bool, error) {
+func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewCodingJob) (core.Job, bool, error) {
 	input.NewJob.Workflow = coding.Workflow
 	input.NewJob.WorkflowRevision = coding.WorkflowRevision
-	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input.NewJob, func() (spine.Job, bool, error) {
+	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(core.JobID(strings.TrimSpace(input.AdmissionKey))), input.NewJob, func() (core.Job, bool, error) {
 		return store.AdmitCoding(ctx, input)
 	})
 }
 
-func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewInvestigationJob) (spine.Job, bool, error) {
+func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewInvestigationJob) (core.Job, bool, error) {
 	input.NewJob.Workflow = investigation.Workflow
 	input.NewJob.WorkflowRevision = investigation.WorkflowRevision
-	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input.NewJob, func() (spine.Job, bool, error) {
+	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+core.JobID(strings.TrimSpace(input.AdmissionKey)), input.NewJob, func() (core.Job, bool, error) {
 		return store.AdmitInvestigation(ctx, input)
 	})
 }
 
-func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob, persist func() (spine.Job, bool, error)) (spine.Job, bool, error) {
+func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob, persist func() (core.Job, bool, error)) (core.Job, bool, error) {
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
-		_, err := store.Job(ctx, spine.JobID(key))
+		_, err := store.Job(ctx, core.JobID(key))
 		switch {
 		case err == nil:
 			// An idempotent retry validates the original input below without
 			// depending on the Gateway still being available.
 		case errors.Is(err, postgres.ErrNotFound):
 			if err := profile.Require(definition); err != nil {
-				return spine.Job{}, false, err
+				return core.Job{}, false, err
 			}
 			if providers == nil {
-				return spine.Job{}, false, fmt.Errorf("provider readiness is not configured")
+				return core.Job{}, false, fmt.Errorf("provider readiness is not configured")
 			}
 			if err := providers.Check(ctx, strings.TrimSpace(input.ProviderConnection)); err != nil {
-				return spine.Job{}, false, fmt.Errorf("Provider Connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
+				return core.Job{}, false, fmt.Errorf("Provider Connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
 			}
 		default:
-			return spine.Job{}, false, err
+			return core.Job{}, false, err
 		}
 	}
 	job, created, err := persist()
 	if err != nil {
-		return spine.Job{}, false, err
+		return core.Job{}, false, err
 	}
 	if !job.AdmissionOpen {
 		return job, created, nil
 	}
 	err = store.WithJobFence(ctx, job.ID, func() error {
-		spawned, err := client.Spawn(ctx, taskName, controlplane.JobTaskParams{JobID: job.ID}, absurdruntime.TaskSpawnOptions(taskKey))
+		spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurdruntime.TaskSpawnOptions(taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
@@ -310,18 +309,18 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 		return nil
 	})
 	if err != nil {
-		return spine.Job{}, false, err
+		return core.Job{}, false, err
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err
 }
 
-func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewMessage) (spine.Message, bool, error) {
+func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewMessage) (core.Message, bool, error) {
 	job, err := store.Job(ctx, input.JobID)
 	if err != nil {
-		return spine.Message{}, false, err
+		return core.Message{}, false, err
 	}
-	var message spine.Message
+	var message core.Message
 	var created bool
 	switch {
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
@@ -329,10 +328,10 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
 		message, created, err = store.AdmitInvestigationMessage(ctx, input)
 	default:
-		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
+		return core.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
 	}
 	if err != nil {
-		return spine.Message{}, false, err
+		return core.Message{}, false, err
 	}
 	// Events carry no delivery truth. Re-emitting on an idempotent client retry
 	// repairs a crash after PostgreSQL admission but before this wake hint.

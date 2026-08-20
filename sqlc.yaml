@@ -25,31 +25,31 @@ sql:
         overrides:
           - column: "dorf.jobs.cleanup_state"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "CleanupState"
           - column: "dorf.jobs.workflow_name"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "WorkflowName"
           - column: "dorf.job_messages.from_kind"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "MessageFromKind"
           - column: "dorf.job_messages.delivery_intent"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "MessageDeliveryIntent"
           - column: "dorf.actions.kind"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "ActionKind"
           - column: "dorf.actions.state"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "ActionState"
           - column: "dorf.agent_runs.state"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
+              import: "github.com/aphronio/dorf/internal/core"
               type: "AgentRunState"
           - column: "dorf.job_outcomes.outcome"
             go_type:

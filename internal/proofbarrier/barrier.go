@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -26,14 +26,14 @@ type Barrier struct {
 	Lease    time.Duration
 }
 
-func FromEnv() (spine.FaultBarrier, error) {
+func FromEnv() (core.FaultBarrier, error) {
 	point := strings.TrimSpace(os.Getenv("DORF_PROOF_FAULT_BARRIER"))
 	if point == "" {
 		return nil, nil
 	}
-	messagePoint := point == spine.BarrierBeforeSubmit || point == spine.BarrierAfterSubmitBeforeBind || point == spine.BarrierHarnessActive
-	publicationPoint := point == spine.BarrierPushAccepted || point == spine.BarrierPullRequestAccepted
-	cleanupPoint := point == spine.BarrierRouteRevoked || point == spine.BarrierSandboxDeleted
+	messagePoint := point == core.BarrierBeforeSubmit || point == core.BarrierAfterSubmitBeforeBind || point == core.BarrierHarnessActive
+	publicationPoint := point == core.BarrierPushAccepted || point == core.BarrierPullRequestAccepted
+	cleanupPoint := point == core.BarrierRouteRevoked || point == core.BarrierSandboxDeleted
 	if !messagePoint && !publicationPoint && !cleanupPoint {
 		return nil, fmt.Errorf("unsupported proof fault barrier %q", point)
 	}
@@ -111,7 +111,7 @@ func (b Barrier) reach(ctx context.Context, jobID, identity, point, payload stri
 	return fmt.Errorf("proof barrier %s timed out; SIGKILL was not observed", point)
 }
 
-func (b Barrier) Reach(ctx context.Context, point string, delivery spine.Delivery) error {
+func (b Barrier) Reach(ctx context.Context, point string, delivery core.Delivery) error {
 	if point != b.Point || delivery.Message.Sequence != b.Sequence {
 		return nil
 	}

@@ -8,14 +8,14 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type DorfAction struct {
 	ID        string
 	JobID     string
-	Kind      spine.ActionKind
-	State     spine.ActionState
+	Kind      core.ActionKind
+	State     core.ActionState
 	ScopeKey  string
 	CreatedAt time.Time
 	SettledAt sql.NullTime

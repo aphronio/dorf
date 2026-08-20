@@ -1,4 +1,4 @@
-package controlplane
+package core
 
 import (
 	"context"
@@ -7,13 +7,12 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type cleanupTarget struct {
-	Sandbox spine.Sandbox
-	Kind    spine.ActionKind
+	Sandbox Sandbox
+	Kind    ActionKind
 }
 
 // RegisterCleanup installs the Core-owned resource cleanup task.
@@ -49,14 +48,14 @@ func (a Application) RegisterCleanup() {
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func cleanupTargets(sandboxes []spine.Sandbox) []cleanupTarget {
-	ordered := append([]spine.Sandbox(nil), sandboxes...)
+func cleanupTargets(sandboxes []Sandbox) []cleanupTarget {
+	ordered := append([]Sandbox(nil), sandboxes...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
 	targets := make([]cleanupTarget, 0, 2*len(ordered))
 	for _, sandbox := range ordered {
 		targets = append(targets,
-			cleanupTarget{Sandbox: sandbox, Kind: spine.ActionRouteRevoke},
-			cleanupTarget{Sandbox: sandbox, Kind: spine.ActionSandboxDelete},
+			cleanupTarget{Sandbox: sandbox, Kind: ActionRouteRevoke},
+			cleanupTarget{Sandbox: sandbox, Kind: ActionSandboxDelete},
 		)
 	}
 	return targets
@@ -64,7 +63,7 @@ func cleanupTargets(sandboxes []spine.Sandbox) []cleanupTarget {
 
 // CurrentCleanupAction projects the next required cleanup mutation from the
 // same ordered targets used by execution. It records no additional status.
-func CurrentCleanupAction(sandboxes []spine.Sandbox, actions []spine.Action) (spine.ActionKind, string, bool) {
+func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, string, bool) {
 	for _, target := range cleanupTargets(sandboxes) {
 		if !actionSucceeded(actions, target.Kind, target.Sandbox.ID) {
 			return target.Kind, target.Sandbox.ID, true
@@ -78,7 +77,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	if err != nil {
 		return err
 	}
-	if job.CleanupState == spine.CleanupComplete {
+	if job.CleanupState == CleanupComplete {
 		return nil
 	}
 	if job.CleanupAttention != "" {
@@ -92,7 +91,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 		if err != nil {
 			return err
 		}
-		if action.State == spine.ActionSucceeded {
+		if action.State == ActionSucceeded {
 			continue
 		}
 
@@ -114,9 +113,9 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	return nil
 }
 
-func actionSucceeded(actions []spine.Action, kind spine.ActionKind, sandboxID string) bool {
+func actionSucceeded(actions []Action, kind ActionKind, sandboxID string) bool {
 	for _, action := range actions {
-		if action.Kind == kind && action.Scope == sandboxID && action.State == spine.ActionSucceeded {
+		if action.Kind == kind && action.Scope == sandboxID && action.State == ActionSucceeded {
 			return true
 		}
 	}

@@ -8,9 +8,9 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -19,10 +19,10 @@ import (
 type CodingExecution interface {
 	gitworkspace.Execution
 	BlobStore() blob.Store
-	ObserveRevision(context.Context, coding.Job, spine.AgentRun) error
+	ObserveRevision(context.Context, coding.Job, core.AgentRun) error
 	PlanReview(context.Context, coding.Job) error
 	RunReview(context.Context, coding.Job, string) error
-	ExecuteReviewCheckout(context.Context, coding.Job, string, spine.Action) error
+	ExecuteReviewCheckout(context.Context, coding.Job, string, core.Action) error
 }
 
 type FactStepResultV1 struct {
@@ -105,10 +105,14 @@ func observeAgentRun(ctx context.Context, service CodingExecution, job coding.Jo
 		if run.ID != work.FactID {
 			continue
 		}
-		if run.JobID != job.ID || run.Role != "implement" || run.State != spine.AgentRunActive {
+		if run.JobID != job.ID || run.Role != "implement" || run.State != core.AgentRunActive {
 			return false, fmt.Errorf("AgentRun observation changed from exact active implementation AgentRun %s", work.FactID)
 		}
-		return service.ObserveAgentRun(ctx, job.Job, run)
+		turn, err := service.ObserveAgentRunTurn(ctx, job.Job, run, "implement")
+		if err != nil {
+			return false, err
+		}
+		return turn.Terminal(), nil
 	}
 	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
 }
@@ -129,7 +133,7 @@ func runDeliveryStep(ctx context.Context, service CodingExecution, store postgre
 	})
 }
 
-func codingAgentInput(job coding.Job, delivery spine.Delivery) string {
+func codingAgentInput(job coding.Job, delivery core.Delivery) string {
 	if delivery.AgentRun.Role != "implement" {
 		return delivery.Message.Input
 	}
@@ -137,7 +141,7 @@ func codingAgentInput(job coding.Job, delivery spine.Delivery) string {
 }
 
 func runRevisionStep(ctx context.Context, service CodingExecution, job coding.Job, snapshot Snapshot, work Work) error {
-	var run *spine.AgentRun
+	var run *core.AgentRun
 	for i := range snapshot.Deliveries {
 		if snapshot.Deliveries[i].AgentRun.ID == work.FactID {
 			run = &snapshot.Deliveries[i].AgentRun
@@ -157,12 +161,12 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 	if err != nil {
 		return err
 	}
-	if push.State != spine.ActionSucceeded {
+	if push.State != core.ActionSucceeded {
 		return absurdruntime.RunActionStep(ctx, push.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Push(workCtx, job.ID, job.Revision)
 		})
 	}
-	if pull.State != spine.ActionSucceeded {
+	if pull.State != core.ActionSucceeded {
 		return absurdruntime.RunActionStep(ctx, pull.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Propose(workCtx, job.ID, job.Revision)
 		})
@@ -171,7 +175,7 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 }
 
 func runSandboxAction(ctx context.Context, service CodingExecution, store postgres.Store, job coding.Job, snapshot Snapshot, work Work) error {
-	var sandbox *spine.Sandbox
+	var sandbox *core.Sandbox
 	for i := range snapshot.Sandboxes {
 		if snapshot.Sandboxes[i].ID == work.Scope {
 			sandbox = &snapshot.Sandboxes[i]
@@ -200,7 +204,7 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 		}
 	}
 
-	expectedID := spine.ScopedActionID(job.ID, work.ActionKind, work.Scope)
+	expectedID := core.ScopedActionID(job.ID, work.ActionKind, work.Scope)
 	if expectedID != work.FactID {
 		return fmt.Errorf("Action changed from %s to %s", work.FactID, expectedID)
 	}
@@ -211,7 +215,7 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 	if action.ID != work.FactID || action.JobID != job.ID || action.Kind != work.ActionKind || action.Scope != work.Scope {
 		return fmt.Errorf("selected Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
 	}
-	if action.State == spine.ActionSucceeded {
+	if action.State == core.ActionSucceeded {
 		return nil
 	}
 	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {

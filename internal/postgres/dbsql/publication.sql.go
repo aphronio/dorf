@@ -9,7 +9,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const clearPublicationAttention = `-- name: ClearPublicationAttention :exec
@@ -126,7 +126,7 @@ for update of j,c
 type GetProposalJobForUpdateRow struct {
 	Revision      string
 	AdmissionOpen bool
-	CleanupState  spine.CleanupState
+	CleanupState  core.CleanupState
 }
 
 func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (GetProposalJobForUpdateRow, error) {
@@ -153,7 +153,7 @@ type GetPublicationJobForUpdateRow struct {
 	Branch               string
 	Repository           string
 	AdmissionOpen        bool
-	CleanupState         spine.CleanupState
+	CleanupState         core.CleanupState
 }
 
 func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) (GetPublicationJobForUpdateRow, error) {

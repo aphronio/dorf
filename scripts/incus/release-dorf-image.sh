@@ -197,7 +197,7 @@ prove_harness() {
     --arg source "$SOURCE_COMMIT" \
     --arg provider "$PROVIDER_CONNECTION" \
     --arg job "$JOB_ID" \
-    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"one real no-change implementation AgentRun",observed:{implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
+    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"one real no-change implementation AgentRun",observed:{implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Core",cleanup_state:"complete"}' \
     >"$EVIDENCE_DIR/$harness-image-proof.json"
   JOB_ID=""
 }

@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
 
@@ -259,8 +259,8 @@ func TestStrictReviewProcessRestartRotatesCapabilityButRecoversExactThreadAndTur
 	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: owner, token: oldToken}
 	agent := Agent{Sandbox: testSandbox(runner)}
 	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-	recover := func() spine.HarnessHistory {
-		history := spine.HarnessHistory{Harness: Harness}
+	recover := func() core.HarnessHistory {
+		history := core.HarnessHistory{Harness: Harness}
 		err := agent.withReviewServerEndpoint(context.Background(), reviewOwner(sandboxName, owner), endpoint, owner, func(protocol *protocol) error {
 			observedThread, turns, err := protocol.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
 			history.ThreadID, history.Turns = observedThread, turns

@@ -5,18 +5,18 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const (
-	Workflow         spine.WorkflowName = "coding-to-proposal"
-	WorkflowRevision                    = "3"
+	Workflow         core.WorkflowName = "coding-to-proposal"
+	WorkflowRevision                   = "3"
 )
 
 // Job is the coding-to-proposal workflow's complete typed state. Its embedded
 // Core Job carries only shared custody and lifecycle facts.
 type Job struct {
-	spine.Job
+	core.Job
 	Repository         string `json:"repository"`
 	StartingRevision   string `json:"starting_revision"`
 	Revision           string `json:"revision"`
@@ -67,7 +67,7 @@ func ReviewRequestFromID(revision, role string) string {
 }
 
 func ReviewRequestMessageID(jobID, revision, role string) string {
-	return spine.MessageID(jobID, spine.MessageFromWorkflow, ReviewRequestFromID(revision, role))
+	return core.MessageID(jobID, core.MessageFromWorkflow, ReviewRequestFromID(revision, role))
 }
 
 func ReviewPolicyAttentionSource(revision string) string {

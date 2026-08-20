@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type InvestigationWorkKind string
@@ -28,7 +28,7 @@ const (
 type InvestigationWork struct {
 	Kind       InvestigationWorkKind `json:"kind"`
 	FactID     string                `json:"fact_id,omitempty"`
-	ActionKind spine.ActionKind      `json:"action,omitempty"`
+	ActionKind core.ActionKind       `json:"action,omitempty"`
 	Scope      string                `json:"scope,omitempty"`
 	Detail     string                `json:"detail,omitempty"`
 }
@@ -51,11 +51,11 @@ func (w InvestigationWork) Description() string {
 }
 
 type InvestigationSnapshot struct {
-	Job         spine.Job
-	MainSandbox spine.Sandbox
-	Actions     []spine.Action
-	Deliveries  []spine.Delivery
-	Delivery    spine.Delivery
+	Job         core.Job
+	MainSandbox core.Sandbox
+	Actions     []core.Action
+	Deliveries  []core.Delivery
+	Delivery    core.Delivery
 	Drafts      []investigation.Draft
 	Source      investigation.Source
 }
@@ -82,13 +82,13 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 		return snapshot, err
 	}
 	for _, owned := range sandboxes {
-		if owned.ID == spine.MainSandboxName(jobID) {
+		if owned.ID == core.MainSandboxName(jobID) {
 			snapshot.MainSandbox = owned
 			break
 		}
 	}
 	if snapshot.MainSandbox.ID == "" {
-		return snapshot, fmt.Errorf("main Sandbox %s: %w", spine.MainSandboxName(jobID), postgres.ErrNotFound)
+		return snapshot, fmt.Errorf("main Sandbox %s: %w", core.MainSandboxName(jobID), postgres.ErrNotFound)
 	}
 	snapshot.Actions, err = store.Actions(ctx, jobID)
 	if err != nil {
@@ -136,11 +136,11 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	if !s.Job.AdmissionOpen {
 		return InvestigationWork{Kind: InvestigationWorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
 	}
-	action := func(kind spine.ActionKind) InvestigationWork {
-		return InvestigationWork{Kind: InvestigationWorkAction, FactID: spine.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
+	action := func(kind core.ActionKind) InvestigationWork {
+		return InvestigationWork{Kind: InvestigationWorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
 	}
-	if !actionSucceeded(s.Actions, spine.ActionSandboxCreate, s.MainSandbox.ID) {
-		return action(spine.ActionSandboxCreate)
+	if !actionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
+		return action(core.ActionSandboxCreate)
 	}
 	materializationAction := gitworkspace.ActionRepositoryClone
 	if s.Source.Kind == investigation.SourceGitBundle {
@@ -149,8 +149,8 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	if !actionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
 		return action(materializationAction)
 	}
-	if !actionSucceeded(s.Actions, spine.ActionRouteCreate, s.MainSandbox.ID) {
-		return action(spine.ActionRouteCreate)
+	if !actionSucceeded(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
+		return action(core.ActionRouteCreate)
 	}
 	for _, draft := range s.Drafts {
 		if draft.AgentRunID == run.ID {
@@ -158,16 +158,16 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 		}
 	}
 	switch run.State {
-	case spine.AgentRunPending, spine.AgentRunSubmitting:
+	case core.AgentRunPending, core.AgentRunSubmitting:
 		return InvestigationWork{Kind: InvestigationWorkDeliver, FactID: run.ID}
-	case spine.AgentRunActive:
+	case core.AgentRunActive:
 		return InvestigationWork{Kind: InvestigationWorkObserveAgent, FactID: run.ID}
-	case spine.AgentRunCompleted:
+	case core.AgentRunCompleted:
 		if s.Job.WorkflowAttentionSource == run.ID && s.Job.WorkflowAttention != "" {
 			return InvestigationWork{Kind: InvestigationWorkAttention, FactID: run.ID, Detail: s.Job.WorkflowAttention}
 		}
 		return InvestigationWork{Kind: InvestigationWorkRecordDraft, FactID: run.ID}
-	case spine.AgentRunFailed, spine.AgentRunInterrupted, spine.AgentRunUncertain:
+	case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
 		detail := run.Attention
 		if detail == "" {
 			detail = string(run.State)
@@ -223,7 +223,7 @@ func RunCodebaseInvestigation(ctx context.Context, service investigation.Service
 	}
 }
 
-func investigationAgentInput(source investigation.Source, delivery spine.Delivery) string {
+func investigationAgentInput(source investigation.Source, delivery core.Delivery) string {
 	return fmt.Sprintf(`%s
 
 Dorf codebase-investigation contract:
@@ -235,7 +235,7 @@ Dorf codebase-investigation contract:
 }
 
 func runInvestigationAction(ctx context.Context, service investigation.Service, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
-	if work.Scope != snapshot.MainSandbox.ID || work.FactID != spine.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
+	if work.Scope != snapshot.MainSandbox.ID || work.FactID != core.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}
 	action, err := store.GetOrCreateSandboxAction(ctx, work.Scope, work.ActionKind)
@@ -245,7 +245,7 @@ func runInvestigationAction(ctx context.Context, service investigation.Service, 
 	if action.ID != work.FactID || action.JobID != snapshot.Job.ID || action.Scope != work.Scope || action.Kind != work.ActionKind {
 		return fmt.Errorf("selected investigation Action changed identity")
 	}
-	if action.State == spine.ActionSucceeded {
+	if action.State == core.ActionSucceeded {
 		return nil
 	}
 	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
@@ -284,8 +284,8 @@ func recordInvestigationDraft(ctx context.Context, service investigation.Service
 		return err
 	}
 	name := investigation.DraftArtifactName(snapshot.Delivery.Message.Sequence)
-	artifact := spine.Artifact{
-		ID:    spine.ArtifactID(snapshot.Job.ID, name),
+	artifact := core.Artifact{
+		ID:    core.ArtifactID(snapshot.Job.ID, name),
 		JobID: snapshot.Job.ID, Name: name,
 		Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "text/markdown",
 		Producer: "dorf-codebase-investigation", AgentRunID: run.ID, CreatedAt: run.FinishedAt,

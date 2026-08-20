@@ -6,36 +6,36 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 var ErrArtifactNotFound = errors.New("Dorf Artifact not found")
 
-func (s Store) Artifact(ctx context.Context, artifactID string) (spine.Artifact, error) {
+func (s Store) Artifact(ctx context.Context, artifactID string) (core.Artifact, error) {
 	row, err := dbsql.New(s.DB).GetArtifact(ctx, artifactID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return spine.Artifact{}, ErrArtifactNotFound
+		return core.Artifact{}, ErrArtifactNotFound
 	}
 	if err != nil {
-		return spine.Artifact{}, err
+		return core.Artifact{}, err
 	}
 	return artifactFromRow(row), nil
 }
 
-func (s Store) Artifacts(ctx context.Context, jobID string) ([]spine.Artifact, error) {
+func (s Store) Artifacts(ctx context.Context, jobID string) ([]core.Artifact, error) {
 	rows, err := dbsql.New(s.DB).ListArtifacts(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	records := make([]spine.Artifact, 0, len(rows))
+	records := make([]core.Artifact, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, artifactFromRow(row))
 	}
 	return records, nil
 }
 
-func insertArtifact(ctx context.Context, tx *sql.Tx, artifact spine.Artifact) error {
+func insertArtifact(ctx context.Context, tx *sql.Tx, artifact core.Artifact) error {
 	queries := dbsql.New(tx)
 	if err := queries.InsertArtifact(ctx, dbsql.InsertArtifactParams{
 		ID: artifact.ID, JobID: artifact.JobID, Name: artifact.Name,
@@ -57,8 +57,8 @@ func insertArtifact(ctx context.Context, tx *sql.Tx, artifact spine.Artifact) er
 	return nil
 }
 
-func artifactFromRow(row dbsql.DorfArtifact) spine.Artifact {
-	return spine.Artifact{
+func artifactFromRow(row dbsql.DorfArtifact) core.Artifact {
+	return core.Artifact{
 		ID: row.ID, JobID: row.JobID, Name: row.Name, Digest: row.Digest,
 		ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer,
 		AgentRunID: row.AgentRunID, CreatedAt: row.CreatedAt.UTC(),

@@ -8,11 +8,11 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/publication"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -93,7 +93,7 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 		fromID := fmt.Sprintf("github-comment:%d", comment.ID)
 		delivery, exists := admitted[fromID]
 		if exists {
-			if delivery.AgentRun.State != spine.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
+			if delivery.AgentRun.State != core.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
 				continue
 			}
 			if err := absurdruntime.RequireClaim(ctx); err != nil {
@@ -114,9 +114,9 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 			return ProposalObservationResultV1{}, err
 		}
 		_, created, err := AdmitMessage(ctx, r.Store, r.Client, postgres.NewMessage{
-			JobID: jobID, FromKind: spine.MessageFromHuman,
+			JobID: jobID, FromKind: core.MessageFromHuman,
 			FromID: fromID, Input: comment.Body,
-			Intent: spine.MessageFollow,
+			Intent: core.MessageFollow,
 		})
 		if err != nil {
 			return ProposalObservationResultV1{}, err
@@ -128,11 +128,11 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	return result, nil
 }
 
-func admittedGitHubComments(deliveries []spine.Delivery) map[string]spine.Delivery {
-	admitted := make(map[string]spine.Delivery)
+func admittedGitHubComments(deliveries []core.Delivery) map[string]core.Delivery {
+	admitted := make(map[string]core.Delivery)
 	for _, delivery := range deliveries {
 		message := delivery.Message
-		if message.FromKind == spine.MessageFromHuman && strings.HasPrefix(message.FromID, "github-comment:") {
+		if message.FromKind == core.MessageFromHuman && strings.HasPrefix(message.FromID, "github-comment:") {
 			admitted[message.FromID] = delivery
 		}
 	}

@@ -1,14 +1,10 @@
-// Package controlplane exposes the in-process Dorf Core application boundary.
-// Native workflows and transport adapters consume this boundary; provider,
-// scheduler, and persistence authorities remain behind it.
-package controlplane
+package core
 
 import (
 	"context"
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -34,22 +30,22 @@ type CleanupRuntimeResolver interface {
 	ResolveCleanup(context.Context, string) (CleanupRuntime, error)
 }
 
-// Store is the durable Core custody required by the application boundary.
+// ApplicationStore is the durable Core custody required by the application boundary.
 // PostgreSQL is the current implementation, not part of the consumer contract.
-type Store interface {
-	Job(context.Context, string) (spine.Job, error)
-	JobTasks(context.Context, string) ([]spine.JobTask, error)
+type ApplicationStore interface {
+	Job(context.Context, string) (Job, error)
+	JobTasks(context.Context, string) ([]JobTask, error)
 	WithJobFence(context.Context, string, func() error) error
 	AttachJobTask(context.Context, string, string, string, string) error
 	CloseAdmissionForCleanup(context.Context, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
-	GetOrCreateSandboxAction(context.Context, string, spine.ActionKind) (spine.Action, error)
+	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	SetCleanupAttention(context.Context, string, string) error
 	CompleteCleanup(context.Context, string) error
 }
 
 type Application struct {
-	Store           Store
+	Store           ApplicationStore
 	Tasks           *absurd.Client
 	CleanupRuntimes CleanupRuntimeResolver
 }
@@ -57,27 +53,27 @@ type Application struct {
 // RequestCleanup closes further admission, settles the currently attached
 // task, and durably hands the Job to Core cleanup. Calling it again converges
 // on the same cleanup task or completed receipt.
-func (a Application) RequestCleanup(ctx context.Context, jobID string) (spine.Job, error) {
+func (a Application) RequestCleanup(ctx context.Context, jobID string) (Job, error) {
 	job, err := a.Store.Job(ctx, jobID)
 	if err != nil {
-		return spine.Job{}, err
+		return Job{}, err
 	}
-	if job.CleanupState == spine.CleanupComplete {
+	if job.CleanupState == CleanupComplete {
 		return job, nil
 	}
 	if err := a.Store.CloseAdmissionForCleanup(ctx, jobID); err != nil {
-		return spine.Job{}, err
+		return Job{}, err
 	}
 	job, err = a.Store.Job(ctx, jobID)
 	if err != nil {
-		return spine.Job{}, err
+		return Job{}, err
 	}
 	skipTaskID := currentTaskID(ctx)
 	if err := a.cancelAttachedTask(ctx, job, skipTaskID); err != nil {
-		return spine.Job{}, err
+		return Job{}, err
 	}
 
-	var result spine.Job
+	var result Job
 	err = a.Store.WithJobFence(ctx, jobID, func() error {
 		current, err := a.Store.Job(ctx, jobID)
 		if err != nil {
@@ -99,7 +95,7 @@ func (a Application) RequestCleanup(ctx context.Context, jobID string) (spine.Jo
 	return result, err
 }
 
-func (a Application) cancelAttachedTask(ctx context.Context, job spine.Job, skipTaskID string) error {
+func (a Application) cancelAttachedTask(ctx context.Context, job Job, skipTaskID string) error {
 	taskID := job.CurrentTaskID
 	if taskID == "" || taskID == skipTaskID {
 		return nil

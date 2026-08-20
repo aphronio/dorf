@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string) (coding.Job, coding.Proposal) {
@@ -82,7 +82,7 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	if err != nil || created || got != stored {
 		t.Fatalf("idempotent Outcome=%#v created=%v err=%v", got, created, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(context.Background(), postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
+	if _, created, err := store.AdmitCodingMessage(context.Background(), postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
 		t.Fatalf("post-abandon Message created=%v err=%v", created, err)
 	}
 	if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
@@ -128,7 +128,7 @@ func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "active-abandon")
 	message, created, err := store.AdmitCodingMessage(context.Background(), postgres.NewMessage{
-		JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "active-before-abandon",
+		JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "active-before-abandon",
 		Input: "continue working before the explicit stop",
 	})
 	if err != nil || !created {
@@ -164,7 +164,7 @@ func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing
 	}
 	activeForCleanup := false
 	for _, candidate := range deliveries {
-		activeForCleanup = activeForCleanup || candidate.AgentRun.ID == delivery.AgentRun.ID && candidate.AgentRun.State == spine.AgentRunActive
+		activeForCleanup = activeForCleanup || candidate.AgentRun.ID == delivery.AgentRun.ID && candidate.AgentRun.State == core.AgentRunActive
 	}
 	if !activeForCleanup {
 		t.Fatalf("active AgentRun was not left for cleanup reconciliation: %#v", deliveries)
@@ -189,8 +189,8 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	go func() {
 		defer wg.Done()
 		_, created, err := store.AdmitCodingMessage(context.Background(), postgres.NewMessage{
-			JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "github-comment-race",
-			Input: "Please explain the tradeoff without changing code.", Intent: spine.MessageFollow,
+			JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "github-comment-race",
+			Input: "Please explain the tradeoff without changing code.", Intent: core.MessageFollow,
 		})
 		results <- result{kind: "message", created: created, err: err}
 	}()
@@ -230,7 +230,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	threadID := "thread-" + job.ID
 	priorTurnID := "turn-" + job.ID
 
-	follow, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
+	follow, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
@@ -245,7 +245,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: spine.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type ReadinessAssessment struct {
@@ -23,12 +23,12 @@ type ReadinessAssessment struct {
 // checkout boundary from a steer handled by its target Turn. A terminal-target
 // steer becomes a turn start only after it is durably bound to a different
 // Turn.
-func StartsImplementationTurn(message spine.Message, run spine.AgentRun) bool {
-	return message.Intent == spine.MessageFollow ||
-		message.Intent == spine.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
+func StartsImplementationTurn(message core.Message, run core.AgentRun) bool {
+	return message.Intent == core.MessageFollow ||
+		message.Intent == core.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
 }
 
-func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []spine.Delivery) ReadinessAssessment {
+func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []core.Delivery) ReadinessAssessment {
 	assessment := ReadinessAssessment{Revision: job.Revision}
 	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
 		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
@@ -52,7 +52,7 @@ func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, 
 	for _, run := range exactReviews {
 		byRole[run.Role] = run
 	}
-	deliveryByMessage := make(map[string]spine.Delivery, len(deliveries))
+	deliveryByMessage := make(map[string]core.Delivery, len(deliveries))
 	for _, delivery := range deliveries {
 		deliveryByMessage[delivery.Message.ID] = delivery
 	}
@@ -68,12 +68,12 @@ func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, 
 	for _, role := range plan.Plan.Roles {
 		run, ok := byRole[string(role)]
 		expectedRequestID := ReviewRequestMessageID(job.ID, job.Revision, string(role))
-		expectedRunID := spine.AgentRunID(expectedRequestID)
+		expectedRunID := core.AgentRunID(expectedRequestID)
 		expectedRequestFromID := ReviewRequestFromID(job.Revision, string(role))
-		expectedMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, expectedRunID)
+		expectedMessageID := core.MessageID(job.ID, core.MessageFromAgent, expectedRunID)
 		feedbackDelivery, feedbackOK := deliveryByMessage[expectedMessageID]
 		feedbackMessage := feedbackDelivery.Message
-		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != spine.MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != spine.MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != spine.AgentRunCompleted || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != spine.MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != spine.MessageFollow {
+		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != core.MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != core.MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != core.AgentRunCompleted || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != core.MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != core.MessageFollow {
 			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
 			return assessment
 		}
@@ -86,22 +86,22 @@ func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, 
 	for _, item := range feedback {
 		delivery, ok := deliveryByMessage[item.messageID]
 		message, implementation := delivery.Message, delivery.AgentRun
-		if !ok || message.FromKind != spine.MessageFromAgent || message.FromID != item.reviewerID || implementation.JobID != job.ID || implementation.Role != "implement" || implementation.InputRevision != job.Revision || implementation.State != spine.AgentRunCompleted || implementation.TurnOutcome != "completed" {
+		if !ok || message.FromKind != core.MessageFromAgent || message.FromID != item.reviewerID || implementation.JobID != job.ID || implementation.Role != "implement" || implementation.InputRevision != job.Revision || implementation.State != core.AgentRunCompleted || implementation.TurnOutcome != "completed" {
 			assessment.Reason = fmt.Sprintf("review feedback Message %s has not been handled by a completed implementation AgentRun", item.messageID)
 			return assessment
 		}
 	}
 
-	var latestInput spine.AgentRun
+	var latestInput core.AgentRun
 	var latestInputSequence int64
-	var latestTurnStart spine.AgentRun
+	var latestTurnStart core.AgentRun
 	var latestSequence int64
 	for _, delivery := range deliveries {
 		run, message := delivery.AgentRun, delivery.Message
 		if run.JobID != job.ID || run.Role != "implement" {
 			continue
 		}
-		if run.State != spine.AgentRunCompleted && run.State != spine.AgentRunFailed && run.State != spine.AgentRunInterrupted {
+		if run.State != core.AgentRunCompleted && run.State != core.AgentRunFailed && run.State != core.AgentRunInterrupted {
 			assessment.Reason = fmt.Sprintf("implementation AgentRun %s is not terminal", run.ID)
 			return assessment
 		}
@@ -116,12 +116,12 @@ func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, 
 			latestTurnStart, latestSequence = run, message.Sequence
 		}
 	}
-	if latestInput.ID != "" && latestInput.State != spine.AgentRunCompleted {
+	if latestInput.ID != "" && latestInput.State != core.AgentRunCompleted {
 		assessment.Reason = fmt.Sprintf("latest implementation input AgentRun %s has not completed successfully", latestInput.ID)
 		return assessment
 	}
 	if latestTurnStart.ID != "" {
-		if latestTurnStart.State != spine.AgentRunCompleted || latestTurnStart.TurnOutcome != "completed" || latestTurnStart.InputRevision == "" {
+		if latestTurnStart.State != core.AgentRunCompleted || latestTurnStart.TurnOutcome != "completed" || latestTurnStart.InputRevision == "" {
 			assessment.Reason = fmt.Sprintf("latest implementation turn-start AgentRun %s has not completed successfully", latestTurnStart.ID)
 			return assessment
 		}
@@ -142,11 +142,11 @@ func AssessReviewReadiness(job Job, records []spine.Evidence, blobs blob.Store, 
 // PublicationDeliveries retains the exact admitted input boundary that began
 // publication. Later Messages remain accepted, but cannot strand recovery of
 // an already-started external effect.
-func PublicationDeliveries(deliveries []spine.Delivery, startedAt time.Time) []spine.Delivery {
+func PublicationDeliveries(deliveries []core.Delivery, startedAt time.Time) []core.Delivery {
 	if startedAt.IsZero() {
 		return deliveries
 	}
-	retained := make([]spine.Delivery, 0, len(deliveries))
+	retained := make([]core.Delivery, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		if !delivery.Message.AdmittedAt.After(startedAt) {
 			retained = append(retained, delivery)
@@ -155,9 +155,9 @@ func PublicationDeliveries(deliveries []spine.Delivery, startedAt time.Time) []s
 	return retained
 }
 
-func verifyGitRevisionObservation(job Job, run spine.AgentRun, records []spine.Evidence, blobs blob.Store) error {
-	expectedID := spine.EvidenceID(run.ID, "git-revision")
-	var observed spine.Evidence
+func verifyGitRevisionObservation(job Job, run core.AgentRun, records []core.Evidence, blobs blob.Store) error {
+	expectedID := core.EvidenceID(run.ID, "git-revision")
+	var observed core.Evidence
 	for _, record := range records {
 		if record.ID == expectedID {
 			observed = record
@@ -189,12 +189,12 @@ func verifyGitRevisionObservation(job Job, run spine.AgentRun, records []spine.E
 	return nil
 }
 
-func VerifyReviewRunEvidence(run ReviewRunView, records []spine.Evidence, blobs blob.Store) error {
-	expectedEvidenceID := spine.EvidenceID(run.ID, "review-observation")
-	if run.State != spine.AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
+func VerifyReviewRunEvidence(run ReviewRunView, records []core.Evidence, blobs blob.Store) error {
+	expectedEvidenceID := core.EvidenceID(run.ID, "review-observation")
+	if run.State != core.AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
 		return fmt.Errorf("terminal harness binding, exact Revision, or least-capability envelope is incomplete")
 	}
-	recordsByID := make(map[string]spine.Evidence, len(records))
+	recordsByID := make(map[string]core.Evidence, len(records))
 	for _, record := range records {
 		recordsByID[record.ID] = record
 	}

@@ -12,7 +12,7 @@ import (
 
 func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
-	for _, directory := range []string{"controlplane", "spine", "workflow", "repository", "publication", "terminal", "codex", "pi"} {
+	for _, directory := range []string{"core", "workflow", "gitworkspace", "publication", "terminal", "codex", "pi"} {
 		path := filepath.Join(root, "internal", directory)
 		entries, err := os.ReadDir(path)
 		if err != nil {
@@ -43,7 +43,7 @@ func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 func TestCoreAndSandboxProvidersDoNotImportWorkflowModules(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
 	workflowModules := []string{"/internal/coding", "/internal/gitworkspace", "/internal/investigation", "/internal/outcome", "/internal/publication", "/internal/workflow"}
-	for _, directory := range []string{"controlplane", "spine", "sandbox", "incus", "e2b"} {
+	for _, directory := range []string{"core", "sandbox", "incus", "e2b"} {
 		path := filepath.Join(root, "internal", directory)
 		entries, err := os.ReadDir(path)
 		if err != nil {

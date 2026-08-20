@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (investigation.Source, error) {
@@ -26,14 +26,14 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 // authorizeInvestigationMessage implements the investigation workflow's
 // follow-up policy inside the same locked transaction that records the Message.
 func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input NewMessage) (admittedAgentRun, error) {
-	if input.Intent != spine.MessageFollow {
+	if input.Intent != core.MessageFollow {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
 	}
 	latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
 	if err != nil {
 		return admittedAgentRun{}, err
 	}
-	if latest.State != spine.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
+	if latest.State != core.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
 	}
 	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
@@ -42,7 +42,7 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 	}
 	return admittedAgentRun{
 		Role: "investigate", Capability: "repository-read-report", InputRevision: source.Revision,
-		SandboxID: spine.MainSandboxName(input.JobID), Harness: latest.Harness, ThreadID: latest.ThreadID,
+		SandboxID: core.MainSandboxName(input.JobID), Harness: latest.Harness, ThreadID: latest.ThreadID,
 	}, nil
 }
 
@@ -58,7 +58,7 @@ func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([
 	return drafts, nil
 }
 
-func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact spine.Artifact) (investigation.Draft, bool, error) {
+func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact core.Artifact) (investigation.Draft, bool, error) {
 	if err := validateInvestigationDraft(artifact); err != nil {
 		return investigation.Draft{}, false, err
 	}
@@ -76,7 +76,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact sp
 		return investigation.Draft{}, false, err
 	}
 	if run.WorkflowName != investigation.Workflow || run.WorkflowRevision != investigation.WorkflowRevision || run.Role != "investigate" ||
-		run.State != spine.AgentRunCompleted || run.TurnID == "" || run.TurnOutcome != "completed" || run.InputRevision != run.Revision ||
+		run.State != core.AgentRunCompleted || run.TurnID == "" || run.TurnOutcome != "completed" || run.InputRevision != run.Revision ||
 		!run.StartedAt.Valid || !run.FinishedAt.Valid {
 		return investigation.Draft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")
 	}
@@ -97,7 +97,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact sp
 		}
 		return existing, false, nil
 	}
-	if !run.AdmissionOpen || run.CleanupState != spine.CleanupPending {
+	if !run.AdmissionOpen || run.CleanupState != core.CleanupPending {
 		return investigation.Draft{}, false, fmt.Errorf("investigation draft cannot be recorded after admission closes or cleanup begins")
 	}
 	if !artifact.CreatedAt.Equal(run.FinishedAt.Time) {
@@ -118,10 +118,10 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact sp
 	return stored, true, nil
 }
 
-func validateInvestigationDraft(artifact spine.Artifact) error {
+func validateInvestigationDraft(artifact core.Artifact) error {
 	if strings.TrimSpace(artifact.JobID) == "" || strings.TrimSpace(artifact.AgentRunID) == "" ||
 		!strings.HasPrefix(artifact.Name, "report-") || !strings.HasSuffix(artifact.Name, ".md") ||
-		artifact.ID != spine.ArtifactID(artifact.JobID, artifact.Name) || artifact.MediaType != "text/markdown" ||
+		artifact.ID != core.ArtifactID(artifact.JobID, artifact.Name) || artifact.MediaType != "text/markdown" ||
 		artifact.Producer != "dorf-codebase-investigation" || artifact.Digest == "" || artifact.ByteSize <= 0 || artifact.CreatedAt.IsZero() {
 		return fmt.Errorf("codebase-investigation draft lacks its exact Markdown Artifact")
 	}

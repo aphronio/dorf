@@ -3,14 +3,13 @@ package gitworkspace_test
 import (
 	"context"
 
-	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
-type stubExecution struct{ controlplane.Execution }
+type stubExecution struct{ core.Execution }
 
-func (stubExecution) ExecuteRepositoryClone(context.Context, spine.Job, spine.Sandbox, spine.Action, string, string, string) error {
+func (stubExecution) ExecuteRepositoryClone(context.Context, core.Job, core.Sandbox, core.Action, string, string, string) error {
 	return nil
 }
 

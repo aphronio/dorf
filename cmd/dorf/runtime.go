@@ -10,7 +10,7 @@ import (
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
-	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -22,7 +22,6 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/publication"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -32,15 +31,15 @@ type profileRuntimeResolver struct {
 	cfg     config.Config
 	store   postgres.Store
 	client  *absurd.Client
-	barrier spine.FaultBarrier
+	barrier core.FaultBarrier
 }
 
-func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (controlplane.CleanupRuntime, error) {
+func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (core.CleanupRuntime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
-		return controlplane.CleanupRuntime{}, err
+		return core.CleanupRuntime{}, err
 	}
-	return controlplane.CleanupRuntime{
+	return core.CleanupRuntime{
 		Execution:      resolved.Execution,
 		SandboxProfile: resolved.Profile.SandboxProfile,
 	}, nil
@@ -82,7 +81,7 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 
 type resolvedBaseRuntime struct {
 	Profile   workflow.RuntimeProfile
-	Execution spine.ExecutionService
+	Execution core.ExecutionService
 	Externals terminal.Externals
 	Sandbox   provider.Sandbox
 	Ownership func(context.Context, string) (provider.Ownership, error)
@@ -94,7 +93,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		return resolvedBaseRuntime{}, err
 	}
 	if !profile.BaseVerified() {
-		return resolvedBaseRuntime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, spine.BaseProfileContract)
+		return resolvedBaseRuntime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, core.BaseProfileContract)
 	}
 	sandbox, err := sandboxForProfile(r.cfg, profile)
 	if err != nil {
@@ -120,7 +119,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	return resolvedBaseRuntime{
 		Profile:   workflow.RuntimeProfile{SandboxProfile: profile.Name},
 		Execution: execution,
@@ -128,14 +127,14 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}, nil
 }
 
-func sandboxForProfile(cfg config.Config, profile spine.SandboxProfile) (provider.Sandbox, error) {
+func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {
 	switch profile.Provider {
-	case spine.SandboxProviderIncus:
+	case core.SandboxProviderIncus:
 		return incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{
 			Image: profile.Artifact, Network: profile.IncusNetwork, DiskSize: profile.IncusDiskSize,
 			Workspace: cfg.Workspace,
 		}}}, nil
-	case spine.SandboxProviderE2B:
+	case core.SandboxProviderE2B:
 		if strings.TrimSpace(cfg.E2BAPIKey) == "" {
 			return nil, fmt.Errorf("invalid E2B Sandbox profile %q: E2B_API_KEY is empty", profile.Name)
 		}

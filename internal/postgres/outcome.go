@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func (s Store) Outcome(ctx context.Context, jobID string) (*coding.Outcome, error) {
@@ -53,7 +53,7 @@ func (s Store) RecordOutcome(ctx context.Context, receipt coding.Outcome) (codin
 		}
 		return existing, false, nil
 	}
-	if !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
+	if !locked.AdmissionOpen || locked.CleanupState != core.CleanupPending {
 		return coding.Outcome{}, false, fmt.Errorf("Job outcome cannot be recorded after admission closes or cleanup begins")
 	}
 	proposalRow, proposalErr := queries.GetProposal(ctx, receipt.JobID)

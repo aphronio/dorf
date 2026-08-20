@@ -6,24 +6,24 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
-const ActionRepositoryRestore spine.ActionKind = "repository-restore"
+const ActionRepositoryRestore core.ActionKind = "repository-restore"
 
 type Store interface {
 	RecordSandboxActionSuccess(context.Context, string) error
 }
 
 type Externals interface {
-	RepositoryRestore(context.Context, spine.Job, spine.Sandbox, Source, []byte) error
-	RepositoryRevision(context.Context, spine.Job, string, string) (gitworkspace.Observation, error)
+	RepositoryRestore(context.Context, core.Job, core.Sandbox, Source, []byte) error
+	RepositoryRevision(context.Context, core.Job, string, string) (gitworkspace.Observation, error)
 }
 
 // VerifyRepositoryUnchanged proves the investigation left the admitted exact
 // detached checkout clean before its report becomes a workflow fact.
-func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job spine.Job, revision string) error {
+func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job core.Job, revision string) error {
 	observation, err := s.externals.RepositoryRevision(ctx, job, "", revision)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func (s Service) BlobStore() blob.Store { return s.blobs }
 
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.
-func (s Service) ExecuteRepositoryRestore(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, source Source) error {
+func (s Service) ExecuteRepositoryRestore(ctx context.Context, job core.Job, sandbox core.Sandbox, action core.Action, source Source) error {
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
 		source.JobID != job.ID || source.Kind != SourceGitBundle {
 		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")

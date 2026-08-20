@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 const reviewEvidenceProducer = "dorf-agent-review"
@@ -47,7 +47,7 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 	if run.JobID != job.ID || run.InputRevision != job.Revision {
 		return fmt.Errorf("review AgentRun %s does not belong to the current Revision", runID)
 	}
-	if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted {
+	if run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted {
 		return s.setWorkflowAttention(ctx, job.ID, run.ID, fmt.Errorf("selected review Role %s is %s: %s", run.Role, run.State, run.Attention))
 	}
 	err = s.executeAndRecordReview(ctx, job, run)
@@ -57,16 +57,16 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 	return err
 }
 
-func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action spine.Action) error {
+func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action core.Action) error {
 	run, err := s.store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
 	}
 	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID ||
-		action.ID != spine.ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
+		action.ID != core.ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
 		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
 	}
-	if action.State == spine.ActionSucceeded {
+	if action.State == core.ActionSucceeded {
 		return nil
 	}
 	if err := s.externals.PrepareReviewCheckout(ctx, job, run); err != nil {
@@ -105,9 +105,9 @@ func (s Service) executeAndRecordReview(ctx context.Context, job Job, run Review
 	return err
 }
 
-func (s Service) recordReviewFeedback(ctx context.Context, runID string, outcome spine.HarnessTurn, observed spine.Evidence) (spine.Message, bool, error) {
+func (s Service) recordReviewFeedback(ctx context.Context, runID string, outcome core.HarnessTurn, observed core.Evidence) (core.Message, bool, error) {
 	if err := s.requireClaim(ctx); err != nil {
-		return spine.Message{}, false, err
+		return core.Message{}, false, err
 	}
 	return s.store.RecordReviewFeedback(ctx, runID, outcome, observed)
 }
@@ -135,48 +135,48 @@ func fullGitObjectID(value string) bool {
 	return err == nil
 }
 
-func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView) (spine.HarnessTurn, error) {
+func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView) (core.HarnessTurn, error) {
 	expectedFromID := ReviewRequestFromID(original.InputRevision, original.Role)
 	expectedMessageID := ReviewRequestMessageID(job.ID, original.InputRevision, original.Role)
-	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != spine.MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != spine.MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
+	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != core.MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != core.MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
 		reason := "review AgentRun request Message, Sandbox ownership, or exact submission contract is invalid"
 		_ = s.uncertainAgentRun(ctx, original.ID, reason)
-		return spine.HarnessTurn{}, reviewBoundaryError(reason)
+		return core.HarnessTurn{}, reviewBoundaryError(reason)
 	}
 	if err := s.requireReviewActions(ctx, job, original); err != nil {
-		return spine.HarnessTurn{}, err
+		return core.HarnessTurn{}, err
 	}
 	run, err := s.store.ReviewRun(ctx, original.ID)
 	if err != nil {
-		return spine.HarnessTurn{}, err
+		return core.HarnessTurn{}, err
 	}
-	if run.State == spine.AgentRunUncertain && (run.ThreadID == "") != (run.TurnID == "") {
+	if run.State == core.AgentRunUncertain && (run.ThreadID == "") != (run.TurnID == "") {
 		reason := "uncertain review AgentRun has a partial harness thread/turn binding"
 		_ = s.uncertainAgentRun(ctx, run.ID, reason)
-		return spine.HarnessTurn{}, reviewBoundaryError(reason)
+		return core.HarnessTurn{}, reviewBoundaryError(reason)
 	}
 	expectedController := ReviewControllerID(run.ID, run.Sandbox.ID, run.Sandbox.OwnershipNonce)
 	request, sandbox := run.Request, run.Sandbox
-	return spine.ExecuteAgentRun(ctx, spine.AgentRunExecution{
+	return core.ExecuteAgentRun(ctx, core.AgentRunExecution{
 		Store: s.store, ReachBarrier: s.reach,
-		Delivery: spine.Delivery{AgentRun: run.AgentRun}, Run: run.AgentRun,
+		Delivery: core.Delivery{AgentRun: run.AgentRun}, Run: run.AgentRun,
 		Harness: s.externals.Harness(), Label: "review",
-		SubmitNew: func(ctx context.Context, agentRun spine.AgentRun) (spine.HarnessBinding, error) {
+		SubmitNew: func(ctx context.Context, agentRun core.AgentRun) (core.HarnessBinding, error) {
 			return s.externals.ReviewInitialTurn(ctx, job, reviewRunAttempt(agentRun, request, sandbox))
 		},
-		Recover: func(ctx context.Context, agentRun spine.AgentRun) (spine.HarnessBinding, error) {
+		Recover: func(ctx context.Context, agentRun core.AgentRun) (core.HarnessBinding, error) {
 			return s.externals.ReviewRecover(ctx, job, reviewRunAttempt(agentRun, request, sandbox))
 		},
-		History: func(ctx context.Context, agentRun spine.AgentRun) (spine.HarnessHistory, error) {
+		History: func(ctx context.Context, agentRun core.AgentRun) (core.HarnessHistory, error) {
 			return s.externals.ReviewTurns(ctx, job, reviewRunAttempt(agentRun, request, sandbox))
 		},
-		Wait: func(ctx context.Context, agentRun spine.AgentRun, turnID string) (spine.HarnessBinding, error) {
+		Wait: func(ctx context.Context, agentRun core.AgentRun, turnID string) (core.HarnessBinding, error) {
 			return s.externals.ReviewWait(ctx, job, reviewRunAttempt(agentRun, request, sandbox), turnID)
 		},
-		ValidateOwner: func(binding spine.HarnessBinding) error { return validateReviewController(expectedController, binding) },
+		ValidateOwner: func(binding core.HarnessBinding) error { return validateReviewController(expectedController, binding) },
 		BeforeRecord:  s.requireClaim,
 		OnReadError:   s.recordReviewReadError,
-		OnRecoverError: func(ctx context.Context, agentRun spine.AgentRun, err error) error {
+		OnRecoverError: func(ctx context.Context, agentRun core.AgentRun, err error) error {
 			var missing interface{ RetryableReviewVisibility() bool }
 			if errors.As(err, &missing) && missing.RetryableReviewVisibility() {
 				_ = s.agentRunAttention(ctx, agentRun.ID, err.Error())
@@ -187,18 +187,18 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 			}
 			return err
 		},
-		OnSubmitError: func(ctx context.Context, agentRun spine.AgentRun, _ spine.HarnessBinding, err error) (spine.HarnessTurn, error) {
+		OnSubmitError: func(ctx context.Context, agentRun core.AgentRun, _ core.HarnessBinding, err error) (core.HarnessTurn, error) {
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
 				if failErr := s.failAgentRun(ctx, agentRun.ID, err.Error()); failErr != nil {
-					return spine.HarnessTurn{}, failErr
+					return core.HarnessTurn{}, failErr
 				}
-				return spine.HarnessTurn{Status: "failed"}, nil
+				return core.HarnessTurn{Status: "failed"}, nil
 			}
 			if uncertainErr := s.uncertainAgentRun(ctx, agentRun.ID, err.Error()); uncertainErr != nil {
-				return spine.HarnessTurn{}, uncertainErr
+				return core.HarnessTurn{}, uncertainErr
 			}
-			return spine.HarnessTurn{}, err
+			return core.HarnessTurn{}, err
 		},
 	})
 }
@@ -211,11 +211,11 @@ func (s Service) requireReviewActions(ctx context.Context, job Job, run ReviewRu
 	if err != nil {
 		return err
 	}
-	for _, kind := range []spine.ActionKind{spine.ActionSandboxCreate, ActionReviewCheckout, spine.ActionRouteCreate} {
-		expectedID := spine.ScopedActionID(job.ID, kind, run.Sandbox.ID)
+	for _, kind := range []core.ActionKind{core.ActionSandboxCreate, ActionReviewCheckout, core.ActionRouteCreate} {
+		expectedID := core.ScopedActionID(job.ID, kind, run.Sandbox.ID)
 		ready := false
 		for _, action := range actions {
-			if action.ID == expectedID && action.JobID == job.ID && action.Kind == kind && action.Scope == run.Sandbox.ID && action.State == spine.ActionSucceeded {
+			if action.ID == expectedID && action.JobID == job.ID && action.Kind == kind && action.Scope == run.Sandbox.ID && action.State == core.ActionSucceeded {
 				ready = true
 				break
 			}
@@ -227,11 +227,11 @@ func (s Service) requireReviewActions(ctx context.Context, job Job, run ReviewRu
 	return nil
 }
 
-func reviewRunAttempt(run spine.AgentRun, request spine.Message, sandbox spine.Sandbox) ReviewRunView {
+func reviewRunAttempt(run core.AgentRun, request core.Message, sandbox core.Sandbox) ReviewRunView {
 	return ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox}
 }
 
-func validateReviewController(expected string, binding spine.HarnessBinding) error {
+func validateReviewController(expected string, binding core.HarnessBinding) error {
 	if expected == "" || binding.ControllerID != expected {
 		return reviewBoundaryError("review harness recovery returned a foreign controller")
 	}
@@ -247,22 +247,22 @@ func (s Service) recordReviewReadError(ctx context.Context, runID string, err er
 	}
 }
 
-func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObservation) (spine.Evidence, error) {
+func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObservation) (core.Evidence, error) {
 	finished := run.FinishedAt.UTC().Truncate(time.Microsecond)
 	started := run.StartedAt.UTC().Truncate(time.Microsecond)
 	if started.IsZero() || finished.IsZero() || started.After(finished) {
-		return spine.Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
+		return core.Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
 	}
 	artifact, err := json.Marshal(reviewObservationArtifact{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: checkout,
 	})
 	if err != nil {
-		return spine.Evidence{}, err
+		return core.Evidence{}, err
 	}
 	stored, err := s.blobs.Put(artifact)
 	if err != nil {
-		return spine.Evidence{}, err
+		return core.Evidence{}, err
 	}
-	return spine.Evidence{ID: spine.EvidenceID(run.ID, "review-observation"), Digest: stored.Digest, ByteSize: stored.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation", AgentRunID: run.ID, Revision: run.InputRevision, StartedAt: started, FinishedAt: finished}, nil
+	return core.Evidence{ID: core.EvidenceID(run.ID, "review-observation"), Digest: stored.Digest, ByteSize: stored.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation", AgentRunID: run.ID, Revision: run.InputRevision, StartedAt: started, FinishedAt: finished}, nil
 }

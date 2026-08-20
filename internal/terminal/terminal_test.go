@@ -13,11 +13,11 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type localRestoreSandbox struct {
@@ -93,8 +93,8 @@ func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *
 		t.Fatal(err)
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(bundle.Contents))
-	job := spine.Job{ID: "job-local-source"}
-	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
+	job := core.Job{ID: "job-local-source"}
+	owned := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	source := investigation.Source{
 		JobID: job.ID, Kind: investigation.SourceGitBundle, Revision: bundle.Revision,
 		BundleDigest: digest, BundleByteSize: int64(len(bundle.Contents)),
@@ -129,8 +129,8 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	revision := strings.Repeat("a", 40)
-	job := spine.Job{ID: "job-foreign"}
-	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("b", 64)}
+	job := core.Job{ID: "job-foreign"}
+	owned := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("b", 64)}
 	source := investigation.Source{
 		JobID: job.ID, Kind: investigation.SourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("c", 64), BundleByteSize: 1,
@@ -147,8 +147,8 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 
 func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 	run := coding.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
-		Request:  spine.Message{ID: "message-review", JobID: "job-review", FromKind: spine.MessageFromWorkflow, Input: "review this exact Revision"},
+		AgentRun: core.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
+		Request:  core.Message{ID: "message-review", JobID: "job-review", FromKind: core.MessageFromWorkflow, Input: "review this exact Revision"},
 	}
 	input, err := reviewInput(run)
 	if err != nil || input != run.Request.Input {
@@ -262,10 +262,10 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		t.Fatal(err)
 	}
 
-	job := coding.Job{Job: spine.Job{ID: "job-real-boundary"}, Revision: revision}
+	job := coding.Job{Job: core.Job{ID: "job-real-boundary"}, Revision: revision}
 	run := coding.ReviewRunView{
-		AgentRun: spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
-		Sandbox:  spine.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
+		AgentRun: core.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
+		Sandbox:  core.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
 	}
 	metadata := map[string]string{
 		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": run.Sandbox.ID, "user.dorf.agent_run": run.ID,
@@ -303,7 +303,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 	if _, err := os.Stat(filepath.Join(reviewerPath, "forged.txt")); !os.IsNotExist(err) {
 		t.Fatalf("implementation forged worktree crossed reviewer boundary: %v", err)
 	}
-	implementationSandbox := spine.MainSandboxName(job.ID)
+	implementationSandbox := core.MainSandboxName(job.ID)
 	var sourceImplementation, targetReviewer, verifyReviewer bool
 	for _, call := range runner.calls {
 		joined := strings.Join(call, " ")

@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const getReviewFeedbackRunForUpdate = `-- name: GetReviewFeedbackRunForUpdate :one
@@ -35,7 +35,7 @@ type GetReviewFeedbackRunForUpdateRow struct {
 	JobID           string
 	InputRevision   string
 	Role            string
-	State           spine.AgentRunState
+	State           core.AgentRunState
 	TurnID          string
 	Capability      string
 	CurrentRevision string

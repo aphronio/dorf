@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const bindAgentRunIdentity = `-- name: BindAgentRunIdentity :execrows
@@ -48,7 +48,7 @@ where id=$5 and harness=$6 and thread_id=$7
 
 type BindHarnessTurnParams struct {
 	TurnID      sql.NullString
-	State       spine.AgentRunState
+	State       core.AgentRunState
 	TurnOutcome string
 	Attention   string
 	RunID       string
@@ -154,7 +154,7 @@ type GetAgentRunByMessageRow struct {
 	ID               string
 	JobID            string
 	MessageID        string
-	State            spine.AgentRunState
+	State            core.AgentRunState
 	Harness          string
 	ThreadID         string
 	BaselineRecorded bool
@@ -201,7 +201,7 @@ for update
 type GetAgentRunForBindingRow struct {
 	JobID       string
 	Role        string
-	State       spine.AgentRunState
+	State       core.AgentRunState
 	Harness     string
 	ThreadID    string
 	TurnID      string
@@ -265,17 +265,17 @@ limit 1
 type GetHarnessMutationDeliveryRow struct {
 	MessageID         string
 	JobID             string
-	FromKind          spine.MessageFromKind
+	FromKind          core.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
 	AdmittedAt        time.Time
-	DeliveryIntent    spine.MessageDeliveryIntent
+	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AgentRunID        string
 	AgentRunJobID     string
 	AgentRunMessageID string
-	State             spine.AgentRunState
+	State             core.AgentRunState
 	Harness           string
 	ThreadID          string
 	BaselineRecorded  bool

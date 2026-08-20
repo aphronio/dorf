@@ -7,14 +7,14 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testing.T) {
 	store, jobID, revision := readinessFixture(t)
-	job := Job{Job: spine.Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
+	job := Job{Job: core.Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
 	withoutPlan := AssessReviewReadiness(job, nil, store, nil, nil, nil)
 	if withoutPlan.Ready || !strings.Contains(withoutPlan.Reason, "no explicit persisted") {
 		t.Fatalf("missing plan readiness=%#v", withoutPlan)
@@ -24,17 +24,17 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	if !explicit.Ready || !strings.Contains(explicit.Reason, "explicitly selected no agent review") {
 		t.Fatalf("explicit no-review readiness=%#v", explicit)
 	}
-	pending := spine.AgentRun{ID: "agent-run-pending", JobID: jobID, MessageID: "message-pending", Role: "implement", State: spine.AgentRunPending}
-	lateInput := AssessReviewReadiness(job, nil, store, &noReview, nil, []spine.Delivery{{Message: spine.Message{ID: pending.MessageID}, AgentRun: pending}})
+	pending := core.AgentRun{ID: "agent-run-pending", JobID: jobID, MessageID: "message-pending", Role: "implement", State: core.AgentRunPending}
+	lateInput := AssessReviewReadiness(job, nil, store, &noReview, nil, []core.Delivery{{Message: core.Message{ID: pending.MessageID}, AgentRun: pending}})
 	if lateInput.Ready || !strings.Contains(lateInput.Reason, "not terminal") {
 		t.Fatalf("late input satisfied readiness: %#v", lateInput)
 	}
-	failedMessage := spine.Message{ID: "message-failed", JobID: jobID, Sequence: 2, Intent: spine.MessageFollow}
-	recoveryMessage := spine.Message{ID: "message-recovery", JobID: jobID, Sequence: 3, Intent: spine.MessageFollow}
-	failedRun := spine.AgentRun{ID: "agent-run-failed", JobID: jobID, MessageID: failedMessage.ID, Role: "implement", InputRevision: revision, State: spine.AgentRunFailed, TurnOutcome: "failed"}
-	recoveryRun := spine.AgentRun{ID: "agent-run-recovery", JobID: jobID, MessageID: recoveryMessage.ID, Role: "implement", InputRevision: revision, State: spine.AgentRunCompleted, TurnOutcome: "completed"}
+	failedMessage := core.Message{ID: "message-failed", JobID: jobID, Sequence: 2, Intent: core.MessageFollow}
+	recoveryMessage := core.Message{ID: "message-recovery", JobID: jobID, Sequence: 3, Intent: core.MessageFollow}
+	failedRun := core.AgentRun{ID: "agent-run-failed", JobID: jobID, MessageID: failedMessage.ID, Role: "implement", InputRevision: revision, State: core.AgentRunFailed, TurnOutcome: "failed"}
+	recoveryRun := core.AgentRun{ID: "agent-run-recovery", JobID: jobID, MessageID: recoveryMessage.ID, Role: "implement", InputRevision: revision, State: core.AgentRunCompleted, TurnOutcome: "completed"}
 	recoveryEvidence := gitObservationEvidence(t, store, job, recoveryRun, time.Now().UTC().Truncate(time.Microsecond))
-	recovered := AssessReviewReadiness(job, []spine.Evidence{recoveryEvidence}, store, &noReview, nil, []spine.Delivery{{Message: failedMessage, AgentRun: failedRun}, {Message: recoveryMessage, AgentRun: recoveryRun}})
+	recovered := AssessReviewReadiness(job, []core.Evidence{recoveryEvidence}, store, &noReview, nil, []core.Delivery{{Message: failedMessage, AgentRun: failedRun}, {Message: recoveryMessage, AgentRun: recoveryRun}})
 	if !recovered.Ready {
 		t.Fatalf("later successful observed Follow did not recover old failure: %#v", recovered)
 	}
@@ -46,21 +46,21 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	requestFromID := ReviewRequestFromID(revision, string(policy.RoleCriticalBoundary))
 	requestID := ReviewRequestMessageID(jobID, revision, string(policy.RoleCriticalBoundary))
-	runID := spine.AgentRunID(requestID)
-	feedbackID := spine.MessageID(jobID, spine.MessageFromAgent, runID)
+	runID := core.AgentRunID(requestID)
+	feedbackID := core.MessageID(jobID, core.MessageFromAgent, runID)
 	run := ReviewRunView{
-		AgentRun: spine.AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: spine.AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
-		Request:  spine.Message{ID: requestID, JobID: jobID, FromKind: spine.MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: spine.MessageFollow},
+		AgentRun: core.AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: core.AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
+		Request:  core.Message{ID: requestID, JobID: jobID, FromKind: core.MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: core.MessageFollow},
 	}
 	observed := reviewObservationEvidence(t, store, run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
-	foreign := spine.Message{ID: feedbackID, JobID: jobID, FromKind: spine.MessageFromAgent, FromID: "agent-run-foreign", Sequence: 3, Input: "Foreign feedback.", Intent: spine.MessageFollow}
-	wrong := AssessReviewReadiness(job, []spine.Evidence{observed}, store, &selected, []ReviewRunView{run}, []spine.Delivery{{Message: foreign}})
+	foreign := core.Message{ID: feedbackID, JobID: jobID, FromKind: core.MessageFromAgent, FromID: "agent-run-foreign", Sequence: 3, Input: "Foreign feedback.", Intent: core.MessageFollow}
+	wrong := AssessReviewReadiness(job, []core.Evidence{observed}, store, &selected, []ReviewRunView{run}, []core.Delivery{{Message: foreign}})
 	if wrong.Ready || !strings.Contains(wrong.Reason, "has not returned a feedback Message") {
 		t.Fatalf("foreign feedback Message satisfied readiness: %#v", wrong)
 	}
-	feedback := spine.Message{ID: feedbackID, JobID: jobID, FromKind: spine.MessageFromAgent, FromID: runID, Sequence: 3, Input: "Consider simplifying the boundary.", Intent: spine.MessageFollow}
-	implementation := spine.AgentRun{ID: spine.AgentRunID(feedback.ID), JobID: jobID, MessageID: feedback.ID, Role: "implement", InputRevision: revision, State: spine.AgentRunCompleted, TurnOutcome: "completed"}
-	handled := AssessReviewReadiness(job, []spine.Evidence{observed}, store, &selected, []ReviewRunView{run}, []spine.Delivery{{Message: feedback, AgentRun: implementation}})
+	feedback := core.Message{ID: feedbackID, JobID: jobID, FromKind: core.MessageFromAgent, FromID: runID, Sequence: 3, Input: "Consider simplifying the boundary.", Intent: core.MessageFollow}
+	implementation := core.AgentRun{ID: core.AgentRunID(feedback.ID), JobID: jobID, MessageID: feedback.ID, Role: "implement", InputRevision: revision, State: core.AgentRunCompleted, TurnOutcome: "completed"}
+	handled := AssessReviewReadiness(job, []core.Evidence{observed}, store, &selected, []ReviewRunView{run}, []core.Delivery{{Message: feedback, AgentRun: implementation}})
 	if handled.Ready || !strings.Contains(handled.Reason, "no valid Git observation") {
 		t.Fatalf("feedback without Git observation satisfied readiness: %#v", handled)
 	}
@@ -68,8 +68,8 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	stale := run
 	stale.ID = "zz-stale-same-role-run"
 	stale.InputRevision = strings.Repeat("f", 40)
-	stale.State = spine.AgentRunFailed
-	settled := AssessReviewReadiness(job, []spine.Evidence{observed, gitEvidence}, store, &selected, []ReviewRunView{run, stale}, []spine.Delivery{{Message: feedback, AgentRun: implementation}})
+	stale.State = core.AgentRunFailed
+	settled := AssessReviewReadiness(job, []core.Evidence{observed, gitEvidence}, store, &selected, []ReviewRunView{run, stale}, []core.Delivery{{Message: feedback, AgentRun: implementation}})
 	if !settled.Ready || !strings.Contains(settled.Reason, "returned feedback") {
 		t.Fatalf("stale same-Role review blocked exact-Revision readiness=%#v", settled)
 	}
@@ -77,34 +77,34 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 
 func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *testing.T) {
 	store, jobID, revision := readinessFixture(t)
-	job := Job{Job: spine.Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
+	job := Job{Job: core.Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
 	plan := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
-	message := spine.Message{
+	message := core.Message{
 		ID: "message-fallback", JobID: jobID, Sequence: 2,
-		Intent: spine.MessageSteer, TargetTurnID: "turn-old",
+		Intent: core.MessageSteer, TargetTurnID: "turn-old",
 	}
-	run := spine.AgentRun{
+	run := core.AgentRun{
 		ID: "run-fallback", JobID: jobID, MessageID: message.ID, Role: "implement",
-		InputRevision: revision, State: spine.AgentRunCompleted, TurnID: "turn-new", TurnOutcome: "completed",
+		InputRevision: revision, State: core.AgentRunCompleted, TurnID: "turn-new", TurnOutcome: "completed",
 	}
 	observed := gitObservationEvidence(t, store, job, run, time.Now().UTC().Truncate(time.Microsecond))
-	ready := AssessReviewReadiness(job, []spine.Evidence{observed}, store, &plan, nil, []spine.Delivery{{Message: message, AgentRun: run}})
+	ready := AssessReviewReadiness(job, []core.Evidence{observed}, store, &plan, nil, []core.Delivery{{Message: message, AgentRun: run}})
 	if !ready.Ready {
 		t.Fatalf("observed terminal-target steer fallback was not ready: %#v", ready)
 	}
 
-	missing := AssessReviewReadiness(job, nil, store, &plan, nil, []spine.Delivery{{Message: message, AgentRun: run}})
+	missing := AssessReviewReadiness(job, nil, store, &plan, nil, []core.Delivery{{Message: message, AgentRun: run}})
 	if missing.Ready || !strings.Contains(missing.Reason, "no valid Git observation") {
 		t.Fatalf("unobserved terminal-target steer fallback satisfied readiness: %#v", missing)
 	}
-	run.State, run.TurnID, run.TurnOutcome = spine.AgentRunFailed, "", "failed"
-	failed := AssessReviewReadiness(job, nil, store, &plan, nil, []spine.Delivery{{Message: message, AgentRun: run}})
+	run.State, run.TurnID, run.TurnOutcome = core.AgentRunFailed, "", "failed"
+	failed := AssessReviewReadiness(job, nil, store, &plan, nil, []core.Delivery{{Message: message, AgentRun: run}})
 	if failed.Ready || !strings.Contains(failed.Reason, "has not completed successfully") {
 		t.Fatalf("failed terminal-target steer fallback satisfied readiness: %#v", failed)
 	}
 }
 
-func gitObservationEvidence(t *testing.T, store blob.Store, job Job, run spine.AgentRun, started time.Time) spine.Evidence {
+func gitObservationEvidence(t *testing.T, store blob.Store, job Job, run core.AgentRun, started time.Time) core.Evidence {
 	t.Helper()
 	observation := gitworkspace.Observation{
 		ComparisonBase: run.InputRevision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch,
@@ -118,14 +118,14 @@ func gitObservationEvidence(t *testing.T, store blob.Store, job Job, run spine.A
 	if err != nil {
 		t.Fatal(err)
 	}
-	return spine.Evidence{
-		ID: spine.EvidenceID(run.ID, "git-revision"), Digest: blob.Digest, ByteSize: blob.ByteSize,
+	return core.Evidence{
+		ID: core.EvidenceID(run.ID, "git-revision"), Digest: blob.Digest, ByteSize: blob.ByteSize,
 		MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: "git-revision",
 		AgentRunID: run.ID, Revision: job.Revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt,
 	}
 }
 
-func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView, checkout ReviewCheckoutObservation) spine.Evidence {
+func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView, checkout ReviewCheckoutObservation) core.Evidence {
 	t.Helper()
 	contents, err := json.Marshal(reviewObservationArtifact{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
@@ -138,8 +138,8 @@ func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView
 	if err != nil {
 		t.Fatal(err)
 	}
-	return spine.Evidence{
-		ID: spine.EvidenceID(run.ID, "review-observation"), Digest: stored.Digest, ByteSize: stored.ByteSize,
+	return core.Evidence{
+		ID: core.EvidenceID(run.ID, "review-observation"), Digest: stored.Digest, ByteSize: stored.ByteSize,
 		MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation",
 		AgentRunID: run.ID, Revision: run.InputRevision, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
 	}

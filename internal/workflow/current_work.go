@@ -8,9 +8,9 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 // WorkKind is the next concrete operation in Dorf's coding workflow. It is a
@@ -36,12 +36,12 @@ const (
 // one. Work is useful for explanation and exact execution, but deliberately
 // not durable.
 type Work struct {
-	Kind       WorkKind         `json:"kind"`
-	Revision   string           `json:"revision,omitempty"`
-	FactID     string           `json:"fact_id,omitempty"`
-	ActionKind spine.ActionKind `json:"action,omitempty"`
-	Scope      string           `json:"scope,omitempty"`
-	Detail     string           `json:"detail,omitempty"`
+	Kind       WorkKind        `json:"kind"`
+	Revision   string          `json:"revision,omitempty"`
+	FactID     string          `json:"fact_id,omitempty"`
+	ActionKind core.ActionKind `json:"action,omitempty"`
+	Scope      string          `json:"scope,omitempty"`
+	Detail     string          `json:"detail,omitempty"`
 }
 
 func (w Work) Description() string {
@@ -67,13 +67,13 @@ func (w Work) Description() string {
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
 	Job         coding.Job
-	Sandboxes   []spine.Sandbox
-	MainSandbox spine.Sandbox
-	Actions     []spine.Action
-	Delivery    *spine.Delivery
-	Deliveries  []spine.Delivery
+	Sandboxes   []core.Sandbox
+	MainSandbox core.Sandbox
+	Actions     []core.Action
+	Delivery    *core.Delivery
+	Deliveries  []core.Delivery
 	Revisions   []coding.Revision
-	Evidence    []spine.Evidence
+	Evidence    []core.Evidence
 	ReviewPlans []coding.ReviewPlanRecord
 	Proposal    *coding.Proposal
 	Outcome     *coding.Outcome
@@ -104,7 +104,7 @@ func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
 	return Projection{CurrentWork: work, Readiness: readiness}, nil
 }
 
-func publicationIntentAt(actions []spine.Action, revision string) time.Time {
+func publicationIntentAt(actions []core.Action, revision string) time.Time {
 	for _, action := range actions {
 		if action.Kind == coding.ActionGitHubPullRequest && action.Scope == revision {
 			return action.CreatedAt
@@ -126,13 +126,13 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 		return snapshot, err
 	}
 	for _, sandbox := range snapshot.Sandboxes {
-		if sandbox.ID == spine.MainSandboxName(jobID) {
+		if sandbox.ID == core.MainSandboxName(jobID) {
 			snapshot.MainSandbox = sandbox
 			break
 		}
 	}
 	if snapshot.MainSandbox.ID == "" {
-		return snapshot, fmt.Errorf("main Sandbox %s: %w", spine.MainSandboxName(jobID), postgres.ErrNotFound)
+		return snapshot, fmt.Errorf("main Sandbox %s: %w", core.MainSandboxName(jobID), postgres.ErrNotFound)
 	}
 	snapshot.Actions, err = store.Actions(ctx, jobID)
 	if err != nil {
@@ -195,9 +195,9 @@ func (s Snapshot) currentReviewRuns() ([]coding.ReviewRunView, error) {
 }
 
 func codingPrerequisitesComplete(f Snapshot) bool {
-	return actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) &&
+	return actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) &&
 		actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) &&
-		actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID)
+		actionSucceeded(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID)
 }
 
 // decideCurrentWork is intentionally an ordinary, coding-specific decision.
@@ -215,10 +215,10 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 	work := func(kind WorkKind, factID, detail string) Work {
 		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
 	}
-	actionWork := func(kind spine.ActionKind, scope, detail string) Work {
+	actionWork := func(kind core.ActionKind, scope, detail string) Work {
 		return Work{
 			Kind: WorkAction, Revision: f.Job.Revision,
-			FactID:     spine.ScopedActionID(f.Job.ID, kind, scope),
+			FactID:     core.ScopedActionID(f.Job.ID, kind, scope),
 			ActionKind: kind, Scope: scope, Detail: detail,
 		}
 	}
@@ -231,14 +231,14 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 
 	// Infrastructure is a fixed prerequisite chain owned by the Job's main
 	// Sandbox. Missing Actions are created only when RunJob executes this work.
-	if !actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) {
-		return actionWork(spine.ActionSandboxCreate, f.MainSandbox.ID, "")
+	if !actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
+		return actionWork(core.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}
 	if !actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) {
 		return actionWork(gitworkspace.ActionRepositoryClone, f.MainSandbox.ID, "")
 	}
-	if !actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID) {
-		return actionWork(spine.ActionRouteCreate, f.MainSandbox.ID, "")
+	if !actionSucceeded(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID) {
+		return actionWork(core.ActionRouteCreate, f.MainSandbox.ID, "")
 	}
 	// Once exact-Revision publication Actions exist, reconcile them before a
 	// later accepted Message can advance the Revision. The Proposal then makes
@@ -263,20 +263,20 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 			if reviewFeedbackReturned(f.Deliveries, f.Job.ID, run.ID) {
 				continue
 			}
-			if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted || run.State == spine.AgentRunUncertain {
+			if run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted || run.State == core.AgentRunUncertain {
 				return work(WorkAttention, run.ID, attentionDetail(f.Job, run.ID, agentRunAttention(run.AgentRun)))
 			}
 			if run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID {
 				return work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role))
 			}
-			if !actionSucceeded(f.Actions, spine.ActionSandboxCreate, run.Sandbox.ID) {
-				return actionWork(spine.ActionSandboxCreate, run.Sandbox.ID, string(role))
+			if !actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) {
+				return actionWork(core.ActionSandboxCreate, run.Sandbox.ID, string(role))
 			}
 			if !actionSucceeded(f.Actions, coding.ActionReviewCheckout, run.Sandbox.ID) {
 				return actionWork(coding.ActionReviewCheckout, run.Sandbox.ID, string(role))
 			}
-			if !actionSucceeded(f.Actions, spine.ActionRouteCreate, run.Sandbox.ID) {
-				return actionWork(spine.ActionRouteCreate, run.Sandbox.ID, string(role))
+			if !actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
+				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
 			}
 			return work(WorkRunReviewer, run.ID, string(role))
 		}
@@ -286,14 +286,14 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 	// Turn; turn-starting follows remain FIFO. DeliveryCandidate is read-only.
 	if f.Delivery != nil {
 		run := f.Delivery.AgentRun
-		if run.State == spine.AgentRunFailed || run.State == spine.AgentRunInterrupted || run.State == spine.AgentRunUncertain {
+		if run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted || run.State == core.AgentRunUncertain {
 			return work(WorkAttention, run.ID, attentionDetail(f.Job, run.ID, agentRunAttention(run)))
 		}
 		return work(WorkDeliverMessage, run.ID, fmt.Sprintf("Message %d", f.Delivery.Message.Sequence))
 	}
 	latestInput, latestTurnStart := latestImplementationRuns(f)
-	if latestInput != nil && latestInput.State != spine.AgentRunCompleted {
-		if latestTurnStart != nil && latestInput.ID == latestTurnStart.ID && latestInput.State == spine.AgentRunActive {
+	if latestInput != nil && latestInput.State != core.AgentRunCompleted {
+		if latestTurnStart != nil && latestInput.ID == latestTurnStart.ID && latestInput.State == core.AgentRunActive {
 			// The active turn-starting input is observed below. A later unsettled
 			// steer remains attention unless it is selected for delivery above.
 		} else {
@@ -303,8 +303,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 			return work(WorkAttention, latestInput.ID, attentionDetail(f.Job, latestInput.ID, agentRunAttention(*latestInput)))
 		}
 	}
-	if latestTurnStart != nil && latestTurnStart.State != spine.AgentRunCompleted {
-		if latestTurnStart.State == spine.AgentRunActive {
+	if latestTurnStart != nil && latestTurnStart.State != core.AgentRunCompleted {
+		if latestTurnStart.State == core.AgentRunActive {
 			return work(WorkObserveAgent, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, ""))
 		}
 		// A pending or submitting Run without a delivery candidate cannot be
@@ -337,29 +337,29 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 	return work(WorkPublishProposal, f.Job.Revision, "")
 }
 
-func reviewFeedbackReturned(deliveries []spine.Delivery, jobID, runID string) bool {
-	expectedID := spine.MessageID(jobID, spine.MessageFromAgent, runID)
+func reviewFeedbackReturned(deliveries []core.Delivery, jobID, runID string) bool {
+	expectedID := core.MessageID(jobID, core.MessageFromAgent, runID)
 	for _, delivery := range deliveries {
 		message := delivery.Message
-		if message.ID == expectedID && message.JobID == jobID && message.FromKind == spine.MessageFromAgent && message.FromID == runID && message.Intent == spine.MessageFollow {
+		if message.ID == expectedID && message.JobID == jobID && message.FromKind == core.MessageFromAgent && message.FromID == runID && message.Intent == core.MessageFollow {
 			return true
 		}
 	}
 	return false
 }
 
-func actionSucceeded(actions []spine.Action, kind spine.ActionKind, scope string) bool {
+func actionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {
 	for _, action := range actions {
 		if action.Kind == kind && action.Scope == scope {
-			return action.State == spine.ActionSucceeded
+			return action.State == core.ActionSucceeded
 		}
 	}
 	return false
 }
 
-func publicationPending(actions []spine.Action, revision string) bool {
+func publicationPending(actions []core.Action, revision string) bool {
 	for _, action := range actions {
-		if action.Scope == revision && action.State != spine.ActionSucceeded &&
+		if action.Scope == revision && action.State != core.ActionSucceeded &&
 			(action.Kind == coding.ActionRepositoryPush || action.Kind == coding.ActionGitHubPullRequest) {
 			return true
 		}
@@ -384,27 +384,27 @@ func attentionDetail(job coding.Job, source, fallback string) string {
 	return fallback
 }
 
-func agentRunAttention(run spine.AgentRun) string {
+func agentRunAttention(run core.AgentRun) string {
 	if run.Attention != "" {
 		return run.Attention
 	}
 	return fmt.Sprintf("AgentRun %s is %s", run.ID, run.State)
 }
 
-func revisionCandidate(f Snapshot, latestTurnStart *spine.AgentRun) *spine.AgentRun {
+func revisionCandidate(f Snapshot, latestTurnStart *core.AgentRun) *core.AgentRun {
 	observed := make(map[string]bool)
 	for _, record := range f.Evidence {
 		if record.Kind == "git-revision" {
 			observed[record.AgentRunID] = true
 		}
 	}
-	if latestTurnStart == nil || latestTurnStart.State != spine.AgentRunCompleted || observed[latestTurnStart.ID] {
+	if latestTurnStart == nil || latestTurnStart.State != core.AgentRunCompleted || observed[latestTurnStart.ID] {
 		return nil
 	}
 	return latestTurnStart
 }
 
-func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *spine.AgentRun) {
+func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *core.AgentRun) {
 	var latestInputSequence int64
 	var latestTurnStartSequence int64
 	for i := range f.Deliveries {
@@ -430,7 +430,7 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *spine.A
 // AgentRun input Revision and its git-revision Evidence.
 func unchangedAttention(f Snapshot) (string, string) {
 	sequences := make(map[string]int64, len(f.Deliveries))
-	runs := make(map[string]spine.AgentRun, len(f.Deliveries))
+	runs := make(map[string]core.AgentRun, len(f.Deliveries))
 	implementationMessages := make(map[string]bool)
 	for _, delivery := range f.Deliveries {
 		run := delivery.AgentRun
@@ -442,8 +442,8 @@ func unchangedAttention(f Snapshot) (string, string) {
 	}
 	type observation struct {
 		sequence int64
-		run      spine.AgentRun
-		evidence spine.Evidence
+		run      core.AgentRun
+		evidence core.Evidence
 	}
 	var observations []observation
 	for _, record := range f.Evidence {
@@ -471,7 +471,7 @@ func unchangedAttention(f Snapshot) (string, string) {
 		if message.Sequence <= previous || message.Sequence > last.sequence || !implementationMessages[message.ID] {
 			continue
 		}
-		if message.FromKind == spine.MessageFromAgent || message.FromKind == spine.MessageFromHuman && exactProposal {
+		if message.FromKind == core.MessageFromAgent || message.FromKind == core.MessageFromHuman && exactProposal {
 			continue
 		}
 		return last.run.ID, fmt.Sprintf("AgentRun %s handled Message %d without a new committed Revision", last.run.ID, message.Sequence)

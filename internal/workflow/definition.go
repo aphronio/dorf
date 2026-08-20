@@ -6,9 +6,9 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 // ProviderCapability names an optional provider primitive beyond Dorf's
@@ -25,7 +25,7 @@ type Presentation struct {
 }
 
 type Definition struct {
-	Name                         spine.WorkflowName   `json:"name"`
+	Name                         core.WorkflowName    `json:"name"`
 	Revision                     string               `json:"revision"`
 	RequiredProviderCapabilities []ProviderCapability `json:"required_provider_capabilities"`
 	Presentation                 Presentation         `json:"-"`
@@ -72,9 +72,9 @@ func (d Definition) OperationLabel(kind, fallback string) string {
 	return presentationLabel(d.Presentation.Operations, kind, fallback)
 }
 
-func (d Definition) ActionLabel(kind spine.ActionKind) string {
+func (d Definition) ActionLabel(kind core.ActionKind) string {
 	switch kind {
-	case spine.ActionSandboxCreate:
+	case core.ActionSandboxCreate:
 		return "Provisioning Sandbox"
 	case gitworkspace.ActionRepositoryClone:
 		return "Cloning repository"
@@ -86,11 +86,11 @@ func (d Definition) ActionLabel(kind spine.ActionKind) string {
 		return "Creating pull request"
 	case coding.ActionReviewCheckout:
 		return "Preparing reviewer checkout"
-	case spine.ActionRouteCreate:
+	case core.ActionRouteCreate:
 		return "Connecting model access"
-	case spine.ActionRouteRevoke:
+	case core.ActionRouteRevoke:
 		return "Revoking model access"
-	case spine.ActionSandboxDelete:
+	case core.ActionSandboxDelete:
 		return "Deleting Sandbox"
 	default:
 		return humanizeIdentifier(string(kind))

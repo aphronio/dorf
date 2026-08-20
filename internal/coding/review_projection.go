@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 const (
@@ -23,17 +23,17 @@ type ReviewPlanRecord struct {
 }
 
 type ReviewRunView struct {
-	spine.AgentRun
-	Request spine.Message `json:"request"`
-	Sandbox spine.Sandbox `json:"sandbox"`
+	core.AgentRun
+	Request core.Message `json:"request"`
+	Sandbox core.Sandbox `json:"sandbox"`
 }
 
 // ReviewRuns derives the concrete reviewer execution aggregates from the
 // Message + AgentRun relationship and Job-owned Sandboxes. The returned views
 // are disposable; each durable fact remains represented once in Delivery or
 // Sandbox.
-func ReviewRuns(deliveries []spine.Delivery, sandboxes []spine.Sandbox) ([]ReviewRunView, error) {
-	byID := make(map[string]spine.Sandbox, len(sandboxes))
+func ReviewRuns(deliveries []core.Delivery, sandboxes []core.Sandbox) ([]ReviewRunView, error) {
+	byID := make(map[string]core.Sandbox, len(sandboxes))
 	for _, sandbox := range sandboxes {
 		byID[sandbox.ID] = sandbox
 	}

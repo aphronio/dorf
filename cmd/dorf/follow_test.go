@@ -9,27 +9,27 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-123", AdmissionOpen: true}
+	job := core.Job{ID: "job-123", AdmissionOpen: true}
 	job.SandboxProfile = "e2b"
-	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
 		Job:        job,
 		Definition: workflow.CodingToProposalDefinition(),
 		History:    []historyEntry{{At: now.Add(-11 * time.Minute), Text: "Job admitted"}},
 		Operation:  "Implementation agent running",
-		AgentRuns:  []spine.AgentRun{{Role: "implement", State: spine.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
-		Sandboxes:  []spine.Sandbox{sandbox},
-		Actions: []spine.Action{{
-			Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-10 * time.Minute),
+		AgentRuns:  []core.AgentRun{{Role: "implement", State: core.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
+		Sandboxes:  []core.Sandbox{sandbox},
+		Actions: []core.Action{{
+			Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: now.Add(-10 * time.Minute),
 		}},
 	}
 	var output bytes.Buffer
@@ -54,7 +54,7 @@ func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
 
 	snapshot.History = append(snapshot.History, historyEntry{At: now.Add(time.Second), Text: "Implementation agent completed"})
 	snapshot.Operation = "Inspect implementation checkout"
-	snapshot.AgentRuns[0].State = spine.AgentRunCompleted
+	snapshot.AgentRuns[0].State = core.AgentRunCompleted
 	renderer.Render(now.Add(2*time.Second), snapshot, false)
 	if got := output.String(); !strings.Contains(got, "Implementation agent completed") || !strings.Contains(got, "Current      Inspect implementation checkout") || strings.Contains(got, "Pulse") {
 		t.Fatalf("changed follow output:\n%s", got)
@@ -72,7 +72,7 @@ func followHumanTimestamp(value time.Time) string {
 func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAttention(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
 	snapshot := followSnapshot{
-		Job:       spine.Job{ID: "job-123", AdmissionOpen: true},
+		Job:       core.Job{ID: "job-123", AdmissionOpen: true},
 		Operation: "Clone repository",
 		Execution: taskResultView{State: absurd.TaskFailed, LastError: "Could not resolve host: github.com"},
 	}
@@ -97,7 +97,7 @@ func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAtt
 
 	output.Reset()
 	snapshot.Job.AdmissionOpen = false
-	snapshot.Job.CleanupState = spine.CleanupComplete
+	snapshot.Job.CleanupState = core.CleanupComplete
 	newFollowRenderer(&output).Render(now, snapshot, false)
 	if strings.Contains(output.String(), "Attention") || strings.Contains(output.String(), "dorf retry") {
 		t.Fatalf("completed Job exposed historical execution as current attention:\n%s", output.String())
@@ -114,13 +114,13 @@ func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAtt
 
 func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 	now := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-cleanup", CleanupState: spine.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}
-	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	job := core.Job{ID: "job-cleanup", CleanupState: core.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}
+	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
 		Job: job, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Complete",
-		Sandboxes: []spine.Sandbox{sandbox},
-		Actions: []spine.Action{{
-			Kind: spine.ActionRouteRevoke, Scope: sandbox.ID, State: spine.ActionUnsettled,
+		Sandboxes: []core.Sandbox{sandbox},
+		Actions: []core.Action{{
+			Kind: core.ActionRouteRevoke, Scope: sandbox.ID, State: core.ActionUnsettled,
 		}},
 		Execution: taskResultView{State: absurd.TaskRunning},
 	}.withCleanupOperation()
@@ -134,12 +134,12 @@ func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 		t.Fatalf("active cleanup output:\n%s", got)
 	}
 
-	snapshot.Actions[0].State = spine.ActionSucceeded
+	snapshot.Actions[0].State = core.ActionSucceeded
 	snapshot = snapshot.withCleanupOperation()
 	if snapshot.Operation != "Deleting Sandbox" {
 		t.Fatalf("post-revoke cleanup operation=%q", snapshot.Operation)
 	}
-	snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: spine.ActionSandboxDelete, Scope: sandbox.ID, State: spine.ActionSucceeded})
+	snapshot.Actions = append(snapshot.Actions, core.Action{Kind: core.ActionSandboxDelete, Scope: sandbox.ID, State: core.ActionSucceeded})
 	snapshot = snapshot.withCleanupOperation()
 	if snapshot.Operation != "Finalizing cleanup" {
 		t.Fatalf("post-delete cleanup operation=%q", snapshot.Operation)
@@ -161,13 +161,13 @@ func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testing.T) {
 	base := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
 	snapshot := workflow.InvestigationSnapshot{
-		Job: spine.Job{AdmittedAt: base, CleanedAt: base.Add(10 * time.Minute)},
-		Actions: []spine.Action{{
-			Kind: spine.ActionSandboxCreate, State: spine.ActionSucceeded,
+		Job: core.Job{AdmittedAt: base, CleanedAt: base.Add(10 * time.Minute)},
+		Actions: []core.Action{{
+			Kind: core.ActionSandboxCreate, State: core.ActionSucceeded,
 			CreatedAt: base.Add(time.Minute), SettledAt: base.Add(2 * time.Minute),
 		}},
-		Deliveries: []spine.Delivery{{AgentRun: spine.AgentRun{
-			Role: "investigate", State: spine.AgentRunCompleted,
+		Deliveries: []core.Delivery{{AgentRun: core.AgentRun{
+			Role: "investigate", State: core.AgentRunCompleted,
 			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
 		}}},
 		Drafts: []investigation.Draft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
@@ -187,35 +187,35 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 }
 
 func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
-	job := spine.Job{ID: "job-123"}
-	main := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
-	reviewRun := spine.AgentRun{ID: "review-run"}
-	review := spine.Sandbox{ID: coding.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
+	job := core.Job{ID: "job-123"}
+	main := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
+	reviewRun := core.AgentRun{ID: "review-run"}
+	review := core.Sandbox{ID: coding.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
 	reviewRun.SandboxID = review.ID
 	now := time.Now()
-	actions := []spine.Action{
-		{Kind: spine.ActionSandboxCreate, Scope: main.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
-		{Kind: spine.ActionSandboxCreate, Scope: review.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
-		{Kind: spine.ActionSandboxDelete, Scope: review.ID, State: spine.ActionSucceeded, SettledAt: now},
+	actions := []core.Action{
+		{Kind: core.ActionSandboxCreate, Scope: main.ID, State: core.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
+		{Kind: core.ActionSandboxCreate, Scope: review.ID, State: core.ActionSucceeded, SettledAt: now.Add(-time.Minute)},
+		{Kind: core.ActionSandboxDelete, Scope: review.ID, State: core.ActionSucceeded, SettledAt: now},
 	}
-	active := provisionedSandboxes(job, []spine.AgentRun{reviewRun}, []spine.Sandbox{review, main}, actions)
+	active := provisionedSandboxes(job, []core.AgentRun{reviewRun}, []core.Sandbox{review, main}, actions)
 	if len(active) != 1 || active[0].Label != "primary" {
 		t.Fatalf("provisioned Sandboxes=%#v", active)
 	}
-	if got := actionSettledText(job, []spine.AgentRun{reviewRun}, actions[2], actions); got != "Reviewer Sandbox deleted · provisioned 1m0s" {
+	if got := actionSettledText(job, []core.AgentRun{reviewRun}, actions[2], actions); got != "Reviewer Sandbox deleted · provisioned 1m0s" {
 		t.Fatalf("Sandbox terminal duration=%q", got)
 	}
 }
 
 func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-123", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
-	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
+	job := core.Job{ID: "job-123", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
+	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Profile: spine.SandboxProfile{Name: "local-codex", Provider: spine.SandboxProviderIncus}, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
-		AgentRuns: []spine.AgentRun{{Role: "investigate", State: spine.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
-		Sandboxes: []spine.Sandbox{sandbox},
-		Actions:   []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},
+		Job: job, Profile: core.SandboxProfile{Name: "local-codex", Provider: core.SandboxProviderIncus}, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
+		AgentRuns: []core.AgentRun{{Role: "investigate", State: core.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
+		Sandboxes: []core.Sandbox{sandbox},
+		Actions:   []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},
 	}
 	var output bytes.Buffer
 	renderer := newFollowRenderer(&output)
@@ -240,10 +240,10 @@ func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.
 	}
 
 	output.Reset()
-	snapshot.Job.CleanupState = spine.CleanupComplete
+	snapshot.Job.CleanupState = core.CleanupComplete
 	snapshot.Job.CleanedAt = now.Add(5 * time.Second)
-	snapshot.AgentRuns[0].State = spine.AgentRunCompleted
-	snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: spine.ActionSandboxDelete, Scope: sandbox.ID, State: spine.ActionSucceeded, SettledAt: snapshot.Job.CleanedAt})
+	snapshot.AgentRuns[0].State = core.AgentRunCompleted
+	snapshot.Actions = append(snapshot.Actions, core.Action{Kind: core.ActionSandboxDelete, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: snapshot.Job.CleanedAt})
 	renderer.Render(snapshot.Job.CleanedAt, snapshot, true)
 	got = output.String()
 	for _, want := range []string{"Complete", "Job          total · 25s", "Cleanup      complete"} {

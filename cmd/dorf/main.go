@@ -19,7 +19,7 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
-	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -30,7 +30,6 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -141,8 +140,8 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	return client, nil
 }
 
-func coreApplication(store postgres.Store, client *absurd.Client) controlplane.Application {
-	return controlplane.Application{Store: store, Tasks: client}
+func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
+	return core.Application{Store: store, Tasks: client}
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -223,7 +222,7 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 		if err != nil {
 			return err
 		}
-		if profile.Provider == spine.SandboxProviderIncus {
+		if profile.Provider == core.SandboxProviderIncus {
 			privateBridge = profile.IncusNetwork
 		} else if strings.TrimSpace(*bind) == "" {
 			return fmt.Errorf("Sandbox profile %q uses %s; remote deployments require an explicit --bind address", profile.Name, profile.Provider)
@@ -254,7 +253,7 @@ type providerGatewayCheckView struct {
 
 type providerGatewayStatusView struct {
 	Profile           string                   `json:"profile"`
-	SandboxProvider   spine.SandboxProvider    `json:"sandbox_provider"`
+	SandboxProvider   core.SandboxProvider     `json:"sandbox_provider"`
 	ProfileVerified   bool                     `json:"profile_verified"`
 	ProfileVerifiedAt *time.Time               `json:"profile_verified_at,omitempty"`
 	Connection        string                   `json:"connection"`
@@ -285,7 +284,7 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
 	authorityErr := g.Check(ctx, *connection)
 	var sandboxPathErr error
-	if profile.Provider == spine.SandboxProviderE2B {
+	if profile.Provider == core.SandboxProviderE2B {
 		sandboxPathErr = g.CheckRemote(ctx, profile.E2BGatewayURL)
 	}
 	view := newProviderGatewayStatusView(profile, strings.TrimSpace(*connection), authorityErr, sandboxPathErr)
@@ -302,7 +301,7 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 	return nil
 }
 
-func newProviderGatewayStatusView(profile spine.SandboxProfile, connection string, authorityErr, sandboxPathErr error) providerGatewayStatusView {
+func newProviderGatewayStatusView(profile core.SandboxProfile, connection string, authorityErr, sandboxPathErr error) providerGatewayStatusView {
 	check := func(target string, err error) providerGatewayCheckView {
 		if err != nil {
 			return providerGatewayCheckView{Status: "failed", Target: target, Detail: err.Error()}
@@ -318,7 +317,7 @@ func newProviderGatewayStatusView(profile spine.SandboxProfile, connection strin
 		verifiedAt := profile.Verification.ProbeCompletedAt
 		view.ProfileVerifiedAt = &verifiedAt
 	}
-	if profile.Provider == spine.SandboxProviderE2B {
+	if profile.Provider == core.SandboxProviderE2B {
 		view.SandboxPath = check(profile.E2BGatewayURL, sandboxPathErr)
 		if sandboxPathErr == nil {
 			view.SandboxPath.Detail = "reachable; anonymous access rejected"
@@ -330,7 +329,7 @@ func newProviderGatewayStatusView(profile spine.SandboxProfile, connection strin
 		}
 	}
 	view.Ready = view.ProfileVerified && view.Authority.Status == "ready" &&
-		(profile.Provider != spine.SandboxProviderE2B || view.SandboxPath.Status == "ready")
+		(profile.Provider != core.SandboxProviderE2B || view.SandboxPath.Status == "ready")
 	switch {
 	case !view.ProfileVerified:
 		view.Impact = "new Jobs cannot use this Sandbox profile"
@@ -338,7 +337,7 @@ func newProviderGatewayStatusView(profile spine.SandboxProfile, connection strin
 	case view.Authority.Status != "ready":
 		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
 		view.Next = "restore the named Provider Connection and private broker, then rerun provider status"
-	case profile.Provider == spine.SandboxProviderE2B && view.SandboxPath.Status != "ready":
+	case profile.Provider == core.SandboxProviderE2B && view.SandboxPath.Status != "ready":
 		view.Impact = "remote Sandboxes using this profile cannot reach inference"
 		view.Next = "restore the configured HTTPS route, or update and reverify the profile"
 	default:
@@ -591,7 +590,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 		return err
 	}
 	if strings.TrimSpace(*branch) == "" && strings.TrimSpace(*key) != "" {
-		*branch = "dorf/" + spine.JobID(strings.TrimSpace(*key))
+		*branch = "dorf/" + core.JobID(strings.TrimSpace(*key))
 	}
 	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
 	profile, err := selectedSandboxProfile(ctx, store, *profileName)
@@ -666,7 +665,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	jobID := set.String("job", "", "existing Job ID")
 	requestID := set.String("id", "", "stable human request identity")
 	inputFile := set.String("input-file", "", "path containing the complete message input")
-	intent := set.String("intent", string(spine.MessageFollow), "harness delivery intent: follow or steer")
+	intent := set.String("intent", string(core.MessageFollow), "harness delivery intent: follow or steer")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -674,7 +673,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, FromKind: spine.MessageFromHuman, FromID: *requestID, Input: input, Intent: spine.MessageDeliveryIntent(*intent)})
+	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, FromKind: core.MessageFromHuman, FromID: *requestID, Input: input, Intent: core.MessageDeliveryIntent(*intent)})
 	if err != nil {
 		return err
 	}
@@ -767,8 +766,8 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		executionOperation = operation
 	}
 	if *jsonOutput {
-		messages := make([]spine.Message, 0, len(snapshot.Deliveries))
-		agentRuns := make([]spine.AgentRun, 0, len(snapshot.Deliveries))
+		messages := make([]core.Message, 0, len(snapshot.Deliveries))
+		agentRuns := make([]core.AgentRun, 0, len(snapshot.Deliveries))
 		for _, delivery := range snapshot.Deliveries {
 			messages = append(messages, delivery.Message)
 			agentRuns = append(agentRuns, delivery.AgentRun)
@@ -829,7 +828,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	return nil
 }
 
-func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, job spine.Job, profile spine.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
+func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, job core.Job, profile core.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
 	snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, job.ID)
 	if err != nil {
 		return err
@@ -840,7 +839,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return err
 	}
 	if artifacts == nil {
-		artifacts = []spine.Artifact{}
+		artifacts = []core.Artifact{}
 	}
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
@@ -849,7 +848,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	currentExecution := currentTaskExecution(executions)
 	definition := workflow.CodebaseInvestigationDefinition()
 	executionOperation := work.Description()
-	if operation, ok := cleanupOperation(definition, job, []spine.Sandbox{snapshot.MainSandbox}, snapshot.Actions); ok {
+	if operation, ok := cleanupOperation(definition, job, []core.Sandbox{snapshot.MainSandbox}, snapshot.Actions); ok {
 		executionOperation = operation
 	}
 	if jsonOutput {
@@ -883,15 +882,15 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	latest := snapshot.Drafts[len(snapshot.Drafts)-1]
 	fmt.Fprintf(stdout, "  latest draft: created-at=%s Artifact=%s\n", latest.CreatedAt.Format(time.RFC3339Nano), latest.ArtifactID)
 	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", latest.ArtifactID)
-	if job.AdmissionOpen && job.CleanupState == spine.CleanupPending {
+	if job.AdmissionOpen && job.CleanupState == core.CleanupPending {
 		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
 		fmt.Fprintf(stdout, "  release resources: dorf cleanup %s\n", job.ID)
 	}
 	return nil
 }
 
-func investigationAgentRuns(deliveries []spine.Delivery) []spine.AgentRun {
-	runs := make([]spine.AgentRun, 0, len(deliveries))
+func investigationAgentRuns(deliveries []core.Delivery) []core.AgentRun {
+	runs := make([]core.AgentRun, 0, len(deliveries))
 	for _, delivery := range deliveries {
 		runs = append(runs, delivery.AgentRun)
 	}
@@ -972,7 +971,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID, "scheduled": job.CleanupState == spine.CleanupScheduled})
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID, "scheduled": job.CleanupState == core.CleanupScheduled})
 }
 
 func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, githubClient githubapi.Client, args []string, stdout io.Writer) error {
@@ -1062,12 +1061,12 @@ type taskResultView struct {
 }
 
 type jobTaskExecutionView struct {
-	Attachment spine.JobTask  `json:"attachment"`
+	Attachment core.JobTask   `json:"attachment"`
 	Current    bool           `json:"current"`
 	Execution  taskResultView `json:"execution"`
 }
 
-func fetchJobTaskExecutions(ctx context.Context, store postgres.Store, client *absurd.Client, job spine.Job) ([]jobTaskExecutionView, error) {
+func fetchJobTaskExecutions(ctx context.Context, store postgres.Store, client *absurd.Client, job core.Job) ([]jobTaskExecutionView, error) {
 	attachments, err := store.JobTasks(ctx, job.ID)
 	if err != nil {
 		return nil, err
@@ -1138,12 +1137,12 @@ func boundedTaskError(raw json.RawMessage) string {
 	return message
 }
 
-func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution taskResultView, operation string) {
-	if execution.State != absurd.TaskFailed || job.CleanupState == spine.CleanupComplete {
+func renderWorkflowExecutionAttention(output io.Writer, job core.Job, execution taskResultView, operation string) {
+	if execution.State != absurd.TaskFailed || job.CleanupState == core.CleanupComplete {
 		return
 	}
 	label := "workflow stopped"
-	if job.CleanupState == spine.CleanupScheduled {
+	if job.CleanupState == core.CleanupScheduled {
 		label = "cleanup stopped"
 	}
 	fmt.Fprintln(output, "  attention: "+label)

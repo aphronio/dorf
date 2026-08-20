@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 type SourceKind string
 
 const (
-	Workflow         spine.WorkflowName = "codebase-investigation"
-	WorkflowRevision                    = "2"
+	Workflow         core.WorkflowName = "codebase-investigation"
+	WorkflowRevision                   = "2"
 
 	SourceRemote    SourceKind = "remote"
 	SourceGitBundle SourceKind = "git-bundle"

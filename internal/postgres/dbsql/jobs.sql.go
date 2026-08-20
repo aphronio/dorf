@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const advanceJobRevision = `-- name: AdvanceJobRevision :execrows
@@ -63,7 +63,7 @@ for update
 type GetAdmittedJobForUpdateRow struct {
 	ID                 string
 	AdmissionKey       string
-	WorkflowName       spine.WorkflowName
+	WorkflowName       core.WorkflowName
 	WorkflowRevision   string
 	Goal               string
 	SandboxProfile     string
@@ -110,7 +110,7 @@ where j.id=$1
 type GetCodingJobRow struct {
 	ID                      string
 	AdmissionKey            string
-	WorkflowName            spine.WorkflowName
+	WorkflowName            core.WorkflowName
 	WorkflowRevision        string
 	Goal                    string
 	Repository              string
@@ -125,7 +125,7 @@ type GetCodingJobRow struct {
 	Model                   string
 	ReasoningEffort         string
 	AdmissionOpen           bool
-	CleanupState            spine.CleanupState
+	CleanupState            core.CleanupState
 	CurrentTaskID           string
 	WorkflowAttention       string
 	WorkflowAttentionSource string
@@ -246,7 +246,7 @@ where j.id=$1
 type GetJobRow struct {
 	ID                      string
 	AdmissionKey            string
-	WorkflowName            spine.WorkflowName
+	WorkflowName            core.WorkflowName
 	WorkflowRevision        string
 	Goal                    string
 	SandboxProfile          string
@@ -254,7 +254,7 @@ type GetJobRow struct {
 	Model                   string
 	ReasoningEffort         string
 	AdmissionOpen           bool
-	CleanupState            spine.CleanupState
+	CleanupState            core.CleanupState
 	CurrentTaskID           string
 	WorkflowAttention       string
 	WorkflowAttentionSource string
@@ -299,7 +299,7 @@ for update
 `
 
 type GetJobAdmissionForUpdateRow struct {
-	WorkflowName     spine.WorkflowName
+	WorkflowName     core.WorkflowName
 	WorkflowRevision string
 	AdmissionOpen    bool
 	OutcomeExists    bool
@@ -362,7 +362,7 @@ on conflict(admission_key) do nothing
 type InsertAdmittedJobParams struct {
 	ID                 string
 	AdmissionKey       string
-	WorkflowName       spine.WorkflowName
+	WorkflowName       core.WorkflowName
 	WorkflowRevision   string
 	Goal               string
 	SandboxProfile     string

@@ -8,7 +8,7 @@ package dbsql
 import (
 	"context"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const closeAdmissionForCleanup = `-- name: CloseAdmissionForCleanup :execrows
@@ -76,7 +76,7 @@ for update
 
 type GetCleanupJobForUpdateRow struct {
 	AdmissionOpen    bool
-	CleanupState     spine.CleanupState
+	CleanupState     core.CleanupState
 	CurrentTaskID    interface{}
 	CleanupAttention string
 }

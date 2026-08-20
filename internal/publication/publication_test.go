@@ -9,11 +9,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type sandboxRunner func(context.Context, string, []byte, ...string) (incus.Result, error)
@@ -32,9 +32,9 @@ func publicationOwner(_ context.Context, sandboxID string) (provider.Ownership, 
 
 func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
 	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	deliveries := []spine.Delivery{
-		{Message: spine.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}, AgentRun: spine.AgentRun{ID: "run-before", MessageID: "before"}},
-		{Message: spine.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, AgentRun: spine.AgentRun{ID: "run-after", MessageID: "after"}},
+	deliveries := []core.Delivery{
+		{Message: core.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}, AgentRun: core.AgentRun{ID: "run-before", MessageID: "before"}},
+		{Message: core.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, AgentRun: core.AgentRun{ID: "run-after", MessageID: "after"}},
 	}
 
 	retained := coding.PublicationDeliveries(deliveries, cutoff)
@@ -63,7 +63,7 @@ func TestGitRepositoryPushUsesRecordedOIDAndRefWithoutCredentialInArgvOrSandbox(
 		},
 	}
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{Job: spine.Job{ID: "job-exact"}, Revision: revision, Branch: "dorf/issue-43", GitHubRepository: "aphronio/dorf"}
+	job := coding.Job{Job: core.Job{ID: "job-exact"}, Revision: revision, Branch: "dorf/issue-43", GitHubRepository: "aphronio/dorf"}
 	if err := repository.Push(context.Background(), job, token); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 				index++
 				return result, nil
 			}))}
-			job := coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}
+			job := coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}
 			got, err := repository.Relation(context.Background(), job, strings.Repeat("a", 40))
 			if err != nil || got != name {
 				t.Fatalf("relation=%s err=%v", got, err)
@@ -101,7 +101,7 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner, Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
 		return incus.Result{ExitCode: 1}, nil
 	}))}
-	if _, err := repository.Relation(context.Background(), coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40)); err == nil {
+	if _, err := repository.Relation(context.Background(), coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40)); err == nil {
 		t.Fatal("unknown remote object did not fail closed")
 	}
 }
@@ -115,7 +115,7 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 		}
 		return incus.Result{ExitCode: 128, Stderr: strings.Repeat("fatal ancestry failure ", 80)}, nil
 	}))}
-	_, err := repository.Relation(context.Background(), coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
+	_, err := repository.Relation(context.Background(), coding.Job{Job: core.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
 	if err == nil || !strings.Contains(err.Error(), "exited 128") || !strings.Contains(err.Error(), "[truncated]") || len(err.Error()) > 620 {
 		t.Fatalf("merge-base operational error=%q", err)
 	}
@@ -123,9 +123,9 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 
 func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{Job: spine.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
+	job := coding.Job{Job: core.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
 	assessment := coding.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact revision and selected review settled"}
-	evidence := []spine.Evidence{{ID: "e-git", Digest: strings.Repeat("1", 64)}}
+	evidence := []core.Evidence{{ID: "e-git", Digest: strings.Repeat("1", 64)}}
 	first := Body(job, assessment, evidence, nil, nil)
 	second := Body(job, assessment, evidence, nil, nil)
 	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) {
@@ -135,26 +135,26 @@ func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 
 func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{Job: spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
+	job := coding.Job{Job: core.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
 	role := "critical-boundary"
 	requestID := coding.ReviewRequestMessageID(job.ID, revision, role)
-	runID := spine.AgentRunID(requestID)
-	feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, runID)
-	observedID := spine.EvidenceID(runID, "review-observation")
+	runID := core.AgentRunID(requestID)
+	feedbackMessageID := core.MessageID(job.ID, core.MessageFromAgent, runID)
+	observedID := core.EvidenceID(runID, "review-observation")
 	runs := []coding.ReviewRunView{{
-		AgentRun: spine.AgentRun{
+		AgentRun: core.AgentRun{
 			ID:            runID,
 			JobID:         job.ID,
 			MessageID:     requestID,
 			Role:          role,
 			InputRevision: revision,
 		},
-		Request: spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: coding.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
+		Request: core.Message{ID: requestID, JobID: job.ID, FromKind: core.MessageFromWorkflow, FromID: coding.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: core.MessageFollow},
 	}, {
-		AgentRun: spine.AgentRun{ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
-		Request:  spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
+		AgentRun: core.AgentRun{ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
+		Request:  core.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: core.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: core.MessageFollow},
 	}}
-	evidence := []spine.Evidence{
+	evidence := []core.Evidence{
 		{ID: observedID, Digest: strings.Repeat("2", 64)},
 		{ID: "e-unselected", Digest: strings.Repeat("3", 64)},
 	}
@@ -177,20 +177,20 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	currentRevision := strings.Repeat("a", 40)
 	oldRevision := strings.Repeat("f", 40)
 	role := "critical-boundary"
-	currentRunID := spine.AgentRunID(coding.ReviewRequestMessageID(jobID, currentRevision, role))
-	oldRunID := spine.AgentRunID(coding.ReviewRequestMessageID(jobID, oldRevision, role))
+	currentRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, currentRevision, role))
+	oldRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, oldRevision, role))
 	runs := []coding.ReviewRunView{
-		{AgentRun: spine.AgentRun{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, State: spine.AgentRunCompleted}},
+		{AgentRun: core.AgentRun{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, State: core.AgentRunCompleted}},
 		// The stale same-Role run deliberately follows the current run.
-		{AgentRun: spine.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: spine.AgentRunFailed}},
+		{AgentRun: core.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: core.AgentRunFailed}},
 	}
 
-	observedID := spine.EvidenceID(currentRunID, "review-observation")
+	observedID := core.EvidenceID(currentRunID, "review-observation")
 	plan := &coding.ReviewPlanRecord{JobID: jobID, Revision: currentRevision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 	body := Body(
-		coding.Job{Job: spine.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
+		coding.Job{Job: core.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
 		coding.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
-		[]spine.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
+		[]core.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
 		plan,
 		runs,
 	)
@@ -342,7 +342,7 @@ func TestPublicationRefusesDurableRecordWithoutClaimCheck(t *testing.T) {
 func TestPublicationLostClaimDoesNotRecordAttention(t *testing.T) {
 	claimLost := errors.New("claim lost")
 	service := (Service{}).WithClaimCheck(func(context.Context) error { return claimLost })
-	err := service.block(context.Background(), coding.Job{Job: spine.Job{ID: "job-1"}, Revision: "revision-1"}, spine.Action{ID: "action-1"}, "stale attention")
+	err := service.block(context.Background(), coding.Job{Job: core.Job{ID: "job-1"}, Revision: "revision-1"}, core.Action{ID: "action-1"}, "stale attention")
 	if !errors.Is(err, claimLost) {
 		t.Fatalf("block error = %v", err)
 	}

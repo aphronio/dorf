@@ -12,10 +12,10 @@ import (
 	"syscall"
 
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -25,7 +25,7 @@ type Check struct {
 	Detail string `json:"detail"`
 }
 
-func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile spine.SandboxProfile, connection string) []Check {
+func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.SandboxProfile, connection string) []Check {
 	checks := []Check{}
 	add := func(name string, err error, repair string) {
 		if err == nil {
@@ -66,9 +66,9 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile spine.Sandb
 	}
 	add("absurd-queue", err, "run dorf migrate")
 	switch profile.Provider {
-	case spine.SandboxProviderIncus:
+	case core.SandboxProviderIncus:
 		addIncusChecks(ctx, profile, add)
-	case spine.SandboxProviderE2B:
+	case core.SandboxProviderE2B:
 		adapter := e2b.Adapter{Config: e2b.AdapterConfig{Template: profile.Artifact, Workspace: cfg.Workspace, SandboxTimeout: profile.E2BSandboxTimeout, ProcessTimeout: cfg.TurnTimeout, ProviderGatewayURL: profile.E2BGatewayURL, AllowInternet: profile.E2BAllowInternet}}
 		add("e2b-profile", adapter.Validate(), "configure the exact E2B template, whole-second timeout, workspace, and deployment-owned HTTPS /v1 Gateway URL")
 		var keyErr error
@@ -81,14 +81,14 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile spine.Sandb
 	}
 	err = gateway.Gateway{StatePath: cfg.GatewayStatePath}.Check(ctx, connection)
 	repair := "connect the named provider and bind the broker to the private Incus bridge"
-	if profile.Provider == spine.SandboxProviderE2B {
+	if profile.Provider == core.SandboxProviderE2B {
 		repair = "connect the named provider; the deployment-owned HTTPS route must reach its private broker"
 	}
 	add("provider-route-authority", err, repair)
 	return checks
 }
 
-func addIncusChecks(ctx context.Context, profile spine.SandboxProfile, add func(string, error, string)) {
+func addIncusChecks(ctx context.Context, profile core.SandboxProfile, add func(string, error, string)) {
 	var platformErr error
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		platformErr = fmt.Errorf("found %s/%s; supported host is linux/amd64", runtime.GOOS, runtime.GOARCH)

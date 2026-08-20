@@ -1,24 +1,20 @@
-package controlplane
+package core
 
-import (
-	"testing"
-
-	"github.com/aphronio/dorf/internal/spine"
-)
+import "testing"
 
 func TestCleanupActionOrderIsExactAndStable(t *testing.T) {
-	targets := cleanupTargets([]spine.Sandbox{
+	targets := cleanupTargets([]Sandbox{
 		{ID: "sandbox-b", JobID: "job-1"},
 		{ID: "sandbox-a", JobID: "job-1"},
 	})
 	want := []struct {
 		sandbox string
-		kind    spine.ActionKind
+		kind    ActionKind
 	}{
-		{"sandbox-a", spine.ActionRouteRevoke},
-		{"sandbox-a", spine.ActionSandboxDelete},
-		{"sandbox-b", spine.ActionRouteRevoke},
-		{"sandbox-b", spine.ActionSandboxDelete},
+		{"sandbox-a", ActionRouteRevoke},
+		{"sandbox-a", ActionSandboxDelete},
+		{"sandbox-b", ActionRouteRevoke},
+		{"sandbox-b", ActionSandboxDelete},
 	}
 	if len(targets) != len(want) {
 		t.Fatalf("cleanup targets = %d, want %d", len(targets), len(want))

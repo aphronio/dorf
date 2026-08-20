@@ -10,7 +10,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/core"
 )
 
 const countUnsettledInputs = `-- name: CountUnsettledInputs :one
@@ -69,7 +69,7 @@ limit 1
 
 type GetFirstUnsettledInputRow struct {
 	Sequence  int64
-	State     spine.AgentRunState
+	State     core.AgentRunState
 	Attention string
 }
 
@@ -91,7 +91,7 @@ limit 1
 
 type GetLatestImplementationRunRow struct {
 	ID    string
-	State spine.AgentRunState
+	State core.AgentRunState
 }
 
 func (q *Queries) GetLatestImplementationRun(ctx context.Context, jobID string) (GetLatestImplementationRunRow, error) {
@@ -120,7 +120,7 @@ limit 1
 type GetLatestTurnStartRunRow struct {
 	ID            string
 	JobID         string
-	State         spine.AgentRunState
+	State         core.AgentRunState
 	Role          string
 	InputRevision string
 	Observed      bool
@@ -150,18 +150,18 @@ where job_id=$1 and from_kind=$2
 
 type GetMessageBySenderParams struct {
 	JobID    string
-	FromKind spine.MessageFromKind
+	FromKind core.MessageFromKind
 	FromID   string
 }
 
 type GetMessageBySenderRow struct {
 	ID                string
 	JobID             string
-	FromKind          spine.MessageFromKind
+	FromKind          core.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
+	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
 }
@@ -220,11 +220,11 @@ values(
 type InsertMessageParams struct {
 	ID                string
 	JobID             string
-	FromKind          spine.MessageFromKind
+	FromKind          core.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
+	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 }
 
@@ -265,18 +265,18 @@ order by m.sequence
 type ListDeliveriesRow struct {
 	MessageID         string
 	MessageJobID      string
-	FromKind          spine.MessageFromKind
+	FromKind          core.MessageFromKind
 	FromID            string
 	Sequence          int64
 	Input             string
-	DeliveryIntent    spine.MessageDeliveryIntent
+	DeliveryIntent    core.MessageDeliveryIntent
 	SteerTargetTurnID string
 	AdmittedAt        time.Time
 	AgentRunPresent   bool
 	AgentRunID        string
 	AgentRunJobID     string
 	AgentRunMessageID string
-	State             spine.AgentRunState
+	State             core.AgentRunState
 	Harness           string
 	ThreadID          string
 	BaselineRecorded  bool

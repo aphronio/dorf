@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/core"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 	"github.com/coder/websocket"
 )
 
@@ -63,7 +63,7 @@ func (a Agent) RemoveRoute(ctx context.Context, owner provider.Ownership) error 
 	return nil
 }
 
-type TurnOutcome = spine.HarnessTurn
+type TurnOutcome = core.HarnessTurn
 
 type RejectedError struct{ Method string }
 
@@ -87,15 +87,15 @@ type reviewVisibilityError struct{ reason string }
 func (e *reviewVisibilityError) Error() string                   { return e.reason }
 func (e *reviewVisibilityError) RetryableReviewVisibility() bool { return true }
 
-func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartInitialTurn(ctx context.Context, owner provider.Ownership, workspace, agentRunID, input, model, effort string) (core.HarnessBinding, error) {
 	threadID, turn, err := a.startInitialTurn(ctx, owner, workspace, agentRunID, input, model, effort, "danger-full-access")
-	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
+	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, err
 }
 
-func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	binding := spine.HarnessBinding{Harness: Harness}
+	binding := core.HarnessBinding{Harness: Harness}
 	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, true)
 		binding.ThreadID, binding.Turn = threadID, turn
@@ -104,10 +104,10 @@ func (a Agent) StartStrictReviewTurn(ctx context.Context, owner provider.Ownersh
 	return binding, err
 }
 
-func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	binding := spine.HarnessBinding{Harness: Harness}
+	binding := core.HarnessBinding{Harness: Harness}
 	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		threadID, turn, err := protocol.reconcileStrictReviewTurn(ctx, workspace, "", submissionNonce, input, model, effort, false)
 		binding.ThreadID, binding.Turn = threadID, turn
@@ -116,10 +116,10 @@ func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Owner
 	return binding, err
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
-	binding := spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
+	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
 	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
 		missingAttempts := 0
 		for {
@@ -169,7 +169,7 @@ func (a Agent) startInitialTurn(ctx context.Context, owner provider.Ownership, w
 	return sessionID, outcome, err
 }
 
-func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, workspace string) (spine.HarnessHistory, error) {
+func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, workspace string) (core.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var threadID string
@@ -179,10 +179,10 @@ func (a Agent) ReadInitialTurns(ctx context.Context, owner provider.Ownership, w
 		threadID, turns, err = protocol.inspectInitialTurns(ctx, workspace)
 		return err
 	})
-	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
+	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (spine.HarnessHistory, error) {
+func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessHistory, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var turns []TurnOutcome
@@ -191,10 +191,10 @@ func (a Agent) ReadTurns(ctx context.Context, owner provider.Ownership, threadID
 		turns, err = protocol.readTurns(ctx, threadID)
 		return err
 	})
-	return spine.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
+	return core.HarnessHistory{Harness: Harness, ThreadID: threadID, Turns: turns}, err
 }
 
-func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string) (spine.HarnessBinding, error) {
+func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspace, threadID, agentRunID, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	var outcome TurnOutcome
@@ -203,7 +203,7 @@ func (a Agent) StartTurn(ctx context.Context, owner provider.Ownership, workspac
 		outcome, err = protocol.resumeAndStartTurn(ctx, threadID, workspace, agentRunID, input, model, effort, "danger-full-access")
 		return err
 	})
-	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
+	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
 func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionID, turnID, agentRunID, input string) (string, error) {
@@ -218,14 +218,14 @@ func (a Agent) SteerTurn(ctx context.Context, owner provider.Ownership, sessionI
 	return acceptedTurnID, err
 }
 
-func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (spine.HarnessBinding, error) {
+func (a Agent) WaitTurn(ctx context.Context, owner provider.Ownership, threadID, turnID string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	outcome := TurnOutcome{ID: turnID, Status: "running"}
 	err := a.withServer(ctx, owner, func(protocol *protocol) error {
 		return protocol.pollTurn(ctx, threadID, turnID, &outcome)
 	})
-	return spine.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
+	return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: outcome}, err
 }
 
 func (a Agent) timeoutContext(ctx context.Context) (context.Context, context.CancelFunc) {

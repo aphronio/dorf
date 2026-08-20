@@ -1,22 +1,17 @@
-package controlplane
+package core
 
-import (
-	"context"
-
-	"github.com/aphronio/dorf/internal/spine"
-)
+import "context"
 
 // AgentExecution is the provider-neutral Core contract for delivering and
 // observing one durably admitted AgentRun.
 type AgentExecution interface {
-	Deliver(context.Context, spine.Job, spine.Delivery, string) error
-	ObserveAgentRun(context.Context, spine.Job, spine.AgentRun) (bool, error)
-	ObserveAgentRunTurn(context.Context, spine.Job, spine.AgentRun, string) (spine.HarnessTurn, error)
+	Deliver(context.Context, Job, Delivery, string) error
+	ObserveAgentRunTurn(context.Context, Job, AgentRun, string) (HarnessTurn, error)
 }
 
 // SandboxExecution reconciles one already-admitted stable Sandbox Action.
 type SandboxExecution interface {
-	ExecuteSandboxAction(context.Context, spine.Job, spine.Sandbox, spine.Action) error
+	ExecuteSandboxAction(context.Context, Job, Sandbox, Action) error
 }
 
 // Execution is the shared in-process Core application contract consumed by
@@ -31,5 +26,5 @@ type Execution interface {
 // workflow requests Job cleanup.
 type CleanupExecution interface {
 	SandboxExecution
-	PrepareCleanup(context.Context, string) (spine.Job, []spine.Sandbox, error)
+	PrepareCleanup(context.Context, string) (Job, []Sandbox, error)
 }
