@@ -1,4 +1,4 @@
-package repository
+package gitworkspace
 
 import (
 	"bytes"
@@ -134,8 +134,8 @@ func (localSandbox) Exec(ctx context.Context, _ provider.Ownership, input []byte
 	return result, err
 }
 
-func testManager(workspace string) Manager {
-	return Manager{Sandbox: localSandbox{workspace: workspace}, Workspace: workspace}
+func testManager(workspace string) Workspace {
+	return Workspace{Sandbox: localSandbox{workspace: workspace}, Workspace: workspace}
 }
 
 func testRepository(t *testing.T) (string, string) {

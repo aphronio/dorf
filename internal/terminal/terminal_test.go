@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/repository"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -87,7 +87,7 @@ func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *
 	}
 	run(local, "add", "unpublished.txt")
 	run(local, "commit", "--quiet", "-m", "unpublished")
-	bundle, err := repository.BundleLocalRevision(context.Background(), local, "HEAD")
+	bundle, err := gitworkspace.BundleLocalRevision(context.Background(), local, "HEAD")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package repository
+package gitworkspace
 
 import (
 	"context"
@@ -8,35 +8,35 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-type ServiceStore interface {
+type ActionStore interface {
 	RecordSandboxActionSuccess(context.Context, string) error
 }
 
-type ServiceExternals interface {
+type GitExternals interface {
 	RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error
 	RepositoryRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
 }
 
-// Service composes Core execution with deterministic repository operations
-// for repository-backed workflows.
-type Service struct {
+// Executor composes Core execution with deterministic Git workspace operations
+// for Git-backed workflows.
+type Executor struct {
 	controlplane.Execution
-	store      ServiceStore
-	externals  ServiceExternals
+	store      ActionStore
+	externals  GitExternals
 	claimCheck func(context.Context) error
 }
 
-func NewService(execution controlplane.Execution, store ServiceStore, externals ServiceExternals, claimCheck func(context.Context) error) Service {
-	return Service{Execution: execution, store: store, externals: externals, claimCheck: claimCheck}
+func NewExecutor(execution controlplane.Execution, store ActionStore, externals GitExternals, claimCheck func(context.Context) error) Executor {
+	return Executor{Execution: execution, store: store, externals: externals, claimCheck: claimCheck}
 }
 
-func (s Service) ObserveRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
+func (s Executor) ObserveRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
 	return s.externals.RepositoryRevision(ctx, job, branch, revision)
 }
 
 // ExecuteRepositoryClone reconciles one workflow-owned remote Git input and
 // records the scoped Action only after the checkout converges.
-func (s Service) ExecuteRepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, remote, revision, branch string) error {
+func (s Executor) ExecuteRepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, remote, revision, branch string) error {
 	if action.Kind != ActionRepositoryClone {
 		return fmt.Errorf("repository clone requires the exact repository-clone Action")
 	}

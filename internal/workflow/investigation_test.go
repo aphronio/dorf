@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -17,13 +17,13 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	delivery := spine.Delivery{Message: spine.Message{Sequence: 1}, AgentRun: run}
 	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery, Source: investigation.Source{JobID: job.ID, Kind: investigation.SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
-	steps := []spine.ActionKind{spine.ActionSandboxCreate, repository.ActionRepositoryClone, spine.ActionRouteCreate}
+	steps := []spine.ActionKind{spine.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, spine.ActionRouteCreate}
 	for _, want := range steps {
 		work := snapshot.Project()
 		if work.Kind != InvestigationWorkAction || work.ActionKind != want || work.Scope != sandbox.ID {
 			t.Fatalf("work=%#v want Action %s", work, want)
 		}
-		if want == repository.ActionRepositoryClone && work.Description() != "Cloning repository" {
+		if want == gitworkspace.ActionRepositoryClone && work.Description() != "Cloning repository" {
 			t.Fatalf("repository clone description=%q", work.Description())
 		}
 		snapshot.Actions = append(snapshot.Actions, spine.Action{Kind: want, Scope: sandbox.ID, State: spine.ActionSucceeded})

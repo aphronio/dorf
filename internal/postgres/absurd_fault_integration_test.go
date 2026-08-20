@@ -11,8 +11,8 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -217,7 +217,7 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
 	spine.Externals
-	repository.ServiceExternals
+	gitworkspace.GitExternals
 	effect *reconcilingFaultEffect
 	runID  string
 }
@@ -229,7 +229,7 @@ func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.
 
 func repositoryCloneAction(actions []spine.Action) (spine.Action, bool) {
 	for _, action := range actions {
-		if action.Kind == repository.ActionRepositoryClone {
+		if action.Kind == gitworkspace.ActionRepositoryClone {
 			return action, true
 		}
 	}
@@ -255,7 +255,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), repository.ActionRepositoryClone)
+			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), gitworkspace.ActionRepositoryClone)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
@@ -271,7 +271,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			service := repository.NewService(execution, store, faultActionExternals{effect: effect, runID: runID}, func(claimCtx context.Context) error {
+			service := gitworkspace.NewExecutor(execution, store, faultActionExternals{effect: effect, runID: runID}, func(claimCtx context.Context) error {
 				err := absurdruntime.RequireClaim(claimCtx)
 				effect.recordClaim(runID, err)
 				return err

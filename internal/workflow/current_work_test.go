@@ -7,7 +7,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/repository"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -24,7 +24,7 @@ func readyFacts() Snapshot {
 		Sandboxes:   []spine.Sandbox{sandbox},
 		Actions: []spine.Action{
 			action(spine.ActionSandboxCreate),
-			action(repository.ActionRepositoryClone),
+			action(gitworkspace.ActionRepositoryClone),
 			action(spine.ActionRouteCreate),
 		},
 		ReviewPlans: []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},

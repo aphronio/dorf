@@ -1,10 +1,10 @@
-package repository_test
+package gitworkspace_test
 
 import (
 	"context"
 
 	"github.com/aphronio/dorf/internal/controlplane"
-	"github.com/aphronio/dorf/internal/repository"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -14,4 +14,4 @@ func (stubExecution) ExecuteRepositoryClone(context.Context, spine.Job, spine.Sa
 	return nil
 }
 
-var _ repository.Execution = stubExecution{}
+var _ gitworkspace.Execution = stubExecution{}

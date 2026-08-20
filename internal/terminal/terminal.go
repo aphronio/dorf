@@ -7,8 +7,8 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/gateway"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
@@ -23,8 +23,8 @@ type Externals struct {
 
 func (e Externals) Harness() string { return e.Agent.Name() }
 
-func (e Externals) repository() repository.Manager {
-	return repository.Manager{Sandbox: e.Sandbox, Workspace: e.Sandbox.Workspace()}
+func (e Externals) gitWorkspace() gitworkspace.Workspace {
+	return gitworkspace.Workspace{Sandbox: e.Sandbox, Workspace: e.Sandbox.Workspace()}
 }
 
 func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
@@ -38,7 +38,7 @@ func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox s
 	if sandbox.JobID != job.ID || sandbox.ID != spine.MainSandboxName(job.ID) {
 		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
-	return e.repository().ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
+	return e.gitWorkspace().ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
 }
 
 func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source investigation.Source, contents []byte) error {
@@ -107,7 +107,7 @@ func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch
 	if err != nil {
 		return spine.RevisionObservation{}, err
 	}
-	return e.repository().ObserveRevision(ctx, owner, branch, revision)
+	return e.gitWorkspace().ObserveRevision(ctx, owner, branch, revision)
 }
 
 func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJob) (policy.ChangeFacts, error) {
@@ -115,7 +115,7 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJo
 	if err != nil {
 		return policy.ChangeFacts{}, err
 	}
-	return e.repository().ChangeFacts(ctx, owner, job.StartingRevision, job.Revision)
+	return e.gitWorkspace().ChangeFacts(ctx, owner, job.StartingRevision, job.Revision)
 }
 
 func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) error {
@@ -384,8 +384,8 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 }
 
 var (
-	_ spine.Externals             = Externals{}
-	_ repository.ServiceExternals = Externals{}
-	_ coding.Externals            = Externals{}
-	_ investigation.Externals     = Externals{}
+	_ spine.Externals           = Externals{}
+	_ gitworkspace.GitExternals = Externals{}
+	_ coding.Externals          = Externals{}
+	_ investigation.Externals   = Externals{}
 )

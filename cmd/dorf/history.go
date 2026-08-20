@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/repository"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 )
@@ -132,7 +132,7 @@ func actionStartedText(job spine.Job, runs []spine.AgentRun, action spine.Action
 	switch action.Kind {
 	case spine.ActionSandboxCreate:
 		return withHumanDetails("Creating "+sandbox, sandboxProviderName(job.SandboxProfile))
-	case repository.ActionRepositoryClone:
+	case gitworkspace.ActionRepositoryClone:
 		return "Cloning repository"
 	case coding.ActionRepositoryPush:
 		return "Publishing Revision"
@@ -161,7 +161,7 @@ func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action
 	switch action.Kind {
 	case spine.ActionSandboxCreate:
 		return withHumanDetails(sandbox+" ready", sandboxProviderName(job.SandboxProfile), duration)
-	case repository.ActionRepositoryClone:
+	case gitworkspace.ActionRepositoryClone:
 		return withHumanDetails("Repository cloned", duration)
 	case coding.ActionRepositoryPush:
 		return withHumanDetails("Revision published", duration)
@@ -188,7 +188,7 @@ func actionFailureSubject(kind spine.ActionKind, sandbox string) string {
 	switch kind {
 	case spine.ActionSandboxCreate:
 		return sandbox + " creation"
-	case repository.ActionRepositoryClone:
+	case gitworkspace.ActionRepositoryClone:
 		return "Repository clone"
 	case coding.ActionRepositoryPush:
 		return "Revision publication"

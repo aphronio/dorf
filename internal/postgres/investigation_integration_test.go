@@ -14,9 +14,9 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -205,7 +205,7 @@ func (e *investigationExternals) SandboxCreate(context.Context, spine.Job, spine
 	return e.effect(spine.ActionSandboxCreate)
 }
 func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
-	return e.effect(repository.ActionRepositoryClone)
+	return e.effect(gitworkspace.ActionRepositoryClone)
 }
 func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source investigation.Source, contents []byte) error {
 	if source.JobID != job.ID || string(contents) != "retained repository input" {
@@ -263,8 +263,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	externals := &investigationExternals{}
 	execution := spine.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
-	repositoryService := repository.NewService(execution, store, externals, absurdruntime.RequireClaim)
-	service := investigation.NewService(repositoryService, store, externals, records, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, absurdruntime.RequireClaim)
+	service := investigation.NewService(workspaceExecutor, store, externals, records, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{

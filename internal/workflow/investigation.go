@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -142,12 +142,12 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	if !actionSucceeded(s.Actions, spine.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(spine.ActionSandboxCreate)
 	}
-	repositoryAction := repository.ActionRepositoryClone
+	materializationAction := gitworkspace.ActionRepositoryClone
 	if s.Source.Kind == investigation.SourceGitBundle {
-		repositoryAction = investigation.ActionRepositoryRestore
+		materializationAction = investigation.ActionRepositoryRestore
 	}
-	if !actionSucceeded(s.Actions, repositoryAction, s.MainSandbox.ID) {
-		return action(repositoryAction)
+	if !actionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
+		return action(materializationAction)
 	}
 	if !actionSucceeded(s.Actions, spine.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(spine.ActionRouteCreate)
@@ -252,7 +252,7 @@ func runInvestigationAction(ctx context.Context, service investigation.Service, 
 		if work.ActionKind == investigation.ActionRepositoryRestore {
 			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
 		}
-		if work.ActionKind == repository.ActionRepositoryClone {
+		if work.ActionKind == gitworkspace.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source.Repository, snapshot.Source.Revision, "")
 		}
 		return service.ExecuteSandboxAction(workCtx, snapshot.Job, snapshot.MainSandbox, action)

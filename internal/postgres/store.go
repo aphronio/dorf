@@ -13,9 +13,9 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -799,7 +799,7 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 		return spine.Action{}, err
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, repository.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate, coding.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate, coding.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
 	default:
 		return spine.Action{}, fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}
@@ -1044,7 +1044,7 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, repository.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate,
+	case spine.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate,
 		spine.ActionRouteRevoke, coding.ActionReviewCheckout, spine.ActionSandboxDelete:
 	default:
 		return fmt.Errorf("unsupported Sandbox Action %q", kind)

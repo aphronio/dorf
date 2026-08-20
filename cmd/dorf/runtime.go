@@ -14,13 +14,13 @@ import (
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/publication"
-	"github.com/aphronio/dorf/internal/repository"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -51,8 +51,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return workflow.CodingRuntime{}, err
 	}
-	repositoryService := repository.NewService(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	codingService := coding.NewService(repositoryService, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
+	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -75,8 +75,8 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	if err != nil {
 		return workflow.InvestigationRuntime{}, err
 	}
-	repositoryService := repository.NewService(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	service := investigation.NewService(repositoryService, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
+	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	return workflow.InvestigationRuntime{Profile: resolved.Profile, Investigation: service}, nil
 }
 

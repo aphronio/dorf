@@ -8,8 +8,8 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -196,7 +196,7 @@ func (s Snapshot) currentReviewRuns() ([]spine.ReviewRunView, error) {
 
 func codingPrerequisitesComplete(f Snapshot) bool {
 	return actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) &&
-		actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) &&
+		actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) &&
 		actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID)
 }
 
@@ -234,8 +234,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	if !actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) {
 		return actionWork(spine.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}
-	if !actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) {
-		return actionWork(repository.ActionRepositoryClone, f.MainSandbox.ID, "")
+	if !actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) {
+		return actionWork(gitworkspace.ActionRepositoryClone, f.MainSandbox.ID, "")
 	}
 	if !actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID) {
 		return actionWork(spine.ActionRouteCreate, f.MainSandbox.ID, "")

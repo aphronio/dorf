@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/repository"
 )
 
 func prepareInvestigationSource(ctx context.Context, blobs blob.Store, remoteRepository, localRepository, revision string) (investigation.Source, bool, error) {
@@ -19,7 +19,7 @@ func prepareInvestigationSource(ctx context.Context, blobs blob.Store, remoteRep
 	if remoteRepository != "" {
 		return investigation.Source{Kind: investigation.SourceRemote, Repository: remoteRepository, Revision: strings.TrimSpace(revision)}, false, nil
 	}
-	bundle, err := repository.BundleLocalRevision(ctx, localRepository, revision)
+	bundle, err := gitworkspace.BundleLocalRevision(ctx, localRepository, revision)
 	if err != nil {
 		return investigation.Source{}, false, err
 	}

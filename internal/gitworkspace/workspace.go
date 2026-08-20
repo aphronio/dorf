@@ -1,4 +1,4 @@
-package repository
+package gitworkspace
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-type Manager struct {
+type Workspace struct {
 	Sandbox   provider.Sandbox
 	Workspace string
 }
@@ -24,9 +24,9 @@ func (e *AttentionError) Error() string         { return e.Reason }
 func (e *AttentionError) AttentionNeeded() bool { return true }
 
 // ReconcileClone materializes one exact remote Revision through the neutral
-// Sandbox command boundary. Git behavior belongs to this repository module,
+// Sandbox command boundary. Git behavior belongs to this Git workspace module,
 // not to Sandbox providers.
-func (m Manager) ReconcileClone(ctx context.Context, owner provider.Ownership, remote, revision, branch string) error {
+func (m Workspace) ReconcileClone(ctx context.Context, owner provider.Ownership, remote, revision, branch string) error {
 	if err := m.Sandbox.AttestOwnership(ctx, owner); err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func sandboxCommandFailure(operation string, result provider.Result) error {
 	return fmt.Errorf("%s: %s", operation, detail)
 }
 
-func (m Manager) ChangeFacts(ctx context.Context, owner provider.Ownership, baseRevision, revision string) (policy.ChangeFacts, error) {
+func (m Workspace) ChangeFacts(ctx context.Context, owner provider.Ownership, baseRevision, revision string) (policy.ChangeFacts, error) {
 	if !fullOID(baseRevision) || !fullOID(revision) {
 		return policy.ChangeFacts{}, fmt.Errorf("ChangeFacts require full immutable Git Revisions")
 	}
@@ -119,7 +119,7 @@ func (m Manager) ChangeFacts(ctx context.Context, owner provider.Ownership, base
 	return policy.FactsFromPaths(baseRevision, revision, parts)
 }
 
-func (m Manager) ObserveRevision(ctx context.Context, owner provider.Ownership, branch, comparisonBase string) (spine.RevisionObservation, error) {
+func (m Workspace) ObserveRevision(ctx context.Context, owner provider.Ownership, branch, comparisonBase string) (spine.RevisionObservation, error) {
 	if !fullOID(comparisonBase) {
 		return spine.RevisionObservation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
@@ -146,7 +146,7 @@ func (m Manager) ObserveRevision(ctx context.Context, owner provider.Ownership, 
 	return observation, nil
 }
 
-func (m Manager) validateGit(ctx context.Context, owner provider.Ownership, revision string) error {
+func (m Workspace) validateGit(ctx context.Context, owner provider.Ownership, revision string) error {
 	script := "set -eu; cd \"$2\"; head=$(git rev-parse HEAD); test \"$head\" = \"$1\" || { echo \"HEAD=$head expected=$1\" >&2; exit 10; }; branch=$(git symbolic-ref --short HEAD); test -n \"$branch\" || { echo 'detached or unborn branch' >&2; exit 11; }; status=$(git status --porcelain=v1 --untracked-files=all); test -z \"$status\" || { echo \"dirty checkout: $status\" >&2; exit 12; }"
 	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
 	if err != nil {

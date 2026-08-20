@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -76,7 +76,7 @@ func (d Definition) ActionLabel(kind spine.ActionKind) string {
 	switch kind {
 	case spine.ActionSandboxCreate:
 		return "Provisioning Sandbox"
-	case repository.ActionRepositoryClone:
+	case gitworkspace.ActionRepositoryClone:
 		return "Cloning repository"
 	case investigation.ActionRepositoryRestore:
 		return "Restoring retained repository"

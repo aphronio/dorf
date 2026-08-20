@@ -17,9 +17,9 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -104,10 +104,10 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	}
 	externals := &integrationExternals{}
 	execution := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
-	repositoryService := repository.NewService(execution, store, externals, func(context.Context) error { return nil })
-	codingService := coding.NewService(repositoryService, store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
+	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, func(context.Context) error { return nil })
+	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	runtimeProfile := workflow.RuntimeProfile{SandboxProfile: "incus"}
-	investigationService := investigation.NewService(repositoryService, store, externals, blob.Store{}, func(context.Context) error { return nil })
+	investigationService := investigation.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
@@ -1550,7 +1550,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 
 type integrationExternals struct {
 	coding.Externals
-	repository.ServiceExternals
+	gitworkspace.GitExternals
 	mu        sync.Mutex
 	turns     []spine.HarnessTurn
 	submitted []int64
@@ -1569,7 +1569,7 @@ func (e *integrationExternals) SandboxCreate(context.Context, spine.Job, spine.S
 	return e.effect(spine.ActionSandboxCreate)
 }
 func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
-	return e.effect(repository.ActionRepositoryClone)
+	return e.effect(gitworkspace.ActionRepositoryClone)
 }
 func (e *integrationExternals) RepositoryRestore(context.Context, spine.Job, spine.Sandbox, investigation.Source, []byte) error {
 	return e.effect(investigation.ActionRepositoryRestore)

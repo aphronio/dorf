@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/repository"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -47,15 +47,15 @@ type Externals interface {
 	ReviewWait(context.Context, spine.CodingJob, spine.ReviewRunView, string) (spine.HarnessBinding, error)
 }
 
-type RepositoryExecution interface {
-	repository.Execution
+type GitWorkspace interface {
+	gitworkspace.Execution
 	ObserveRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
 }
 
 // Service owns Revision and review execution for the
 // coding-to-proposal workflow while delegating shared custody to Core.
 type Service struct {
-	RepositoryExecution
+	GitWorkspace
 	store      Store
 	externals  Externals
 	blobs      blob.Store
@@ -63,14 +63,14 @@ type Service struct {
 	claimCheck func(context.Context) error
 }
 
-func NewService(repository RepositoryExecution, store Store, externals Externals, blobs blob.Store, barrier spine.FaultBarrier, claimCheck func(context.Context) error) Service {
-	return Service{RepositoryExecution: repository, store: store, externals: externals, blobs: blobs, barrier: barrier, claimCheck: claimCheck}
+func NewService(workspace GitWorkspace, store Store, externals Externals, blobs blob.Store, barrier spine.FaultBarrier, claimCheck func(context.Context) error) Service {
+	return Service{GitWorkspace: workspace, store: store, externals: externals, blobs: blobs, barrier: barrier, claimCheck: claimCheck}
 }
 
 func (s Service) BlobStore() blob.Store { return s.blobs }
 
 func (s Service) ObserveRevision(ctx context.Context, job spine.CodingJob, run spine.AgentRun) error {
-	observation, err := s.RepositoryExecution.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
+	observation, err := s.GitWorkspace.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)

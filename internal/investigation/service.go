@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/repository"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -34,17 +34,17 @@ func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job spine.Job, r
 	return nil
 }
 
-// Service composes shared repository execution with the retained-source
+// Service composes shared Git workspace execution with the retained-source
 // materialization owned only by codebase-investigation.
 type Service struct {
-	repository.Execution
+	gitworkspace.Execution
 	store      Store
 	externals  Externals
 	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewService(execution repository.Execution, store Store, externals Externals, blobs blob.Store, claimCheck func(context.Context) error) Service {
+func NewService(execution gitworkspace.Execution, store Store, externals Externals, blobs blob.Store, claimCheck func(context.Context) error) Service {
 	return Service{Execution: execution, store: store, externals: externals, blobs: blobs, claimCheck: claimCheck}
 }
 

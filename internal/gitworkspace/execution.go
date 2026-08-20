@@ -1,4 +1,4 @@
-package repository
+package gitworkspace
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 
 const ActionRepositoryClone spine.ActionKind = "repository-clone"
 
-// Execution is the repository module's composition of Core execution with
-// exact remote repository materialization. It is not part of the Core
+// Execution is the Git workspace module's composition of Core execution with
+// exact remote materialization. It is not part of the Core
 // application contract.
 type Execution interface {
 	controlplane.Execution

@@ -2014,8 +2014,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted Core/domain separation slice — 2026-08-20
 - **Decision:** Move the investigation `Source`, `Draft`, Artifact naming, retained-bundle restore,
   and unchanged detached-checkout proof into `internal/investigation`. Its typed runtime composes
-  that service over shared repository execution. The base runtime now grants only execution;
-  coding and investigation each add their own repository-backed authority explicitly.
+  that service over shared Git workspace execution. The base runtime now grants only execution;
+  coding and investigation each add their own Git-backed authority explicitly.
 - **Why:** Keeping investigation types and restore rules in `spine` made the second workflow look
   like shared Core semantics. Core owns the Action, Sandbox, AgentRun, blob, and cleanup mechanisms;
   the investigation workflow owns what its retained source and draft mean.
@@ -2082,7 +2082,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   implementations made in-process workflow reuse look like a privileged path and prevented a
   workflow-owned service from importing the Core contract without an import cycle. Interfaces must
   describe capabilities actually consumed, not speculate about a public transport schema.
-- **Proof:** Coding and investigation accept a repository-module interface composed over Core
+- **Proof:** Coding and investigation accept a Git-workspace interface composed over Core
   execution; cleanup accepts only cleanup execution; compile-time assertions prove the current
   implementations satisfy each contract. Common runtimes and Core interfaces carry no repository
   capability.
@@ -2097,7 +2097,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Refined by D084 — 2026-08-20
 - **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action,
   Artifact, Evidence, recovery, and requested-cleanup custody described by the North Star. Place
-  exact Git checkout and Revision observation in the repository module. Place review execution and
+  exact Git checkout and Revision observation in `internal/gitworkspace`. Place review execution and
   proposal-facing Action kinds in the coding workflow module.
   Sandbox providers expose only their provider-neutral Sandbox contract; they do not implement Git
   clone policy. Shared use by multiple workflows does not make a behavior Core.
@@ -2113,8 +2113,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   contracts remain unearned and are not introduced by this correction.
 - **Vocabulary:** This decision relocates existing behavior and constants only. It introduces no
   product term and changes no meaning in the North Star vocabulary.
-- **Proof:** Core declares no repository execution interface; the Sandbox contract contains no Git
-  operation; one repository implementation is exercised through a provider-neutral Sandbox fake;
+- **Proof:** Core declares no Git workspace interface; the Sandbox contract contains no Git
+  operation; one Git workspace implementation is exercised through a provider-neutral Sandbox fake;
   coding execution lives outside `spine`; Incus, E2B, workflow, CLI, and PostgreSQL tests retain the
   same observable behavior.
 - **Reconsider when:** Independently distributed workflow modules require dynamic loading, or a

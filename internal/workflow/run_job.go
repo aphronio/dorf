@@ -8,8 +8,8 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -17,7 +17,7 @@ import (
 // CodingExecution is the coding workflow's explicit composition of reusable
 // Core execution with only its own Revision and review policy.
 type CodingExecution interface {
-	repository.Execution
+	gitworkspace.Execution
 	BlobStore() blob.Store
 	ObserveRevision(context.Context, spine.CodingJob, spine.AgentRun) error
 	PlanReview(context.Context, spine.CodingJob) error
@@ -221,7 +221,7 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 			}
 			return service.ExecuteReviewCheckout(workCtx, job, reviewer.ID, action)
 		}
-		if work.ActionKind == repository.ActionRepositoryClone {
+		if work.ActionKind == gitworkspace.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, job.Job, *sandbox, action, job.Repository, job.Revision, job.Branch)
 		}
 		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)
