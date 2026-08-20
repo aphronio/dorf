@@ -39,8 +39,8 @@ type sandboxProfileStore interface {
 
 type CodingRuntime struct {
 	Profile  RuntimeProfile
-	Coding   CodingExecution
-	Proposal ProposalRuntime
+	Coding   coding.CodingExecution
+	Proposal coding.ProposalRuntime
 }
 
 type InvestigationRuntime struct {
@@ -67,19 +67,17 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			return core.TaskResultV1{}, err
 		}
 		proposal := runtime.Proposal
-		proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
-		proposal.Outcome = proposal.Outcome.WithClaimCheck(absurdruntime.RequireClaim)
 		if proposal.PollInterval <= 0 {
 			proposal.PollInterval = 30 * time.Second
 		}
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
 		for {
-			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
+			work, err := coding.RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				return core.TaskResultV1{}, err
 			}
-			if work.Kind == WorkComplete {
+			if work.Kind == coding.WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
 					return core.TaskResultV1{}, err
@@ -100,7 +98,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
+				if (work.Kind == coding.WorkObserveProposal || work.Kind == coding.WorkObserveAgent) && errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err
@@ -216,7 +214,7 @@ func requireJobProfile(ctx context.Context, store sandboxProfileStore, job core.
 		}
 		return errors.New(detail)
 	}
-	if err := profile.Require(expected); err != nil {
+	if err := profile.Require(expected.Name, expected.Revision, expected.RequiredProviderCapabilities); err != nil {
 		detail := err.Error()
 		attentionErr := store.SetWorkflowAttention(ctx, job.ID, "provider-capabilities", detail)
 		if attentionErr != nil {
@@ -227,30 +225,17 @@ func requireJobProfile(ctx context.Context, store sandboxProfileStore, job core.
 	return nil
 }
 
-func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
+func wakeOptions(work coding.Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
 	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
 	switch work.Kind {
-	case WorkObserveProposal:
+	case coding.WorkObserveProposal:
 		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
 		options.Timeout = proposalPollInterval
-	case WorkObserveAgent:
+	case coding.WorkObserveAgent:
 		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}
 	return options
-}
-
-func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revision string) (ProposalObservationResultV1, error) {
-	result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (ProposalObservationResultV1, error) {
-		return proposal.Observe(workCtx, jobID, revision)
-	})
-	if err != nil {
-		return ProposalObservationResultV1{}, err
-	}
-	if result.Revision != revision {
-		return ProposalObservationResultV1{}, fmt.Errorf("proposal observation conflicts with Revision %s", revision)
-	}
-	return result, nil
 }
 
 func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewCodingJob) (core.Job, bool, error) {
@@ -278,7 +263,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 			// An idempotent retry validates the original input below without
 			// depending on the Gateway still being available.
 		case errors.Is(err, postgres.ErrNotFound):
-			if err := profile.Require(definition); err != nil {
+			if err := profile.Require(definition.Name, definition.Revision, definition.RequiredProviderCapabilities); err != nil {
 				return core.Job{}, false, err
 			}
 			if providers == nil {

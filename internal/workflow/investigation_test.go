@@ -106,14 +106,15 @@ func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T
 func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testing.T) {
 	browser := ProviderCapability("browser-workload")
 	definition := Definition{Name: "browser-verification", Revision: "1", RequiredProviderCapabilities: []ProviderCapability{browser}}
-	err := (RuntimeProfile{SandboxProfile: "incus"}).Require(definition)
+	err := (RuntimeProfile{SandboxProfile: "incus"}).Require(definition.Name, definition.Revision, definition.RequiredProviderCapabilities)
 	if err == nil || !strings.Contains(err.Error(), string(browser)) {
 		t.Fatalf("missing provider capability error=%v", err)
 	}
 	if definition := CodebaseInvestigationDefinition(); len(definition.RequiredProviderCapabilities) != 0 {
 		t.Fatalf("investigation unexpectedly requires provider capabilities: %v", definition.RequiredProviderCapabilities)
 	}
-	if err := (RuntimeProfile{SandboxProfile: "e2b"}).Require(CodebaseInvestigationDefinition()); err != nil {
+	investigationDefinition := CodebaseInvestigationDefinition()
+	if err := (RuntimeProfile{SandboxProfile: "e2b"}).Require(investigationDefinition.Name, investigationDefinition.Revision, investigationDefinition.RequiredProviderCapabilities); err != nil {
 		t.Fatal(err)
 	}
 }

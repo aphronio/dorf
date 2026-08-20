@@ -21,6 +21,17 @@ const (
 )
 
 type Store interface {
+	CodingJob(context.Context, string) (Job, error)
+	Sandboxes(context.Context, string) ([]core.Sandbox, error)
+	Deliveries(context.Context, string) ([]core.Delivery, error)
+	Revisions(context.Context, string) ([]Revision, error)
+	ReviewPlans(context.Context, string) ([]ReviewPlanRecord, error)
+	Proposal(context.Context, string) (*Proposal, error)
+	Outcome(context.Context, string) (*Outcome, error)
+	DeliveryCandidate(context.Context, string) (*core.Delivery, error)
+	NextDelivery(context.Context, string) (*core.Delivery, error)
+	BeginPublication(context.Context, string, string) (Job, core.Action, core.Action, error)
+	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
 	RecordRevisionObservation(context.Context, string, string, gitworkspace.Observation, core.Evidence) error
 	SetWorkflowAttention(context.Context, string, string, string) error
 	Evidence(context.Context, string) ([]core.Evidence, error)

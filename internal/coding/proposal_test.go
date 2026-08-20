@@ -1,18 +1,17 @@
-package workflow
+package coding
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
 )
 
 func TestProposalObservationRequiresExactIdentity(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := coding.Job{GitHubRepository: "aphronio/dorf", BaseBranch: "greenfield", Branch: "dorf/job"}
-	proposal := coding.Proposal{Number: 94, URL: "https://github.com/aphronio/dorf/pull/94", ProposedRevision: revision}
+	job := Job{GitHubRepository: "aphronio/dorf", BaseBranch: "greenfield", Branch: "dorf/job"}
+	proposal := Proposal{Number: 94, URL: "https://github.com/aphronio/dorf/pull/94", ProposedRevision: revision}
 	pull := githubapi.PullRequest{Repository: job.GitHubRepository, Base: job.BaseBranch, Head: job.Branch, Number: proposal.Number, URL: proposal.URL, HeadSHA: revision}
 	if err := validateExactProposal(job, proposal, pull); err != nil {
 		t.Fatal(err)

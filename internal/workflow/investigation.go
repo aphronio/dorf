@@ -11,7 +11,14 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
+
+type investigationFactStepResultV1 struct {
+	FactID string `json:"fact_id"`
+}
+
+func investigationAgentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 
 type InvestigationWorkKind string
 
@@ -139,17 +146,17 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	action := func(kind core.ActionKind) InvestigationWork {
 		return InvestigationWork{Kind: InvestigationWorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
 	}
-	if !actionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
+	if !investigationActionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(core.ActionSandboxCreate)
 	}
 	materializationAction := gitworkspace.ActionRepositoryClone
 	if s.Source.Kind == investigation.SourceGitBundle {
 		materializationAction = investigation.ActionRepositoryRestore
 	}
-	if !actionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
+	if !investigationActionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
 		return action(materializationAction)
 	}
-	if !actionSucceeded(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
+	if !investigationActionSucceeded(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(core.ActionRouteCreate)
 	}
 	for _, draft := range s.Drafts {
@@ -191,7 +198,7 @@ func RunCodebaseInvestigation(ctx context.Context, service investigation.Service
 		case InvestigationWorkAction:
 			err = runInvestigationAction(ctx, service, store, snapshot, work)
 		case InvestigationWorkDeliver:
-			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
+			err = runInvestigationFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
 			})
 		case InvestigationWorkObserveAgent:
@@ -204,7 +211,7 @@ func RunCodebaseInvestigation(ctx context.Context, service investigation.Service
 			}
 			return work, nil
 		case InvestigationWorkRecordDraft:
-			err = runFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
+			err = runInvestigationFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
 				return recordInvestigationDraft(workCtx, service, store, snapshot)
 			})
 		default:
@@ -303,4 +310,31 @@ func validateInvestigationReport(output string) (string, error) {
 		return "", investigationContractError("investigation report must be nonblank Markdown")
 	}
 	return strings.TrimSpace(output) + "\n", nil
+}
+
+func investigationActionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {
+	for _, action := range actions {
+		if action.Kind == kind && action.Scope == scope {
+			return action.State == core.ActionSucceeded
+		}
+	}
+	return false
+}
+
+func runInvestigationFactStep(ctx context.Context, name, factID string, work func(context.Context) error) error {
+	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (investigationFactStepResultV1, error) {
+		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (investigationFactStepResultV1, error) {
+			if err := work(workCtx); err != nil {
+				return investigationFactStepResultV1{}, err
+			}
+			return investigationFactStepResultV1{FactID: factID}, nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+	if result.FactID != factID {
+		return fmt.Errorf("Step %s returned fact %q, want %q", name, result.FactID, factID)
+	}
+	return nil
 }

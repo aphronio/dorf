@@ -1,4 +1,4 @@
-package workflow
+package coding
 
 import (
 	"context"
@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/postgres"
 )
 
 // WorkKind is the next concrete operation in Dorf's coding workflow. It is a
@@ -45,7 +43,7 @@ type Work struct {
 }
 
 func (w Work) Description() string {
-	definition := CodingToProposalDefinition()
+	definition := WorkflowDefinition()
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
@@ -66,36 +64,36 @@ func (w Work) Description() string {
 // database read. The reads are not a database transaction; every operation
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
-	Job         coding.Job
+	Job         Job
 	Sandboxes   []core.Sandbox
 	MainSandbox core.Sandbox
 	Actions     []core.Action
 	Delivery    *core.Delivery
 	Deliveries  []core.Delivery
-	Revisions   []coding.Revision
+	Revisions   []Revision
 	Evidence    []core.Evidence
-	ReviewPlans []coding.ReviewPlanRecord
-	Proposal    *coding.Proposal
-	Outcome     *coding.Outcome
+	ReviewPlans []ReviewPlanRecord
+	Proposal    *Proposal
+	Outcome     *Outcome
 }
 
 // Projection is a disposable explanation derived from one Snapshot. It is
 // shared by execution and inspection and is never persisted.
 type Projection struct {
-	CurrentWork Work                       `json:"current_work"`
-	Readiness   coding.ReadinessAssessment `json:"readiness"`
+	CurrentWork Work                `json:"current_work"`
+	Readiness   ReadinessAssessment `json:"readiness"`
 }
 
 // Project derives readiness and the one next coding operation once. Once
 // publication starts, its admitted input boundary is retained so a later
 // accepted Message cannot strand reconciliation.
 func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
-	deliveries := coding.PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
+	deliveries := PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
 	reviewRuns, err := s.currentReviewRuns()
 	if err != nil {
 		return Projection{}, err
 	}
-	readiness := coding.AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
+	readiness := AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
 	work := decideCurrentWorkWithReviewRuns(s, reviewRuns)
 	if work.Kind == WorkPublishProposal && !readiness.Ready {
 		work.Kind = WorkAttention
@@ -106,7 +104,7 @@ func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
 
 func publicationIntentAt(actions []core.Action, revision string) time.Time {
 	for _, action := range actions {
-		if action.Kind == coding.ActionGitHubPullRequest && action.Scope == revision {
+		if action.Kind == ActionGitHubPullRequest && action.Scope == revision {
 			return action.CreatedAt
 		}
 	}
@@ -114,7 +112,7 @@ func publicationIntentAt(actions []core.Action, revision string) time.Time {
 }
 
 // LoadSnapshot performs one staged load of the coding product facts.
-func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snapshot, error) {
+func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, error) {
 	var snapshot Snapshot
 	var err error
 	snapshot.Job, err = store.CodingJob(ctx, jobID)
@@ -132,7 +130,7 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 		}
 	}
 	if snapshot.MainSandbox.ID == "" {
-		return snapshot, fmt.Errorf("main Sandbox %s: %w", core.MainSandboxName(jobID), postgres.ErrNotFound)
+		return snapshot, fmt.Errorf("main Sandbox %s is not durably reserved", core.MainSandboxName(jobID))
 	}
 	snapshot.Actions, err = store.Actions(ctx, jobID)
 	if err != nil {
@@ -171,7 +169,7 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 	return snapshot, nil
 }
 
-func (s Snapshot) currentReviewPlan() *coding.ReviewPlanRecord {
+func (s Snapshot) currentReviewPlan() *ReviewPlanRecord {
 	for i := range s.ReviewPlans {
 		if s.ReviewPlans[i].Revision == s.Job.Revision {
 			return &s.ReviewPlans[i]
@@ -180,12 +178,12 @@ func (s Snapshot) currentReviewPlan() *coding.ReviewPlanRecord {
 	return nil
 }
 
-func (s Snapshot) currentReviewRuns() ([]coding.ReviewRunView, error) {
-	all, err := coding.ReviewRuns(s.Deliveries, s.Sandboxes)
+func (s Snapshot) currentReviewRuns() ([]ReviewRunView, error) {
+	all, err := ReviewRuns(s.Deliveries, s.Sandboxes)
 	if err != nil {
 		return nil, err
 	}
-	runs := make([]coding.ReviewRunView, 0, len(all))
+	runs := make([]ReviewRunView, 0, len(all))
 	for _, run := range all {
 		if run.InputRevision == s.Job.Revision {
 			runs = append(runs, run)
@@ -211,7 +209,7 @@ func decideCurrentWork(f Snapshot) Work {
 	return decideCurrentWorkWithReviewRuns(f, reviewRuns)
 }
 
-func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunView) Work {
+func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Work {
 	work := func(kind WorkKind, factID, detail string) Work {
 		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
 	}
@@ -251,7 +249,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 	// AgentRuns before consuming the feedback Messages they produce.
 	plan := f.currentReviewPlan()
 	if plan != nil {
-		byRole := make(map[string]coding.ReviewRunView, len(reviewRuns))
+		byRole := make(map[string]ReviewRunView, len(reviewRuns))
 		for _, run := range reviewRuns {
 			byRole[run.Role] = run
 		}
@@ -272,8 +270,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 			if !actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionSandboxCreate, run.Sandbox.ID, string(role))
 			}
-			if !actionSucceeded(f.Actions, coding.ActionReviewCheckout, run.Sandbox.ID) {
-				return actionWork(coding.ActionReviewCheckout, run.Sandbox.ID, string(role))
+			if !actionSucceeded(f.Actions, ActionReviewCheckout, run.Sandbox.ID) {
+				return actionWork(ActionReviewCheckout, run.Sandbox.ID, string(role))
 			}
 			if !actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
@@ -332,7 +330,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 	// The ReviewPlan is the final deterministic decision. There is no pending
 	// plan or a separate handoff fact.
 	if plan == nil {
-		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, coding.ReviewPolicyAttentionSource(f.Job.Revision), ""))
+		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, ReviewPolicyAttentionSource(f.Job.Revision), ""))
 	}
 
 	if f.Proposal != nil && f.Proposal.ProposedRevision == f.Job.Revision {
@@ -364,7 +362,7 @@ func actionSucceeded(actions []core.Action, kind core.ActionKind, scope string) 
 func publicationPending(actions []core.Action, revision string) bool {
 	for _, action := range actions {
 		if action.Scope == revision && action.State != core.ActionSucceeded &&
-			(action.Kind == coding.ActionRepositoryPush || action.Kind == coding.ActionGitHubPullRequest) {
+			(action.Kind == ActionRepositoryPush || action.Kind == ActionGitHubPullRequest) {
 			return true
 		}
 	}
@@ -374,14 +372,14 @@ func publicationPending(actions []core.Action, revision string) bool {
 func publicationDetail(f Snapshot, fallback string) string {
 	for _, action := range f.Actions {
 		if action.Scope == f.Job.Revision && action.ID == f.Job.WorkflowAttentionSource &&
-			(action.Kind == coding.ActionRepositoryPush || action.Kind == coding.ActionGitHubPullRequest) {
+			(action.Kind == ActionRepositoryPush || action.Kind == ActionGitHubPullRequest) {
 			return f.Job.WorkflowAttention
 		}
 	}
 	return fallback
 }
 
-func attentionDetail(job coding.Job, source, fallback string) string {
+func attentionDetail(job Job, source, fallback string) string {
 	if job.WorkflowAttentionSource == source && job.WorkflowAttention != "" {
 		return job.WorkflowAttention
 	}
@@ -421,7 +419,7 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *core.Ag
 		if latestInput == nil || message.Sequence >= latestInputSequence {
 			latestInput, latestInputSequence = run, message.Sequence
 		}
-		if coding.StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
+		if StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
 			latestTurnStart, latestTurnStartSequence = run, message.Sequence
 		}
 	}

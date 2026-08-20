@@ -1,19 +1,18 @@
 package workflow
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
+	"github.com/aphronio/dorf/internal/profile"
 )
 
 // ProviderCapability names an optional provider primitive beyond Dorf's
 // baseline Sandbox and Harness contracts.
-type ProviderCapability string
+type ProviderCapability = profile.Capability
 
 // Presentation is optional human copy owned by one workflow revision. It is
 // never persisted and never affects execution; missing entries fall back to
@@ -31,22 +30,21 @@ type Definition struct {
 	Presentation                 Presentation         `json:"-"`
 }
 
-type RuntimeProfile struct {
-	SandboxProfile       string               `json:"sandbox_profile"`
-	ProviderCapabilities []ProviderCapability `json:"provider_capabilities"`
-}
+type RuntimeProfile = profile.Runtime
 
 func CodingToProposalDefinition() Definition {
+	definition := coding.WorkflowDefinition()
 	return Definition{
-		Name: coding.Workflow, Revision: coding.WorkflowRevision,
+		Name: definition.Name, Revision: definition.Revision,
+		RequiredProviderCapabilities: definition.RequiredProviderCapabilities,
 		Presentation: Presentation{
 			Operations: map[string]string{
-				string(WorkComplete):        "Complete",
-				string(WorkAttention):       "Needs attention",
-				string(WorkObserveRevision): "Inspecting implementation checkout",
-				string(WorkChooseReview):    "Choosing deterministic review",
-				string(WorkPublishProposal): "Publishing exact-Revision Proposal",
-				string(WorkObserveProposal): "Waiting for Proposal decision",
+				string(coding.WorkComplete):        "Complete",
+				string(coding.WorkAttention):       "Needs attention",
+				string(coding.WorkObserveRevision): "Inspecting implementation checkout",
+				string(coding.WorkChooseReview):    "Choosing deterministic review",
+				string(coding.WorkPublishProposal): "Publishing exact-Revision Proposal",
+				string(coding.WorkObserveProposal): "Waiting for Proposal decision",
 			},
 			AgentRoles: map[string]string{"implement": "Implementation agent"},
 		},
@@ -126,25 +124,4 @@ func lowerFirst(value string) string {
 		return value
 	}
 	return strings.ToLower(value[:1]) + value[1:]
-}
-
-func (p RuntimeProfile) Require(definition Definition) error {
-	if strings.TrimSpace(p.SandboxProfile) == "" {
-		return fmt.Errorf("workflow %s revision %s requires a named Sandbox profile", definition.Name, definition.Revision)
-	}
-	available := make(map[ProviderCapability]bool, len(p.ProviderCapabilities))
-	for _, capability := range p.ProviderCapabilities {
-		available[capability] = true
-	}
-	var missing []string
-	for _, capability := range definition.RequiredProviderCapabilities {
-		if !available[capability] {
-			missing = append(missing, string(capability))
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	sort.Strings(missing)
-	return fmt.Errorf("workflow %s revision %s requires missing provider capabilities: %s", definition.Name, definition.Revision, strings.Join(missing, ", "))
 }

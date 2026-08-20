@@ -12,7 +12,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-var _ CodingExecution = coding.Service{}
+var _ coding.CodingExecution = coding.Service{}
 
 type profileGuardStore struct {
 	job               core.Job
@@ -96,7 +96,6 @@ func TestPersistedWorkflowContractsV1(t *testing.T) {
 	}{
 		{"task result", core.TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
 		{"wake", WakeV1{JobID: "job-1", Sequence: 2}, `{"job_id":"job-1","sequence":2}`},
-		{"fact step result", FactStepResultV1{FactID: "action-1"}, `{"fact_id":"action-1"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -121,30 +120,11 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 }
 
 func TestActiveAgentObservationUsesInterruptiblePoll(t *testing.T) {
-	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2, 30*time.Second)
+	options := wakeOptions(coding.Work{Kind: coding.WorkObserveAgent, FactID: "run-1"}, 2, 30*time.Second)
 	if options.StepName != "dorf/agent-run-wake/v1/run-1/00000000000000000002" {
 		t.Fatalf("active AgentRun wake step = %q", options.StepName)
 	}
 	if options.Timeout != time.Second {
 		t.Fatalf("active AgentRun poll = %s, want 1s", options.Timeout)
-	}
-}
-
-func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
-	tests := []struct {
-		name string
-		got  string
-		want string
-	}{
-		{"AgentRun", agentRunStepName("run-1"), "dorf/agent-run/v1/run-1"},
-		{"Revision", revisionStepName("run-1"), "dorf/revision/v1/run-1"},
-		{"ReviewPolicy", reviewPolicyStepName("job-1", "revision-1"), "dorf/review-policy/v1/job-1/revision-1"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if test.got != test.want {
-				t.Fatalf("Step name %q, want %q", test.got, test.want)
-			}
-		})
 	}
 }

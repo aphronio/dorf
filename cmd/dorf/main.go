@@ -742,7 +742,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if job.Workflow != coding.Workflow {
 		return fmt.Errorf("inspect does not support workflow %q", job.Workflow)
 	}
-	snapshot, err := workflow.LoadSnapshot(ctx, store, set.Arg(0))
+	snapshot, err := coding.LoadSnapshot(ctx, store, set.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -1039,7 +1039,7 @@ func openClosed(open bool) string {
 	return "closed"
 }
 
-func renderWorkflow(output io.Writer, work workflow.Work) {
+func renderWorkflow(output io.Writer, work coding.Work) {
 	fmt.Fprintln(output, "\nWorkflow")
 	fmt.Fprintln(output, "  Sandbox → repository clone → provider Route → Message → AgentRun → Revision → ReviewPolicy")
 	fmt.Fprintln(output, "                                                ↑                                  │")

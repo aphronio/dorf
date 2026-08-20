@@ -98,7 +98,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 	}
 	switch job.Workflow {
 	case coding.Workflow:
-		snapshot, err := workflow.LoadSnapshot(ctx, store, jobID)
+		snapshot, err := coding.LoadSnapshot(ctx, store, jobID)
 		if err != nil {
 			return followSnapshot{}, err
 		}
@@ -112,7 +112,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		}
 		return followSnapshot{
 			Job: snapshot.Job.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
-			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == workflow.WorkAttention,
+			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == coding.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	case investigation.Workflow:

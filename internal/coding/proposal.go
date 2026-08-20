@@ -1,4 +1,4 @@
-package workflow
+package coding
 
 import (
 	"context"
@@ -7,13 +7,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/outcome"
-	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/publication"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type ProposalGitHub interface {
@@ -23,21 +18,45 @@ type ProposalGitHub interface {
 	CreateIssueComment(context.Context, githubapi.Authority, int64, string) (githubapi.Comment, error)
 }
 
+type ProposalPublication interface {
+	Push(context.Context, string, string) error
+	Propose(context.Context, string, string) error
+}
+
+type ProposalOutcome interface {
+	Record(context.Context, string, OutcomeKind) (Outcome, bool, error)
+}
+
+type ProposalMessageAdmitter func(context.Context, string, string, string) (core.Message, bool, error)
+
 // ProposalRuntime holds the coding proposal workflow's concrete dependencies.
 // The durable Job remains authoritative; GitHub only supplies observations.
 type ProposalRuntime struct {
-	Publication  publication.Service
+	Publication  ProposalPublication
 	GitHub       ProposalGitHub
-	Outcome      outcome.Service
-	Store        postgres.Store
-	Client       *absurd.Client
+	Outcome      ProposalOutcome
+	Store        Store
+	AdmitMessage ProposalMessageAdmitter
 	PollInterval time.Duration
 }
 
 type ProposalObservationResultV1 struct {
-	Revision    string             `json:"revision"`
-	Outcome     coding.OutcomeKind `json:"outcome,omitempty"`
-	NewMessages int                `json:"new_messages"`
+	Revision    string      `json:"revision"`
+	Outcome     OutcomeKind `json:"outcome,omitempty"`
+	NewMessages int         `json:"new_messages"`
+}
+
+func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revision string) (ProposalObservationResultV1, error) {
+	result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (ProposalObservationResultV1, error) {
+		return proposal.Observe(workCtx, jobID, revision)
+	})
+	if err != nil {
+		return ProposalObservationResultV1{}, err
+	}
+	if result.Revision != revision {
+		return ProposalObservationResultV1{}, fmt.Errorf("proposal observation conflicts with Revision %s", revision)
+	}
+	return result, nil
 }
 
 func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (ProposalObservationResultV1, error) {
@@ -65,9 +84,9 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	}
 	result := ProposalObservationResultV1{Revision: job.Revision}
 	if pull.State == "closed" {
-		result.Outcome = coding.OutcomeRejected
+		result.Outcome = OutcomeRejected
 		if pull.Merged {
-			result.Outcome = coding.OutcomeAccepted
+			result.Outcome = OutcomeAccepted
 		}
 		if _, _, err := r.Outcome.Record(ctx, jobID, result.Outcome); err != nil {
 			return ProposalObservationResultV1{}, err
@@ -113,11 +132,10 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 		if err := absurdruntime.RequireClaim(ctx); err != nil {
 			return ProposalObservationResultV1{}, err
 		}
-		_, created, err := AdmitMessage(ctx, r.Store, r.Client, postgres.NewMessage{
-			JobID: jobID, FromKind: core.MessageFromHuman,
-			FromID: fromID, Input: comment.Body,
-			Intent: core.MessageFollow,
-		})
+		if r.AdmitMessage == nil {
+			return ProposalObservationResultV1{}, fmt.Errorf("coding Message admission is not configured")
+		}
+		_, created, err := r.AdmitMessage(ctx, jobID, fromID, comment.Body)
 		if err != nil {
 			return ProposalObservationResultV1{}, err
 		}
@@ -158,7 +176,7 @@ func hasFeedbackReply(comments []githubapi.Comment, jobID string, commentID int6
 	return false
 }
 
-func validateExactProposal(job coding.Job, proposal coding.Proposal, pull githubapi.PullRequest) error {
+func validateExactProposal(job Job, proposal Proposal, pull githubapi.PullRequest) error {
 	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
 		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
 		return fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")

@@ -13,7 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -160,7 +159,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
 	job := core.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
 	mainSandbox := core.MainSandboxName(job.ID)
-	entries := workflowHistory(workflow.Snapshot{
+	entries := workflowHistory(coding.Snapshot{
 		Job: coding.Job{Job: job},
 		Deliveries: []core.Delivery{{
 			Message:  core.Message{ID: "message-1", Sequence: 1, FromKind: core.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
@@ -212,7 +211,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 			t.Fatalf("human history leaked plumbing %q:\n%s", plumbing, story.String())
 		}
 	}
-	abandoned := workflowHistory(workflow.Snapshot{
+	abandoned := workflowHistory(coding.Snapshot{
 		Job:     coding.Job{Job: core.Job{AdmittedAt: base}},
 		Outcome: &coding.Outcome{Kind: coding.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
 	})

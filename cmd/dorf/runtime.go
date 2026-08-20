@@ -57,14 +57,19 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Store: r.store, GitHub: githubClient,
 		Repository: publication.GitRepository{Sandbox: resolved.Sandbox, Workspace: r.cfg.Workspace, Ownership: resolved.Ownership},
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
-	}
+	}.WithClaimCheck(absurdruntime.RequireClaim)
+	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
 	return workflow.CodingRuntime{
 		Profile: resolved.Profile,
 		Coding:  codingService,
-		Proposal: workflow.ProposalRuntime{
+		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
-			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
-			Store:   r.store, Client: r.client,
+			Outcome: outcomeService, Store: r.store,
+			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.Message, bool, error) {
+				return workflow.AdmitMessage(ctx, r.store, r.client, postgres.NewMessage{
+					JobID: jobID, FromKind: core.MessageFromHuman, FromID: fromID, Input: input, Intent: core.MessageFollow,
+				})
+			},
 		},
 	}, nil
 }

@@ -1,4 +1,4 @@
-package workflow
+package coding
 
 import (
 	"strings"
@@ -6,14 +6,13 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	policy "github.com/aphronio/dorf/internal/review"
 )
 
 func readyFacts() Snapshot {
-	job := coding.Job{Job: core.Job{ID: "job-1", AdmissionOpen: true}, Revision: "rev-1"}
+	job := Job{Job: core.Job{ID: "job-1", AdmissionOpen: true}, Revision: "rev-1"}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	action := func(kind core.ActionKind) core.Action {
 		return core.Action{ID: core.ScopedActionID(job.ID, kind, sandbox.ID), Kind: kind, State: core.ActionSucceeded, Scope: sandbox.ID}
@@ -27,7 +26,7 @@ func readyFacts() Snapshot {
 			action(gitworkspace.ActionRepositoryClone),
 			action(core.ActionRouteCreate),
 		},
-		ReviewPlans: []coding.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
+		ReviewPlans: []ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
 	}
 }
 
@@ -36,7 +35,7 @@ func factDelivery(message core.Message, run core.AgentRun) core.Delivery {
 }
 
 func TestCodingAgentInputKeepsReviewFeedbackOpaque(t *testing.T) {
-	job := coding.Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
+	job := Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
 	message := core.Message{FromKind: core.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
 	reviewer := codingAgentInput(job, core.Delivery{Message: message, AgentRun: core.AgentRun{Role: "critical-boundary"}})
 	if reviewer != message.Input {
@@ -52,7 +51,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("selected reviewer Actions precede its AgentRun and implementation feedback", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		reviewer := coding.ReviewRunView{AgentRun: core.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunPending, Capability: coding.ReviewReadOnlyCapability, SandboxID: coding.ReviewSandboxName("review-1")}}
+		reviewer := ReviewRunView{AgentRun: core.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunPending, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName("review-1")}}
 		reviewer.Sandbox = core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID}
 		facts.Deliveries = []core.Delivery{factDelivery(core.Message{ID: reviewer.MessageID, JobID: facts.Job.ID}, reviewer.AgentRun)}
 		facts.Sandboxes = append(facts.Sandboxes, reviewer.Sandbox)
@@ -62,7 +61,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 			action core.ActionKind
 		}{
 			{WorkAction, core.ActionSandboxCreate},
-			{WorkAction, coding.ActionReviewCheckout},
+			{WorkAction, ActionReviewCheckout},
 			{WorkAction, core.ActionRouteCreate},
 		}
 		for _, step := range steps {
@@ -81,9 +80,9 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("review feedback Message enters the ordinary implementation lane", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		requestID := coding.ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
+		requestID := ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
 		reviewerID := core.AgentRunID(requestID)
-		reviewer := core.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunCompleted, Capability: coding.ReviewReadOnlyCapability, SandboxID: coding.ReviewSandboxName(reviewerID)}
+		reviewer := core.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunCompleted, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName(reviewerID)}
 		feedback := core.Message{ID: core.MessageID(facts.Job.ID, core.MessageFromAgent, reviewerID), JobID: facts.Job.ID, FromKind: core.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: core.MessageFollow}
 		facts.Deliveries = []core.Delivery{factDelivery(core.Message{ID: requestID, JobID: facts.Job.ID}, reviewer), factDelivery(feedback, core.AgentRun{MessageID: feedback.ID, Role: "implement"})}
 		facts.Sandboxes = append(facts.Sandboxes, core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID})
@@ -117,8 +116,8 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("started publication settles before a later Message", func(t *testing.T) {
 		facts := readyFacts()
 		facts.Actions = append(facts.Actions,
-			core.Action{Kind: coding.ActionRepositoryPush, State: core.ActionUnsettled, Scope: facts.Job.Revision},
-			core.Action{Kind: coding.ActionGitHubPullRequest, State: core.ActionUnsettled, Scope: facts.Job.Revision},
+			core.Action{Kind: ActionRepositoryPush, State: core.ActionUnsettled, Scope: facts.Job.Revision},
+			core.Action{Kind: ActionGitHubPullRequest, State: core.ActionUnsettled, Scope: facts.Job.Revision},
 		)
 		facts.Delivery = &core.Delivery{Message: core.Message{Sequence: 2}, AgentRun: core.AgentRun{ID: "implement-2", State: core.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
@@ -128,7 +127,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("ready exact Revision observes its Proposal", func(t *testing.T) {
 		facts := readyFacts()
-		facts.Proposal = &coding.Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
+		facts.Proposal = &Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 		if got := decideCurrentWork(facts); got.Kind != WorkObserveProposal {
 			t.Fatalf("CurrentWork = %#v, want Proposal observation", got)
 		}
@@ -167,7 +166,7 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 			facts.Deliveries = []core.Delivery{factDelivery(message, run)}
 			facts.Evidence = []core.Evidence{{ID: "e-git", Kind: "git-revision", AgentRunID: run.ID, Revision: facts.Job.Revision}}
 			if test.proposal {
-				facts.Proposal = &coding.Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
+				facts.Proposal = &Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 			}
 			id, _ := unchangedAttention(facts)
 			if (id != "") != test.attention {
@@ -181,7 +180,7 @@ func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
 	facts := readyFacts()
 	facts.Deliveries = []core.Delivery{
 		factDelivery(core.Message{ID: "initial", Sequence: 1, FromKind: core.MessageFromHuman, Intent: core.MessageFollow}, core.AgentRun{ID: "initial-run", MessageID: "initial", Role: "implement", State: core.AgentRunCompleted, InputRevision: "rev-0"}),
-		factDelivery(core.Message{ID: "review-request", JobID: facts.Job.ID, Sequence: 2, FromKind: core.MessageFromWorkflow, Intent: core.MessageFollow}, core.AgentRun{ID: "review-run", JobID: facts.Job.ID, MessageID: "review-request", Role: "general", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, Capability: coding.ReviewReadOnlyCapability, SandboxID: "review-sandbox"}),
+		factDelivery(core.Message{ID: "review-request", JobID: facts.Job.ID, Sequence: 2, FromKind: core.MessageFromWorkflow, Intent: core.MessageFollow}, core.AgentRun{ID: "review-run", JobID: facts.Job.ID, MessageID: "review-request", Role: "general", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, Capability: ReviewReadOnlyCapability, SandboxID: "review-sandbox"}),
 		factDelivery(core.Message{ID: "review-feedback", Sequence: 3, FromKind: core.MessageFromAgent, Intent: core.MessageFollow}, core.AgentRun{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision}),
 	}
 	facts.Sandboxes = append(facts.Sandboxes, core.Sandbox{ID: "review-sandbox", JobID: facts.Job.ID})
@@ -295,7 +294,7 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 	facts := readyFacts()
 	startedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	facts.Actions = append(facts.Actions, core.Action{
-		Kind:      coding.ActionGitHubPullRequest,
+		Kind:      ActionGitHubPullRequest,
 		State:     core.ActionUnsettled,
 		Scope:     facts.Job.Revision,
 		CreatedAt: startedAt,

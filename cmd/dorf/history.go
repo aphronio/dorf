@@ -20,7 +20,7 @@ type historyEntry struct {
 	Text string
 }
 
-func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
+func workflowHistory(snapshot coding.Snapshot) []historyEntry {
 	definition := workflow.CodingToProposalDefinition()
 	entries := commonHistory(snapshot.Job.Job, snapshot.Deliveries, snapshot.Actions)
 	add := func(at time.Time, text string) { addHistoryEntry(&entries, at, text) }
@@ -297,7 +297,7 @@ func renderHumanHistoryEntry(output io.Writer, entry historyEntry, lastDate *str
 	fmt.Fprintf(output, "%s  %s  %s\n", indent, local.Format("15:04"), entry.Text)
 }
 
-func proposalActionSettledAt(s workflow.Snapshot) time.Time {
+func proposalActionSettledAt(s coding.Snapshot) time.Time {
 	if s.Proposal == nil {
 		return time.Time{}
 	}
