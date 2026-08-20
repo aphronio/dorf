@@ -42,7 +42,7 @@ func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 
 func TestCoreAndSandboxProvidersDoNotImportWorkflowModules(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
-	workflowModules := []string{"/internal/coding", "/internal/gitworkspace", "/internal/investigation", "/internal/outcome", "/internal/publication", "/internal/workflow"}
+	workflowModules := []string{"/internal/coding", "/internal/gitworkspace", "/internal/investigation", "/internal/outcome", "/internal/publication"}
 	for _, directory := range []string{"core", "sandbox", "incus", "e2b"} {
 		path := filepath.Join(root, "internal", directory)
 		entries, err := os.ReadDir(path)

@@ -21,6 +21,11 @@ const (
 )
 
 type Store interface {
+	Job(context.Context, string) (core.Job, error)
+	JobExists(context.Context, string) (bool, error)
+	AdmitCoding(context.Context, Admission) (core.Job, bool, error)
+	AdmitCodingMessage(context.Context, core.MessageAdmission) (core.Message, bool, error)
+	NextWakeSequence(context.Context, string) (int64, error)
 	CodingJob(context.Context, string) (Job, error)
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	Deliveries(context.Context, string) ([]core.Delivery, error)

@@ -25,7 +25,7 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 
 // authorizeInvestigationMessage implements the investigation workflow's
 // follow-up policy inside the same locked transaction that records the Message.
-func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input NewMessage) (admittedAgentRun, error) {
+func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
 	if input.Intent != core.MessageFollow {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
 	}

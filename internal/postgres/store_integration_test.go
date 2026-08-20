@@ -20,8 +20,8 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -34,9 +34,9 @@ func (p providerCheck) Check(context.Context, string) error { return p.err }
 
 type integrationRuntimeResolver struct {
 	execution            core.CleanupExecution
-	profile              workflow.RuntimeProfile
-	codingRuntime        workflow.CodingRuntime
-	investigationRuntime workflow.InvestigationRuntime
+	profile              profileapp.Runtime
+	codingRuntime        coding.Runtime
+	investigationRuntime investigation.Runtime
 }
 
 func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (core.CleanupRuntime, error) {
@@ -46,16 +46,16 @@ func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name strin
 	return core.CleanupRuntime{Execution: r.execution, SandboxProfile: r.profile.SandboxProfile}, nil
 }
 
-func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (workflow.CodingRuntime, error) {
+func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (coding.Runtime, error) {
 	if name != r.codingRuntime.Profile.SandboxProfile {
-		return workflow.CodingRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+		return coding.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	return r.codingRuntime, nil
 }
 
-func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name string) (workflow.InvestigationRuntime, error) {
+func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name string) (investigation.Runtime, error) {
 	if name != r.investigationRuntime.Profile.SandboxProfile {
-		return workflow.InvestigationRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+		return investigation.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	return r.investigationRuntime, nil
 }
@@ -105,17 +105,18 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, func(context.Context) error { return nil })
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
-	runtimeProfile := workflow.RuntimeProfile{SandboxProfile: "incus"}
+	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
 	investigationService := investigation.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
-		codingRuntime:        workflow.CodingRuntime{Profile: runtimeProfile, Coding: codingService},
-		investigationRuntime: workflow.InvestigationRuntime{Profile: runtimeProfile, Investigation: investigationService},
+		codingRuntime:        coding.Runtime{Profile: runtimeProfile, Coding: codingService},
+		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Investigation: investigationService},
 	}
 	application := core.Application{Store: store, Tasks: client, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
-	workflow.Register(client, store, resolver, application)
+	coding.Register(application, store, resolver)
+	investigation.Register(application, store, resolver)
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -123,9 +124,9 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	return db, store, client
 }
 
-func codingJobInput(key, goal, revision, branch string) postgres.NewCodingJob {
-	return postgres.NewCodingJob{
-		NewJob: postgres.NewJob{
+func codingJobInput(key, goal, revision, branch string) coding.Admission {
+	return coding.Admission{
+		JobAdmission: core.JobAdmission{
 			AdmissionKey: key, Goal: goal, SandboxProfile: "incus", ProviderConnection: "primary",
 			Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
@@ -146,31 +147,31 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("provider is not ready")}, workflow.RuntimeProfile{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("provider is not ready")}, profileapp.Runtime{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
 		t.Fatal("new Job bypassed provider readiness")
 	}
 	if _, err := store.Job(ctx, core.JobID(blocked.AdmissionKey)); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("failed provider preflight persisted Job: %v", err)
 	}
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
+	job, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
 	if job.SandboxProfile != "incus" || job.Workflow != coding.Workflow || job.WorkflowRevision != coding.WorkflowRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
-	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
+	repeatedJob, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
 		t.Fatalf("idempotent Job admission=%#v created=%v err=%v", repeatedJob, created, err)
 	}
 	changedJob := input
 	changedJob.Goal = "changed complete input"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: changedJob.SandboxProfile}, changedJob); err == nil {
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedJob.SandboxProfile}, changedJob); err == nil {
 		t.Fatal("changed complete Job input under the same admission key did not conflict")
 	}
 	changedProfile := input
 	changedProfile.SandboxProfile = "e2b"
-	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
 		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
 	}
 	taskIDs := []string{job.CurrentTaskID}
@@ -180,28 +181,28 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		}
 	})
 
-	first, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
+	first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || !created || first.Sequence != 2 || first.FromKind != "human" || first.FromID != "client-retry" || first.ID != core.MessageID(job.ID, "human", "client-retry") {
 		t.Fatalf("first message=%#v created=%v err=%v", first, created, err)
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not codebase-investigation") {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not codebase-investigation") {
 		t.Fatalf("investigation admission crossed into coding: created=%v err=%v", created, err)
 	}
-	repeated, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
+	repeated, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || created || repeated != first {
 		t.Fatalf("idempotent message=%#v created=%v err=%v", repeated, created, err)
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
 		t.Fatal("changed input under the same source identity did not conflict")
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
 		t.Fatal("byte-distinct complete input under the same source identity did not conflict")
 	}
-	distinct, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-distinct", Input: "same text"})
+	distinct, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-distinct", Input: "same text"})
 	if err != nil || !created || distinct.ID == first.ID || distinct.Sequence != 3 {
 		t.Fatalf("distinct identical message=%#v created=%v err=%v", distinct, created, err)
 	}
-	crossKind, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "workflow", FromID: distinct.FromID, Input: "same source identity from the workflow"})
+	crossKind, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "workflow", FromID: distinct.FromID, Input: "same source identity from the workflow"})
 	if err != nil || !created || crossKind.Sequence != 4 || crossKind.ID == distinct.ID || crossKind.ID != core.MessageID(job.ID, "workflow", distinct.FromID) || crossKind.FromKind != "workflow" || crossKind.FromID != distinct.FromID {
 		t.Fatalf("cross-kind source identity=%#v created=%v err=%v", crossKind, created, err)
 	}
@@ -214,7 +215,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			message, _, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
+			message, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
 			if err == nil {
 				sequences <- message.Sequence
 			}
@@ -301,7 +302,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("cleanup crossed the active harness-mutation fence: %#v", result)
 	case <-time.After(100 * time.Millisecond):
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
 		close(releaseFence)
 		t.Fatalf("cleanup did not close admission before waiting for the active harness-mutation fence: created=%v err=%v", created, err)
 	}
@@ -318,10 +319,10 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if cleaning.AdmissionOpen {
 		t.Fatal("cleanup did not durably close admission")
 	}
-	if retry, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
+	if retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v %v", retry, created, err)
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
 		t.Fatal("cleanup allowed a new message")
 	}
 }
@@ -478,7 +479,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("active Turn delivery candidate=%#v err=%v, want observation outside delivery lane", candidate, err)
 	}
 
-	steerInput := postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: core.MessageSteer}
+	steerInput := core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: core.MessageSteer}
 	steer, created, err := store.AdmitCodingMessage(ctx, steerInput)
 	if err != nil || !created || steer.Intent != core.MessageSteer || steer.TargetTurnID != activeTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
@@ -511,7 +512,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, _, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: other.ID, FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -548,11 +549,11 @@ func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
 			if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			first, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "first-shared-steer", Input: "first accepted shared input", Intent: core.MessageSteer})
+			first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "first-shared-steer", Input: "first accepted shared input", Intent: core.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("first steer=%#v created=%v err=%v", first, created, err)
 			}
-			second, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "second-shared-steer", Input: "second accepted shared input", Intent: core.MessageSteer})
+			second, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "second-shared-steer", Input: "second accepted shared input", Intent: core.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("second steer=%#v created=%v err=%v", second, created, err)
 			}
@@ -613,7 +614,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "terminal-race-steer", Input: "preserve exact durable input", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "terminal-race-steer", Input: "preserve exact durable input", Intent: core.MessageSteer})
 	if err != nil || !created || steer.TargetTurnID != targetTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -631,7 +632,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, actualTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	later, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
+	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
 	if err != nil || !created {
 		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
 	}
@@ -676,7 +677,7 @@ func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 			if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			follow, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "queued-follow", Input: "continue after the accepted outcome"})
+			follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "queued-follow", Input: "continue after the accepted outcome"})
 			if err != nil || !created || follow.Intent != core.MessageFollow {
 				t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 			}
@@ -722,7 +723,7 @@ func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
 	}) {
 		t.Fatalf("prepared Delivery baseline=%#v err=%v", deliveries, err)
 	}
-	later, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
+	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
 	if err != nil || !created {
 		t.Fatalf("later Follow=%#v created=%v err=%v", later, created, err)
 	}
@@ -758,7 +759,7 @@ func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "recover-submitting-steer", Input: "adjust the active Turn", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "recover-submitting-steer", Input: "adjust the active Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -769,7 +770,7 @@ func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
 	if err := store.PrepareAgentRun(ctx, selected.AgentRun.ID, "codex", targetTurnID); err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "queued-after-steer", Input: "run after the active Turn"}); err != nil || !created {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "queued-after-steer", Input: "run after the active Turn"}); err != nil || !created {
 		t.Fatalf("queued Follow created=%v err=%v", created, err)
 	}
 
@@ -802,7 +803,7 @@ func TestTerminalTargetSteerFallbackOwnsRevisionObservation(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -850,7 +851,7 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 	if err := store.RecordRevisionObservation(ctx, job.ID, first.AgentRun.ID, observation, failedEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
 		t.Fatalf("failed accepted turn crossed Revision observation gate: %v", err)
 	}
-	follow, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "successful-follow", Input: "finish the coding workflow"})
+	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "successful-follow", Input: "finish the coding workflow"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
@@ -909,7 +910,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 		t.Fatalf("replay exact changed Revision observation: %v", err)
 	}
 
-	follow, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "verify-unchanged", Input: "verify the current implementation"})
+	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "verify-unchanged", Input: "verify the current implementation"})
 	if err != nil || !created || follow.JobID != job.ID {
 		t.Fatalf("follow Message=%#v created=%v err=%v", follow, created, err)
 	}
@@ -1367,7 +1368,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
 	}
 
-	late, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-before-observation", Input: "include this bounded steering"})
+	late, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "late-before-observation", Input: "include this bounded steering"})
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
@@ -1380,7 +1381,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	includedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-late-"+job.ID)
 	evidence := integrationEvidence(includedRun.ID, "git-revision", "", "", revision, "a")
 	evidence.AgentRunID = includedRun.ID
-	afterCandidate, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
+	afterCandidate, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
 	if err != nil || !created {
 		t.Fatalf("late post-candidate admission=%#v created=%v err=%v", afterCandidate, created, err)
 	}
@@ -1393,7 +1394,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if err := store.RecordRevisionObservation(ctx, job.ID, finalRun.ID, observation, finalEvidence); err != nil {
 		t.Fatalf("final Revision observation: %v", err)
 	}
-	retry, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
+	retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
 	if err != nil || created || retry != late {
 		t.Fatalf("idempotent admitted retry=%#v created=%v err=%v", retry, created, err)
 	}
@@ -1423,7 +1424,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: "incus"}, codingJobInput("cleanup-exhausted-"+suffix, "initial", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-exhausted"))
+	job, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profileapp.Runtime{SandboxProfile: "incus"}, codingJobInput("cleanup-exhausted-"+suffix, "initial", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-exhausted"))
 	if err != nil || !created {
 		t.Fatalf("admit Job created=%v err=%v", created, err)
 	}
@@ -1459,7 +1460,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	second, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: "human", FromID: "later-pending", Input: "must not be submitted by cleanup"})
+	second, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-pending", Input: "must not be submitted by cleanup"})
 	if err != nil || !created || second.Sequence != 2 {
 		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
 	}
@@ -1655,12 +1656,12 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err := store.AttachJobTask(ctx, job.ID, "", unrelated.TaskID, "unrelated-task"); err != nil {
 		t.Fatal(err)
 	}
-	spawned, err := client.Spawn(ctx, postgres.MessageTaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
+	spawned, err := client.Spawn(ctx, coding.TaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: coding.TaskKey(job.ID)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
-	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, postgres.MessageTaskName); err == nil {
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, coding.TaskName); err == nil {
 		t.Fatal("a second public Spawn result replaced the stored task binding")
 	}
 }

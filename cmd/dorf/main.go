@@ -28,10 +28,10 @@ import (
 	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	"github.com/aphronio/dorf/internal/version"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -136,7 +136,8 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	core := coreApplication(store, client)
 	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
-	workflow.Register(client, store, runtimes, core)
+	coding.Register(core, store, runtimes)
+	investigation.Register(core, store, runtimes)
 	return client, nil
 }
 
@@ -597,9 +598,9 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	job, created, err := workflow.Admit(ctx, store, client, providers, workflow.RuntimeProfile{SandboxProfile: profile.Name}, postgres.NewCodingJob{
-		NewJob:     postgres.NewJob{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
-		Repository: *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
+	job, created, err := coding.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, coding.Admission{
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		Repository:   *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
 	})
 	if err != nil {
 		return err
@@ -643,11 +644,11 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
-	input := postgres.NewInvestigationJob{
-		NewJob: postgres.NewJob{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
-		Source: source,
+	input := investigation.Admission{
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		Source:       source,
 	}
-	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.RuntimeProfile{SandboxProfile: profile.Name}, input)
+	job, created, err := investigation.Admit(ctx, store, coreApplication(store, client), gateway.Gateway{StatePath: cfg.GatewayStatePath}, profileapp.Runtime{SandboxProfile: profile.Name}, input)
 	if err != nil {
 		return err
 	}
@@ -673,7 +674,21 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	accepted, created, err := workflow.AdmitMessage(ctx, store, client, postgres.NewMessage{JobID: *jobID, FromKind: core.MessageFromHuman, FromID: *requestID, Input: input, Intent: core.MessageDeliveryIntent(*intent)})
+	job, err := store.Job(ctx, *jobID)
+	if err != nil {
+		return err
+	}
+	messageInput := core.MessageAdmission{JobID: *jobID, FromKind: core.MessageFromHuman, FromID: *requestID, Input: input, Intent: core.MessageDeliveryIntent(*intent)}
+	var accepted core.Message
+	var created bool
+	switch {
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		accepted, created, err = coding.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		accepted, created, err = investigation.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
+	default:
+		return fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
+	}
 	if err != nil {
 		return err
 	}
@@ -904,7 +919,7 @@ func investigationSourceSummary(source investigation.Source) string {
 	return "remote Git " + source.Repository
 }
 
-func joinProviderCapabilities(capabilities []workflow.ProviderCapability) string {
+func joinProviderCapabilities(capabilities []profileapp.Capability) string {
 	if len(capabilities) == 0 {
 		return "none"
 	}
@@ -924,7 +939,7 @@ func retry(ctx context.Context, store postgres.Store, client *absurd.Client, arg
 	if set.NArg() != 1 {
 		return fmt.Errorf("retry requires one Job ID")
 	}
-	receipt, err := workflow.RetryFailedJob(ctx, store, client, set.Arg(0))
+	receipt, err := coreApplication(store, client).RetryFailedJob(ctx, set.Arg(0))
 	if err != nil {
 		return err
 	}

@@ -12,7 +12,7 @@ import (
 
 // authorizeCodingMessage implements the coding workflow's delivery policy
 // inside the same locked transaction that records the accepted Message.
-func authorizeCodingMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input NewMessage) (admittedAgentRun, error) {
+func authorizeCodingMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
 	if job.OutcomeExists {
 		return admittedAgentRun{}, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
 	}

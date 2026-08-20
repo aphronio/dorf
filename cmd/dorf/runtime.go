@@ -20,10 +20,10 @@ import (
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/aphronio/dorf/internal/publication"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/terminal"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -45,10 +45,10 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 	}, nil
 }
 
-func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (workflow.CodingRuntime, error) {
+func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (coding.Runtime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
-		return workflow.CodingRuntime{}, err
+		return coding.Runtime{}, err
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
 	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
@@ -59,14 +59,14 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}.WithClaimCheck(absurdruntime.RequireClaim)
 	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
-	return workflow.CodingRuntime{
+	return coding.Runtime{
 		Profile: resolved.Profile,
 		Coding:  codingService,
 		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeService, Store: r.store,
 			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.Message, bool, error) {
-				return workflow.AdmitMessage(ctx, r.store, r.client, postgres.NewMessage{
+				return coding.AdmitMessage(ctx, r.store, coreApplication(r.store, r.client), core.MessageAdmission{
 					JobID: jobID, FromKind: core.MessageFromHuman, FromID: fromID, Input: input, Intent: core.MessageFollow,
 				})
 			},
@@ -74,18 +74,18 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}, nil
 }
 
-func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (workflow.InvestigationRuntime, error) {
+func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
-		return workflow.InvestigationRuntime{}, err
+		return investigation.Runtime{}, err
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
 	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
-	return workflow.InvestigationRuntime{Profile: resolved.Profile, Investigation: service}, nil
+	return investigation.Runtime{Profile: resolved.Profile, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
-	Profile   workflow.RuntimeProfile
+	Profile   profileapp.Runtime
 	Execution core.ExecutionService
 	Externals terminal.Externals
 	Sandbox   provider.Sandbox
@@ -126,7 +126,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}
 	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	return resolvedBaseRuntime{
-		Profile:   workflow.RuntimeProfile{SandboxProfile: profile.Name},
+		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
 		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil

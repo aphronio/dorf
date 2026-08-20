@@ -3,6 +3,7 @@ package investigation
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
@@ -50,6 +51,16 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	}
 }
 
+func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
+	if TaskName != "dorf-codebase-investigation-v2" || TaskKey("job-1") != "codebase-investigation:v2:job-1" {
+		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
+	}
+	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2)
+	if options.StepName != "dorf/investigation-agent-wake/v2/run-1/00000000000000000002" || options.Timeout != time.Second {
+		t.Fatalf("active investigator wake=%#v", options)
+	}
+}
+
 func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	revision := strings.Repeat("b", 40)
 	job := core.Job{ID: "job-local", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
@@ -68,7 +79,7 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 
 func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
 	tests := []string{
-		"# Finding\n\nSee `internal/workflow/workflow.go:54`.\n",
+		"# Finding\n\nSee `internal/investigation/coordinator.go:54`.\n",
 		"No material issue was found.\n",
 	}
 	for _, test := range tests {
@@ -98,7 +109,7 @@ func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T
 			t.Fatalf("investigation input lacks %q:\n%s", required, input)
 		}
 	}
-	if strings.Contains(input, "/workspace/job") || strings.Contains(input, "internal/workflow") {
+	if strings.Contains(input, "/workspace/job") {
 		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
 	}
 }

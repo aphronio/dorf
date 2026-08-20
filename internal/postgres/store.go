@@ -32,13 +32,10 @@ const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
 	AbsurdSchemaURL     = "https://raw.githubusercontent.com/earendil-works/absurd/" + AbsurdReleaseCommit + "/sql/absurd.sql"
 	AbsurdSchemaSHA256  = "d34309370c539f3a51f2b36b69b1f77551f8e4a14480a1c8def8bb8f40fd9aab"
-	MessageTaskName     = "dorf-coding-job-v3"
 	initialFromID       = "dorf:initial"
 )
 
 var dorfMigrations = []string{"001_baseline.sql"}
-
-func MessageTaskKey(jobID string) string { return "coding-job:v3:" + jobID }
 
 type Store struct{ DB *sql.DB }
 
@@ -60,34 +57,8 @@ func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-type NewJob struct {
-	AdmissionKey       string
-	Workflow           core.WorkflowName
-	WorkflowRevision   string
-	Goal               string
-	SandboxProfile     string
-	ProviderConnection string
-	Model              string
-	ReasoningEffort    string
-}
-
-type NewCodingJob struct {
-	NewJob
-	Repository         string
-	Revision           string
-	Branch             string
-	GitHubRepository   string
-	GitHubInstallation string
-	BaseBranch         string
-}
-
-type NewInvestigationJob struct {
-	NewJob
-	Source investigation.Source
-}
-
 type admissionInput struct {
-	NewJob
+	core.JobAdmission
 	Repository          string
 	Revision            string
 	Branch              string
@@ -95,14 +66,6 @@ type admissionInput struct {
 	GitHubInstallation  string
 	BaseBranch          string
 	InvestigationSource investigation.Source
-}
-
-type NewMessage struct {
-	JobID    string
-	FromKind core.MessageFromKind
-	FromID   string
-	Input    string
-	Intent   core.MessageDeliveryIntent
 }
 
 func (s Store) BootstrapAbsurd(ctx context.Context, schema []byte) error {
@@ -217,15 +180,15 @@ func (s Store) Migrate(ctx context.Context) error {
 
 func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
 
-func (s Store) AdmitCoding(ctx context.Context, input NewCodingJob) (core.Job, bool, error) {
+func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Job, bool, error) {
 	return s.admit(ctx, admissionInput{
-		NewJob: input.NewJob, Repository: input.Repository, Revision: input.Revision, Branch: input.Branch,
+		JobAdmission: input.JobAdmission, Repository: input.Repository, Revision: input.Revision, Branch: input.Branch,
 		GitHubRepository: input.GitHubRepository, GitHubInstallation: input.GitHubInstallation, BaseBranch: input.BaseBranch,
 	})
 }
 
-func (s Store) AdmitInvestigation(ctx context.Context, input NewInvestigationJob) (core.Job, bool, error) {
-	return s.admit(ctx, admissionInput{NewJob: input.NewJob, InvestigationSource: input.Source})
+func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
+	return s.admit(ctx, admissionInput{JobAdmission: input.JobAdmission, InvestigationSource: input.Source})
 }
 
 func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool, error) {
@@ -313,7 +276,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool,
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	stored := admissionInput{NewJob: NewJob{
+	stored := admissionInput{JobAdmission: core.JobAdmission{
 		AdmissionKey: storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
 		Goal: storedRow.Goal, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
@@ -450,17 +413,17 @@ type admittedAgentRun struct {
 	TargetTurnID  string
 }
 
-type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, NewMessage) (admittedAgentRun, error)
+type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, core.MessageAdmission) (admittedAgentRun, error)
 
-func (s Store) AdmitCodingMessage(ctx context.Context, input NewMessage) (core.Message, bool, error) {
+func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
 	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
 }
 
-func (s Store) AdmitInvestigationMessage(ctx context.Context, input NewMessage) (core.Message, bool, error) {
+func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
 	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
 }
 
-func (s Store) admitMessage(ctx context.Context, input NewMessage, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
+func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
 		return core.Message{}, false, err
@@ -480,7 +443,7 @@ func (s Store) admitMessage(ctx context.Context, input NewMessage, workflow core
 	return message, created, nil
 }
 
-func normalizeMessage(input NewMessage) (NewMessage, error) {
+func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
 	input.JobID = strings.TrimSpace(input.JobID)
 	input.FromKind = core.MessageFromKind(strings.TrimSpace(string(input.FromKind)))
 	input.FromID = strings.TrimSpace(input.FromID)
@@ -491,24 +454,24 @@ func normalizeMessage(input NewMessage) (NewMessage, error) {
 		input.Intent = core.MessageFollow
 	}
 	if input.JobID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
-		return NewMessage{}, fmt.Errorf("message admission requires Job ID, from ID, and complete input")
+		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, from ID, and complete input")
 	}
 	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
-		return NewMessage{}, fmt.Errorf("invalid message from kind")
+		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
 	}
 	if len(input.FromID) > 256 {
-		return NewMessage{}, fmt.Errorf("from ID must be at most 256 characters")
+		return core.MessageAdmission{}, fmt.Errorf("from ID must be at most 256 characters")
 	}
 	if input.Intent != core.MessageFollow && input.Intent != core.MessageSteer {
-		return NewMessage{}, fmt.Errorf("message intent must be follow or steer")
+		return core.MessageAdmission{}, fmt.Errorf("message intent must be follow or steer")
 	}
 	if len(input.Input) > 1<<20 {
-		return NewMessage{}, fmt.Errorf("message input exceeds 1 MiB")
+		return core.MessageAdmission{}, fmt.Errorf("message input exceeds 1 MiB")
 	}
 	return input, nil
 }
 
-func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
+func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
 	queries := dbsql.New(tx)
 	job, err := queries.GetJobAdmissionForUpdate(ctx, input.JobID)
 	if err != nil {
@@ -608,6 +571,14 @@ func (s Store) Job(ctx context.Context, id string) (core.Job, error) {
 		WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
 		AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
 	}, nil
+}
+
+func (s Store) JobExists(ctx context.Context, id string) (bool, error) {
+	_, err := s.Job(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (s Store) CodingJob(ctx context.Context, id string) (coding.Job, error) {

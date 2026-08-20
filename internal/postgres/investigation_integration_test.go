@@ -17,7 +17,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -25,8 +24,8 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("codebase-investigation-%d", time.Now().UnixNano())
-	input := postgres.NewInvestigationJob{
-		NewJob: postgres.NewJob{
+	input := investigation.Admission{
+		JobAdmission: core.JobAdmission{
 			AdmissionKey: key, Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
@@ -63,10 +62,10 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
 		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
 		t.Fatalf("coding admission crossed into investigation: created=%v err=%v", created, err)
 	}
 
@@ -124,7 +123,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
 		t.Fatalf("changed Artifact replay error=%v", err)
 	}
-	follow, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
+	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
 	if err != nil || !created || follow.Sequence != 2 {
 		t.Fatalf("follow-up=%#v created=%v err=%v", follow, created, err)
 	}
@@ -163,8 +162,8 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 		Kind: investigation.SourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("8", 64), BundleByteSize: 4096,
 	}
-	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
-		NewJob: postgres.NewJob{
+	job, created, err := store.AdmitInvestigation(ctx, investigation.Admission{
+		JobAdmission: core.JobAdmission{
 			AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
 			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Inspect an unpublished commit.", SandboxProfile: "incus",
@@ -225,7 +224,7 @@ func (e *investigationExternals) AgentInitialTurn(_ context.Context, job core.Jo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.job = job
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Finding\n\nThe explicit coordinator is in `internal/workflow/investigation.go`.\n"}
+	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n"}
 	return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + job.ID, Turn: e.turn}, nil
 }
 func (e *investigationExternals) AgentInitialTurns(context.Context, core.Job) (core.HarnessHistory, error) {
@@ -239,7 +238,7 @@ func (e *investigationExternals) AgentSubmit(_ context.Context, job core.Job, de
 	if delivery.AgentRun.ThreadID != "thread-"+job.ID {
 		return core.HarnessBinding{}, fmt.Errorf("follow-up did not reuse the investigator Thread")
 	}
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Revised finding\n\nThe follow-up is grounded in `internal/workflow/investigation.go`.\n"}
+	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n"}
 	return core.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: e.turn}, nil
 }
 func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, threadID string) (core.HarnessHistory, error) {
@@ -265,8 +264,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, absurdruntime.RequireClaim)
 	service := investigation.NewService(workspaceExecutor, store, externals, records, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
-		NewJob: postgres.NewJob{
+	job, created, err := store.AdmitInvestigation(ctx, investigation.Admission{
+		JobAdmission: core.JobAdmission{
 			AdmissionKey: "investigation-terminal-" + suffix,
 			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Find one concrete simplification.", SandboxProfile: "incus",
@@ -333,7 +332,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
 		t.Fatalf("Job did not remain open for follow-up or cleanup: %#v err=%v", job, err)
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
 		t.Fatalf("follow-up created=%v err=%v", created, err)
 	}
 	revisionTaskName := taskName + "-follow-up"

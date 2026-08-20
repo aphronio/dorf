@@ -1113,8 +1113,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D051 — One explicit coding coordinator uses stable Absurd Steps
 
-- **Status:** Accepted workflow boundary — 2026-08-10; transitional phase removed by D061
-- **Decision:** The coding path is ordered by one readable `workflow.RunJob` coordinator. It invokes
+- **Status:** Accepted workflow boundary — 2026-08-10; refined by D061 and D087
+- **Decision:** The coding path is ordered by one readable `coding.RunJob` coordinator. It invokes
   bounded operations in product order. `CurrentWork` selects the exact owning fact. Each external
   Action runs in its own `dorf/action/v1/<ActionID>` Step and returns
   `ActionStepResultV1{ActionID}`; AgentRun, Revision, Check, and policy operations retain their own
@@ -2029,10 +2029,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D080 — Workflows authorize Messages; PostgreSQL atomically records them
 
-- **Status:** Accepted after live investigation dogfood — 2026-08-20
+- **Status:** Accepted after live investigation dogfood; package boundary refined by D087 — 2026-08-20
 - **Decision:** Remove the generic PostgreSQL `AdmitMessage` workflow switch. The workflow layer
-  dispatches by the Job's immutable workflow identity to `AdmitCodingMessage` or
-  `AdmitInvestigationMessage`. Each typed path authorizes its delivery intent, AgentRun role and
+  exposes `AdmitCodingMessage` and `AdmitInvestigationMessage`; the client adapter dispatches by the
+  Job's immutable workflow identity. Each typed path authorizes its delivery intent, AgentRun role and
   capability, exact Revision, and Harness Thread reuse. One shared PostgreSQL transaction still
   locks the Job, verifies the expected workflow revision, preserves sender idempotency and FIFO,
   and inserts the authorized Message and AgentRun together.
@@ -2115,7 +2115,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   product term and changes no meaning in the North Star vocabulary.
 - **Proof:** Core declares no Git workspace interface; the Sandbox contract contains no Git
   operation; one Git workspace implementation is exercised through a provider-neutral Sandbox fake;
-  coding execution lives outside the shared custody package; Incus, E2B, workflow, CLI, and
+  coding execution lives outside the shared custody package; Incus, E2B, native-workflow, CLI, and
   PostgreSQL tests retain the same observable behavior.
 - **Reconsider when:** Independently distributed workflow modules require dynamic loading, or a
   non-workflow consumer proves a smaller reusable repository boundary.
@@ -2188,3 +2188,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Not included:** No public transport, SDK, plugin system, or new product vocabulary is introduced.
 - **Reconsider when:** A real external transport earns a separate public resource contract or a Core
   capability proves independently useful enough to justify another package boundary.
+
+## D087 — Each native workflow owns its complete in-process module
+
+- **Status:** Accepted package-ownership completion — 2026-08-20
+- **Decision:** `internal/coding` and `internal/investigation` each own their typed admission input,
+  definition and presentation, coordinator, runtime composition, Absurd task registration, Message
+  policy, and durable wait loop. Delete the horizontal `internal/workflow` package. Core retains only
+  reusable task attachment, Message wake emission, operator retry, and requested-cleanup mechanics.
+- **Durability:** Existing workflow names and revisions, Absurd task names, idempotency keys, Step and
+  event identities, PostgreSQL facts, retry behavior, and cleanup ordering are unchanged. Moving task
+  registration beside its coordinator does not move execution authority out of Absurd.
+- **Why:** A central workflow package had become a second composition layer that imported every
+  native workflow and translated their types and presentation. It obscured that native workflows are
+  independent Core consumers and made adding one require editing a pseudo-registry.
+- **Not included:** No dynamic plugin system, workflow DSL, public transport, or new product
+  vocabulary is introduced. The binary composition root still selects the compiled workflows.
+- **Reconsider when:** Independently distributed workflows earn a loading and compatibility contract,
+  or three workflow modules prove a smaller shared registration contract that removes more policy
+  than it hides.

@@ -14,7 +14,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
@@ -53,7 +52,7 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
 		t.Fatalf("failed task=%#v err=%v", failed, err)
 	}
-	receipt, err := workflow.RetryFailedJob(ctx, store, client, job.ID)
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil || pending == nil || pending.State != absurd.TaskPending {
 		t.Fatalf("scheduled task=%#v err=%v", pending, err)
 	}
-	if _, err := workflow.RetryFailedJob(ctx, store, client, job.ID); err == nil || !strings.Contains(err.Error(), "not currently failed") {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err == nil || !strings.Contains(err.Error(), "not currently failed") {
 		t.Fatalf("non-failed retry error=%v", err)
 	}
 	after, err := store.Job(ctx, job.ID)
@@ -126,7 +125,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 		t.Fatalf("ordered task attachments=%#v", attachments)
 	}
 
-	receipt, err := workflow.RetryFailedJob(ctx, store, client, job.ID)
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
