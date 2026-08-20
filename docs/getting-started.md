@@ -44,8 +44,8 @@ The CLI verifies release and image identity before import, then stores the exact
 explicit profile verification creates one disposable Sandbox, runs Dorf's base functional probe,
 deletes it, and confirms absence before the profile can admit work. To bring an existing artifact,
 use `dorf profile create` with its provider-specific image or template reference. Image construction,
-publication, and consumer-validation authorities are indexed in the
-[Incus image guide](implementation/incus-image.md).
+publication, and consumer validation are owned by the repository's release command; see the
+[release process](releasing.md).
 
 ## 3. Connect the provider and initialize Dorf
 

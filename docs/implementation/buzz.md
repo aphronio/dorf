@@ -5,7 +5,7 @@ directly throughout iterative development rather than promoted through separate 
 production environments. It is not a Dorf Sandbox: Dorf does not assign Jobs to it, clone
 managed repositories into it, or give an agent control of its lifecycle.
 
-The default capacity replaces the paused `hermes-vm` envelope:
+The default capacity is:
 
 - VM: `dorf-buzz`
 - base: `images:ubuntu/24.04`
@@ -102,50 +102,10 @@ scripts/incus/expose-buzz.sh disable
 `disable` removes only the `buzz-tailnet` Incus proxy device and its VM address reservation,
 restores Buzz's loopback binding and advertised URLs, and restarts the relay.
 
-## Current dogfood evidence
-
-The first real client path was validated on 2026-07-28 with Buzz Desktop `v0.4.26` on a separate
-MacBook already joined to the same tailnet. The client was subsequently upgraded to `v0.5.0`
-without changing the relay path or identity:
-
-```text
-Buzz Desktop on Mac
-  -> ws://omarchy:3000
-  -> Tailscale to 100.126.177.27:3000
-  -> Incus NAT proxy buzz-tailnet
-  -> 10.125.18.211:3000 in dorf-buzz
-  -> Buzz relay and PostgreSQL
-```
-
-The desktop generated the human identity locally. Its public identity
-`npub1czt79ctlfgmrt6nav52wlcyfz5kh3ly6m4euqhnpqmtvptfrlekq6pr82j` is the sole relay
-member with role `owner`; no copy of its private key is present in the VM. The temporary bootstrap
-identity was removed only after this owner authenticated successfully, and its key files are absent.
-
-The owner sent `hello from macbook` in the private Welcome channel. The relay accepted and persisted
-the signed event with ID
-`28cd01fd1df0bce8dacef64d717276d8682003ae3573032b2db8c115c307a083`, proving the
-actual desktop-to-database path rather than only network liveness.
-
-Buzz onboarding also created the built-in Fizz, Honey, and Bumble persona definitions. No AI
-provider is connected and those agents are intentionally inactive. Dorf does not use that
-ACP-managed path.
-
 Normal Buzz channel messages, including access-controlled private-channel messages, are plaintext
 to the relay database. Tailscale protects this deployment's network path, and Buzz membership
 protects ordinary client reads, but an administrator of Omarchy, Incus, the VM, PostgreSQL, or its
 backups can read stored conversation content. Treat the host and its backups as trusted.
-
-## Integration boundary
-
-The direct Buzz-to-Dorf coordinator was a disposable tracer bullet and is not retained. Channel
-identity, relay messaging, replay handling, and assistant behavior remain outside the supported Go
-Job application. A future concrete client may call the same Dorf application boundary, but Buzz is
-not a second coding workflow and does not own Job or Sandbox lifecycle.
-
-There is no supported Dorf `buzz` command or coordinator listener. Buzz changes independently and
-is not a public Dorf integration contract. Inspect the current upstream project before implementing
-or operating a new integration.
 
 ## Operate and recover
 
@@ -163,6 +123,3 @@ This is the main deployment, so upgrade it in place only through a small demonst
 coherent backup, change the pinned revision, run the provisioning command, and validate relay
 health plus the real desktop client before continuing. Add a separate environment only when a
 concrete migration, additional user, or recovery risk makes it cheaper than restoring this one.
-
-Do not delete `hermes-vm` as part of this setup. It remains stopped with `boot.autostart=false` and
-retains its disk and snapshots for reversible recovery.

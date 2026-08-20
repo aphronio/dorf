@@ -5,7 +5,7 @@ can let a user sign in once with a ChatGPT subscription and then spawn many sand
 its own real Codex app-server, without repeating login per sandbox.
 
 **Outcome (2026-07-29):** decided — see D035 in `docs/project/decisions.md` and
-`docs/project/model-auth-broker.md`. This document remains the evidence base.
+`docs/history/model-auth-broker.md`. This document remains the evidence base.
 
 ## Two independent layers
 

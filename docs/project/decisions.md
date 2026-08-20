@@ -650,7 +650,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   credentials and may be egress-limited to the broker alone. Incus images are credential-free for
   the Codex leg. Login is a one-time device-code flow; identical sandbox wiring serves
   ChatGPT-subscription or API-key billing. Chosen/rejected/parked options:
-  `docs/project/model-auth-broker.md`. Validation: `docs/research/codex-auth-multi-sandbox.md`
+  `docs/history/model-auth-broker.md`. Validation: `docs/research/codex-auth-multi-sandbox.md`
   (2026-07-29 experiment).
 - **Why:** Cloned secret-bearing images proved unreliable under concurrent refresh (#117, from
   #112/#114 Droid evidence). Brokered custody removes refreshable state from sandboxes by

@@ -1,7 +1,7 @@
 # Brokered Model Authentication for Sandboxes
 
 - **Status:** Historical decision evidence from 2026-07-29
-- **Current authority:** [Provider Gateway](provider-gateway.md) and decisions D035–D036
+- **Current authority:** [Provider Gateway](../project/provider-gateway.md) and decisions D035–D036
 - **Research evidence:** `docs/research/codex-auth-multi-sandbox.md` and issue #117
 
 This page preserves the experiment and rejected alternatives that led to the current boundary. It is

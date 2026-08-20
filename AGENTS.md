@@ -7,19 +7,17 @@ Read only the authority relevant to the task:
 - [Principles](docs/project/principles.md): judgment, abstractions, and vertical-slice completion.
 - [North Star](docs/project/north-star.md): product direction, vocabulary, and experience.
 - [Architecture](docs/project/architecture.md): storage, sequencing, recovery, and composition.
-- [Showcase Ideals](docs/project/showcase-ideals.md): workflow-facing acceptance and verification DX.
 - [Decision Log](docs/project/decisions.md): accepted consequential choices and reconsideration triggers.
 - [Provider Gateway](docs/project/provider-gateway.md): provider authentication, routing, and broker ownership.
-- [Orchestration](docs/project/orchestration.md): coordinating and recovering bounded issues or epics.
-- [Core Setup](docs/implementation/core-setup.md): host setup, default deployment, and diagnostics.
-- [sqlc Guide](docs/project/sqlc.md): schema, queries, generation, transactions, and type mapping.
+- [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and operations.
 - [Release Process](docs/releasing.md): release operator entry point.
 - [Sandbox and VM Watchlist](docs/research/sandbox-vm-watchlist.md): non-normative candidates and
   current evaluation priority; consult when discussing or selecting Sandbox or VM providers.
 
-Material under `docs/research/` and `docs/history/` is archival and non-normative. Read research only
-for an explicit ecosystem comparison, including any Sandbox or VM provider discussion; neither
-directory is a source of Dorf requirements.
+Material under `docs/research/` and `docs/history/` is archival and non-normative. Read it only when
+the task explicitly needs historical evidence, archived product exploration, or an ecosystem
+comparison such as Sandbox or VM provider selection; neither directory is a source of Dorf
+requirements.
 
 ## Operating Rules
 
@@ -34,6 +32,8 @@ directory is a source of Dorf requirements.
 - Execute deterministic setup and verification through repository-owned commands before spending
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.
+- For PostgreSQL changes, edit the schema and query sources rather than generated `dbsql` files;
+  regenerate and check them through the repository's `sql:generate` and `sql:check` tasks.
 - Use the GitHub CLI (`gh`) for GitHub issues, pull requests, and other repository operations. Do not
   use the Codex GitHub app for those operations.
 - Put Markdown issue and PR bodies in a temporary file and pass it with `--body-file`; do not place

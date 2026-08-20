@@ -9,10 +9,9 @@
 | Apply enduring product and engineering judgment | [Principles](project/principles.md) |
 | Understand durable authority and recovery | [Greenfield architecture](project/architecture.md) |
 | Understand accepted choices | [Decision log](project/decisions.md) |
-| Change PostgreSQL queries safely | [sqlc working guide](project/sqlc.md) |
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
-| Build the credential-free Incus image | [Incus image](implementation/incus-image.md) |
-| Build and qualify the E2B template | [E2B template](implementation/e2b-template.md) |
+| Operate the persistent Buzz deployment | [Buzz deployment](implementation/buzz.md) |
 
-Material under `docs/research/` is archival ecosystem research. Material under `docs/history/` is
-completed implementation history. Neither is a source of current Dorf requirements.
+Material under `docs/research/` is archival, non-normative exploration. Material under
+`docs/history/` is completed implementation and decision history. Neither is a source of current
+Dorf requirements.
