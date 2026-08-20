@@ -325,6 +325,10 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunVi
 		return work(WorkAttention, id, detail)
 	}
 
+	// Deterministic verification is intentionally absent here. D084 records
+	// when workflow-owned verification is earned and where to recover the
+	// useful pre-deletion mechanics without restoring the old repository contract.
+
 	// The ReviewPlan is the final deterministic decision. There is no pending
 	// plan or a separate handoff fact.
 	if plan == nil {

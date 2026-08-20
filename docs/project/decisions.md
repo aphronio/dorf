@@ -2139,6 +2139,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A concrete workflow needs deterministic evaluation as an explicit accepted
   input with its own result and recovery semantics. Add that workflow-owned contract from the real
   use case; do not restore an ambient repository file or a generic Core Check primitive.
+- **Implementation reference:** Commit `36d8a01` is the last tree before deletion. Treat it as
+  non-normative source material when a workflow earns verification: retain exact-Revision binding,
+  stable Absurd Step identities, bounded command observations, content-addressed Evidence, and
+  retry-safe settlement. Do not recover `.dorf.toml`, implicit setup discovery, or Core-owned Check
+  policy merely because the old implementation contained them.
 
 ## D085 — Workflow records live with the workflow that defines them
 
