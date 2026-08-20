@@ -23,40 +23,43 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("codebase-investigation-%d", time.Now().UnixNano())
-	input := postgres.NewJob{
-		AdmissionKey: key, Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
-		Goal: "Find one unnecessary coding-workflow dependency.", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), Branch: "dorf/investigation-test",
-		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		InvestigationSource: spine.CodebaseInvestigationSource{Kind: spine.InvestigationSourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+	input := postgres.NewInvestigationJob{
+		NewJob: postgres.NewJob{
+			AdmissionKey: key, Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
+			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		},
+		Source: spine.CodebaseInvestigationSource{Kind: spine.InvestigationSourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
-	job, created, err := store.Admit(ctx, input)
+	job, created, err := store.AdmitInvestigation(ctx, input)
 	if err != nil || !created || job.Workflow != input.Workflow || job.WorkflowRevision != input.WorkflowRevision {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
-	repeated, created, err := store.Admit(ctx, input)
+	repeated, created, err := store.AdmitInvestigation(ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
 		t.Fatalf("idempotent Job=%#v created=%v err=%v", repeated, created, err)
 	}
 	source, err := store.CodebaseInvestigationSource(ctx, job.ID)
-	if err != nil || source.JobID != job.ID || source.Kind != spine.InvestigationSourceRemote || source.Repository != input.Repository || source.Revision != input.Revision {
+	if err != nil || source.JobID != job.ID || source.Kind != spine.InvestigationSourceRemote || source.Repository != input.Source.Repository || source.Revision != input.Source.Revision {
 		t.Fatalf("source=%#v err=%v", source, err)
 	}
 	changedSource := input
-	changedSource.Repository = ""
-	changedSource.InvestigationSource = spine.CodebaseInvestigationSource{
-		Kind: spine.InvestigationSourceGitBundle, Revision: input.Revision,
+	changedSource.Source = spine.CodebaseInvestigationSource{
+		Kind: spine.InvestigationSourceGitBundle, Revision: input.Source.Revision,
 		BundleDigest: strings.Repeat("e", 64), BundleByteSize: 123,
 	}
-	if _, _, err := store.Admit(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
+	if _, _, err := store.AdmitInvestigation(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
 	changed := input
 	changed.Workflow = spine.WorkflowCodingToProposal
 	changed.WorkflowRevision = spine.CodingToProposalRevision
-	changed.GitHubRepository, changed.GitHubInstallation, changed.BaseBranch = "aphronio/dorf", "42", "main"
-	if _, _, err := store.Admit(ctx, changed); err == nil {
+	if _, _, err := store.AdmitInvestigation(ctx, changed); err == nil {
 		t.Fatal("same admission key changed workflow identity")
+	}
+	if _, err := store.DB.ExecContext(ctx, `insert into dorf.coding_to_proposal_inputs(job_id,workflow_name,repository,starting_revision,revision,branch,github_repository,github_installation_id,base_branch) values($1,'coding-to-proposal',$2,$3,$3,$4,$5,$6,$7)`,
+		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
+		t.Fatal("database attached coding input to an investigation Job")
 	}
 	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
 		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
@@ -69,8 +72,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	run := deliveries[0].AgentRun
 	otherInput := input
 	otherInput.AdmissionKey += "-other"
-	otherInput.Branch += "-other"
-	otherJob, created, err := store.Admit(ctx, otherInput)
+	otherJob, created, err := store.AdmitInvestigation(ctx, otherInput)
 	if err != nil || !created {
 		t.Fatalf("other Job=%#v created=%v err=%v", otherJob, created, err)
 	}
@@ -156,14 +158,16 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 		Kind: spine.InvestigationSourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("8", 64), BundleByteSize: 4096,
 	}
-	job, created, err := store.Admit(ctx, postgres.NewJob{
-		AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
-		Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
-		Goal: "Inspect an unpublished commit.", Revision: revision, Branch: "dorf/local-investigation",
-		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		InvestigationSource: supplied,
+	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
+		NewJob: postgres.NewJob{
+			AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
+			Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			Goal: "Inspect an unpublished commit.", SandboxProfile: "incus",
+			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		},
+		Source: supplied,
 	})
-	if err != nil || !created || job.Repository != "" || job.Revision != revision {
+	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
 	stored, err := store.CodebaseInvestigationSource(ctx, job.ID)
@@ -194,11 +198,11 @@ func (e *investigationExternals) effect(kind spine.ActionKind) error {
 func (e *investigationExternals) SandboxCreate(context.Context, spine.Job, spine.Sandbox) error {
 	return e.effect(spine.ActionSandboxCreate)
 }
-func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
+func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
 	return e.effect(spine.ActionRepositoryClone)
 }
 func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source spine.CodebaseInvestigationSource, contents []byte) error {
-	if source.JobID != job.ID || source.Revision != job.Revision || string(contents) != "retained repository input" {
+	if source.JobID != job.ID || string(contents) != "retained repository input" {
 		return fmt.Errorf("unexpected retained repository restore")
 	}
 	return e.effect(spine.ActionRepositoryRestore)
@@ -212,7 +216,7 @@ func (e *investigationExternals) RouteRevoke(context.Context, spine.Job, spine.S
 func (e *investigationExternals) SandboxDelete(context.Context, spine.Job, spine.Sandbox) error {
 	return e.effect(spine.ActionSandboxDelete)
 }
-func (e *investigationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e *investigationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery, _ string) (spine.HarnessBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.job = job
@@ -224,7 +228,7 @@ func (e *investigationExternals) AgentInitialTurns(context.Context, spine.Job) (
 	defer e.mu.Unlock()
 	return spine.HarnessHistory{Harness: "codex", ThreadID: "thread-" + e.job.ID, Turns: []spine.HarnessTurn{e.turn}}, nil
 }
-func (e *investigationExternals) AgentSubmit(_ context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e *investigationExternals) AgentSubmit(_ context.Context, job spine.Job, delivery spine.Delivery, _ string) (spine.HarnessBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if delivery.AgentRun.ThreadID != "thread-"+job.ID {
@@ -238,9 +242,9 @@ func (e *investigationExternals) AgentTurns(_ context.Context, job spine.Job, th
 	defer e.mu.Unlock()
 	return spine.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: []spine.HarnessTurn{e.turn}}, nil
 }
-func (*investigationExternals) RepositoryRevision(_ context.Context, job spine.Job) (spine.RevisionObservation, error) {
+func (*investigationExternals) RepositoryRevision(_ context.Context, _ spine.Job, _ string, revision string) (spine.RevisionObservation, error) {
 	now := time.Now().UTC()
-	return spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, nil
+	return spine.RevisionObservation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
 }
 
 func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *testing.T) {
@@ -254,13 +258,14 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	externals := &investigationExternals{}
 	service := spine.NewService(store, externals, records, nil, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := store.Admit(ctx, postgres.NewJob{
-		AdmissionKey: "investigation-terminal-" + suffix,
-		Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
-		Goal:     "Find one concrete simplification.",
-		Revision: strings.Repeat("d", 40), Branch: "dorf/investigation-terminal-" + suffix,
-		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		InvestigationSource: spine.CodebaseInvestigationSource{
+	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
+		NewJob: postgres.NewJob{
+			AdmissionKey: "investigation-terminal-" + suffix,
+			Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			Goal: "Find one concrete simplification.", SandboxProfile: "incus",
+			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		},
+		Source: spine.CodebaseInvestigationSource{
 			Kind: spine.InvestigationSourceGitBundle, Revision: strings.Repeat("d", 40),
 			BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
 		},

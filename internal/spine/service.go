@@ -29,13 +29,13 @@ type Store interface {
 type Externals interface {
 	Harness() string
 	SandboxCreate(context.Context, Job, Sandbox) error
-	RepositoryClone(context.Context, Job, Sandbox) error
+	RepositoryClone(context.Context, Job, Sandbox, string, string, string) error
 	RepositoryRestore(context.Context, Job, Sandbox, CodebaseInvestigationSource, []byte) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
-	AgentInitialTurn(context.Context, Job, Delivery) (HarnessBinding, error)
+	AgentInitialTurn(context.Context, Job, Delivery, string) (HarnessBinding, error)
 	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
 	AgentTurns(context.Context, Job, string) (HarnessHistory, error)
-	AgentSubmit(context.Context, Job, Delivery) (HarnessBinding, error)
+	AgentSubmit(context.Context, Job, Delivery, string) (HarnessBinding, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
 	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
@@ -54,9 +54,9 @@ type CodingStore interface {
 }
 
 type RepositoryExternals interface {
-	RepositorySetup(context.Context, Job, Action) (CommandObservation, []DeclaredCheck, error)
-	RepositoryRevision(context.Context, Job) (RevisionObservation, error)
-	RepositoryCheck(context.Context, Job, Check) (CommandObservation, error)
+	RepositorySetup(context.Context, CodingJob, Action) (CommandObservation, []DeclaredCheck, error)
+	RepositoryRevision(context.Context, Job, string, string) (RevisionObservation, error)
+	RepositoryCheck(context.Context, CodingJob, Check) (CommandObservation, error)
 }
 
 // ServiceStore and ServiceExternals are the one complete construction
@@ -155,7 +155,7 @@ func (s Service) uncertainAgentRun(ctx context.Context, runID, reason string) er
 	return s.recordAgentRun(ctx, func() error { return s.store.UncertainAgentRun(ctx, runID, reason) })
 }
 
-func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error {
+func (s Service) ExecuteSetup(ctx context.Context, job CodingJob, action Action) error {
 	observation, declared, err := s.externals.RepositorySetup(ctx, job, action)
 	if err != nil {
 		if attentionNeeded(err) {
@@ -184,8 +184,8 @@ func (s Service) ExecuteSetup(ctx context.Context, job Job, action Action) error
 	return nil
 }
 
-func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) error {
-	observation, err := s.externals.RepositoryRevision(ctx, job)
+func (s Service) ObserveRevision(ctx context.Context, job CodingJob, run AgentRun) error {
+	observation, err := s.externals.RepositoryRevision(ctx, job.Job, job.Branch, job.Revision)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
@@ -208,7 +208,7 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, run AgentRun) err
 	return s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
 }
 
-func (s Service) ExecuteCheck(ctx context.Context, job Job, check Check) error {
+func (s Service) ExecuteCheck(ctx context.Context, job CodingJob, check Check) error {
 	if check.State == "passed" {
 		return nil
 	}
@@ -308,14 +308,14 @@ func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity strin
 	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery) error {
+func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery, input string) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery)
+		return s.deliverSteer(ctx, job, delivery, input)
 	}
-	return s.deliverAgentRun(ctx, job, delivery)
+	return s.deliverAgentRun(ctx, job, delivery, input)
 }
 
-func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery) error {
+func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
 	contract := agentRunContract{
 		store:               s.store,
@@ -327,7 +327,7 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 		bindUnsupportedTurn: true,
 		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
 			delivery.AgentRun = run
-			return s.externals.AgentInitialTurn(ctx, job, delivery)
+			return s.externals.AgentInitialTurn(ctx, job, delivery, input)
 		},
 		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
 			history, err := s.externals.AgentInitialTurns(ctx, job)
@@ -338,7 +338,7 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 		},
 		submitBound: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
 			delivery.AgentRun = run
-			return s.externals.AgentSubmit(ctx, job, delivery)
+			return s.externals.AgentSubmit(ctx, job, delivery, input)
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
 			return s.externals.AgentTurns(ctx, job, run.ThreadID)
@@ -405,18 +405,18 @@ func (s Service) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun,
 
 // VerifyRepositoryUnchanged proves the investigation left the admitted exact
 // checkout clean before its report becomes a terminal workflow fact.
-func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job Job) error {
-	observation, err := s.externals.RepositoryRevision(ctx, job)
+func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job Job, revision string) error {
+	observation, err := s.externals.RepositoryRevision(ctx, job, "", revision)
 	if err != nil {
 		return err
 	}
-	if observation.Revision != job.Revision || observation.ComparisonBase != job.Revision || observation.Branch != job.Branch {
+	if observation.Revision != revision || observation.ComparisonBase != revision || observation.Branch != "" {
 		return fmt.Errorf("investigation changed the admitted repository checkout")
 	}
 	return nil
 }
 
-func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {
+func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
 	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
 	if err != nil {
@@ -432,7 +432,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) e
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
 			return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 		}
-		return s.deliverAgentRun(ctx, job, delivery)
+		return s.deliverAgentRun(ctx, job, delivery, input)
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -463,7 +463,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery) e
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
 				return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 			}
-			return s.deliverAgentRun(ctx, job, delivery)
+			return s.deliverAgentRun(ctx, job, delivery, input)
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -659,8 +659,6 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	switch action.Kind {
 	case ActionSandboxCreate:
 		err = s.externals.SandboxCreate(ctx, job, sandbox)
-	case ActionRepositoryClone:
-		err = s.externals.RepositoryClone(ctx, job, sandbox)
 	case ActionRouteCreate, ActionRouteRevoke:
 		route := RouteForSandbox(sandbox)
 		if action.Kind == ActionRouteCreate {
@@ -698,11 +696,29 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 	return nil
 }
 
+// ExecuteRepositoryClone reconciles one workflow-owned remote Git input
+// without placing repository facts on Core Job.
+func (s Service) ExecuteRepositoryClone(ctx context.Context, job Job, sandbox Sandbox, action Action, repository, revision, branch string) error {
+	if action.Kind != ActionRepositoryClone {
+		return fmt.Errorf("repository clone requires the exact repository-clone Action")
+	}
+	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
+		return fmt.Errorf("repository clone does not belong to the exact Job and Sandbox")
+	}
+	if err := s.externals.RepositoryClone(ctx, job, sandbox, repository, revision, branch); err != nil {
+		return err
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
+}
+
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.
 func (s Service) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox Sandbox, action Action, source CodebaseInvestigationSource) error {
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
-		source.JobID != job.ID || source.Kind != InvestigationSourceGitBundle || source.Revision != job.Revision {
+		source.JobID != job.ID || source.Kind != InvestigationSourceGitBundle {
 		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
 	}
 	contents, err := s.blobs.ReadVerified(source.BundleDigest, source.BundleByteSize)

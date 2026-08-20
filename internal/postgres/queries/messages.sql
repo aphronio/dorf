@@ -97,10 +97,11 @@ select coalesce(
     (
         select m.sequence
         from dorf.jobs j
-        join dorf.actions a on a.id=j.setup_action_id
+        join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+        join dorf.actions a on a.id=c.setup_action_id
         join dorf.job_messages m
           on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
-        where j.id=sqlc.arg(job_id) and j.setup_action_id=a.id
+        where j.id=sqlc.arg(job_id) and c.setup_action_id=a.id
           and a.kind='repository-setup' and a.scope_key<>''
           and a.state='unsettled'
     ),

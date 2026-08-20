@@ -20,7 +20,7 @@ type historyEntry struct {
 
 func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 	definition := workflow.CodingToProposalDefinition()
-	entries := commonHistory(snapshot.Job, snapshot.Deliveries, snapshot.Actions)
+	entries := commonHistory(snapshot.Job.Job, snapshot.Deliveries, snapshot.Actions)
 	add := func(at time.Time, text string) { addHistoryEntry(&entries, at, text) }
 
 	for _, delivery := range snapshot.Deliveries {

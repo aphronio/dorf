@@ -14,9 +14,9 @@ import (
 )
 
 const advanceJobRevision = `-- name: AdvanceJobRevision :execrows
-update dorf.jobs
+update dorf.coding_to_proposal_inputs
 set revision=$1
-where id=$2 and revision=$3
+where job_id=$2 and revision=$3
 `
 
 type AdvanceJobRevisionParams struct {
@@ -53,31 +53,23 @@ func (q *Queries) ClearWorkflowAttention(ctx context.Context, arg ClearWorkflowA
 }
 
 const getAdmittedJobForUpdate = `-- name: GetAdmittedJobForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,sandbox_profile,provider_connection,
-       model,reasoning_effort,coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch
+select id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,
+       model,reasoning_effort
 from dorf.jobs
 where admission_key=$1
 for update
 `
 
 type GetAdmittedJobForUpdateRow struct {
-	ID                   string
-	AdmissionKey         string
-	WorkflowName         spine.WorkflowName
-	WorkflowRevision     string
-	Goal                 string
-	Repository           string
-	Revision             string
-	Branch               string
-	SandboxProfile       string
-	ProviderConnection   string
-	Model                string
-	ReasoningEffort      string
-	GithubRepository     string
-	GithubInstallationID string
-	BaseBranch           string
+	ID                 string
+	AdmissionKey       string
+	WorkflowName       spine.WorkflowName
+	WorkflowRevision   string
+	Goal               string
+	SandboxProfile     string
+	ProviderConnection string
+	Model              string
+	ReasoningEffort    string
 }
 
 func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey string) (GetAdmittedJobForUpdateRow, error) {
@@ -89,13 +81,120 @@ func (q *Queries) GetAdmittedJobForUpdate(ctx context.Context, admissionKey stri
 		&i.WorkflowName,
 		&i.WorkflowRevision,
 		&i.Goal,
-		&i.Repository,
-		&i.Revision,
-		&i.Branch,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
 		&i.ReasoningEffort,
+	)
+	return i, err
+}
+
+const getCodingJob = `-- name: GetCodingJob :one
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+       c.repository,c.starting_revision,c.revision,c.branch,
+       c.github_repository,c.github_installation_id,c.base_branch,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
+       coalesce(j.workflow_attention,'') as workflow_attention,
+       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
+       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       j.admitted_at,j.cleaned_at
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+left join lateral (
+    select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
+where j.id=$1
+`
+
+type GetCodingJobRow struct {
+	ID                      string
+	AdmissionKey            string
+	WorkflowName            spine.WorkflowName
+	WorkflowRevision        string
+	Goal                    string
+	Repository              string
+	StartingRevision        string
+	Revision                string
+	Branch                  string
+	GithubRepository        string
+	GithubInstallationID    string
+	BaseBranch              string
+	SandboxProfile          string
+	ProviderConnection      string
+	Model                   string
+	ReasoningEffort         string
+	AdmissionOpen           bool
+	CleanupState            spine.CleanupState
+	CurrentTaskID           string
+	WorkflowAttention       string
+	WorkflowAttentionSource string
+	WorkflowAttentionAt     sql.NullTime
+	CleanupAttention        string
+	AdmittedAt              time.Time
+	CleanedAt               sql.NullTime
+}
+
+func (q *Queries) GetCodingJob(ctx context.Context, jobID string) (GetCodingJobRow, error) {
+	row := q.db.QueryRowContext(ctx, getCodingJob, jobID)
+	var i GetCodingJobRow
+	err := row.Scan(
+		&i.ID,
+		&i.AdmissionKey,
+		&i.WorkflowName,
+		&i.WorkflowRevision,
+		&i.Goal,
+		&i.Repository,
+		&i.StartingRevision,
+		&i.Revision,
+		&i.Branch,
+		&i.GithubRepository,
+		&i.GithubInstallationID,
+		&i.BaseBranch,
+		&i.SandboxProfile,
+		&i.ProviderConnection,
+		&i.Model,
+		&i.ReasoningEffort,
+		&i.AdmissionOpen,
+		&i.CleanupState,
+		&i.CurrentTaskID,
+		&i.WorkflowAttention,
+		&i.WorkflowAttentionSource,
+		&i.WorkflowAttentionAt,
+		&i.CleanupAttention,
+		&i.AdmittedAt,
+		&i.CleanedAt,
+	)
+	return i, err
+}
+
+const getCodingToProposalInput = `-- name: GetCodingToProposalInput :one
+select job_id,repository,starting_revision,revision,branch,
+       github_repository,github_installation_id,base_branch
+from dorf.coding_to_proposal_inputs
+where job_id=$1
+`
+
+type GetCodingToProposalInputRow struct {
+	JobID                string
+	Repository           string
+	StartingRevision     string
+	Revision             string
+	Branch               string
+	GithubRepository     string
+	GithubInstallationID string
+	BaseBranch           string
+}
+
+func (q *Queries) GetCodingToProposalInput(ctx context.Context, jobID string) (GetCodingToProposalInputRow, error) {
+	row := q.db.QueryRowContext(ctx, getCodingToProposalInput, jobID)
+	var i GetCodingToProposalInputRow
+	err := row.Scan(
+		&i.JobID,
+		&i.Repository,
+		&i.StartingRevision,
+		&i.Revision,
+		&i.Branch,
 		&i.GithubRepository,
 		&i.GithubInstallationID,
 		&i.BaseBranch,
@@ -130,10 +229,7 @@ func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) 
 }
 
 const getJob = `-- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.repository,j.revision,
-       initial.oid as starting_revision,j.branch,
-       coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
-       coalesce(j.base_branch,'') as base_branch,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -141,7 +237,6 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.reposit
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
-join dorf.revisions initial on initial.job_id=j.id and initial.generation=0
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true
@@ -154,13 +249,6 @@ type GetJobRow struct {
 	WorkflowName            spine.WorkflowName
 	WorkflowRevision        string
 	Goal                    string
-	Repository              string
-	Revision                string
-	StartingRevision        string
-	Branch                  string
-	GithubRepository        string
-	GithubInstallationID    string
-	BaseBranch              string
 	SandboxProfile          string
 	ProviderConnection      string
 	Model                   string
@@ -185,13 +273,6 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 		&i.WorkflowName,
 		&i.WorkflowRevision,
 		&i.Goal,
-		&i.Repository,
-		&i.Revision,
-		&i.StartingRevision,
-		&i.Branch,
-		&i.GithubRepository,
-		&i.GithubInstallationID,
-		&i.BaseBranch,
 		&i.SandboxProfile,
 		&i.ProviderConnection,
 		&i.Model,
@@ -237,11 +318,12 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 }
 
 const getRevisionJobForUpdate = `-- name: GetRevisionJobForUpdate :one
-select revision,branch,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
-from dorf.jobs
-where id=$1
-for update
+select c.revision,c.branch,j.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=$1
+for update of j,c
 `
 
 type GetRevisionJobForUpdateRow struct {
@@ -265,9 +347,9 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 
 const getSelectedSetupAction = `-- name: GetSelectedSetupAction :one
 select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
-from dorf.jobs j
-join dorf.actions a on a.id=j.setup_action_id and a.job_id=j.id
-where j.id=$1
+from dorf.coding_to_proposal_inputs c
+join dorf.actions a on a.id=c.setup_action_id and a.job_id=c.job_id
+where c.job_id=$1
 `
 
 func (q *Queries) GetSelectedSetupAction(ctx context.Context, jobID string) (DorfAction, error) {
@@ -287,8 +369,8 @@ func (q *Queries) GetSelectedSetupAction(ctx context.Context, jobID string) (Dor
 
 const getSetupActionIDForUpdate = `-- name: GetSetupActionIDForUpdate :one
 select coalesce(setup_action_id,'') as setup_action_id
-from dorf.jobs
-where id=$1
+from dorf.coding_to_proposal_inputs
+where job_id=$1
 for update
 `
 
@@ -300,11 +382,12 @@ func (q *Queries) GetSetupActionIDForUpdate(ctx context.Context, jobID string) (
 }
 
 const getSetupRetryJobForUpdate = `-- name: GetSetupRetryJobForUpdate :one
-select coalesce(setup_action_id,'') as setup_action_id,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
-from dorf.jobs
-where id=$1
-for update
+select coalesce(c.setup_action_id,'') as setup_action_id,j.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=$1
+for update of j,c
 `
 
 type GetSetupRetryJobForUpdateRow struct {
@@ -322,37 +405,28 @@ func (q *Queries) GetSetupRetryJobForUpdate(ctx context.Context, jobID string) (
 
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,
-    sandbox_profile,provider_connection,model,reasoning_effort,
-    github_repository,github_installation_id,base_branch
+    id,admission_key,workflow_name,workflow_revision,goal,
+    sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
     $1,$2,$3,$4,
-    $5,$6,
-    $7,$8,
-    $9,$10,$11,
-    $12,$13,
-    $14,$15
+    $5,
+    $6,$7,$8,
+    $9
 )
 on conflict(admission_key) do nothing
 `
 
 type InsertAdmittedJobParams struct {
-	ID                   string
-	AdmissionKey         string
-	WorkflowName         spine.WorkflowName
-	WorkflowRevision     string
-	Goal                 string
-	Repository           string
-	Revision             string
-	Branch               string
-	SandboxProfile       string
-	ProviderConnection   string
-	Model                string
-	ReasoningEffort      string
-	GithubRepository     sql.NullString
-	GithubInstallationID sql.NullString
-	BaseBranch           sql.NullString
+	ID                 string
+	AdmissionKey       string
+	WorkflowName       spine.WorkflowName
+	WorkflowRevision   string
+	Goal               string
+	SandboxProfile     string
+	ProviderConnection string
+	Model              string
+	ReasoningEffort    string
 }
 
 func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobParams) (int64, error) {
@@ -362,13 +436,46 @@ func (q *Queries) InsertAdmittedJob(ctx context.Context, arg InsertAdmittedJobPa
 		arg.WorkflowName,
 		arg.WorkflowRevision,
 		arg.Goal,
-		arg.Repository,
-		arg.Revision,
-		arg.Branch,
 		arg.SandboxProfile,
 		arg.ProviderConnection,
 		arg.Model,
 		arg.ReasoningEffort,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCodingToProposalInput = `-- name: InsertCodingToProposalInput :execrows
+insert into dorf.coding_to_proposal_inputs(
+    job_id,workflow_name,repository,starting_revision,revision,branch,
+    github_repository,github_installation_id,base_branch
+) values(
+    $1,'coding-to-proposal',$2,$3,$4,
+    $5,$6,$7,$8
+)
+on conflict(job_id) do nothing
+`
+
+type InsertCodingToProposalInputParams struct {
+	JobID                string
+	Repository           string
+	StartingRevision     string
+	Revision             string
+	Branch               string
+	GithubRepository     string
+	GithubInstallationID string
+	BaseBranch           string
+}
+
+func (q *Queries) InsertCodingToProposalInput(ctx context.Context, arg InsertCodingToProposalInputParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCodingToProposalInput,
+		arg.JobID,
+		arg.Repository,
+		arg.StartingRevision,
+		arg.Revision,
+		arg.Branch,
 		arg.GithubRepository,
 		arg.GithubInstallationID,
 		arg.BaseBranch,
@@ -567,9 +674,9 @@ func (q *Queries) NextRevisionGeneration(ctx context.Context, jobID string) (int
 }
 
 const selectInitialSetupAction = `-- name: SelectInitialSetupAction :execrows
-update dorf.jobs
+update dorf.coding_to_proposal_inputs
 set setup_action_id=$1
-where id=$2 and setup_action_id is null
+where job_id=$2 and setup_action_id is null
 `
 
 type SelectInitialSetupActionParams struct {
@@ -586,16 +693,25 @@ func (q *Queries) SelectInitialSetupAction(ctx context.Context, arg SelectInitia
 }
 
 const selectSetupRetry = `-- name: SelectSetupRetry :execrows
-update dorf.jobs
-set setup_action_id=$1,
-    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where dorf.jobs.id=$2 and setup_action_id=$3
-  and (workflow_attention_source is null or workflow_attention_source=$3)
-  and exists (
+with selected as (
+  update dorf.coding_to_proposal_inputs c
+  set setup_action_id=$1
+  where c.job_id=$2 and c.setup_action_id=$3
+    and exists (
+      select 1 from dorf.jobs j
+      where j.id=c.job_id and (j.workflow_attention_source is null or j.workflow_attention_source=$3)
+    )
+    and exists (
       select 1 from dorf.actions a
-      where a.id=$3 and a.job_id=dorf.jobs.id
+      where a.id=$3 and a.job_id=c.job_id
         and a.kind='repository-setup' and a.state='failed'
-  )
+    )
+  returning c.job_id
+)
+update dorf.jobs j
+set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+from selected
+where j.id=selected.job_id
 `
 
 type SelectSetupRetryParams struct {

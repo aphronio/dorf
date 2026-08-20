@@ -11,7 +11,7 @@ import (
 )
 
 func readyFacts() Snapshot {
-	job := spine.Job{ID: "job-1", Revision: "rev-1", AdmissionOpen: true}
+	job := spine.CodingJob{Job: spine.Job{ID: "job-1", AdmissionOpen: true}, Revision: "rev-1"}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	action := func(kind spine.ActionKind) spine.Action {
 		return spine.Action{ID: spine.ScopedActionID(job.ID, kind, sandbox.ID), Kind: kind, State: spine.ActionSucceeded, Scope: sandbox.ID}
@@ -34,6 +34,19 @@ func readyFacts() Snapshot {
 
 func factDelivery(message spine.Message, run spine.AgentRun) spine.Delivery {
 	return spine.Delivery{Message: message, AgentRun: run}
+}
+
+func TestCodingAgentInputKeepsReviewFeedbackOpaque(t *testing.T) {
+	job := spine.CodingJob{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
+	message := spine.Message{FromKind: spine.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
+	reviewer := codingAgentInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary"}})
+	if reviewer != message.Input {
+		t.Fatalf("reviewer input was rewritten: %q", reviewer)
+	}
+	implementation := codingAgentInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "implement"}})
+	if !strings.HasPrefix(implementation, message.Input+"\n\n") || !strings.Contains(implementation, job.Branch) || !strings.Contains(implementation, job.Revision) {
+		t.Fatalf("implementation input is missing the coding contract: %q", implementation)
+	}
 }
 
 func TestCurrentWorkDependencyOrder(t *testing.T) {

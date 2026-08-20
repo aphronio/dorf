@@ -108,7 +108,7 @@ func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, ch
 	return nil
 }
 
-func AssessReviewReadiness(job Job, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
+func AssessReviewReadiness(job CodingJob, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
 	err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
 	assessment := ReadinessAssessment{Revision: job.Revision}
 	if err != nil {
@@ -240,7 +240,7 @@ func PublicationDeliveries(deliveries []Delivery, startedAt time.Time) []Deliver
 	return retained
 }
 
-func verifyGitRevisionObservation(job Job, run AgentRun, records []Evidence, blobs blob.Store) error {
+func verifyGitRevisionObservation(job CodingJob, run AgentRun, records []Evidence, blobs blob.Store) error {
 	expectedID := EvidenceID(run.ID, "git-revision")
 	var observed Evidence
 	for _, record := range records {

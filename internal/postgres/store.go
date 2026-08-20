@@ -58,17 +58,36 @@ func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
 }
 
 type NewJob struct {
-	AdmissionKey        string
-	Workflow            spine.WorkflowName
-	WorkflowRevision    string
-	Goal                string
+	AdmissionKey       string
+	Workflow           spine.WorkflowName
+	WorkflowRevision   string
+	Goal               string
+	SandboxProfile     string
+	ProviderConnection string
+	Model              string
+	ReasoningEffort    string
+}
+
+type NewCodingJob struct {
+	NewJob
+	Repository         string
+	Revision           string
+	Branch             string
+	GitHubRepository   string
+	GitHubInstallation string
+	BaseBranch         string
+}
+
+type NewInvestigationJob struct {
+	NewJob
+	Source spine.CodebaseInvestigationSource
+}
+
+type admissionInput struct {
+	NewJob
 	Repository          string
 	Revision            string
 	Branch              string
-	SandboxProfile      string
-	ProviderConnection  string
-	Model               string
-	ReasoningEffort     string
 	GitHubRepository    string
 	GitHubInstallation  string
 	BaseBranch          string
@@ -195,7 +214,18 @@ func (s Store) Migrate(ctx context.Context) error {
 
 func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
 
-func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error) {
+func (s Store) AdmitCoding(ctx context.Context, input NewCodingJob) (spine.Job, bool, error) {
+	return s.admit(ctx, admissionInput{
+		NewJob: input.NewJob, Repository: input.Repository, Revision: input.Revision, Branch: input.Branch,
+		GitHubRepository: input.GitHubRepository, GitHubInstallation: input.GitHubInstallation, BaseBranch: input.BaseBranch,
+	})
+}
+
+func (s Store) AdmitInvestigation(ctx context.Context, input NewInvestigationJob) (spine.Job, bool, error) {
+	return s.admit(ctx, admissionInput{NewJob: input.NewJob, InvestigationSource: input.Source})
+}
+
+func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool, error) {
 	input.AdmissionKey = strings.TrimSpace(input.AdmissionKey)
 	input.Workflow = spine.WorkflowName(strings.TrimSpace(string(input.Workflow)))
 	input.WorkflowRevision = strings.TrimSpace(input.WorkflowRevision)
@@ -216,12 +246,12 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
 	input.InvestigationSource = normalizeInvestigationSource(input.InvestigationSource)
-	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.Branch == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return spine.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, branch, Sandbox profile, Provider Connection, and model")
+	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
+		return spine.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, Provider Connection, and model")
 	}
 	switch input.Workflow {
 	case spine.WorkflowCodingToProposal:
-		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (spine.CodebaseInvestigationSource{}) {
+		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (spine.CodebaseInvestigationSource{}) {
 			return spine.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", spine.CodingToProposalRevision)
 		}
 		if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
@@ -237,18 +267,14 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		if err := validateInvestigationSource(input.InvestigationSource); err != nil {
 			return spine.Job{}, false, err
 		}
-		if input.Repository != "" && input.Repository != input.InvestigationSource.Repository {
-			return spine.Job{}, false, fmt.Errorf("codebase-investigation repository conflicts with its typed source")
-		}
-		if input.Revision != "" && input.Revision != input.InvestigationSource.Revision {
-			return spine.Job{}, false, fmt.Errorf("codebase-investigation Revision conflicts with its typed source")
-		}
-		input.Repository = input.InvestigationSource.Repository
-		input.Revision = input.InvestigationSource.Revision
 	default:
 		return spine.Job{}, false, fmt.Errorf("unsupported workflow %q", input.Workflow)
 	}
-	if !ValidRevision(input.Revision) {
+	revision := input.Revision
+	if input.Workflow == spine.WorkflowCodebaseInvestigation {
+		revision = input.InvestigationSource.Revision
+	}
+	if !ValidRevision(revision) {
 		return spine.Job{}, false, fmt.Errorf("admitted revision must be a lowercase full commit OID (40 hex for SHA-1 or 64 hex for SHA-256)")
 	}
 	if input.ReasoningEffort != "low" && input.ReasoningEffort != "medium" && input.ReasoningEffort != "high" && input.ReasoningEffort != "xhigh" {
@@ -273,10 +299,8 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		}
 		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
 			ID: id, AdmissionKey: input.AdmissionKey, WorkflowName: input.Workflow, WorkflowRevision: input.WorkflowRevision,
-			Goal: input.Goal, Repository: input.Repository,
-			Revision: input.Revision, Branch: input.Branch, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
-			Model: input.Model, ReasoningEffort: input.ReasoningEffort, GithubRepository: nullableString(input.GitHubRepository),
-			GithubInstallationID: nullableString(input.GitHubInstallation), BaseBranch: nullableString(input.BaseBranch),
+			Goal: input.Goal, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
+			Model: input.Model, ReasoningEffort: input.ReasoningEffort,
 		})
 		if err != nil {
 			return spine.Job{}, false, err
@@ -286,19 +310,33 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 	if err != nil {
 		return spine.Job{}, false, err
 	}
-	stored := NewJob{
+	stored := admissionInput{NewJob: NewJob{
 		AdmissionKey: storedRow.AdmissionKey, Workflow: spine.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
-		Goal: storedRow.Goal, Repository: storedRow.Repository,
-		Revision: storedRow.Revision, Branch: storedRow.Branch, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
+		Goal: storedRow.Goal, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
 		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
-		GitHubRepository: storedRow.GithubRepository, GitHubInstallation: storedRow.GithubInstallationID, BaseBranch: storedRow.BaseBranch,
-	}
-	expectedBase := input
-	expectedBase.InvestigationSource = spine.CodebaseInvestigationSource{}
-	if storedRow.ID != id || stored != expectedBase {
+	}}
+	expectedCore := input
+	expectedCore.Repository, expectedCore.Revision, expectedCore.Branch = "", "", ""
+	expectedCore.GitHubRepository, expectedCore.GitHubInstallation, expectedCore.BaseBranch = "", "", ""
+	expectedCore.InvestigationSource = spine.CodebaseInvestigationSource{}
+	if storedRow.ID != id || stored != expectedCore {
 		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
 	}
-	if input.Workflow == spine.WorkflowCodebaseInvestigation {
+	if input.Workflow == spine.WorkflowCodingToProposal {
+		if _, err := queries.InsertCodingToProposalInput(ctx, dbsql.InsertCodingToProposalInputParams{
+			JobID: id, Repository: input.Repository, StartingRevision: input.Revision, Revision: input.Revision,
+			Branch: input.Branch, GithubRepository: input.GitHubRepository,
+			GithubInstallationID: input.GitHubInstallation, BaseBranch: input.BaseBranch,
+		}); err != nil {
+			return spine.Job{}, false, err
+		}
+		coding, err := queries.GetCodingToProposalInput(ctx, id)
+		if err != nil {
+			return spine.Job{}, false, err
+		}
+		stored.Repository, stored.Revision, stored.Branch = coding.Repository, coding.StartingRevision, coding.Branch
+		stored.GitHubRepository, stored.GitHubInstallation, stored.BaseBranch = coding.GithubRepository, coding.GithubInstallationID, coding.BaseBranch
+	} else {
 		if _, err := queries.InsertCodebaseInvestigationSource(ctx, investigationSourceParams(id, input.InvestigationSource)); err != nil {
 			return spine.Job{}, false, err
 		}
@@ -339,7 +377,7 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 		}
 	}
 	if input.Workflow == spine.WorkflowCodebaseInvestigation {
-		if _, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, InputRevision: nullableString(input.Revision), SandboxID: sandboxID}); err != nil {
+		if _, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, InputRevision: nullableString(revision), SandboxID: sandboxID}); err != nil {
 			return spine.Job{}, false, err
 		}
 	} else {
@@ -347,8 +385,10 @@ func (s Store) Admit(ctx context.Context, input NewJob) (spine.Job, bool, error)
 			return spine.Job{}, false, err
 		}
 	}
-	if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
-		return spine.Job{}, false, err
+	if input.Workflow == spine.WorkflowCodingToProposal {
+		if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
+			return spine.Job{}, false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return spine.Job{}, false, err
@@ -387,7 +427,8 @@ func validateInvestigationSource(source spine.CodebaseInvestigationSource) error
 
 func investigationSourceParams(jobID string, source spine.CodebaseInvestigationSource) dbsql.InsertCodebaseInvestigationSourceParams {
 	return dbsql.InsertCodebaseInvestigationSourceParams{
-		JobID: jobID, Kind: string(source.Kind), BundleDigest: nullableString(source.BundleDigest),
+		JobID: jobID, Kind: string(source.Kind), Repository: source.Repository, Revision: source.Revision,
+		BundleDigest:   nullableString(source.BundleDigest),
 		BundleByteSize: sql.NullInt64{Int64: source.BundleByteSize, Valid: source.BundleByteSize > 0},
 	}
 }
@@ -522,11 +563,11 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 			return spine.Message{}, false, fmt.Errorf("insert implementation follow-up AgentRun: %w", err)
 		}
 	case "investigate":
-		jobRow, err := queries.GetJob(ctx, message.JobID)
+		sourceRow, err := queries.GetCodebaseInvestigationSource(ctx, message.JobID)
 		if err != nil {
 			return spine.Message{}, false, err
 		}
-		rows, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, InputRevision: nullableString(jobRow.Revision), SandboxID: spine.MainSandboxName(message.JobID)})
+		rows, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, InputRevision: nullableString(sourceRow.Revision), SandboxID: spine.MainSandboxName(message.JobID)})
 		if err := expectOneRows(rows, err); err != nil {
 			return spine.Message{}, false, fmt.Errorf("insert investigation follow-up AgentRun: %w", err)
 		}
@@ -575,15 +616,35 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	}
 	return spine.Job{
 		ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: spine.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
-		Goal: row.Goal, Repository: row.Repository,
-		Revision: row.Revision, StartingRevision: row.StartingRevision, Branch: row.Branch,
-		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
+		Goal:           row.Goal,
 		SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
 		Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
 		CurrentTaskID:     row.CurrentTaskID,
 		WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
 		WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
 		AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
+	}, nil
+}
+
+func (s Store) CodingJob(ctx context.Context, id string) (spine.CodingJob, error) {
+	row, err := dbsql.New(s.DB).GetCodingJob(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return spine.CodingJob{}, ErrNotFound
+	}
+	if err != nil {
+		return spine.CodingJob{}, err
+	}
+	return spine.CodingJob{
+		Job: spine.Job{
+			ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: spine.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
+			Goal: row.Goal, SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
+			Model: row.Model, ReasoningEffort: row.ReasoningEffort, AdmissionOpen: row.AdmissionOpen, CleanupState: spine.CleanupState(row.CleanupState),
+			CurrentTaskID: row.CurrentTaskID, WorkflowAttention: row.WorkflowAttention, WorkflowAttentionSource: row.WorkflowAttentionSource,
+			WorkflowAttentionAt: timeValue(row.WorkflowAttentionAt), CleanupAttention: row.CleanupAttention,
+			AdmittedAt: row.AdmittedAt, CleanedAt: timeValue(row.CleanedAt),
+		},
+		Repository: row.Repository, StartingRevision: row.StartingRevision, Revision: row.Revision, Branch: row.Branch,
+		GitHubRepository: row.GithubRepository, GitHubInstallation: row.GithubInstallationID, BaseBranch: row.BaseBranch,
 	}, nil
 }
 

@@ -14,11 +14,12 @@ import (
 )
 
 const getCodebaseInvestigationRunForUpdate = `-- name: GetCodebaseInvestigationRunForUpdate :one
-select j.workflow_name,j.workflow_revision,j.revision,j.admission_open,j.cleanup_state,
+select j.workflow_name,j.workflow_revision,s.revision,j.admission_open,j.cleanup_state,
        ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.input_revision,'') as input_revision,
        ar.started_at,ar.finished_at
 from dorf.jobs j
+join dorf.codebase_investigation_sources s on s.job_id=j.id
 join dorf.agent_runs ar on ar.job_id=j.id
 where j.id=$1 and ar.id=$2
 for update of j,ar
@@ -67,10 +68,9 @@ func (q *Queries) GetCodebaseInvestigationRunForUpdate(ctx context.Context, arg 
 }
 
 const getCodebaseInvestigationSource = `-- name: GetCodebaseInvestigationSource :one
-select s.job_id,s.kind,j.repository,j.revision,
+select s.job_id,s.kind,s.repository,s.revision,
        coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
 from dorf.codebase_investigation_sources s
-join dorf.jobs j on j.id=s.job_id
 where s.job_id=$1
 `
 
@@ -156,9 +156,10 @@ func (q *Queries) InsertCodebaseInvestigationDraft(ctx context.Context, arg Inse
 
 const insertCodebaseInvestigationSource = `-- name: InsertCodebaseInvestigationSource :execrows
 insert into dorf.codebase_investigation_sources(
-    job_id,kind,bundle_digest,bundle_byte_size
+    job_id,workflow_name,kind,repository,revision,bundle_digest,bundle_byte_size
 ) values(
-    $1,$2,$3,$4
+    $1,'codebase-investigation',$2,$3,$4,
+    $5,$6
 )
 on conflict(job_id) do nothing
 `
@@ -166,6 +167,8 @@ on conflict(job_id) do nothing
 type InsertCodebaseInvestigationSourceParams struct {
 	JobID          string
 	Kind           string
+	Repository     string
+	Revision       string
 	BundleDigest   sql.NullString
 	BundleByteSize sql.NullInt64
 }
@@ -174,6 +177,8 @@ func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg Ins
 	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationSource,
 		arg.JobID,
 		arg.Kind,
+		arg.Repository,
+		arg.Revision,
 		arg.BundleDigest,
 		arg.BundleByteSize,
 	)

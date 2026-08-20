@@ -10,7 +10,7 @@ import (
 
 func TestProposalObservationRequiresExactIdentity(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := spine.Job{GitHubRepository: "aphronio/dorf", BaseBranch: "greenfield", Branch: "dorf/job"}
+	job := spine.CodingJob{GitHubRepository: "aphronio/dorf", BaseBranch: "greenfield", Branch: "dorf/job"}
 	proposal := spine.GitHubProposal{Number: 94, URL: "https://github.com/aphronio/dorf/pull/94", ProposedRevision: revision}
 	pull := githubapi.PullRequest{Repository: job.GitHubRepository, Base: job.BaseBranch, Head: job.Branch, Number: proposal.Number, URL: proposal.URL, HeadSHA: revision}
 	if err := validateExactProposal(job, proposal, pull); err != nil {

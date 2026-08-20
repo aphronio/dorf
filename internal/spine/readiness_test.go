@@ -73,7 +73,7 @@ func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *test
 
 func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testing.T) {
 	store, jobID, revision, declared, check, record := readinessFixture(t)
-	job := Job{ID: jobID, Revision: revision, Branch: "dorf/readiness"}
+	job := CodingJob{Job: Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
 	withoutPlan := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, nil, nil, nil)
 	if withoutPlan.Ready || !strings.Contains(withoutPlan.Reason, "no explicit persisted") {
 		t.Fatalf("missing plan readiness=%#v", withoutPlan)
@@ -139,7 +139,7 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 
 func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *testing.T) {
 	store, jobID, revision, declared, check, checkEvidence := readinessFixture(t)
-	job := Job{ID: jobID, Revision: revision, Branch: "dorf/readiness"}
+	job := CodingJob{Job: Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
 	plan := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
 	message := Message{
 		ID: "message-fallback", JobID: jobID, Sequence: 2,
@@ -166,7 +166,7 @@ func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *test
 	}
 }
 
-func gitObservationEvidence(t *testing.T, store blob.Store, job Job, run AgentRun, started time.Time) Evidence {
+func gitObservationEvidence(t *testing.T, store blob.Store, job CodingJob, run AgentRun, started time.Time) Evidence {
 	t.Helper()
 	observation := RevisionObservation{
 		ComparisonBase: run.InputRevision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch,

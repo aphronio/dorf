@@ -15,7 +15,7 @@ import (
 
 const getReviewFeedbackRunForUpdate = `-- name: GetReviewFeedbackRunForUpdate :one
 select ar.job_id,coalesce(ar.input_revision,'') as input_revision,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
-       coalesce(ar.capability,'') as capability,j.revision as current_revision,j.admission_open,
+       coalesce(ar.capability,'') as capability,c.revision as current_revision,j.admission_open,
        exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)::boolean as outcome_exists,
        (ar.harness is not null and ar.thread_id is not null and ar.turn_id is not null
         and exists(select 1 from dorf.actions a where a.job_id=ar.job_id
@@ -26,6 +26,7 @@ select ar.job_id,coalesce(ar.input_revision,'') as input_revision,ar.role,ar.sta
             and a.kind='review-checkout' and a.scope_key=ar.sandbox_id and a.state='succeeded'))::boolean as boundary_ready
 from dorf.agent_runs ar
 join dorf.jobs j on j.id=ar.job_id
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 where ar.id=$1
 for update of j,ar
 `
@@ -62,13 +63,14 @@ func (q *Queries) GetReviewFeedbackRunForUpdate(ctx context.Context, runID strin
 }
 
 const getReviewJobForUpdate = `-- name: GetReviewJobForUpdate :one
-select dorf.jobs.revision,dorf.jobs.admission_open,
+select c.revision,dorf.jobs.admission_open,
        exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists,
        coalesce((
          select rp.policy_digest from dorf.review_plans rp
          where rp.job_id=dorf.jobs.id and rp.revision=$1
        ),'') as policy_digest
 from dorf.jobs
+join dorf.coding_to_proposal_inputs c on c.job_id=dorf.jobs.id
 where id=$2
 for update
 `

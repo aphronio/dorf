@@ -138,13 +138,6 @@ type Job struct {
 	Workflow                WorkflowName `json:"workflow"`
 	WorkflowRevision        string       `json:"workflow_revision"`
 	Goal                    string       `json:"goal"`
-	Repository              string       `json:"repository"`
-	Revision                string       `json:"revision"`
-	StartingRevision        string       `json:"starting_revision"`
-	Branch                  string       `json:"branch"`
-	GitHubRepository        string       `json:"github_repository,omitempty"`
-	GitHubInstallation      string       `json:"github_installation_id,omitempty"`
-	BaseBranch              string       `json:"base_branch,omitempty"`
 	SandboxProfile          string       `json:"sandbox_profile"`
 	ProviderConnection      string       `json:"provider_connection"`
 	Model                   string       `json:"model"`
@@ -158,6 +151,19 @@ type Job struct {
 	CleanupAttention        string       `json:"cleanup_attention,omitempty"`
 	AdmittedAt              time.Time    `json:"admitted_at,omitempty"`
 	CleanedAt               time.Time    `json:"cleaned_at,omitempty"`
+}
+
+// CodingJob is the coding-to-proposal workflow's complete typed state. Its
+// embedded Job carries only shared custody and lifecycle facts.
+type CodingJob struct {
+	Job
+	Repository         string `json:"repository"`
+	StartingRevision   string `json:"starting_revision"`
+	Revision           string `json:"revision"`
+	Branch             string `json:"branch"`
+	GitHubRepository   string `json:"github_repository"`
+	GitHubInstallation string `json:"github_installation_id"`
+	BaseBranch         string `json:"base_branch"`
 }
 
 // Sandbox is infrastructure owned for the lifetime of a Job. AgentRuns use a

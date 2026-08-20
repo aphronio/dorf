@@ -109,7 +109,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			runs = append(runs, delivery.AgentRun)
 		}
 		return followSnapshot{
-			Job: snapshot.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
+			Job: snapshot.Job.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == workflow.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil

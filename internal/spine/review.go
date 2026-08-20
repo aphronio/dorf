@@ -87,11 +87,11 @@ type ReviewStore interface {
 }
 
 type ReviewExternals interface {
-	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
-	PrepareReviewCheckout(context.Context, Job, ReviewRunView) error
-	VerifyReviewCheckout(context.Context, Job, ReviewRunView) (ReviewCheckoutObservation, error)
-	ReviewInitialTurn(context.Context, Job, ReviewRunView) (HarnessBinding, error)
-	ReviewRecover(context.Context, Job, ReviewRunView) (HarnessBinding, error)
-	ReviewTurns(context.Context, Job, ReviewRunView) (HarnessHistory, error)
-	ReviewWait(context.Context, Job, ReviewRunView, string) (HarnessBinding, error)
+	RepositoryChangeFacts(context.Context, CodingJob) (policy.ChangeFacts, error)
+	PrepareReviewCheckout(context.Context, CodingJob, ReviewRunView) error
+	VerifyReviewCheckout(context.Context, CodingJob, ReviewRunView) (ReviewCheckoutObservation, error)
+	ReviewInitialTurn(context.Context, CodingJob, ReviewRunView) (HarnessBinding, error)
+	ReviewRecover(context.Context, CodingJob, ReviewRunView) (HarnessBinding, error)
+	ReviewTurns(context.Context, CodingJob, ReviewRunView) (HarnessHistory, error)
+	ReviewWait(context.Context, CodingJob, ReviewRunView, string) (HarnessBinding, error)
 }

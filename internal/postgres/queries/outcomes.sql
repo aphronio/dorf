@@ -5,10 +5,11 @@ from dorf.job_outcomes
 where job_id=sqlc.arg(job_id);
 
 -- name: GetOutcomeJobForUpdate :one
-select revision,admission_open,cleanup_state
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
+select c.revision,j.admission_open,j.cleanup_state
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=sqlc.arg(job_id)
+for update of j,c;
 
 -- name: OutcomeImplementationSettled :one
 select (
@@ -28,11 +29,11 @@ select (
   and coalesce((
     select ar.state='completed' and exists (
       select 1 from dorf.evidence e
-      where e.agent_run_id=ar.id and e.kind='git-revision' and e.revision=j.revision
+      where e.agent_run_id=ar.id and e.kind='git-revision' and e.revision=c.revision
     )
     from dorf.agent_runs ar
     join dorf.job_messages m on m.id=ar.message_id
-    join dorf.jobs j on j.id=ar.job_id
+    join dorf.coding_to_proposal_inputs c on c.job_id=ar.job_id
     where ar.job_id=sqlc.arg(job_id) and ar.role='implement'
       and (m.delivery_intent='follow' or (
         m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id

@@ -21,7 +21,7 @@ type reviewBoundaryError string
 func (e reviewBoundaryError) Error() string         { return string(e) }
 func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 
-func (s Service) PlanReview(ctx context.Context, job Job) error {
+func (s Service) PlanReview(ctx context.Context, job CodingJob) error {
 	declared, err := s.store.DeclaredChecks(ctx, job.ID)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func (s Service) recordReviewPolicy(ctx context.Context, record ReviewPlanRecord
 	return s.store.RecordReviewPolicy(ctx, record)
 }
 
-func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
+func (s Service) RunReview(ctx context.Context, job CodingJob, runID string) error {
 	run, err := s.store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ func (s Service) RunReview(ctx context.Context, job Job, runID string) error {
 // ExecuteReviewCheckout prepares one selected reviewer's exact immutable
 // checkout. The workflow owns the surrounding Action Step; this operation
 // only reconciles and records that Action's external effect.
-func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action Action) error {
+func (s Service) ExecuteReviewCheckout(ctx context.Context, job CodingJob, runID string, action Action) error {
 	run, err := s.store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
@@ -97,7 +97,7 @@ func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID strin
 	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
 }
 
-func (s Service) executeAndRecordReview(ctx context.Context, job Job, run ReviewRunView) error {
+func (s Service) executeAndRecordReview(ctx context.Context, job CodingJob, run ReviewRunView) error {
 	outcome, err := s.executeReviewRun(ctx, job, run)
 	if err != nil {
 		return err
@@ -133,7 +133,7 @@ func (s Service) recordReviewFeedback(ctx context.Context, runID string, outcome
 	return s.store.RecordReviewFeedback(ctx, runID, outcome, observed)
 }
 
-func (s Service) verifyReviewCheckout(ctx context.Context, job Job, run ReviewRunView) (ReviewCheckoutObservation, error) {
+func (s Service) verifyReviewCheckout(ctx context.Context, job CodingJob, run ReviewRunView) (ReviewCheckoutObservation, error) {
 	checkout, err := s.externals.VerifyReviewCheckout(ctx, job, run)
 	if err != nil {
 		reason := "review checkout verification failed: " + err.Error()
@@ -156,7 +156,7 @@ func fullGitObjectID(value string) bool {
 	return err == nil
 }
 
-func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView) (HarnessTurn, error) {
+func (s Service) executeReviewRun(ctx context.Context, job CodingJob, original ReviewRunView) (HarnessTurn, error) {
 	expectedFromID := ReviewRequestFromID(original.InputRevision, original.Role)
 	expectedMessageID := ReviewRequestMessageID(job.ID, original.InputRevision, original.Role)
 	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
@@ -231,7 +231,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 	return contract.execute(ctx)
 }
 
-func (s Service) requireReviewActions(ctx context.Context, job Job, run ReviewRunView) error {
+func (s Service) requireReviewActions(ctx context.Context, job CodingJob, run ReviewRunView) error {
 	if run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != job.ID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}

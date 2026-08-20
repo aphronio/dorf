@@ -139,11 +139,12 @@ The intended reusable custody concepts are Job identity, admission, Messages, Ag
 ownership, stable external effects, Artifact and Evidence storage, attention, recovery, and cleanup.
 Their exact public shape is not yet accepted.
 
-The current implementation still places repository, branch, Revision, review, Proposal, and GitHub
-assumptions in records near the spine. That is evidence from the first workflow, not a reason to make
-every field nullable or introduce generic payload tables. A second workflow should first add its
-natural facts and coordinator. Only duplicated behavior with the same authority and recovery meaning
-earns extraction.
+The durable Core Job row contains only shared identity, accepted goal, workflow/profile selection,
+execution attachment, attention, and cleanup lifecycle. Coding repository, branch, Revision, GitHub
+authority, and selected setup live in a typed coding input row; investigation repository and exact
+Revision live in its typed source row. These are explicit workflow projections, not nullable Core
+fields or generic payloads. Some Go types and services remain physically near `spine` while their
+ownership is moved incrementally; package location alone does not make them Core vocabulary.
 
 Workflow facts remain specific:
 

@@ -293,19 +293,23 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 	return result, nil
 }
 
-func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {
-	input.Workflow = spine.WorkflowCodingToProposal
-	input.WorkflowRevision = spine.CodingToProposalRevision
-	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input)
+func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewCodingJob) (spine.Job, bool, error) {
+	input.NewJob.Workflow = spine.WorkflowCodingToProposal
+	input.NewJob.WorkflowRevision = spine.CodingToProposalRevision
+	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input.NewJob, func() (spine.Job, bool, error) {
+		return store.AdmitCoding(ctx, input)
+	})
 }
 
-func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {
-	input.Workflow = spine.WorkflowCodebaseInvestigation
-	input.WorkflowRevision = spine.CodebaseInvestigationRevision
-	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input)
+func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewInvestigationJob) (spine.Job, bool, error) {
+	input.NewJob.Workflow = spine.WorkflowCodebaseInvestigation
+	input.NewJob.WorkflowRevision = spine.CodebaseInvestigationRevision
+	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input.NewJob, func() (spine.Job, bool, error) {
+		return store.AdmitInvestigation(ctx, input)
+	})
 }
 
-func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob) (spine.Job, bool, error) {
+func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob, persist func() (spine.Job, bool, error)) (spine.Job, bool, error) {
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
 		_, err := store.Job(ctx, spine.JobID(key))
@@ -327,7 +331,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 			return spine.Job{}, false, err
 		}
 	}
-	job, created, err := store.Admit(ctx, input)
+	job, created, err := persist()
 	if err != nil {
 		return spine.Job{}, false, err
 	}

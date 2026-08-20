@@ -1,11 +1,10 @@
 -- name: GetPublicationJobForUpdate :one
-select revision,coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch,branch,repository,
-       admission_open,cleanup_state
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
+select c.revision,c.github_repository,c.github_installation_id,
+       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=sqlc.arg(job_id)
+for update of j,c;
 
 -- name: CompleteRepositoryPush :execrows
 update dorf.actions
@@ -14,10 +13,11 @@ where id=sqlc.arg(action_id) and kind='repository-push' and scope_key=sqlc.arg(r
   and state in ('unsettled','succeeded');
 
 -- name: GetProposalJobForUpdate :one
-select revision,admission_open,cleanup_state
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
+select c.revision,j.admission_open,j.cleanup_state
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=sqlc.arg(job_id)
+for update of j,c;
 
 -- GetProposal is the one proposal projection shared by publication and outcome code.
 -- name: GetProposal :one
@@ -48,7 +48,11 @@ update dorf.jobs
 set workflow_attention=sqlc.arg(reason)::text,
     workflow_attention_source=sqlc.arg(action_id)::text,
     workflow_attention_at=clock_timestamp()
-where dorf.jobs.id=sqlc.arg(job_id) and dorf.jobs.revision=sqlc.arg(revision)
+where dorf.jobs.id=sqlc.arg(job_id)
+  and exists (
+    select 1 from dorf.coding_to_proposal_inputs c
+    where c.job_id=dorf.jobs.id and c.revision=sqlc.arg(revision)
+  )
   and dorf.jobs.admission_open and dorf.jobs.cleanup_state='pending'
   and exists (
     select 1 from dorf.actions a
@@ -61,13 +65,14 @@ where dorf.jobs.id=sqlc.arg(job_id) and dorf.jobs.revision=sqlc.arg(revision)
 -- name: ClearPublicationAttention :exec
 update dorf.jobs
 set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where id=sqlc.arg(job_id) and revision=sqlc.arg(revision)
+where id=sqlc.arg(job_id)
+  and exists (select 1 from dorf.coding_to_proposal_inputs c where c.job_id=dorf.jobs.id and c.revision=sqlc.arg(revision))
   and workflow_attention_source=sqlc.arg(action_id);
 
 -- name: ClearPublicationAttentionForAction :exec
 update dorf.jobs j
 set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where j.revision=sqlc.arg(revision)
+where exists (select 1 from dorf.coding_to_proposal_inputs c where c.job_id=j.id and c.revision=sqlc.arg(revision))
   and j.workflow_attention_source=sqlc.arg(action_id)
   and exists (
     select 1 from dorf.actions a

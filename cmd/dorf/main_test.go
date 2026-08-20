@@ -160,7 +160,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	job := spine.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
 	mainSandbox := spine.MainSandboxName(job.ID)
 	entries := workflowHistory(workflow.Snapshot{
-		Job: job,
+		Job: spine.CodingJob{Job: job},
 		Deliveries: []spine.Delivery{{
 			Message:  spine.Message{ID: "message-1", Sequence: 1, FromKind: spine.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
 			AgentRun: spine.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
@@ -212,7 +212,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		}
 	}
 	abandoned := workflowHistory(workflow.Snapshot{
-		Job:     spine.Job{AdmittedAt: base},
+		Job:     spine.CodingJob{Job: spine.Job{AdmittedAt: base}},
 		Outcome: &spine.JobOutcome{Kind: spine.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
 	})
 	last := abandoned[len(abandoned)-1]

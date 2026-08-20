@@ -90,6 +90,17 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	return db, store, client
 }
 
+func codingJobInput(key, goal, revision, branch string) postgres.NewCodingJob {
+	return postgres.NewCodingJob{
+		NewJob: postgres.NewJob{
+			AdmissionKey: key, Goal: goal, SandboxProfile: "incus", ProviderConnection: "primary",
+			Model: "gpt-5.6-sol", ReasoningEffort: "high",
+		},
+		Repository: "https://github.com/aphronio/dorf.git", Revision: revision, Branch: branch,
+		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
+	}
+}
+
 func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T) {
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
@@ -99,7 +110,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatalf("baseline migrations count=%d name=%q err=%v", migrationCount, migrationName, err)
 	}
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
-	input := postgres.NewJob{AdmissionKey: key, Goal: "initial input", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/integration", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
+	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
 	if _, _, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("provider is not ready")}, workflow.RuntimeProfile{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
@@ -309,14 +320,10 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 		t.Fatalf("default profile=%#v err=%v", defaulted, err)
 	}
 
-	input := postgres.NewJob{
-		AdmissionKey: "profile-immutability-" + name, Goal: "bounded implementation",
-		Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
-		Branch: "dorf/profile-immutability", SandboxProfile: name, ProviderConnection: "primary",
-		Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf",
-		GitHubInstallation: "42", BaseBranch: "main",
-	}
-	job, created, err := store.Admit(ctx, input)
+	input := codingJobInput("profile-immutability-"+name, "bounded implementation", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/profile-immutability")
+	input.SandboxProfile = name
+	input.BaseBranch = "main"
+	job, created, err := store.AdmitCoding(ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
@@ -343,14 +350,14 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if !changed.CreatedAt.Equal(stored.CreatedAt) {
 		t.Fatalf("patch changed profile creation time: got=%s want=%s", changed.CreatedAt, stored.CreatedAt)
 	}
-	repeated, created, err := store.Admit(ctx, input)
+	repeated, created, err := store.AdmitCoding(ctx, input)
 	if err != nil || created || repeated.ID != job.ID {
 		t.Fatalf("completed Job idempotency depended on updated profile verification: Job=%#v created=%v err=%v", repeated, created, err)
 	}
 	unverified := input
 	unverified.AdmissionKey += "-new"
 	unverified.Branch += "-new"
-	if _, _, err := store.Admit(ctx, unverified); err == nil || !strings.Contains(err.Error(), spine.BaseProfileContract) {
+	if _, _, err := store.AdmitCoding(ctx, unverified); err == nil || !strings.Contains(err.Error(), spine.BaseProfileContract) {
 		t.Fatalf("new Job admitted through updated unverified profile: %v", err)
 	}
 }
@@ -819,14 +826,18 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 	}
 }
 
-func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label string) (spine.Job, string) {
+func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label string) (spine.CodingJob, string) {
 	t.Helper()
 	ctx := context.Background()
 	revision := strings.Repeat("a", 40)
 	key := fmt.Sprintf("%s-%d", label, time.Now().UnixNano())
-	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "transport proof", Repository: "https://github.com/aphronio/dorf.git", Revision: revision, Branch: "dorf/" + label, SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	admitted, created, err := store.AdmitCoding(ctx, codingJobInput(key, "transport proof", revision, "dorf/"+label))
 	if err != nil || !created {
-		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
+	}
+	job, err := store.CodingJob(ctx, admitted.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	setup, err := store.BeginSetup(ctx, job.ID)
@@ -844,10 +855,14 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	start, changed := strings.Repeat("1", 40), strings.Repeat("2", 40)
-	input := postgres.NewJob{AdmissionKey: fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-evidence", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
-	job, created, err := store.Admit(ctx, input)
+	input := codingJobInput(fmt.Sprintf("revision-evidence-%d", time.Now().UnixNano()), "bounded implementation", start, "dorf/revision-evidence")
+	admitted, created, err := store.AdmitCoding(ctx, input)
 	if err != nil || !created {
-		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
+	}
+	job, err := store.CodingJob(ctx, admitted.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	now := time.Now().UTC().Round(time.Microsecond)
 	setup, err := store.BeginSetup(ctx, job.ID)
@@ -864,6 +879,10 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	changedObservation := spine.RevisionObservation{ComparisonBase: start, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
 	if err := store.RecordRevisionObservation(ctx, job.ID, changedRun.ID, changedObservation, changedEvidence); err != nil {
 		t.Fatalf("changed Revision observation: %v", err)
+	}
+	replayed, created, err := store.AdmitCoding(ctx, input)
+	if err != nil || created || replayed.ID != job.ID {
+		t.Fatalf("admission replay after Revision advance=%#v created=%v err=%v", replayed, created, err)
 	}
 	if err := store.RecordRevisionObservation(ctx, job.ID, changedRun.ID, changedObservation, changedEvidence); err != nil {
 		t.Fatalf("replay exact changed Revision observation: %v", err)
@@ -889,7 +908,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	if err := store.RecordRevisionObservation(ctx, job.ID, unchangedRun.ID, unchangedObservation, unchangedEvidence); err != nil {
 		t.Fatalf("unchanged Revision observation: %v", err)
 	}
-	stored, err := store.Job(ctx, job.ID)
+	stored, err := store.CodingJob(ctx, job.ID)
 	records, evidenceErr := store.Evidence(ctx, job.ID)
 	if err != nil || evidenceErr != nil || stored.Revision != changed || changedRun.InputRevision != start || unchangedRun.InputRevision != changed || !slices.ContainsFunc(records, func(record spine.Evidence) bool {
 		return record.ID == changedEvidence.ID && record.AgentRunID == changedRun.ID && record.Revision == changed
@@ -998,7 +1017,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	prepare := func(t *testing.T, suffix string) (spine.Job, spine.ReviewPlanRecord) {
+	prepare := func(t *testing.T, suffix string) (spine.CodingJob, spine.ReviewPlanRecord) {
 		t.Helper()
 		job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
 		facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/review.md"}, true, false)
@@ -1103,7 +1122,7 @@ func TestReviewerFeedbackBecomesIdempotentObservedImplementationMessage(t *testi
 	if err := store.RecordRevisionObservation(ctx, job.ID, implementationRun.ID, observation, evidence); err != nil {
 		t.Fatalf("unchanged review feedback observation: %v", err)
 	}
-	stored, err := store.Job(ctx, job.ID)
+	stored, err := store.CodingJob(ctx, job.ID)
 	if err != nil || stored.Revision != revision {
 		t.Fatalf("unchanged review feedback Job=%#v err=%v", stored, err)
 	}
@@ -1157,7 +1176,7 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 	}
 }
 
-func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, spine.Message, spine.AgentRun) {
+func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.CodingJob, string, spine.Message, spine.AgentRun) {
 	t.Helper()
 	ctx := context.Background()
 	job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
@@ -1235,13 +1254,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.Admit(ctx, postgres.NewJob{
-		AdmissionKey: "cleanup-order-" + fmt.Sprint(time.Now().UnixNano()),
-		Goal:         "prove exact cleanup order", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), Branch: "dorf/cleanup-order",
-		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
-	})
+	job, created, err := store.AdmitCoding(ctx, codingJobInput("cleanup-order-"+fmt.Sprint(time.Now().UnixNano()), "prove exact cleanup order", strings.Repeat("a", 40), "dorf/cleanup-order"))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
@@ -1325,13 +1338,17 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 	}
 }
 
-func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.Job, string, string) {
+func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.CodingJob, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	start, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/review-policy", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	admitted, created, err := store.AdmitCoding(ctx, codingJobInput(fmt.Sprintf("review-policy-%s-%d", strings.ReplaceAll(suffix, " ", "-"), time.Now().UnixNano()), "bounded implementation", start, "dorf/review-policy"))
 	if err != nil || !created {
-		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
+		t.Fatalf("admit=%#v created=%v err=%v", admitted, created, err)
+	}
+	job, err := store.CodingJob(ctx, admitted.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	setup, err := store.BeginSetup(ctx, job.ID)
@@ -1355,7 +1372,7 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 	if err := store.RecordCheck(ctx, check, checkEvidence, spine.CommandObservation{Command: check.Command, StartedAt: now, FinishedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	job, err = store.Job(ctx, job.ID)
+	job, err = store.CodingJob(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1366,7 +1383,7 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	start := strings.Repeat("7", 40)
-	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: fmt.Sprintf("setup-retry-%d", time.Now().UnixNano()), Goal: "bounded setup retry", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/setup-retry", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(fmt.Sprintf("setup-retry-%d", time.Now().UnixNano()), "bounded setup retry", start, "dorf/setup-retry"))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -1466,8 +1483,9 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	ctx := context.Background()
 	start := strings.Repeat("6", 40)
 	revision := strings.Repeat("7", 40)
+	branch := "dorf/revision-observation-boundary"
 	key := fmt.Sprintf("revision-observation-boundary-%d", time.Now().UnixNano())
-	job, created, err := store.Admit(ctx, postgres.NewJob{AdmissionKey: key, Goal: "bounded implementation", Repository: "https://github.com/aphronio/dorf.git", Revision: start, Branch: "dorf/revision-observation-boundary", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(key, "bounded implementation", start, branch))
 	if err != nil || !created {
 		t.Fatalf("admit=%#v created=%v err=%v", job, created, err)
 	}
@@ -1489,7 +1507,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
-	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: branch, StartedAt: now, FinishedAt: now}
 	initialEvidence := integrationEvidence(initialRun.ID, "git-revision", "", "", revision, "9")
 	initialEvidence.AgentRunID = initialRun.ID
 	if err := store.RecordRevisionObservation(ctx, job.ID, initialRun.ID, observation, initialEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
@@ -1541,7 +1559,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: "incus"}, postgres.NewJob{AdmissionKey: "cleanup-exhausted-" + suffix, Goal: "initial", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/cleanup-exhausted", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"})
+	job, created, err := workflow.Admit(ctx, store, client, providerCheck{}, workflow.RuntimeProfile{SandboxProfile: "incus"}, codingJobInput("cleanup-exhausted-"+suffix, "initial", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-exhausted"))
 	if err != nil || !created {
 		t.Fatalf("admit Job created=%v err=%v", created, err)
 	}
@@ -1684,13 +1702,13 @@ func (e *integrationExternals) effect(kind spine.ActionKind) error {
 func (e *integrationExternals) SandboxCreate(context.Context, spine.Job, spine.Sandbox) error {
 	return e.effect(spine.ActionSandboxCreate)
 }
-func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
+func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
 	return e.effect(spine.ActionRepositoryClone)
 }
 func (e *integrationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
 	return e.effect(spine.ActionRouteCreate)
 }
-func (e *integrationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e *integrationExternals) AgentInitialTurn(_ context.Context, job spine.Job, delivery spine.Delivery, _ string) (spine.HarnessBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if len(e.turns) == 0 {
@@ -1710,7 +1728,7 @@ func (e *integrationExternals) AgentTurns(_ context.Context, _ spine.Job, thread
 	defer e.mu.Unlock()
 	return spine.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: append([]spine.HarnessTurn(nil), e.turns...)}, nil
 }
-func (e *integrationExternals) AgentSubmit(_ context.Context, _ spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e *integrationExternals) AgentSubmit(_ context.Context, _ spine.Job, delivery spine.Delivery, _ string) (spine.HarnessBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	turn := spine.HarnessTurn{ID: "integration-turn-" + delivery.Message.ID, Status: "running"}
@@ -1756,8 +1774,8 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	input := postgres.NewJob{AdmissionKey: "reattach-cas-" + suffix, Goal: "preserve one task binding", Repository: "https://github.com/aphronio/dorf.git", Revision: "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", Branch: "dorf/reattach-cas", SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high", GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield"}
-	job, created, err := store.Admit(ctx, input)
+	input := codingJobInput("reattach-cas-"+suffix, "preserve one task binding", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/reattach-cas")
+	job, created, err := store.AdmitCoding(ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}

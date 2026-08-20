@@ -8,11 +8,12 @@ import (
 )
 
 func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
-	job := spine.Job{ID: "job-1", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true, Revision: strings.Repeat("a", 40)}
+	revision := strings.Repeat("a", 40)
+	job := spine.Job{ID: "job-1", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	run := spine.AgentRun{ID: "run-1", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}
 	delivery := spine.Delivery{Message: spine.Message{Sequence: 1}, AgentRun: run}
-	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery}
+	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery, Source: spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate}
 	for _, want := range steps {
@@ -48,11 +49,12 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 }
 
 func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
-	job := spine.Job{ID: "job-local", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true, Revision: strings.Repeat("b", 40)}
+	revision := strings.Repeat("b", 40)
+	job := spine.Job{ID: "job-local", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := InvestigationSnapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: job.Revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
+		Source:   spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
 		Delivery: spine.Delivery{AgentRun: spine.AgentRun{ID: "run-local", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}},
 		Actions:  []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded}},
 	}
@@ -77,6 +79,25 @@ func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
 		if _, err := validateInvestigationReport(invalid); err == nil {
 			t.Fatalf("accepted invalid output %q", invalid)
 		}
+	}
+}
+
+func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	input := investigationAgentInput(
+		spine.CodebaseInvestigationSource{Revision: revision},
+		spine.Delivery{Message: spine.Message{Input: "Find one architectural weakness."}, AgentRun: spine.AgentRun{Role: "investigate"}},
+	)
+	for _, required := range []string{
+		"current working directory is its root", "repository-relative paths with 1-based line numbers",
+		"<path>:<line> or <path>:<start>-<end>", "Do not include absolute Sandbox paths", revision,
+	} {
+		if !strings.Contains(input, required) {
+			t.Fatalf("investigation input lacks %q:\n%s", required, input)
+		}
+	}
+	if strings.Contains(input, "/workspace/job") || strings.Contains(input, "internal/workflow") {
+		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
 	}
 }
 

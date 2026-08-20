@@ -24,32 +24,6 @@ type localRestoreSandbox struct {
 	workspace string
 }
 
-func TestInvestigationTurnInputRequiresPortableRepositoryCitations(t *testing.T) {
-	revision := strings.Repeat("a", 40)
-	input := codingTurnInput(
-		spine.Job{Revision: revision},
-		spine.Delivery{
-			Message:  spine.Message{Input: "Find one architectural weakness."},
-			AgentRun: spine.AgentRun{Role: "investigate"},
-		},
-	)
-
-	for _, required := range []string{
-		"current working directory is its root",
-		"repository-relative paths with 1-based line numbers",
-		"<path>:<line> or <path>:<start>-<end>",
-		"Do not include absolute Sandbox paths",
-		revision,
-	} {
-		if !strings.Contains(input, required) {
-			t.Fatalf("investigation input lacks %q:\n%s", required, input)
-		}
-	}
-	if strings.Contains(input, "/workspace/job") || strings.Contains(input, "internal/workflow") {
-		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
-	}
-}
-
 func (s localRestoreSandbox) Workspace() string { return s.workspace }
 
 func (s localRestoreSandbox) physical(path string) string {
@@ -117,7 +91,7 @@ func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *
 		t.Fatal(err)
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(bundle.Contents))
-	job := spine.Job{ID: "job-local-source", Revision: bundle.Revision, Branch: "dorf/investigation-local"}
+	job := spine.Job{ID: "job-local-source"}
 	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
 	source := spine.CodebaseInvestigationSource{
 		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: bundle.Revision,
@@ -134,8 +108,8 @@ func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *
 	if got := run(checkout, "rev-parse", "HEAD"); got != bundle.Revision {
 		t.Fatalf("HEAD=%s want=%s", got, bundle.Revision)
 	}
-	if got := run(checkout, "branch", "--show-current"); got != job.Branch {
-		t.Fatalf("branch=%s want=%s", got, job.Branch)
+	if got := run(checkout, "branch", "--show-current"); got != "" {
+		t.Fatalf("retained investigation checkout is attached to branch %s", got)
 	}
 	contents, err := os.ReadFile(filepath.Join(checkout, "unpublished.txt"))
 	if err != nil || string(contents) != "exact committed source\n" {
@@ -152,10 +126,11 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "foreign.txt"), []byte("do not delete\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	job := spine.Job{ID: "job-foreign", Revision: strings.Repeat("a", 40), Branch: "dorf/investigation-foreign"}
+	revision := strings.Repeat("a", 40)
+	job := spine.Job{ID: "job-foreign"}
 	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("b", 64)}
 	source := spine.CodebaseInvestigationSource{
-		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: job.Revision,
+		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("c", 64), BundleByteSize: 1,
 	}
 	err := (Externals{Sandbox: sandbox}).RepositoryRestore(context.Background(), job, owned, source, []byte("x"))
@@ -199,21 +174,6 @@ type bridgeAddressRunner struct{}
 
 func (bridgeAddressRunner) Run(context.Context, string, []byte, ...string) (incus.Result, error) {
 	return incus.Result{Stdout: "10.42.0.1/24\n"}, nil
-}
-
-func TestCodingTurnInputKeepsReviewFeedbackOpaque(t *testing.T) {
-	job := spine.Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
-	message := spine.Message{FromKind: spine.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
-
-	reviewer := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary"}})
-	if reviewer != message.Input {
-		t.Fatalf("reviewer input was rewritten: %q", reviewer)
-	}
-
-	implementation := codingTurnInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "implement"}})
-	if !strings.HasPrefix(implementation, message.Input+"\n\n") || !strings.Contains(implementation, job.Branch) || !strings.Contains(implementation, job.Revision) {
-		t.Fatalf("implementation input is missing the coding contract: %q", implementation)
-	}
 }
 
 type localReviewBoundaryRunner struct {
@@ -300,7 +260,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		t.Fatal(err)
 	}
 
-	job := spine.Job{ID: "job-real-boundary", Revision: revision}
+	job := spine.CodingJob{Job: spine.Job{ID: "job-real-boundary"}, Revision: revision}
 	run := spine.ReviewRunView{
 		AgentRun: spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
 		Sandbox:  spine.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},

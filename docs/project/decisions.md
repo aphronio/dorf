@@ -1889,9 +1889,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Local index, tracked-worktree, and untracked changes are excluded and reported to the caller.
 - **Execution:** A retained source projects a distinct `repository-restore` Action. Dorf reads and
   verifies the retained bytes, uses the common Sandbox `PutFile` operation to reconcile an exact
-  temporary bundle, verifies it with Git, and converges the admitted branch and Revision before the
+  temporary bundle, verifies it with Git, and converges a detached checkout at the admitted Revision before the
   investigator runs. An ownership marker distinguishes a retryable partial restore from a foreign
-  pre-existing checkout. Remote sources keep the existing `repository-clone` Action.
+  pre-existing checkout. Remote sources keep the existing `repository-clone` Action and use the same
+  detached exact-Revision contract. Investigation has no synthetic branch.
 - **File boundary:** `PutFile` reconciles one bounded byte slice at one clean absolute regular-file
   destination through an adjacent verified temporary file and atomic rename. Incus and E2B retain
   their private transports. The operation is safe to retry after an indeterminate response, but it
@@ -1949,3 +1950,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A reusable custody mechanism cannot support multiple real workflows without
   knowing their terminal policy. A single workflow needing a typed decision is not sufficient; that
   decision remains workflow-owned.
+
+## D076 — Core Jobs and workflow inputs have separate durable types
+
+- **Status:** Accepted first Core/workflow separation slice — 2026-08-20
+- **Decision:** Keep `dorf.jobs` limited to shared custody: identity, bounded goal, pinned workflow
+  and Sandbox profile, execution attachment, attention, and cleanup lifecycle. Store coding
+  repository, starting/current Revision, branch, GitHub authority, and selected setup in
+  `coding_to_proposal_inputs`. Store investigation repository, exact Revision, and remote-or-retained
+  source identity in `codebase_investigation_sources`. Admission uses explicit typed inputs for each
+  workflow; there is no generic input JSON, nullable workflow column set, or compatibility facade.
+- **Execution:** Coding continues to own a mutable branch and Revision line. Investigation owns a
+  clean detached checkout at one exact Revision and never fabricates a branch. Shared Sandbox,
+  AgentRun, route, Artifact, attention, task attachment, and requested-cleanup custody are unchanged.
+- **Why:** The first coding workflow had placed its repository and GitHub assumptions on the shared
+  Job row. The second workflow proved those were not Core facts and that retaining them would force
+  false branches and coding authority onto unrelated work.
+- **Proof:** PostgreSQL constraints and integration coverage reject cross-workflow facts, preserve
+  complete-input idempotency, admit branchless remote and retained investigations, and keep coding
+  revision/setup/publication behavior typed. The full SQL generation/vet, Go unit/integration, and
+  vet contract passes against a recreated prototype baseline.
+- **Reconsider when:** Another workflow needs one of these facts with the same authority and recovery
+  meaning. Repeated field names alone are insufficient reason to move it into Core.

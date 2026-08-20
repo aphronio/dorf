@@ -1,16 +1,16 @@
 -- name: InsertCodebaseInvestigationSource :execrows
 insert into dorf.codebase_investigation_sources(
-    job_id,kind,bundle_digest,bundle_byte_size
+    job_id,workflow_name,kind,repository,revision,bundle_digest,bundle_byte_size
 ) values(
-    sqlc.arg(job_id),sqlc.arg(kind),sqlc.arg(bundle_digest),sqlc.arg(bundle_byte_size)
+    sqlc.arg(job_id),'codebase-investigation',sqlc.arg(kind),sqlc.arg(repository),sqlc.arg(revision),
+    sqlc.arg(bundle_digest),sqlc.arg(bundle_byte_size)
 )
 on conflict(job_id) do nothing;
 
 -- name: GetCodebaseInvestigationSource :one
-select s.job_id,s.kind,j.repository,j.revision,
+select s.job_id,s.kind,s.repository,s.revision,
        coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
 from dorf.codebase_investigation_sources s
-join dorf.jobs j on j.id=s.job_id
 where s.job_id=sqlc.arg(job_id);
 
 -- name: ListCodebaseInvestigationDrafts :many
@@ -23,11 +23,12 @@ where d.job_id=sqlc.arg(job_id)
 order by m.sequence,d.artifact_id;
 
 -- name: GetCodebaseInvestigationRunForUpdate :one
-select j.workflow_name,j.workflow_revision,j.revision,j.admission_open,j.cleanup_state,
+select j.workflow_name,j.workflow_revision,s.revision,j.admission_open,j.cleanup_state,
        ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.input_revision,'') as input_revision,
        ar.started_at,ar.finished_at
 from dorf.jobs j
+join dorf.codebase_investigation_sources s on s.job_id=j.id
 join dorf.agent_runs ar on ar.job_id=j.id
 where j.id=sqlc.arg(job_id) and ar.id=sqlc.arg(agent_run_id)
 for update of j,ar;

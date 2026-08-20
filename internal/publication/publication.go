@@ -29,8 +29,8 @@ type GitHub interface {
 }
 
 type Repository interface {
-	Relation(context.Context, spine.Job, string) (string, error)
-	Push(context.Context, spine.Job, string) error
+	Relation(context.Context, spine.CodingJob, string) (string, error)
+	Push(context.Context, spine.CodingJob, string) error
 }
 
 type WorkflowBarrier interface {
@@ -65,7 +65,7 @@ type readinessView struct {
 	ReviewRuns []spine.ReviewRunView
 }
 
-func (s Service) readiness(ctx context.Context, job spine.Job, intentAt time.Time) (readinessView, error) {
+func (s Service) readiness(ctx context.Context, job spine.CodingJob, intentAt time.Time) (readinessView, error) {
 	var view readinessView
 	declared, err := s.Store.DeclaredChecks(ctx, job.ID)
 	if err != nil {
@@ -115,7 +115,7 @@ func (s Service) Push(ctx context.Context, jobID, revision string) error {
 }
 
 func (s Service) pushFenced(ctx context.Context, jobID, revision string) error {
-	job, err := s.Store.Job(ctx, jobID)
+	job, err := s.Store.CodingJob(ctx, jobID)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func (s Service) Propose(ctx context.Context, jobID, revision string) error {
 }
 
 func (s Service) proposeFenced(ctx context.Context, jobID, revision string) error {
-	job, err := s.Store.Job(ctx, jobID)
+	job, err := s.Store.CodingJob(ctx, jobID)
 	if err != nil {
 		return err
 	}
@@ -276,7 +276,7 @@ func planPush(present bool, remote, revision, relation string) (string, error) {
 	return "", &AttentionError{Reason: fmt.Sprintf("remote head %s is %s relative to exact Revision %s; refusing force or rewrite", remote, relation, revision)}
 }
 
-func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHubProposal, title, body string) (string, githubapi.PullRequest, error) {
+func planPull(job spine.CodingJob, pulls []githubapi.PullRequest, stored *spine.GitHubProposal, title, body string) (string, githubapi.PullRequest, error) {
 	if len(pulls) > 1 {
 		return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("GitHub has %d pull requests across states or bases for the exact Job head; refusing duplicate publication", len(pulls))}
 	}
@@ -296,7 +296,7 @@ func planPull(job spine.Job, pulls []githubapi.PullRequest, stored *spine.GitHub
 	return "adopt", pull, nil
 }
 
-func (s Service) block(ctx context.Context, job spine.Job, action spine.Action, reason string) error {
+func (s Service) block(ctx context.Context, job spine.CodingJob, action spine.Action, reason string) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func claimBeforeRecord(ctx context.Context, claimCheck func(context.Context) err
 	return record()
 }
 
-func validatePullIdentity(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
+func validatePullIdentity(job spine.CodingJob, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
 	if pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.Number < 1 || pull.URL == "" {
 		return &AttentionError{Reason: "GitHub pull request conflicts with exact repository + head + base identity"}
 	}
@@ -350,7 +350,7 @@ func validatePullIdentity(job spine.Job, pull githubapi.PullRequest, stored *spi
 	return nil
 }
 
-func validatePull(job spine.Job, pull githubapi.PullRequest, stored *spine.GitHubProposal, title string) error {
+func validatePull(job spine.CodingJob, pull githubapi.PullRequest, stored *spine.GitHubProposal, title string) error {
 	if err := validatePullIdentity(job, pull, stored); err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job spine.Job, readiness spine.ReadinessAssessment, checks []spine.Check, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
+func Body(job spine.CodingJob, readiness spine.ReadinessAssessment, checks []spine.Check, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
@@ -453,7 +453,7 @@ type GitRepository struct {
 	Run       func(context.Context, []string, []string) ([]byte, []byte, error)
 }
 
-func (r GitRepository) Relation(ctx context.Context, job spine.Job, remote string) (string, error) {
+func (r GitRepository) Relation(ctx context.Context, job spine.CodingJob, remote string) (string, error) {
 	if !postgres.ValidRevision(remote) {
 		return "", &AttentionError{Reason: "remote head is not an exact commit OID"}
 	}
@@ -500,7 +500,7 @@ func boundedStderr(stderr string) string {
 	return detail
 }
 
-func (r GitRepository) Push(ctx context.Context, job spine.Job, token string) error {
+func (r GitRepository) Push(ctx context.Context, job spine.CodingJob, token string) error {
 	if token == "" {
 		return fmt.Errorf("repository push requires one ephemeral GitHub App token")
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 type Store interface {
-	Job(context.Context, string) (spine.Job, error)
+	CodingJob(context.Context, string) (spine.CodingJob, error)
 	Proposal(context.Context, string) (*spine.GitHubProposal, error)
 	Outcome(context.Context, string) (*spine.JobOutcome, error)
 	RecordOutcome(context.Context, spine.JobOutcome) (spine.JobOutcome, bool, error)
@@ -60,7 +60,7 @@ func (s Service) recordFenced(ctx context.Context, jobID string, requested spine
 		}
 		return *existing, false, nil
 	}
-	job, err := s.Store.Job(ctx, jobID)
+	job, err := s.Store.CodingJob(ctx, jobID)
 	if err != nil {
 		return spine.JobOutcome{}, false, err
 	}

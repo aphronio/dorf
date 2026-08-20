@@ -220,7 +220,7 @@ type faultActionExternals struct {
 	runID  string
 }
 
-func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox) error {
+func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
 	e.effect.reconcile(e.runID)
 	return nil
 }
@@ -245,7 +245,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		result, err := absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (faultActionResultV1, error) {
-			job, err := store.Job(workCtx, params.JobID)
+			job, err := store.CodingJob(workCtx, params.JobID)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
@@ -269,7 +269,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			if err := service.ExecuteSandboxAction(workCtx, job, sandbox, action); err != nil {
+			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, action, job.Repository, job.Revision, job.Branch); err != nil {
 				return faultActionResultV1{}, err
 			}
 			return faultActionResultV1{ActionID: action.ID}, nil
@@ -283,19 +283,12 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 
 func admitFaultJob(t *testing.T, store postgres.Store, suffix string) spine.Job {
 	t.Helper()
-	job, created, err := store.Admit(context.Background(), postgres.NewJob{
-		AdmissionKey:       "absurd-fault-" + suffix,
-		Goal:               "prove late work cannot duplicate one logical external effect",
-		Repository:         "https://github.com/aphronio/dorf.git",
-		Revision:           "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
-		Branch:             "dorf/absurd-fault-" + suffix,
-		GitHubRepository:   "aphronio/dorf",
-		GitHubInstallation: "42",
-		BaseBranch:         "greenfield",
-		SandboxProfile:     "incus", ProviderConnection: "primary",
-		Model:           "gpt-5.6-sol",
-		ReasoningEffort: "high",
-	})
+	job, created, err := store.AdmitCoding(context.Background(), codingJobInput(
+		"absurd-fault-"+suffix,
+		"prove late work cannot duplicate one logical external effect",
+		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c",
+		"dorf/absurd-fault-"+suffix,
+	))
 	if err != nil || !created {
 		t.Fatalf("admit fault Job=%#v created=%v err=%v", job, created, err)
 	}

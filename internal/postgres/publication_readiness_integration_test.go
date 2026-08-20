@@ -38,11 +38,11 @@ func (g *forbiddenPublicationGitHub) UpdatePullRequest(context.Context, githubap
 
 type forbiddenPublicationRepository struct{ calls int }
 
-func (r *forbiddenPublicationRepository) Relation(context.Context, spine.Job, string) (string, error) {
+func (r *forbiddenPublicationRepository) Relation(context.Context, spine.CodingJob, string) (string, error) {
 	r.calls++
 	return "", errors.New("repository must not be called before readiness")
 }
-func (r *forbiddenPublicationRepository) Push(context.Context, spine.Job, string) error {
+func (r *forbiddenPublicationRepository) Push(context.Context, spine.CodingJob, string) error {
 	r.calls++
 	return errors.New("repository must not be called before readiness")
 }

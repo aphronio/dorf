@@ -71,7 +71,7 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.Source.JobID != snapshot.Job.ID || snapshot.Source.Revision != snapshot.Job.Revision {
+	if snapshot.Source.JobID != snapshot.Job.ID {
 		return snapshot, fmt.Errorf("codebase-investigation source conflicts with its exact Job")
 	}
 	sandboxes, err := store.Sandboxes(ctx, jobID)
@@ -189,7 +189,7 @@ func RunCodebaseInvestigation(ctx context.Context, service spine.Service, store 
 			err = runInvestigationAction(ctx, service, store, snapshot, work)
 		case InvestigationWorkDeliver:
 			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
-				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery)
+				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
 			})
 		case InvestigationWorkObserveAgent:
 			turn, observeErr := service.ObserveAgentRunTurn(ctx, snapshot.Job, snapshot.Delivery.AgentRun, "investigate")
@@ -220,6 +220,17 @@ func RunCodebaseInvestigation(ctx context.Context, service spine.Service, store 
 	}
 }
 
+func investigationAgentInput(source spine.CodebaseInvestigationSource, delivery spine.Delivery) string {
+	return fmt.Sprintf(`%s
+
+Dorf codebase-investigation contract:
+- Inspect the repository at exact Revision %s; the current working directory is its root.
+- Do not modify the checkout.
+- Return a nonblank Markdown report grounded in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
+- Do not include absolute Sandbox paths.
+- If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
+}
+
 func runInvestigationAction(ctx context.Context, service spine.Service, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != spine.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
@@ -237,6 +248,9 @@ func runInvestigationAction(ctx context.Context, service spine.Service, store po
 	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
 		if work.ActionKind == spine.ActionRepositoryRestore {
 			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
+		}
+		if work.ActionKind == spine.ActionRepositoryClone {
+			return service.ExecuteRepositoryClone(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source.Repository, snapshot.Source.Revision, "")
 		}
 		return service.ExecuteSandboxAction(workCtx, snapshot.Job, snapshot.MainSandbox, action)
 	})
@@ -259,7 +273,7 @@ func recordInvestigationDraft(ctx context.Context, service spine.Service, store 
 	if err != nil {
 		return err
 	}
-	if err := service.VerifyRepositoryUnchanged(ctx, snapshot.Job); err != nil {
+	if err := service.VerifyRepositoryUnchanged(ctx, snapshot.Job, snapshot.Source.Revision); err != nil {
 		return investigationContractError("investigator changed or dirtied the admitted checkout: " + err.Error())
 	}
 	blob, err := service.BlobStore().Put([]byte(report))

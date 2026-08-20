@@ -379,8 +379,12 @@ workspace=$1; branch=$2; comparison_base=$3
 export GIT_OPTIONAL_LOCKS=0
 cd "$workspace"
 start=$(date +%s%N)
-current_ref=$(git symbolic-ref -q HEAD) || { echo 'detached or unborn branch' >&2; exit 20; }
-test "$current_ref" = "refs/heads/$branch" || { echo "branch is $current_ref, expected refs/heads/$branch" >&2; exit 21; }
+current_ref=$(git symbolic-ref -q HEAD || true)
+if test -n "$branch"; then
+  test "$current_ref" = "refs/heads/$branch" || { echo "branch is $current_ref, expected refs/heads/$branch" >&2; exit 21; }
+else
+  test -z "$current_ref" || { echo "checkout is attached to $current_ref, expected detached HEAD" >&2; exit 20; }
+fi
 test "$(git cat-file -t "$comparison_base" 2>/dev/null)" = commit || { echo 'comparison base is not an existing commit' >&2; exit 22; }
 head=$(git rev-parse --verify HEAD) || { echo 'unborn branch' >&2; exit 23; }
 test "$(git cat-file -t "$head" 2>/dev/null)" = commit || { echo 'HEAD is not a commit' >&2; exit 24; }
@@ -390,7 +394,7 @@ test -z "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'checkout
 if test "$head" != "$comparison_base"; then
   git merge-base --is-ancestor "$comparison_base" "$head" || { echo 'HEAD does not descend from comparison base' >&2; exit 28; }
 fi
-test "$(git symbolic-ref -q HEAD)" = "$current_ref" && test "$(git rev-parse --verify HEAD)" = "$head" || { echo 'branch changed during observation' >&2; exit 29; }
+test "$(git symbolic-ref -q HEAD || true)" = "$current_ref" && test "$(git rev-parse --verify HEAD)" = "$head" || { echo 'checkout identity changed during observation' >&2; exit 29; }
 test -z "$(git status --porcelain=v1 --untracked-files=all)" || { echo 'checkout changed during observation' >&2; exit 30; }
 finish=$(date +%s%N)
 printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$comparison_base" "$head" "$tree" "$branch" "$start" "$finish"`

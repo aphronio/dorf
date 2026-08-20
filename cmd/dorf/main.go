@@ -603,7 +603,10 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	job, created, err := workflow.Admit(ctx, store, client, providers, workflow.RuntimeProfile{SandboxProfile: profile.Name}, postgres.NewJob{AdmissionKey: *key, Goal: goal, Repository: *repository, Revision: *revision, Branch: *branch, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base})
+	job, created, err := workflow.Admit(ctx, store, client, providers, workflow.RuntimeProfile{SandboxProfile: profile.Name}, postgres.NewCodingJob{
+		NewJob:     postgres.NewJob{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		Repository: *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
+	})
 	if err != nil {
 		return err
 	}
@@ -642,16 +645,13 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
-	jobID := spine.JobID(strings.TrimSpace(*key))
 	source, workingTreeChangesExcluded, err := prepareInvestigationSource(ctx, blob.Store{Root: cfg.BlobRoot}, *repositoryURL, *localRepository, *revision)
 	if err != nil {
 		return err
 	}
-	input := postgres.NewJob{
-		AdmissionKey: *key, Goal: brief, Repository: source.Repository, Revision: source.Revision,
-		Branch:         "dorf/investigation-" + strings.TrimPrefix(jobID, "job-"),
-		SandboxProfile: profile.Name, ProviderConnection: *provider,
-		Model: *model, ReasoningEffort: *effort, InvestigationSource: source,
+	input := postgres.NewInvestigationJob{
+		NewJob: postgres.NewJob{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		Source: source,
 	}
 	job, created, err := workflow.AdmitCodebaseInvestigation(ctx, store, client, gateway.Gateway{StatePath: cfg.GatewayStatePath}, workflow.RuntimeProfile{SandboxProfile: profile.Name}, input)
 	if err != nil {
@@ -774,7 +774,8 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	if err != nil {
 		return err
 	}
-	job = snapshot.Job
+	codingJob := snapshot.Job
+	job = codingJob.Job
 	projection, err := snapshot.Project(evidenceStore)
 	if err != nil {
 		return err
@@ -800,7 +801,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			agentRuns = append(agentRuns, delivery.AgentRun)
 		}
 		view := map[string]any{
-			"job":                            job,
+			"job":                            codingJob,
 			"sandbox_profile":                profileView(profile),
 			"current_work":                   currentWork,
 			"readiness":                      assessment,
@@ -822,7 +823,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
-	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, job.Repository, job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, codingJob.Repository, codingJob.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
@@ -834,7 +835,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		fmt.Fprintln(stdout, "  proposal: none")
 	} else {
 		fmt.Fprintf(stdout, "  proposal: #%d %s Revision=%s", snapshot.Proposal.Number, snapshot.Proposal.URL, snapshot.Proposal.ProposedRevision)
-		if snapshot.Proposal.ProposedRevision != job.Revision {
+		if snapshot.Proposal.ProposedRevision != codingJob.Revision {
 			fmt.Fprint(stdout, " (stale)")
 		}
 		fmt.Fprintln(stdout)
@@ -889,7 +890,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
-		job.Goal, investigationSourceSummary(snapshot.Source), job.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
+		job.Goal, investigationSourceSummary(snapshot.Source), snapshot.Source.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
@@ -967,7 +968,7 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore bl
 	if set.NArg() != 2 || set.Arg(0) != "verify" {
 		return fmt.Errorf("evidence requires: verify JOB_ID")
 	}
-	job, err := store.Job(ctx, set.Arg(1))
+	job, err := store.CodingJob(ctx, set.Arg(1))
 	if err != nil {
 		return err
 	}

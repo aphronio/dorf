@@ -12,13 +12,13 @@ import (
 )
 
 type outcomeStore struct {
-	job      spine.Job
+	job      spine.CodingJob
 	proposal *spine.GitHubProposal
 	outcome  *spine.JobOutcome
 	writes   int
 }
 
-func (s *outcomeStore) Job(context.Context, string) (spine.Job, error) { return s.job, nil }
+func (s *outcomeStore) CodingJob(context.Context, string) (spine.CodingJob, error) { return s.job, nil }
 func (s *outcomeStore) Proposal(context.Context, string) (*spine.GitHubProposal, error) {
 	return s.proposal, nil
 }
@@ -49,7 +49,7 @@ func (g *outcomeGitHub) PullRequest(_ context.Context, authority githubapi.Autho
 func outcomeFixture() (*outcomeStore, *outcomeGitHub, Service) {
 	revision := strings.Repeat("a", 40)
 	store := &outcomeStore{
-		job:      spine.Job{ID: "job-exact", Revision: revision, GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield", Branch: "dorf/issue-39"},
+		job:      spine.CodingJob{Job: spine.Job{ID: "job-exact"}, Revision: revision, GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield", Branch: "dorf/issue-39"},
 		proposal: &spine.GitHubProposal{JobID: "job-exact", Number: 39, URL: "https://github.com/aphronio/dorf/pull/39", ProposedRevision: revision},
 	}
 	github := &outcomeGitHub{pull: githubapi.PullRequest{Number: 39, URL: store.proposal.URL, Repository: "aphronio/dorf", Head: "dorf/issue-39", Base: "greenfield", HeadSHA: revision}}

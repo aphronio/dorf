@@ -235,9 +235,9 @@ the client-owned cleanup boundary has PostgreSQL integration and a live Incus te
 workflow through E2B remains a proof follow-up.
 This narrow support claim is evidence, not the permanent product boundary.
 
-The current coding implementation may contain repository, Revision, review, and GitHub fields in
-records that look core-shaped. Do not preserve or make them optional merely to claim generality. A
-second workflow should add its natural facts first; only observed duplication earns extraction.
+The durable Core Job is workflow-neutral. Coding and investigation keep their repository, Revision,
+GitHub, and draft facts in typed workflow-owned records. Do not make unlike facts optional or move
+them into generic payloads merely to claim generality; only observed duplication earns extraction.
 
 ## Non-goals until evidence demands them
 

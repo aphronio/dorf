@@ -351,7 +351,13 @@ func (s Sandbox) ReconcileClone(ctx context.Context, name, repository, revision,
 			return failure("refresh existing Sandbox clone", fetch)
 		}
 	}
-	checkout, err := s.Exec(ctx, name, nil, "git", "-C", s.Config.Workspace, "checkout", "-B", branch, revision)
+	checkoutArgs := []string{"git", "-C", s.Config.Workspace, "checkout"}
+	if branch == "" {
+		checkoutArgs = append(checkoutArgs, "--detach", revision)
+	} else {
+		checkoutArgs = append(checkoutArgs, "-B", branch, revision)
+	}
+	checkout, err := s.Exec(ctx, name, nil, checkoutArgs...)
 	if err != nil {
 		return err
 	}

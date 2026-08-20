@@ -261,7 +261,13 @@ func reconcileClone(ctx context.Context, runtime provider.Sandbox, owner provide
 			return fmt.Errorf("refresh existing Sandbox clone: %s", strings.TrimSpace(fetch.Stderr))
 		}
 	}
-	checkout, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "checkout", "-B", branch, revision)
+	checkoutArgs := []string{"git", "-C", workspace, "checkout"}
+	if branch == "" {
+		checkoutArgs = append(checkoutArgs, "--detach", revision)
+	} else {
+		checkoutArgs = append(checkoutArgs, "-B", branch, revision)
+	}
+	checkout, err := runtime.Exec(ctx, owner, nil, checkoutArgs...)
 	if err != nil {
 		return err
 	}

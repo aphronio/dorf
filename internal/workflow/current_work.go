@@ -66,7 +66,7 @@ func (w Work) Description() string {
 // database read. The reads are not a database transaction; every operation
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
-	Job            spine.Job
+	Job            spine.CodingJob
 	Sandboxes      []spine.Sandbox
 	MainSandbox    spine.Sandbox
 	Actions        []spine.Action
@@ -124,7 +124,7 @@ func publicationIntentAt(actions []spine.Action, revision string) time.Time {
 func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snapshot, error) {
 	var snapshot Snapshot
 	var err error
-	snapshot.Job, err = store.Job(ctx, jobID)
+	snapshot.Job, err = store.CodingJob(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -434,7 +434,7 @@ func publicationDetail(f Snapshot, fallback string) string {
 	return fallback
 }
 
-func attentionDetail(job spine.Job, source, fallback string) string {
+func attentionDetail(job spine.CodingJob, source, fallback string) string {
 	if job.WorkflowAttentionSource == source && job.WorkflowAttention != "" {
 		return job.WorkflowAttention
 	}

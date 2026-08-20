@@ -10,7 +10,7 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, spine.Job, string) {
+func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, spine.CodingJob, string) {
 	t.Helper()
 	_, store, _ := testDatabase(t)
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "cleanup-publication-"+label)

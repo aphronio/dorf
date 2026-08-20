@@ -1,8 +1,5 @@
 -- name: GetJob :one
-select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.repository,j.revision,
-       initial.oid as starting_revision,j.branch,
-       coalesce(j.github_repository,'') as github_repository,coalesce(j.github_installation_id,'') as github_installation_id,
-       coalesce(j.base_branch,'') as base_branch,
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
        j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
        j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
        coalesce(j.workflow_attention,'') as workflow_attention,
@@ -10,18 +7,35 @@ select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,j.reposit
        j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
        j.admitted_at,j.cleaned_at
 from dorf.jobs j
-join dorf.revisions initial on initial.job_id=j.id and initial.generation=0
+left join lateral (
+    select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
+where j.id=sqlc.arg(job_id);
+
+-- name: GetCodingJob :one
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+       c.repository,c.starting_revision,c.revision,c.branch,
+       c.github_repository,c.github_installation_id,c.base_branch,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
+       coalesce(j.workflow_attention,'') as workflow_attention,
+       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
+       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       j.admitted_at,j.cleaned_at
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 left join lateral (
     select task_id from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
 ) current_task on true
 where j.id=sqlc.arg(job_id);
 
 -- name: GetRevisionJobForUpdate :one
-select revision,branch,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
+select c.revision,c.branch,j.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=sqlc.arg(job_id)
+for update of j,c;
 
 -- name: NextRevisionGeneration :one
 select (coalesce(max(generation),0)+1)::integer
@@ -42,34 +56,45 @@ where job_id=sqlc.arg(job_id)
 order by generation;
 
 -- name: AdvanceJobRevision :execrows
-update dorf.jobs
+update dorf.coding_to_proposal_inputs
 set revision=sqlc.arg(revision)
-where id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
+where job_id=sqlc.arg(job_id) and revision=sqlc.arg(comparison_base_oid);
 
 -- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
-    id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,
-    sandbox_profile,provider_connection,model,reasoning_effort,
-    github_repository,github_installation_id,base_branch
+    id,admission_key,workflow_name,workflow_revision,goal,
+    sandbox_profile,provider_connection,model,reasoning_effort
 )
 values(
     sqlc.arg(id),sqlc.arg(admission_key),sqlc.arg(workflow_name),sqlc.arg(workflow_revision),
-    sqlc.arg(goal),sqlc.arg(repository),
-    sqlc.arg(revision),sqlc.arg(branch),
+    sqlc.arg(goal),
     sqlc.arg(sandbox_profile),sqlc.arg(provider_connection),sqlc.arg(model),
-    sqlc.arg(reasoning_effort),sqlc.arg(github_repository),
-    sqlc.arg(github_installation_id),sqlc.arg(base_branch)
+    sqlc.arg(reasoning_effort)
 )
 on conflict(admission_key) do nothing;
 
 -- name: GetAdmittedJobForUpdate :one
-select id,admission_key,workflow_name,workflow_revision,goal,repository,revision,branch,sandbox_profile,provider_connection,
-       model,reasoning_effort,coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch
+select id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,
+       model,reasoning_effort
 from dorf.jobs
 where admission_key=sqlc.arg(admission_key)
 for update;
+
+-- name: InsertCodingToProposalInput :execrows
+insert into dorf.coding_to_proposal_inputs(
+    job_id,workflow_name,repository,starting_revision,revision,branch,
+    github_repository,github_installation_id,base_branch
+) values(
+    sqlc.arg(job_id),'coding-to-proposal',sqlc.arg(repository),sqlc.arg(starting_revision),sqlc.arg(revision),
+    sqlc.arg(branch),sqlc.arg(github_repository),sqlc.arg(github_installation_id),sqlc.arg(base_branch)
+)
+on conflict(job_id) do nothing;
+
+-- name: GetCodingToProposalInput :one
+select job_id,repository,starting_revision,revision,branch,
+       github_repository,github_installation_id,base_branch
+from dorf.coding_to_proposal_inputs
+where job_id=sqlc.arg(job_id);
 
 -- name: InsertInitialRevision :exec
 insert into dorf.revisions(job_id,oid,branch,generation)
@@ -113,39 +138,49 @@ where id=sqlc.arg(job_id);
 
 -- name: GetSetupActionIDForUpdate :one
 select coalesce(setup_action_id,'') as setup_action_id
-from dorf.jobs
-where id=sqlc.arg(job_id)
+from dorf.coding_to_proposal_inputs
+where job_id=sqlc.arg(job_id)
 for update;
 
 -- name: GetSelectedSetupAction :one
 select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
-from dorf.jobs j
-join dorf.actions a on a.id=j.setup_action_id and a.job_id=j.id
-where j.id=sqlc.arg(job_id);
+from dorf.coding_to_proposal_inputs c
+join dorf.actions a on a.id=c.setup_action_id and a.job_id=c.job_id
+where c.job_id=sqlc.arg(job_id);
 
 -- name: SelectInitialSetupAction :execrows
-update dorf.jobs
+update dorf.coding_to_proposal_inputs
 set setup_action_id=sqlc.arg(action_id)
-where id=sqlc.arg(job_id) and setup_action_id is null;
+where job_id=sqlc.arg(job_id) and setup_action_id is null;
 
 -- name: GetSetupRetryJobForUpdate :one
-select coalesce(setup_action_id,'') as setup_action_id,admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
+select coalesce(c.setup_action_id,'') as setup_action_id,j.admission_open,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=sqlc.arg(job_id)
+for update of j,c;
 
 -- name: SelectSetupRetry :execrows
-update dorf.jobs
-set setup_action_id=sqlc.arg(action_id),
-    workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where dorf.jobs.id=sqlc.arg(job_id) and setup_action_id=sqlc.arg(previous_action_id)
-  and (workflow_attention_source is null or workflow_attention_source=sqlc.arg(previous_action_id))
-  and exists (
+with selected as (
+  update dorf.coding_to_proposal_inputs c
+  set setup_action_id=sqlc.arg(action_id)
+  where c.job_id=sqlc.arg(job_id) and c.setup_action_id=sqlc.arg(previous_action_id)
+    and exists (
+      select 1 from dorf.jobs j
+      where j.id=c.job_id and (j.workflow_attention_source is null or j.workflow_attention_source=sqlc.arg(previous_action_id))
+    )
+    and exists (
       select 1 from dorf.actions a
-      where a.id=sqlc.arg(previous_action_id) and a.job_id=dorf.jobs.id
+      where a.id=sqlc.arg(previous_action_id) and a.job_id=c.job_id
         and a.kind='repository-setup' and a.state='failed'
-  );
+    )
+  returning c.job_id
+)
+update dorf.jobs j
+set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
+from selected
+where j.id=selected.job_id;
 
 -- name: SetWorkflowAttention :execrows
 update dorf.jobs

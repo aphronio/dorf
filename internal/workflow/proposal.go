@@ -40,7 +40,7 @@ type ProposalObservationResultV1 struct {
 }
 
 func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (ProposalObservationResultV1, error) {
-	job, err := r.Store.Job(ctx, jobID)
+	job, err := r.Store.CodingJob(ctx, jobID)
 	if err != nil {
 		return ProposalObservationResultV1{}, err
 	}
@@ -157,7 +157,7 @@ func hasFeedbackReply(comments []githubapi.Comment, jobID string, commentID int6
 	return false
 }
 
-func validateExactProposal(job spine.Job, proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
+func validateExactProposal(job spine.CodingJob, proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
 	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
 		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
 		return fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")

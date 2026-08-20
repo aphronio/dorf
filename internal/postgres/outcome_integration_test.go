@@ -13,7 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string) (spine.Job, spine.GitHubProposal) {
+func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string) (spine.CodingJob, spine.GitHubProposal) {
 	t.Helper()
 	ctx := context.Background()
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "outcome-"+label+fmt.Sprintf("-%d", time.Now().UnixNano()))
@@ -55,13 +55,12 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 
 func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, created, err := store.Admit(context.Background(), postgres.NewJob{
-		AdmissionKey: "pre-proposal-abandon-" + fmt.Sprint(time.Now().UnixNano()),
-		Goal:         "stop this coding Job", Repository: "https://github.com/aphronio/dorf.git",
-		Revision: strings.Repeat("a", 40), Branch: "dorf/pre-proposal-abandon",
-		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
-	})
+	job, created, err := store.AdmitCoding(context.Background(), codingJobInput(
+		"pre-proposal-abandon-"+fmt.Sprint(time.Now().UnixNano()),
+		"stop this coding Job",
+		strings.Repeat("a", 40),
+		"dorf/pre-proposal-abandon",
+	))
 	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}

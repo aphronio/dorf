@@ -32,16 +32,16 @@ func (e Externals) SandboxCreate(ctx context.Context, job spine.Job, sandbox spi
 	return e.Sandbox.ReconcileOwnedCreate(ctx, ownershipMetadata(sandbox))
 }
 
-func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox) error {
+func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, repository, revision, branch string) error {
 	if sandbox.JobID != job.ID || sandbox.ID != spine.MainSandboxName(job.ID) {
 		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
-	return e.Sandbox.ReconcileClone(ctx, ownershipMetadata(sandbox), job.Repository, job.Revision, job.Branch)
+	return e.Sandbox.ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
 }
 
 func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source spine.CodebaseInvestigationSource, contents []byte) error {
 	if owned.JobID != job.ID || owned.ID != spine.MainSandboxName(job.ID) || source.JobID != job.ID ||
-		source.Kind != spine.InvestigationSourceGitBundle || source.Revision != job.Revision || len(contents) == 0 {
+		source.Kind != spine.InvestigationSourceGitBundle || len(contents) == 0 {
 		return fmt.Errorf("repository restore requires the exact retained source and main Sandbox")
 	}
 	owner := ownershipMetadata(owned)
@@ -73,24 +73,24 @@ fi`
 		return fmt.Errorf("transfer retained repository bundle: %w", err)
 	}
 	script := `set -eu
-workspace=$1 revision=$2 branch=$3 bundle=$4
+	workspace=$1 revision=$2 bundle=$3
 if test ! -e "$workspace/.git"; then
   mkdir -p "$workspace"
   git -C "$workspace" init --quiet
 fi
 git -C "$workspace" bundle verify "$bundle" >/dev/null
 git -C "$workspace" fetch --quiet --force --no-tags "$bundle" HEAD:refs/dorf/source
-git -C "$workspace" checkout --quiet -B "$branch" "$revision"
+	git -C "$workspace" checkout --quiet --detach "$revision"
 git -C "$workspace" reset --quiet --hard "$revision"
 git -C "$workspace" clean -qffd
 git -C "$workspace" remote remove origin 2>/dev/null || true
 git -C "$workspace" config --local user.name 'Dorf Agent'
 git -C "$workspace" config --local user.email 'dorf-agent@localhost'
 test "$(git -C "$workspace" rev-parse HEAD)" = "$revision"
-test "$(git -C "$workspace" symbolic-ref --short HEAD)" = "$branch"
+	test -z "$(git -C "$workspace" symbolic-ref -q --short HEAD || true)"
 test -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)"
 rm -f -- "$bundle"`
-	result, err := e.Sandbox.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-repository-restore", workspace, source.Revision, job.Branch, bundlePath)
+	result, err := e.Sandbox.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-repository-restore", workspace, source.Revision, bundlePath)
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
+func (e Externals) RepositorySetup(ctx context.Context, job spine.CodingJob, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return spine.CommandObservation{}, nil, err
@@ -118,15 +118,15 @@ func (e Externals) RepositorySetup(ctx context.Context, job spine.Job, action sp
 	return observation, checks, err
 }
 
-func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job) (spine.RevisionObservation, error) {
+func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return spine.RevisionObservation{}, err
 	}
-	return e.repository().ObserveRevision(ctx, owner, job.Branch, job.Revision)
+	return e.repository().ObserveRevision(ctx, owner, branch, revision)
 }
 
-func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spine.Check) (spine.CommandObservation, error) {
+func (e Externals) RepositoryCheck(ctx context.Context, job spine.CodingJob, check spine.Check) (spine.CommandObservation, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return spine.CommandObservation{}, err
@@ -134,7 +134,7 @@ func (e Externals) RepositoryCheck(ctx context.Context, job spine.Job, check spi
 	return e.repository().RunCommand(ctx, owner, check.ID, job.Revision, check.Command)
 }
 
-func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (policy.ChangeFacts, error) {
+func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJob) (policy.ChangeFacts, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return policy.ChangeFacts{}, err
@@ -142,7 +142,7 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.Job) (po
 	return e.repository().ChangeFacts(ctx, owner, job.StartingRevision, job.Revision)
 }
 
-func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) error {
+func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) error {
 	if run.SandboxID == "" {
 		return fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
 	}
@@ -201,7 +201,7 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.ReviewCheckoutObservation, error) {
+func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.ReviewCheckoutObservation, error) {
 	if run.SandboxID == "" {
 		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
 	}
@@ -227,7 +227,7 @@ printf '%s %s clean\n' "$head" "$tree"`
 	return spine.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -237,7 +237,7 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.Job, run spi
 	return binding, err
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessHistory, error) {
+func (e Externals) ReviewTurns(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessHistory, error) {
 	binding, err := e.ReviewWait(ctx, job, run, run.TurnID)
 	return spine.HarnessHistory{
 		Harness: binding.Harness, ThreadID: binding.ThreadID,
@@ -245,7 +245,7 @@ func (e Externals) ReviewTurns(ctx context.Context, job spine.Job, run spine.Rev
 	}, err
 }
 
-func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewRecover(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -255,7 +255,7 @@ func (e Externals) ReviewRecover(ctx context.Context, job spine.Job, run spine.R
 	return binding, err
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job spine.Job, run spine.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
+func (e Externals) ReviewWait(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -281,7 +281,7 @@ func reviewInput(run spine.ReviewRunView) (string, error) {
 	return run.Request.Input, nil
 }
 
-func reviewMetadata(job spine.Job, run spine.ReviewRunView) provider.ReviewMetadata {
+func reviewMetadata(job spine.CodingJob, run spine.ReviewRunView) provider.ReviewMetadata {
 	return provider.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
 }
 
@@ -324,12 +324,12 @@ func (e Externals) RouteCreate(ctx context.Context, job spine.Job, sandbox spine
 	return nil
 }
 
-func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e Externals) AgentInitialTurn(ctx context.Context, job spine.Job, delivery spine.Delivery, input string) (spine.HarnessBinding, error) {
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
+	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentInitialTurns(ctx context.Context, job spine.Job) (spine.HarnessHistory, error) {
@@ -348,29 +348,12 @@ func (e Externals) AgentTurns(ctx context.Context, job spine.Job, threadID strin
 	return e.Agent.ReadTurns(ctx, owner, threadID)
 }
 
-func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+func (e Externals) AgentSubmit(ctx context.Context, job spine.Job, delivery spine.Delivery, input string) (spine.HarnessBinding, error) {
 	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
 	if err != nil {
 		return spine.HarnessBinding{}, err
 	}
-	return e.Agent.StartTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ThreadID, delivery.AgentRun.ID, codingTurnInput(job, delivery), job.Model, job.ReasoningEffort)
-}
-
-func codingTurnInput(job spine.Job, delivery spine.Delivery) string {
-	if delivery.AgentRun.Role == "investigate" {
-		return fmt.Sprintf(`%s
-
-Dorf codebase-investigation contract:
-- Inspect the repository at exact Revision %s; the current working directory is its root.
-- Do not modify the checkout.
-- Return a nonblank Markdown report grounded in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
-- Do not include absolute Sandbox paths.
-- If there is no useful finding, say that plainly in the report.`, delivery.Message.Input, job.Revision)
-	}
-	if delivery.AgentRun.Role != "implement" {
-		return delivery.Message.Input
-	}
-	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", delivery.Message.Input, job.Branch, job.Revision)
+	return e.Agent.StartTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ThreadID, delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job spine.Job, delivery spine.Delivery) (string, error) {

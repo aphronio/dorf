@@ -15,7 +15,8 @@ import (
 const clearPublicationAttention = `-- name: ClearPublicationAttention :exec
 update dorf.jobs
 set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where id=$1 and revision=$2
+where id=$1
+  and exists (select 1 from dorf.coding_to_proposal_inputs c where c.job_id=dorf.jobs.id and c.revision=$2)
   and workflow_attention_source=$3
 `
 
@@ -33,7 +34,7 @@ func (q *Queries) ClearPublicationAttention(ctx context.Context, arg ClearPublic
 const clearPublicationAttentionForAction = `-- name: ClearPublicationAttentionForAction :exec
 update dorf.jobs j
 set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-where j.revision=$1
+where exists (select 1 from dorf.coding_to_proposal_inputs c where c.job_id=j.id and c.revision=$1)
   and j.workflow_attention_source=$2
   and exists (
     select 1 from dorf.actions a
@@ -115,10 +116,11 @@ func (q *Queries) GetProposal(ctx context.Context, jobID string) (DorfGithubProp
 }
 
 const getProposalJobForUpdate = `-- name: GetProposalJobForUpdate :one
-select revision,admission_open,cleanup_state
-from dorf.jobs
-where id=$1
-for update
+select c.revision,j.admission_open,j.cleanup_state
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=$1
+for update of j,c
 `
 
 type GetProposalJobForUpdateRow struct {
@@ -135,13 +137,12 @@ func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (Ge
 }
 
 const getPublicationJobForUpdate = `-- name: GetPublicationJobForUpdate :one
-select revision,coalesce(github_repository,'') as github_repository,
-       coalesce(github_installation_id,'') as github_installation_id,
-       coalesce(base_branch,'') as base_branch,branch,repository,
-       admission_open,cleanup_state
-from dorf.jobs
-where id=$1
-for update
+select c.revision,c.github_repository,c.github_installation_id,
+       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state
+from dorf.jobs j
+join dorf.coding_to_proposal_inputs c on c.job_id=j.id
+where j.id=$1
+for update of j,c
 `
 
 type GetPublicationJobForUpdateRow struct {
@@ -176,7 +177,11 @@ update dorf.jobs
 set workflow_attention=$1::text,
     workflow_attention_source=$2::text,
     workflow_attention_at=clock_timestamp()
-where dorf.jobs.id=$3 and dorf.jobs.revision=$4
+where dorf.jobs.id=$3
+  and exists (
+    select 1 from dorf.coding_to_proposal_inputs c
+    where c.job_id=dorf.jobs.id and c.revision=$4
+  )
   and dorf.jobs.admission_open and dorf.jobs.cleanup_state='pending'
   and exists (
     select 1 from dorf.actions a

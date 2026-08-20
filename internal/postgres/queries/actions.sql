@@ -32,11 +32,11 @@ values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_k
 on conflict do nothing;
 
 -- name: GetSetupActionForUpdate :one
-select a.job_id,a.kind,coalesce(j.setup_action_id,'') as setup_action_id
+select a.job_id,a.kind,coalesce(c.setup_action_id,'') as setup_action_id
 from dorf.actions a
-join dorf.jobs j on j.id=a.job_id
+join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
 where a.id=sqlc.arg(action_id)
-for update of a,j;
+for update of a,c;
 
 -- name: FinishSetupAction :execrows
 update dorf.actions

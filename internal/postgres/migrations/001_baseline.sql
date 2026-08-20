@@ -51,13 +51,7 @@ create table dorf.jobs (
     workflow_name text not null check (workflow_name in ('coding-to-proposal','codebase-investigation')),
     workflow_revision text not null check (length(trim(workflow_revision)) > 0),
     goal text not null check (length(trim(goal)) > 0),
-    repository text not null,
-    revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
-    branch text not null check (length(trim(branch)) > 0),
     sandbox_profile text not null references dorf.sandbox_profiles(name),
-    github_repository text,
-    github_installation_id text,
-    base_branch text,
     provider_connection text not null check (length(trim(provider_connection)) > 0),
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
@@ -66,21 +60,29 @@ create table dorf.jobs (
     workflow_attention text,
     workflow_attention_source text,
     workflow_attention_at timestamptz,
-    setup_action_id text,
     cleanup_attention text,
     admitted_at timestamptz not null default clock_timestamp(),
     cleaned_at timestamptz,
     constraint jobs_workflow_attention_check check (
         num_nonnulls(workflow_attention,workflow_attention_source,workflow_attention_at) in (0,3)
     ),
-    constraint jobs_repository_check check (
-        workflow_name='codebase-investigation' or length(trim(repository))>0
+    unique(id,workflow_name)
+);
+
+create table dorf.coding_to_proposal_inputs (
+    job_id text primary key,
+    workflow_name text not null check (workflow_name='coding-to-proposal'),
+    repository text not null check (length(trim(repository))>0),
+    starting_revision text not null check (starting_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
+    revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
+    branch text not null check (length(trim(branch))>0),
+    github_repository text not null check (
+        github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$'
     ),
-    constraint jobs_github_authority_complete_check check (
-        (github_repository is null and github_installation_id is null and base_branch is null) or
-        (github_repository ~ '^[a-z0-9]([a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$' and
-         github_installation_id ~ '^[1-9][0-9]*$' and length(base_branch) > 0 and base_branch <> branch)
-    )
+    github_installation_id text not null check (github_installation_id ~ '^[1-9][0-9]*$'),
+    base_branch text not null check (length(trim(base_branch))>0 and base_branch<>branch),
+    setup_action_id text,
+    foreign key(job_id,workflow_name) references dorf.jobs(id,workflow_name)
 );
 
 create table dorf.job_tasks (
@@ -93,15 +95,19 @@ create table dorf.job_tasks (
 );
 
 create table dorf.codebase_investigation_sources (
-    job_id text primary key references dorf.jobs(id),
+    job_id text primary key,
+    workflow_name text not null check (workflow_name='codebase-investigation'),
     kind text not null check (kind in ('remote','git-bundle')),
+    repository text not null,
+    revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     bundle_digest text,
     bundle_byte_size bigint,
     check (
-        (kind='remote' and bundle_digest is null and bundle_byte_size is null) or
-        (kind='git-bundle' and bundle_digest is not null and bundle_byte_size is not null and
+        (kind='remote' and length(trim(repository))>0 and bundle_digest is null and bundle_byte_size is null) or
+        (kind='git-bundle' and length(trim(repository))=0 and bundle_digest is not null and bundle_byte_size is not null and
          bundle_digest ~ '^[0-9a-f]{64}$' and bundle_byte_size>0)
-    )
+    ),
+    foreign key(job_id,workflow_name) references dorf.jobs(id,workflow_name)
 );
 
 create table dorf.job_messages (
@@ -199,7 +205,7 @@ create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,input
 alter table dorf.agent_runs add constraint agent_runs_job_id_id_key unique(job_id,id);
 
 create table dorf.revisions (
-    job_id text not null references dorf.jobs(id),
+    job_id text not null references dorf.coding_to_proposal_inputs(job_id),
     oid text not null check (oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     comparison_base_oid text check (comparison_base_oid is null or comparison_base_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     tree_oid text check (tree_oid is null or tree_oid ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
@@ -216,7 +222,7 @@ create table dorf.revisions (
 );
 
 create table dorf.repository_commands (
-    job_id text not null references dorf.jobs(id),
+    job_id text not null references dorf.coding_to_proposal_inputs(job_id),
     name text not null check (name in ('prepare','check','smoke')),
     command text not null check (length(command)>0),
     primary key(job_id,name)
@@ -224,7 +230,7 @@ create table dorf.repository_commands (
 
 create table dorf.checks (
     id text primary key,
-    job_id text not null references dorf.jobs(id),
+    job_id text not null references dorf.coding_to_proposal_inputs(job_id),
     name text not null check (name in ('check','smoke')),
     command text not null check (length(command)>0),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
@@ -275,7 +281,7 @@ create table dorf.artifacts (
 );
 
 create table dorf.codebase_investigation_drafts (
-    job_id text not null references dorf.jobs(id),
+    job_id text not null references dorf.codebase_investigation_sources(job_id),
     agent_run_id text not null,
     artifact_id text not null,
     primary key(job_id,agent_run_id),
@@ -289,7 +295,7 @@ alter table dorf.revisions
 alter table dorf.checks add constraint checks_evidence_id_fkey foreign key(evidence_id) references dorf.evidence(id);
 
 create table dorf.review_plans (
-    job_id text not null references dorf.jobs(id),
+    job_id text not null references dorf.coding_to_proposal_inputs(job_id),
     revision text not null check (revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     facts jsonb not null,
     plan jsonb not null,
@@ -330,10 +336,10 @@ from dorf.agent_runs ar
 join dorf.job_messages request on request.id=ar.message_id and request.job_id=ar.job_id
 join dorf.sandboxes sandbox on sandbox.id=ar.sandbox_id;
 
-alter table dorf.jobs add constraint jobs_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
+alter table dorf.coding_to_proposal_inputs add constraint coding_setup_action_id_fkey foreign key(setup_action_id) references dorf.actions(id);
 
 create table dorf.github_proposals (
-    job_id text primary key references dorf.jobs(id),
+    job_id text primary key references dorf.coding_to_proposal_inputs(job_id),
     pr_number bigint not null check (pr_number>0),
     pr_url text not null check (length(pr_url)>0),
     proposed_revision text not null check (proposed_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
@@ -341,7 +347,7 @@ create table dorf.github_proposals (
 );
 
 create table dorf.job_outcomes (
-    job_id text primary key references dorf.jobs(id),
+    job_id text primary key references dorf.coding_to_proposal_inputs(job_id),
     outcome text not null check (outcome in ('accepted','rejected','abandoned')),
     observed_state text check (observed_state in ('open','closed')),
     observed_merged boolean not null,
