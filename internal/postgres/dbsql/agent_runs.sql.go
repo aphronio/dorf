@@ -317,6 +317,27 @@ func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) 
 	return i, err
 }
 
+const getLatestImplementationThreadBinding = `-- name: GetLatestImplementationThreadBinding :one
+select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
+from dorf.agent_runs ar
+left join dorf.job_messages m on m.id=ar.message_id
+where ar.job_id=$1 and ar.role='implement' and ar.thread_id is not null
+order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
+limit 1
+`
+
+type GetLatestImplementationThreadBindingRow struct {
+	Harness  string
+	ThreadID string
+}
+
+func (q *Queries) GetLatestImplementationThreadBinding(ctx context.Context, jobID string) (GetLatestImplementationThreadBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestImplementationThreadBinding, jobID)
+	var i GetLatestImplementationThreadBindingRow
+	err := row.Scan(&i.Harness, &i.ThreadID)
+	return i, err
+}
+
 const implementationThreadExists = `-- name: ImplementationThreadExists :one
 select exists(
     select 1 from dorf.agent_runs
@@ -334,6 +355,47 @@ func (q *Queries) ImplementationThreadExists(ctx context.Context, arg Implementa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const insertAdmittedAgentRun = `-- name: InsertAdmittedAgentRun :execrows
+insert into dorf.agent_runs(
+    id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+)
+select $1,j.id,$2,$3,$4,
+       $5,'pending',$6,$7,$8
+from dorf.jobs j
+where j.id=$9
+on conflict do nothing
+`
+
+type InsertAdmittedAgentRunParams struct {
+	ID            string
+	MessageID     string
+	Harness       sql.NullString
+	ThreadID      sql.NullString
+	Role          string
+	InputRevision sql.NullString
+	Capability    sql.NullString
+	SandboxID     string
+	JobID         string
+}
+
+func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmittedAgentRunParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertAdmittedAgentRun,
+		arg.ID,
+		arg.MessageID,
+		arg.Harness,
+		arg.ThreadID,
+		arg.Role,
+		arg.InputRevision,
+		arg.Capability,
+		arg.SandboxID,
+		arg.JobID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertImplementationAgentRun = `-- name: InsertImplementationAgentRun :execrows

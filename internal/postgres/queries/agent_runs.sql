@@ -25,6 +25,24 @@ where j.id=sqlc.arg(job_id)
   and j.workflow_revision='2'
 on conflict do nothing;
 
+-- name: InsertAdmittedAgentRun :execrows
+insert into dorf.agent_runs(
+    id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
+)
+select sqlc.arg(id),j.id,sqlc.arg(message_id),sqlc.arg(harness),sqlc.arg(thread_id),
+       sqlc.arg(role),'pending',sqlc.arg(input_revision),sqlc.arg(capability),sqlc.arg(sandbox_id)
+from dorf.jobs j
+where j.id=sqlc.arg(job_id)
+on conflict do nothing;
+
+-- name: GetLatestImplementationThreadBinding :one
+select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
+from dorf.agent_runs ar
+left join dorf.job_messages m on m.id=ar.message_id
+where ar.job_id=sqlc.arg(job_id) and ar.role='implement' and ar.thread_id is not null
+order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
+limit 1;
+
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs

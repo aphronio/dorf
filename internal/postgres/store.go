@@ -438,11 +438,27 @@ func investigationSourceFromValues(jobID, kind, repository, revision, digest str
 	return investigation.Source{JobID: jobID, Kind: investigation.SourceKind(kind), Repository: repository, Revision: revision, BundleDigest: digest, BundleByteSize: byteSize}
 }
 
-func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
-	return s.admitMessage(ctx, input)
+type admittedAgentRun struct {
+	Role          string
+	Capability    string
+	InputRevision string
+	SandboxID     string
+	Harness       string
+	ThreadID      string
+	TargetTurnID  string
 }
 
-func (s Store) admitMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
+type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, NewMessage) (admittedAgentRun, error)
+
+func (s Store) AdmitCodingMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
+	return s.admitMessage(ctx, input, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
+}
+
+func (s Store) AdmitInvestigationMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
+	return s.admitMessage(ctx, input, spine.WorkflowCodebaseInvestigation, spine.CodebaseInvestigationRevision, authorizeInvestigationMessage)
+}
+
+func (s Store) admitMessage(ctx context.Context, input NewMessage, workflow spine.WorkflowName, revision string, authorize messageAuthorizer) (spine.Message, bool, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
 		return spine.Message{}, false, err
@@ -452,7 +468,7 @@ func (s Store) admitMessage(ctx context.Context, input NewMessage) (spine.Messag
 		return spine.Message{}, false, err
 	}
 	defer tx.Rollback()
-	message, created, err := admitMessageTx(ctx, tx, input)
+	message, created, err := admitMessageTx(ctx, tx, input, workflow, revision, authorize)
 	if err != nil {
 		return spine.Message{}, false, err
 	}
@@ -490,7 +506,7 @@ func normalizeMessage(input NewMessage) (NewMessage, error) {
 	return input, nil
 }
 
-func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Message, bool, error) {
+func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage, workflow spine.WorkflowName, revision string, authorize messageAuthorizer) (spine.Message, bool, error) {
 	queries := dbsql.New(tx)
 	job, err := queries.GetJobAdmissionForUpdate(ctx, input.JobID)
 	if err != nil {
@@ -498,6 +514,9 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 			return spine.Message{}, false, ErrNotFound
 		}
 		return spine.Message{}, false, err
+	}
+	if job.WorkflowName != workflow || job.WorkflowRevision != revision {
+		return spine.Message{}, false, fmt.Errorf("Job %s is not %s revision %s", input.JobID, workflow, revision)
 	}
 	row, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID})
 	if err == nil {
@@ -514,39 +533,15 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if !job.AdmissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
 	}
-	var message spine.Message
-	role, harness, threadID := "", "", ""
-	switch {
-	case job.WorkflowName == spine.WorkflowCodingToProposal && job.WorkflowRevision == spine.CodingToProposalRevision:
-		if job.OutcomeExists {
-			return spine.Message{}, false, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
-		}
-		role = "implement"
-		if input.Intent == spine.MessageSteer {
-			active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular harness Turn")
-				}
-				return spine.Message{}, false, err
-			}
-			message.TargetTurnID, harness, threadID, role = active.TurnID, active.Harness, active.ThreadID, active.Role
-		}
-	case job.WorkflowName == spine.WorkflowCodebaseInvestigation && job.WorkflowRevision == spine.CodebaseInvestigationRevision:
-		if input.Intent != spine.MessageFollow {
-			return spine.Message{}, false, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
-		}
-		latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
-		if err != nil {
-			return spine.Message{}, false, err
-		}
-		if latest.State != spine.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
-			return spine.Message{}, false, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
-		}
-		role, harness, threadID = "investigate", latest.Harness, latest.ThreadID
-	default:
-		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept follow-up Messages in this slice", job.WorkflowName, job.WorkflowRevision)
+	if authorize == nil {
+		return spine.Message{}, false, fmt.Errorf("message admission policy is not configured")
 	}
+	run, err := authorize(ctx, queries, job, input)
+	if err != nil {
+		return spine.Message{}, false, err
+	}
+	var message spine.Message
+	message.TargetTurnID = run.TargetTurnID
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
 		return spine.Message{}, false, err
@@ -557,28 +552,14 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 		return spine.Message{}, false, err
 	}
 	runID := spine.AgentRunID(message.ID)
-	switch role {
-	case "implement":
-		rows, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)})
-		if err := expectOneRows(rows, err); err != nil {
-			return spine.Message{}, false, fmt.Errorf("insert implementation follow-up AgentRun: %w", err)
-		}
-	case "investigate":
-		sourceRow, err := queries.GetCodebaseInvestigationSource(ctx, message.JobID)
-		if err != nil {
-			return spine.Message{}, false, err
-		}
-		rows, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, InputRevision: nullableString(sourceRow.Revision), SandboxID: spine.MainSandboxName(message.JobID)})
-		if err := expectOneRows(rows, err); err != nil {
-			return spine.Message{}, false, fmt.Errorf("insert investigation follow-up AgentRun: %w", err)
-		}
-	default:
-		return spine.Message{}, false, fmt.Errorf("unsupported follow-up AgentRun role %s", role)
-	}
-	if harness != "" || threadID != "" {
-		if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
-			return spine.Message{}, false, fmt.Errorf("bind follow-up AgentRun to Harness Thread: %w", err)
-		}
+	rows, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
+		ID: runID, JobID: message.JobID, MessageID: message.ID,
+		Harness: nullableString(run.Harness), ThreadID: nullableString(run.ThreadID),
+		Role: run.Role, InputRevision: nullableString(run.InputRevision),
+		Capability: nullableString(run.Capability), SandboxID: run.SandboxID,
+	})
+	if err := expectOneRows(rows, err); err != nil {
+		return spine.Message{}, false, fmt.Errorf("insert authorized %s AgentRun: %w", run.Role, err)
 	}
 	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID})
 	if err != nil {
@@ -975,7 +956,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
 	if err == nil {
 		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ScopeKey, existingRow.CreatedAt, existingRow.SettledAt)
-		message, _, messageErr := admitMessageTx(ctx, tx, messageInput)
+		message, _, messageErr := admitMessageTx(ctx, tx, messageInput, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
 		if messageErr != nil {
 			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
 		}
@@ -1013,7 +994,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if err := expectOneRows(queries.SelectSetupRetry(ctx, dbsql.SelectSetupRetryParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID, PreviousActionID: sql.NullString{String: locked.SetupActionID, Valid: true}})); err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
-	message, messageCreated, err := admitMessageTx(ctx, tx, messageInput)
+	message, messageCreated, err := admitMessageTx(ctx, tx, messageInput, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}

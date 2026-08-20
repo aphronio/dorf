@@ -62,8 +62,11 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
 		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
+	}
+	if _, created, err := store.AdmitCodingMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
+		t.Fatalf("coding admission crossed into investigation: created=%v err=%v", created, err)
 	}
 
 	deliveries, err := store.Deliveries(ctx, job.ID)
@@ -120,7 +123,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
 		t.Fatalf("changed Artifact replay error=%v", err)
 	}
-	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "later", Input: "broaden the question"})
+	follow, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "later", Input: "broaden the question"})
 	if err != nil || !created || follow.Sequence != 2 {
 		t.Fatalf("follow-up=%#v created=%v err=%v", follow, created, err)
 	}
@@ -329,7 +332,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
 		t.Fatalf("Job did not remain open for follow-up or cleanup: %#v err=%v", job, err)
 	}
-	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
 		t.Fatalf("follow-up created=%v err=%v", created, err)
 	}
 	revisionTaskName := taskName + "-follow-up"

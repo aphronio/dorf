@@ -420,7 +420,20 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 }
 
 func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewMessage) (spine.Message, bool, error) {
-	message, created, err := store.AdmitMessage(ctx, input)
+	job, err := store.Job(ctx, input.JobID)
+	if err != nil {
+		return spine.Message{}, false, err
+	}
+	var message spine.Message
+	var created bool
+	switch {
+	case job.Workflow == spine.WorkflowCodingToProposal && job.WorkflowRevision == spine.CodingToProposalRevision:
+		message, created, err = store.AdmitCodingMessage(ctx, input)
+	case job.Workflow == spine.WorkflowCodebaseInvestigation && job.WorkflowRevision == spine.CodebaseInvestigationRevision:
+		message, created, err = store.AdmitInvestigationMessage(ctx, input)
+	default:
+		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
+	}
 	if err != nil {
 		return spine.Message{}, false, err
 	}

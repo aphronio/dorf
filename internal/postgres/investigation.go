@@ -23,6 +23,29 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 	return investigationSourceFromValues(row.JobID, row.Kind, row.Repository, row.Revision, row.BundleDigest, row.BundleByteSize), nil
 }
 
+// authorizeInvestigationMessage implements the investigation workflow's
+// follow-up policy inside the same locked transaction that records the Message.
+func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input NewMessage) (admittedAgentRun, error) {
+	if input.Intent != spine.MessageFollow {
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
+	}
+	latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
+	if err != nil {
+		return admittedAgentRun{}, err
+	}
+	if latest.State != spine.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
+	}
+	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
+	if err != nil {
+		return admittedAgentRun{}, err
+	}
+	return admittedAgentRun{
+		Role: "investigate", Capability: "repository-read-report", InputRevision: source.Revision,
+		SandboxID: spine.MainSandboxName(input.JobID), Harness: latest.Harness, ThreadID: latest.ThreadID,
+	}, nil
+}
+
 func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]investigation.Draft, error) {
 	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationDrafts(ctx, jobID)
 	if err != nil {

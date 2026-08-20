@@ -183,6 +183,11 @@ admission and render the same facts; they are not separate workflow engines.
 
 Native workflows must use the same application boundary as other clients rather than a privileged
 internal path. Their product and authoring direction lives in the [North Star](north-star.md).
+Message admission follows the same rule: the workflow layer dispatches to the exact pinned workflow
+contract, and each typed workflow store authorizes delivery intent, role, capability, Revision, and
+Harness Thread reuse. PostgreSQL keeps the shared transaction—Job lock, admission fence,
+idempotency, FIFO sequence, and atomic Message plus AgentRun insertion—but does not select workflow
+meaning through a generic switch.
 
 ## Current coding composition
 
