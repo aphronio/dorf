@@ -1,14 +1,15 @@
 # Dorf Principles
 
 This document contains enduring, repository-wide product and engineering judgment. The North Star
-defines the desired experience; the greenfield architecture records the selected technical shape;
+defines the desired experience; the architecture records the selected technical shape;
 GitHub issues own temporary implementation scope.
 
 ## Build a small thing that composes
 
 Product direction and vocabulary live in the [North Star](north-star.md). Build the smallest
-reliable control-plane primitive required by a proven workflow, then let real use earn broader seams.
-Do not turn possible Harnesses, Sandboxes, clients, or workflows into speculative abstractions.
+reliable control-plane primitive required by a proven client or workflow, then let real use earn
+broader seams. Do not turn possible Harnesses, Sandboxes, clients, or workflows into speculative
+abstractions.
 
 ## Build from conviction, not competitor parity
 
@@ -150,7 +151,7 @@ remain targeted terminals for changes that touch those authorities, not default 
 
 ## Evidence over narration
 
-Agent prose is a Message or workflow Artifact, not Evidence. Process state, command results, commits,
+Agent prose is a Message or Artifact, not Evidence. Process state, command results, commits,
 harness observation, external authority, and retained content identity are observed facts. Evidence
 records those observed facts and must use a supported typed relation to identify the fact it proves.
 Do not duplicate reviewer prose as Evidence. A fluent agent must never silently become the authority

@@ -1441,7 +1441,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D063 — Dorf Core portability precedes general workflow authoring
 
-- **Status:** Accepted product direction — 2026-08-13
+- **Status:** Accepted product direction — 2026-08-13; client composition refined by D081 — 2026-08-20
 - **Positioning:** Dorf is the open-source control plane for running agent Harnesses on infrastructure
   its owner controls: your agents, your infrastructure, one API. Core is the product. Whole-setup
   portability is direction; Codex and Pi with local Incus coding-to-PR on the supported host are the
@@ -1454,11 +1454,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Authority:** Current Core, workflow, and client ownership is defined only by the
   [North Star product boundary](north-star.md#product-boundary) and corrected by D075. A Harness
   remains authoritative for its native session, transcript, and tool protocol.
-- **Composition:** Native workflows are Core dogfood and should use the same intended Core contract
-  that ordinary clients and other products may later embed. They receive no privileged hidden path.
-  Transport, SDK, and public compatibility promises remain uncommitted until real portability
-  implementations and external-client use prove them. Dynamic agent-authored recipes remain a later
-  UX layer; Dorf is not a generic automation canvas, graph framework, agent builder, or model/tool
+- **Composition:** Native workflows are Core dogfood and use the same application contract that
+  external clients invoke. They receive no privileged hidden path. D081 defines the deployed
+  control-plane and thin-client-SDK direction. Dynamic agent-authored recipes remain a later UX
+  layer; Dorf is not a generic automation canvas, graph framework, agent builder, or model/tool
   Harness.
 - **Proof order:** Starting from Codex on Incus, D065 proves Pi as the second supported Harness on
   Incus. Next prove Codex on a second Sandbox provider, then cross Pi and that provider. The
@@ -1468,7 +1467,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Supersedes and refines:** Supersedes D062's research-workflow-first proof order. It also refines
   older second-workflow extraction gates, including D009, D047, and D061: a later workflow still adds
   its natural facts before common authoring seams are extracted, but workflow generality is not the
-  next product proof. It does not authorize a generic API, provider matrix, plugin system, or
+  next product proof. D081 permits a direct Core client boundary earned through a real external
+  client; this does not authorize a generic workflow API, provider matrix, plugin system, or
   marketplace.
 - **Reconsider when:** A supported Harness cannot fit the AgentRun boundary, a second Sandbox cannot
   preserve the Job authority model, or real external-client use shows that profile selection and
@@ -2047,3 +2047,25 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A third workflow demonstrates genuinely identical delivery authorization.
   Share only the repeated typed policy; do not restore a central workflow-name dispatcher in
   persistence.
+
+## D081 — Dorf is a deployed control plane; workflows are optional Core consumers
+
+- **Status:** Accepted product direction; public Core API not yet implemented — 2026-08-20
+- **Decision:** The [North Star product boundary](north-star.md#product-boundary) is the authority.
+  A self-hosted Dorf deployment exposes one application contract. Native workflows consume it
+  in-process and add policy; external clients consume it through supported transports and may drive
+  bounded execution directly without selecting a predefined workflow. A future language SDK is a
+  thin client for a running deployment, not an embeddable Dorf runtime.
+- **Why:** Dorf coordinates durable PostgreSQL and Absurd state, workers, Provider Gateway routes,
+  Sandbox providers, Harness processes, recovery, and cleanup. Hiding those authorities behind an
+  imported runtime library would create misleading lifecycle and deployment semantics. Requiring a
+  predefined workflow for every caller would instead make optional policy the only door into Core.
+- **Current boundary:** Native workflows already consume the in-process Core machinery. The CLI is
+  the supported external client surface. A direct-execution resource contract, network transport,
+  authentication model, and client SDK remain uncommitted until one external-client slice proves
+  them together.
+- **Refines:** D063's composition direction and supersedes any remaining implication that clients or
+  products should embed the Go control plane. D034's Python SDK was already superseded by D047.
+- **Reconsider when:** A genuinely process-local consumer can preserve the same durable ownership,
+  recovery, and operational truth with materially less machinery than a deployed control plane, or
+  direct client use proves a different resource boundary.

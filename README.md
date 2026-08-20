@@ -5,77 +5,36 @@
 Your agents. Your infrastructure. One API.
 
 Dorf's direction is to carry a supported agent setup into compatible isolated infrastructure
-without rebuilding it in a new agent framework. Dorf keeps custody of the whole Job, including
-recovery, external effects, evidence, the workflow-defined outcome, and cleanup.
-
-Today, Dorf supports one coding workflow: a Job starts with a goal and ends with a verified pull
-request.
+without rebuilding it in a new agent framework. Dorf keeps custody of controlled execution,
+including recovery, external effects, retained results, and requested cleanup.
 
 ```text
-Coding Job
-    |
-    v
-+------------------------------------------------------------+
-|                    Dorf coding workflow                    |
-|                                                            |
-|  Isolate -> Implement -> Verify -> Review -> Pull request  |
-|                                                            |
-|       Durable recovery and evidence across every step      |
-+------------------------------------------------------------+
+External clients                  Native workflows
+        |                                |
+        +-------------+------------------+
+                      v
+                 Dorf Core
+        durable execution and recovery
+                      |
+                      v
+       Sandbox providers x agent Harnesses
 ```
 
-| Direction | Works today |
-| --- | --- |
-| Many kinds of Jobs | Coding Job to PR |
-| Choice of agent | Codex or Pi |
-| Choice of Sandbox | Local Incus; E2B proof profile |
-| Many ways to start Jobs | CLI |
+Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
+Native workflows consume Core in-process. External clients use the CLI today; a public network API
+and thin client SDKs are direction, not current support claims. Clients may eventually drive Core
+directly or delegate policy to a predefined workflow.
+
+The built-in workflows currently cover coding to a verified pull-request Proposal and
+repository-grounded codebase investigation. See [Getting started](docs/getting-started.md) for the
+supported deployment, profiles, commands, and workflow inputs.
 
 ## Build
-
-Dorf's default supported deployment runs on x86_64 Linux with local Incus. An admitted E2B proof
-profile requires an exact template and a deployment-owned HTTPS Provider Gateway route. Disposable
-tunnels are not a supported deployment. macOS is not supported as a host.
 
 ```bash
 go build -o ./bin/dorf ./cmd/dorf
 ./bin/dorf version
 ```
-
-Releases contain the same x86_64 Linux binary. See
-[Getting started](docs/getting-started.md) for PostgreSQL, Incus, the credential-free Sandbox image,
-Provider Gateway, GitHub App, and repository preparation.
-
-## Product model
-
-```text
-A client starts a Job with a clear goal.
-Code handles predictable steps.
-Agents handle judgment inside an isolated Sandbox.
-Dorf records evidence and cleans up resources.
-```
-
-Each coding Job gets its own Sandbox, clone, branch, checks, review, and pull request. Dorf can resume
-the Job without repeating completed work.
-
-The common Sandbox seam has been proved with Incus and E2B. Broader deployment profiles and general
-workflow authoring remain use-case-driven work.
-
-The main commands are:
-
-```bash
-dorf setup --provider personal-chatgpt
-dorf doctor --provider personal-chatgpt
-dorf admit ...
-dorf worker
-dorf message --job JOB --id STABLE_ID --input-file message.txt --intent steer
-dorf inspect JOB
-dorf abandon JOB
-dorf cleanup JOB
-```
-
-`inspect` shows what happened, what is running, what needs attention, and what still needs cleanup.
-Use `absurdctl list-tasks` and `absurdctl dump-task` for scheduler details.
 
 ## Development
 

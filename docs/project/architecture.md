@@ -1,30 +1,19 @@
-# Greenfield Architecture — Go + Absurd
+# Dorf Architecture
 
 This document records Dorf's accepted Go, PostgreSQL, and Absurd boundaries. It defines authority,
 recovery, composition, and evolution constraints. Code owns concrete package, schema, task, step,
 query, and API shape; GitHub issues own temporary implementation scope and acceptance criteria.
 
-The superseded Python implementation is historical evidence, not a compatibility target. Old local
-state, SQLite schemas, Python APIs, CLI shapes, and document formats are not supported.
-
-## Product and implementation scope
-
 Product direction and vocabulary live in the [North Star](north-star.md).
-
-The verified implementation is deliberately narrow: one Go application, two explicit workflows,
-PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. The
-`codebase-investigation` workflow has an independent coordinator, retained drafts, same-Thread
-follow-ups, explicit client-requested cleanup, and a live Incus dogfood terminal. This
-architecture must keep both concrete paths clear without treating coding-specific or investigation-
-specific records as the permanent public workflow API.
 
 ## System shape
 
 ```mermaid
 flowchart LR
-    Client["Client or external product"] --> Core["Dorf Core"]
+    Client["External client"] --> Transport["CLI or public transport"]
+    Transport --> Core["Core application boundary"]
     Workflow["Native Dorf workflow"] --> Core
-    Core --> Custody["Job-wide custody"]
+    Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
     Absurd --> Edge["Actions · Checks · AgentRuns"]
@@ -32,6 +21,10 @@ flowchart LR
     Edge --> External["Workflow external authorities"]
     Sandbox --> Harness["Agent Harness"]
 ```
+
+Dorf runs as a stateful control-plane deployment. Native workflows call its application boundary
+in-process. External clients call the same boundary through a supported transport, optionally using
+a thin client SDK. They do not embed the control plane or its dependencies into their own process.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -46,13 +39,13 @@ Adapters translate existing authorities; they do not invent another workflow.
 
 | Fact | Authority |
 | --- | --- |
-| Job identity, bounded goal, workflow identity/version, accepted input, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
+| Job identity, bounded goal, accepted execution contract, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
 | Workflow-specific facts and outcome | Workflow-owned PostgreSQL tables or typed records |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
-| Named workflow deliverables | Typed Artifact records whose bytes live in the content-addressed blob store |
+| Named deliverables | Typed Artifact records whose bytes live in the content-addressed blob store |
 | Retained observed proof | Evidence linked to the fact it proves; bytes use the same content-addressed blob store |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
@@ -67,9 +60,10 @@ requested resource release.
 
 ## Execution model
 
-One admission creates one Job with complete bounded intent, a stable idempotency identity, and one
-pinned workflow version. If recording and scheduling cannot share one transaction, recovery
-reconciles the boundary rather than assuming both happened.
+One admission creates one durable execution owner with complete bounded intent and a stable
+idempotency identity. A workflow-driven Job also pins its workflow version. If recording and
+scheduling cannot share one transaction, recovery reconciles the boundary rather than assuming both
+happened.
 
 A Job records an append-only ordered chain of Absurd task attachments. The latest attachment is its
 current execution task; task names are observations, not hard-coded Job phases. A workflow may hand
@@ -118,8 +112,8 @@ domain records.
 
 ### Artifacts, Evidence, and inspection
 
-Artifacts are immutable named workflow deliverables. A workflow-specific typed result may point to
-one or more Artifacts, while clients discover them by Job and retrieve exact bytes by Artifact ID.
+Artifacts are immutable named deliverables. A consumer-specific typed result may point to one or
+more Artifacts, while clients discover them by Job and retrieve exact bytes by Artifact ID.
 Artifact metadata is durable PostgreSQL state; bytes live in the deployment-owned content-addressed
 blob store and survive Sandbox cleanup. Artifact content may contain claims and is not its own proof.
 
@@ -135,100 +129,38 @@ into Dorf's product history.
 
 ## Durable core and workflow facts
 
-The intended reusable custody concepts are Job identity, admission, Messages, AgentRuns, Sandbox
-ownership, stable external effects, Artifact and Evidence storage, attention, recovery, and cleanup.
-Their exact public shape is not yet accepted.
+Core retains only execution facts whose authority and recovery meaning survive removal of client or
+workflow policy: durable identity, accepted input order, AgentRuns, Sandbox ownership, stable
+external effects, Artifact and Evidence custody, attention, recovery, and requested cleanup.
 
-The durable Core Job row contains only shared identity, accepted goal, workflow/profile selection,
-execution attachment, attention, and cleanup lifecycle. Coding repository, branch, Revision, GitHub
-authority, and selected setup live in a typed coding input row; investigation repository and exact
-Revision live in its typed source row. These are explicit workflow projections, not nullable Core
-fields or generic payloads. Some Go types and services remain physically near `spine` while their
-ownership is moved incrementally; package location alone does not make them Core vocabulary.
-
-Workflow facts remain specific:
-
-- coding owns repository authority, Revisions, Checks tied to a Revision, review policy, Proposal,
-  GitHub outcome, and coding inspection;
-- codebase investigation owns its exact repository input, flexible Markdown drafts, and post-Turn
-  unchanged-checkout assertion; and
-- future workflows must not inherit Git or research semantics merely to reuse durable custody.
-
-Do not introduce a polymorphic fact owner, generic JSON result, arbitrary Action registry, or common
-workflow phase to make unlike facts look similar.
-
-Runtime composition mirrors that durable boundary. `ExecutionService` owns shared Sandbox, Route,
-AgentRun, Artifact-byte, attention, and cleanup custody. `RepositoryService` adds exact checkout
-materialization and observation for workflows that use Git. `CodingService` adds setup, mutable
-Revision observation, Checks, and review. The investigation package composes repository execution
-with its retained-source restore and exact unchanged-checkout proof. Coding and investigation each
-receive their own typed runtime; cleanup receives only execution custody. Provider and Harness
-selection still happens once at the composition root. The base runtime contains only shared
-execution. GitHub, publication, outcome observation, coding services, and investigation source or
-draft policy are constructed only by the workflow runtime that owns them.
+Client- and workflow-specific inputs, results, external authorities, and terminal meaning remain in
+their typed owner. They do not become nullable Core fields, generic payloads, common phases, or
+registries merely because Core stores or executes work on their behalf. Runtime composition grants
+only the authorities required by that consumer; provider and Harness selection remain at the
+composition boundary.
 
 ## Client boundary
 
-Clients submit bounded intent, inspect, send Messages, receive results, and request explicit terminal
-operations. They do not open PostgreSQL, drive Absurd, construct adapters, or become workflow
-authorities.
+Clients may drive bounded execution directly or delegate policy to a predefined workflow. Direct
+clients decide what Messages to send, what results mean, whether more work is needed, and when to
+request cleanup. Workflow clients delegate those decisions to the selected workflow. Both use the
+same Core application contract and observe the same durable facts.
 
-The CLI with stable structured output is the first client boundary and the smallest integration for
-a same-host orchestrator such as Agent0. A thin language SDK may wrap the proven application
-contract. HTTP is justified when a real remote or untrusted client needs it. CI, GitHub, webhooks,
-MCP, schedules, Slack, and user interfaces are adapters that translate events into idempotent Job
-admission and render the same facts; they are not separate workflow engines.
+Native workflows call that contract in-process. External clients use a supported transport; a
+language SDK is only a typed transport client for a running Dorf deployment. The CLI is the first
+such adapter. A public network transport is earned by a real remote client rather than by exposing
+PostgreSQL, Absurd, adapters, or an embeddable control-plane library.
+
+CI, GitHub, webhooks, MCP, schedules, Slack, and user interfaces translate external events into
+idempotent calls and render the same facts. They may own interaction and cross-Job composition
+policy, but they are not hidden workflow engines inside Core.
 
 ## Native workflow composition
 
-Native workflows must use the same application boundary as other clients rather than a privileged
-internal path. Their product and authoring direction lives in the [North Star](north-star.md).
-Message admission follows the same rule: the workflow layer dispatches to the exact pinned workflow
-contract, and each typed workflow store authorizes delivery intent, role, capability, Revision, and
-Harness Thread reuse. PostgreSQL keeps the shared transaction—Job lock, admission fence,
-idempotency, FIFO sequence, and atomic Message plus AgentRun insertion—but does not select workflow
-meaning through a generic switch.
-
-## Current coding composition
-
-One admitted coding request owns its Sandboxes, clone, branch, Revision line, implementation Thread,
-selected review resources, exact pull-request Proposal, explicit outcome, and cleanup. Its explicit
-coordinator orders deterministic setup, implementation AgentRuns, Git observation, repository
-Checks, selected review, publication, feedback, terminal observation, and cleanup from natural
-facts.
-
-Review is selected rather than ritualized. Deterministic policy supplies mandatory review for known
-risks and may select one bounded general reviewer for unknown work. Each reviewer consumes a
-workflow Message in an isolated capability envelope. Reviewer prose returns as a Message to the
-implementation path; it is not parsed into a universal policy result or copied into Evidence.
-
-Git and GitHub remain authoritative for branch, commits, pull request, comments, merge, and close.
-Exact external observations produce the coding outcome. Explicit abandonment is human authority and
-may occur before a Proposal. Outcome and cleanup remain separate.
-
-## Current codebase-investigation composition
-
-One admitted investigation pins an exact repository source and Revision, unstructured brief,
-workflow revision, Sandbox profile, and model envelope. A source is either a reachable remote Git
-repository or a content-addressed Git bundle retained before admission; retained inputs are not
-workflow-output Artifacts. Its explicit coordinator creates one Job-owned Sandbox, materializes the
-exact Revision through the provider-neutral file boundary when required, installs the scoped
-Provider Route, and runs one bounded `investigate` AgentRun per accepted Message. Every completed
-Turn must leave the checkout exact and clean before its Markdown becomes an immutable numbered draft
-Artifact. The coordinator then waits durably: a follow-up Message creates another AgentRun in the
-same Harness Thread and Sandbox. A client decides whether to request another draft, consume or
-publish one, start another workflow, or request shared Job cleanup. Investigation does not assign
-accept/reject meaning or choose cleanup timing.
-
-Workflow capability requirements name only optional broad provider primitives beyond the baseline
-Sandbox and Harness contracts, such as browser workloads, nested containers, served endpoints,
-snapshots, or GPUs. Repository tools and services belong to its setup script or custom image. The
-two current workflows need no optional provider capability.
-
-The workflow deliberately has no repository setup, Checks, branch mutation, review, GitHub authority,
-publication, external source capture, scheduler, generic workflow registry, or automatic idle
-Sandbox pause. Provider-neutral pause and resume require measured waiting cost and a separate earned
-lifecycle contract.
+Native workflows consume the same application boundary without a privileged execution path. They
+own typed input, sequencing, evaluation, external authorities, result meaning, and cleanup requests;
+Core owns the reusable custody beneath those decisions. Their product and authoring direction lives
+in the [North Star](north-star.md), while concrete behavior lives in code and its tests.
 
 ## Failure and code evolution
 
@@ -270,19 +202,14 @@ an update clears verification and default status. Credentials remain host config
 
 ## Harness and Sandbox adapters
 
-Incus and E2B implement one provider-neutral Sandbox contract. Its file operation reconciles one
-bounded byte sequence at an absolute regular-file path through verified temporary write and atomic
-replacement; it does not claim directory synchronization, mounts, or streaming. E2B has proved lifecycle, command,
-exact ownership recovery, authenticated endpoints, remote scoped routes, Codex and Pi, coding-to-PR,
-terminal Outcome observation, and cleanup through that seam.
-Every operation carries Dorf's Job ID, durable Sandbox ID, and ownership nonce while provider
-locators, lifecycle APIs, command transports, topology, and connection capabilities remain
-adapter-private. Common workflow, repository, publication, terminal, Codex, and Pi code imports no
-provider package; the composition root resolves the Job's named profile into one adapter and Harness.
-A profile is not usable until Dorf's base functional probe and exact proof-resource cleanup complete.
-A provider/profile is not supported until its required route and
-Harness capabilities are admitted and proved end to end. Support direction and proof order live in
-the [North Star](north-star.md).
+Sandbox and Harness implementations meet provider-neutral custody contracts. Every external
+operation carries exact Dorf ownership while provider locators, lifecycle APIs, command transports,
+topology, and connection capabilities remain adapter-private. Consumer code selects a verified
+profile rather than branching on provider or Harness identity.
+
+A profile is not usable until Dorf's functional probe and exact proof-resource cleanup complete. A
+provider/profile is not supported until its required route and Harness capabilities are admitted
+and proved end to end. Current support claims belong in operator documentation, not this boundary.
 
 Go remains the core. A language-specific executor is justified only when a concrete provider SDK or
 workflow need makes that boundary materially smaller. It consumes a dedicated queue through a small
@@ -318,21 +245,3 @@ correctness.
 If Dorf outgrows Absurd, completed Jobs remain historical domain records, active short-lived Jobs can
 drain, and new Jobs can begin on the replacement. Raw checkpoint history is not a portability
 format.
-
-## Current verified terminal
-
-The Go replacement is proven only when a clean supported host can complete one real coding Job:
-
-1. converge setup without a Dorf cloud account or host Docker socket;
-2. admit a complete goal and create one isolated Sandbox and branch;
-3. start a real implementation AgentRun and accept input while it is active;
-4. survive controller and executor loss without duplicating a Sandbox, Message, Turn, or Action;
-5. run deterministic repository Checks and retain Revision-bound Evidence;
-6. select useful review and return its text through the implementation Message path;
-7. publish and observe an exact-Revision pull-request Proposal;
-8. record accepted, rejected, or abandoned outcome; and
-9. reconcile cleanup to an observable terminal.
-
-This terminal must run without Python in the critical path. Feature parity with the deleted Python
-implementation is not required. Future portability terminals and any later non-coding workflow must
-be specified and proven separately; they do not weaken this coding proof.
