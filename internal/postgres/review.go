@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
@@ -303,4 +304,4 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 	return message, created, nil
 }
 
-var _ spine.CodingServiceStore = Store{}
+var _ coding.Store = Store{}

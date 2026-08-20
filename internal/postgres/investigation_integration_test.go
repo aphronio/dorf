@@ -16,6 +16,7 @@ import (
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -186,7 +187,7 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 }
 
 type investigationExternals struct {
-	spine.CodingServiceExternals
+	spine.Externals
 	mu      sync.Mutex
 	job     spine.Job
 	turn    spine.HarnessTurn
@@ -262,8 +263,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	externals := &investigationExternals{}
 	execution := spine.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
-	repository := spine.NewRepositoryService(execution, externals)
-	service := investigation.NewService(repository, store, externals, records, absurdruntime.RequireClaim)
+	repositoryService := repository.NewService(execution, store, externals, absurdruntime.RequireClaim)
+	service := investigation.NewService(repositoryService, store, externals, records, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{

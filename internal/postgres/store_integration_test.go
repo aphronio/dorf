@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -102,14 +104,14 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	}
 	externals := &integrationExternals{}
 	execution := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
-	repository := spine.NewRepositoryService(execution, externals)
-	coding := spine.NewCodingService(repository, store, externals)
+	repositoryService := repository.NewService(execution, store, externals, func(context.Context) error { return nil })
+	codingService := coding.NewService(repositoryService, store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	runtimeProfile := workflow.RuntimeProfile{SandboxProfile: "incus"}
-	investigationService := investigation.NewService(repository, store, externals, blob.Store{}, func(context.Context) error { return nil })
+	investigationService := investigation.NewService(repositoryService, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
-		codingRuntime:        workflow.CodingRuntime{Profile: runtimeProfile, Coding: coding},
+		codingRuntime:        workflow.CodingRuntime{Profile: runtimeProfile, Coding: codingService},
 		investigationRuntime: workflow.InvestigationRuntime{Profile: runtimeProfile, Investigation: investigationService},
 	}
 	core := controlplane.Application{Store: store, Tasks: client, CleanupRuntimes: resolver}
@@ -1719,8 +1721,8 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 }
 
 type integrationExternals struct {
-	spine.CodingServiceExternals
-	spine.RepositoryServiceExternals
+	coding.Externals
+	repository.ServiceExternals
 	mu        sync.Mutex
 	turns     []spine.HarnessTurn
 	submitted []int64

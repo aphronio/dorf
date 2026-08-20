@@ -14,6 +14,51 @@ type agentRunStore interface {
 	UncertainAgentRun(context.Context, string, string) error
 }
 
+// AgentRunExecution exposes the existing AgentRun reconciliation mechanism to
+// workflow modules without exposing Harness or Sandbox adapters themselves.
+// Its callbacks supply workflow-specific submission and ownership policy.
+type AgentRunExecution struct {
+	Store interface {
+		PrepareAgentRun(context.Context, string, string, string) error
+		BindAgentRun(context.Context, string, string, string, string, string) error
+		UncertainAgentRun(context.Context, string, string) error
+	}
+	ReachBarrier func(context.Context, string, Delivery) error
+	Delivery     Delivery
+	Run          AgentRun
+	Harness      string
+
+	SubmitNew   func(context.Context, AgentRun) (HarnessBinding, error)
+	SubmitBound func(context.Context, AgentRun) (HarnessBinding, error)
+	Recover     func(context.Context, AgentRun) (HarnessBinding, error)
+	History     func(context.Context, AgentRun) (HarnessHistory, error)
+	Wait        func(context.Context, AgentRun, string) (HarnessBinding, error)
+
+	ValidateOwner  func(HarnessBinding) error
+	BeforeRecord   func(context.Context) error
+	OnReadError    func(context.Context, string, error)
+	OnSubmitError  func(context.Context, AgentRun, HarnessBinding, error) (HarnessTurn, error)
+	OnRecoverError func(context.Context, AgentRun, error) error
+
+	BindUnsupportedTurn bool
+	Label               string
+}
+
+// ExecuteAgentRun reconciles one already-admitted AgentRun against its
+// selected Harness and records only through the supplied durable callbacks.
+func ExecuteAgentRun(ctx context.Context, execution AgentRunExecution) (HarnessTurn, error) {
+	return (agentRunContract{
+		store: execution.Store, reachBarrier: execution.ReachBarrier,
+		delivery: execution.Delivery, run: execution.Run, harness: execution.Harness,
+		submitNew: execution.SubmitNew, submitBound: execution.SubmitBound,
+		recover: execution.Recover, history: execution.History, wait: execution.Wait,
+		validateOwner: execution.ValidateOwner, beforeRecord: execution.BeforeRecord,
+		onReadError: execution.OnReadError, onSubmitError: execution.OnSubmitError,
+		onRecoverError: execution.OnRecoverError, bindUnsupportedTurn: execution.BindUnsupportedTurn,
+		label: execution.Label,
+	}).execute(ctx)
+}
+
 type agentRunContract struct {
 	store        agentRunStore
 	reachBarrier func(context.Context, string, Delivery) error

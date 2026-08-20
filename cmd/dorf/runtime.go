@@ -8,6 +8,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/codex"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/e2b"
@@ -19,6 +20,7 @@ import (
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/publication"
+	"github.com/aphronio/dorf/internal/repository"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/terminal"
@@ -49,8 +51,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return workflow.CodingRuntime{}, err
 	}
-	repository := spine.NewRepositoryService(resolved.Execution, resolved.Externals)
-	coding := spine.NewCodingService(repository, r.store, resolved.Externals)
+	repositoryService := repository.NewService(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
+	codingService := coding.NewService(repositoryService, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -59,7 +61,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}
 	return workflow.CodingRuntime{
 		Profile: resolved.Profile,
-		Coding:  coding,
+		Coding:  codingService,
 		Proposal: workflow.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
@@ -73,8 +75,8 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	if err != nil {
 		return workflow.InvestigationRuntime{}, err
 	}
-	repository := spine.NewRepositoryService(resolved.Execution, resolved.Externals)
-	service := investigation.NewService(repository, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	repositoryService := repository.NewService(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
+	service := investigation.NewService(repositoryService, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	return workflow.InvestigationRuntime{Profile: resolved.Profile, Investigation: service}, nil
 }
 

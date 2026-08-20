@@ -2,6 +2,7 @@ package spine
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,19 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 )
+
+const (
+	commandEvidenceProducer = "dorf-command-observer"
+	reviewEvidenceProducer  = "dorf-agent-review"
+)
+
+func fullGitObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
 
 type ReadinessAssessment struct {
 	Ready    bool   `json:"ready"`

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/repository"
@@ -409,8 +410,8 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 }
 
 var (
-	_ spine.Externals                  = Externals{}
-	_ spine.RepositoryServiceExternals = Externals{}
-	_ spine.CodingServiceExternals     = Externals{}
-	_ investigation.Externals          = Externals{}
+	_ spine.Externals             = Externals{}
+	_ repository.ServiceExternals = Externals{}
+	_ coding.Externals            = Externals{}
+	_ investigation.Externals     = Externals{}
 )

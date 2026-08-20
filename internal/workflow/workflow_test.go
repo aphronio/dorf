@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-var _ CodingExecution = spine.CodingService{}
+var _ CodingExecution = coding.Service{}
 
 type profileGuardStore struct {
 	job               spine.Job

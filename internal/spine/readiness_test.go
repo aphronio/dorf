@@ -111,10 +111,7 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 		AgentRun: AgentRun{ID: runID, JobID: jobID, MessageID: requestID, InputRevision: revision, Role: string(policy.RoleCriticalBoundary), State: AgentRunCompleted, TurnOutcome: "completed", TurnID: "turn-review", Harness: "codex", ThreadID: "thread-review", Capability: ReviewReadOnlyCapability, StartedAt: now, FinishedAt: now.Add(time.Second)},
 		Request:  Message{ID: requestID, JobID: jobID, FromKind: MessageFromWorkflow, FromID: requestFromID, Sequence: 2, Input: "Review the exact Revision.", Intent: MessageFollow},
 	}
-	observed, err := (CodingService{RepositoryService: RepositoryService{ExecutionService: ExecutionService{blobs: store}}}).reviewEvidence(run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	observed := reviewObservationEvidence(t, store, run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	foreign := Message{ID: feedbackID, JobID: jobID, FromKind: MessageFromAgent, FromID: "agent-run-foreign", Sequence: 3, Input: "Foreign feedback.", Intent: MessageFollow}
 	wrong := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run}, []Delivery{{Message: foreign}})
 	if wrong.Ready || !strings.Contains(wrong.Reason, "has not returned a feedback Message") {
@@ -187,6 +184,26 @@ func gitObservationEvidence(t *testing.T, store blob.Store, job CodingJob, run A
 	}
 }
 
+func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView, checkout ReviewCheckoutObservation) Evidence {
+	t.Helper()
+	contents, err := json.Marshal(reviewObservationArtifact{
+		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
+		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome, Checkout: checkout,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Put(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Evidence{
+		ID: EvidenceID(run.ID, "review-observation"), Digest: stored.Digest, ByteSize: stored.ByteSize,
+		MediaType: "application/vnd.dorf.observation+json", Producer: reviewEvidenceProducer, Kind: "review-observation",
+		AgentRunID: run.ID, Revision: run.InputRevision, StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
+	}
+}
+
 func readinessFixture(t *testing.T) (blob.Store, string, string, []DeclaredCheck, Check, Evidence) {
 	t.Helper()
 	store := blob.Store{Root: t.TempDir()}
@@ -206,6 +223,23 @@ func readinessFixture(t *testing.T) (blob.Store, string, string, []DeclaredCheck
 	record := Evidence{ID: EvidenceID(checkID, "check-output"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: "check-output", CheckID: checkID, Revision: revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
 	check := Check{ID: checkID, JobID: jobID, Name: declared[0].Name, Command: declared[0].Command, Revision: revision, State: "passed", EvidenceID: record.ID, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
 	return store, jobID, revision, declared, check, record
+}
+
+func commandArtifact(identity, revision string, observation CommandObservation) ([]byte, error) {
+	return json.Marshal(struct {
+		Identity        string    `json:"identity"`
+		Revision        string    `json:"revision"`
+		Producer        string    `json:"producer"`
+		Command         string    `json:"command"`
+		ExitCode        int       `json:"exit_code"`
+		StartedAt       time.Time `json:"started_at"`
+		FinishedAt      time.Time `json:"finished_at"`
+		Stdout          string    `json:"stdout"`
+		Stderr          string    `json:"stderr"`
+		StdoutTruncated bool      `json:"stdout_truncated"`
+		StderrTruncated bool      `json:"stderr_truncated"`
+		Redactions      []string  `json:"redactions"`
+	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
 }
 
 func evidencePath(root, digest string) string {

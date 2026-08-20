@@ -2,10 +2,8 @@ package spine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
 )
@@ -40,11 +38,6 @@ type Externals interface {
 	SandboxDelete(context.Context, Job, Sandbox) error
 }
 
-type RepositoryServiceExternals interface {
-	RepositoryClone(context.Context, Job, Sandbox, string, string, string) error
-	RepositoryRevision(context.Context, Job, string, string) (RevisionObservation, error)
-}
-
 type CodingStore interface {
 	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
 	RecordRevisionObservation(context.Context, string, string, RevisionObservation, Evidence) error
@@ -61,26 +54,10 @@ type RepositoryExternals interface {
 	RepositoryCheck(context.Context, CodingJob, Check) (CommandObservation, error)
 }
 
-// CodingServiceStore and CodingServiceExternals add only the repository,
-// Check, and review capabilities owned by coding-to-proposal.
-type CodingServiceStore interface {
-	Store
-	CodingStore
-	ReviewStore
-}
-
-type CodingServiceExternals interface {
-	Externals
-	RepositoryExternals
-	ReviewExternals
-}
-
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
 	ReachWorkflow(context.Context, string, string, string) error
 }
-
-const commandEvidenceProducer = "dorf-command-observer"
 
 const (
 	BarrierBeforeSubmit          = "before-submit"
@@ -110,27 +87,6 @@ func NewExecutionService(store Store, externals Externals, records blob.Store, b
 		blobs:      records,
 		claimCheck: claimCheck,
 	}
-}
-
-// CodingService composes shared execution custody with the extra facts and
-// adapters required only by coding-to-proposal.
-type CodingService struct {
-	RepositoryService
-	store     CodingServiceStore
-	externals CodingServiceExternals
-}
-
-type RepositoryService struct {
-	ExecutionService
-	repository RepositoryServiceExternals
-}
-
-func NewRepositoryService(service ExecutionService, externals RepositoryServiceExternals) RepositoryService {
-	return RepositoryService{ExecutionService: service, repository: externals}
-}
-
-func NewCodingService(repository RepositoryService, store CodingServiceStore, externals CodingServiceExternals) CodingService {
-	return CodingService{RepositoryService: repository, store: store, externals: externals}
 }
 
 func (s ExecutionService) BlobStore() blob.Store { return s.blobs }
@@ -177,150 +133,9 @@ func (s ExecutionService) uncertainAgentRun(ctx context.Context, runID, reason s
 	return s.recordAgentRun(ctx, func() error { return s.store.UncertainAgentRun(ctx, runID, reason) })
 }
 
-func (s CodingService) ExecuteSetup(ctx context.Context, job CodingJob, action Action) error {
-	observation, declared, err := s.externals.RepositorySetup(ctx, job, action)
-	if err != nil {
-		if attentionNeeded(err) {
-			return s.setWorkflowAttention(ctx, job.ID, action.ID, err)
-		}
-		return err
-	}
-	observation = canonicalCommandObservation(observation)
-	artifact, err := commandArtifact(action.ID, job.StartingRevision, observation)
-	if err != nil {
-		return err
-	}
-	evidenceRecord, err := s.retainEvidence(action.ID, "repository-setup", action.ID, "", "", job.StartingRevision, observation.StartedAt, observation.FinishedAt, artifact)
-	if err != nil {
-		return err
-	}
-	if err := s.reachWorkflow(ctx, BarrierSetupComplete, job.ID, action.ID); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	if err := s.store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s CodingService) ObserveRevision(ctx context.Context, job CodingJob, run AgentRun) error {
-	observation, err := s.repository.RepositoryRevision(ctx, job.Job, job.Branch, job.Revision)
-	if err != nil {
-		if attentionNeeded(err) {
-			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
-		}
-		return err
-	}
-	observation.StartedAt = observation.StartedAt.UTC().Truncate(time.Microsecond)
-	observation.FinishedAt = observation.FinishedAt.UTC().Truncate(time.Microsecond)
-	artifact, err := json.Marshal(observation)
-	if err != nil {
-		return err
-	}
-	evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", run.ID, "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-	if err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	return s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
-}
-
-func (s CodingService) ExecuteCheck(ctx context.Context, job CodingJob, check Check) error {
-	if check.State == "passed" {
-		return nil
-	}
-	if check.State == "failed" {
-		return s.handleFailedCheck(ctx, check)
-	}
-	observation, err := s.externals.RepositoryCheck(ctx, job, check)
-	if err != nil {
-		if attentionNeeded(err) {
-			return s.setWorkflowAttention(ctx, job.ID, check.ID, err)
-		}
-		return err
-	}
-	observation = canonicalCommandObservation(observation)
-	artifact, err := commandArtifact(check.ID, job.Revision, observation)
-	if err != nil {
-		return err
-	}
-	evidenceRecord, err := s.retainEvidence(check.ID, "check-output", "", "", check.ID, job.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-	if err != nil {
-		return err
-	}
-	if err := s.reachWorkflow(ctx, BarrierCheckExited, job.ID, check.ID); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	if err := s.store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
-		return err
-	}
-	check.State, check.ExitCode, check.EvidenceID = "passed", observation.ExitCode, evidenceRecord.ID
-	if observation.ExitCode != 0 {
-		check.State = "failed"
-		return s.handleFailedCheck(ctx, check)
-	}
-	return nil
-}
-
-func (s CodingService) setWorkflowAttention(ctx context.Context, jobID, source string, cause error) error {
-	if err := s.requireClaim(ctx); err != nil {
-		return errors.Join(cause, err)
-	}
-	if err := s.store.SetWorkflowAttention(ctx, jobID, source, cause.Error()); err != nil {
-		return errors.Join(cause, err)
-	}
-	return cause
-}
-
 func attentionNeeded(err error) bool {
 	var attention interface{ AttentionNeeded() bool }
 	return errors.As(err, &attention) && attention.AttentionNeeded()
-}
-
-func (s CodingService) handleFailedCheck(ctx context.Context, check Check) error {
-	if _, _, err := s.store.AdmitCheckMessage(ctx, check); err != nil {
-		return err
-	}
-	return nil
-}
-
-func canonicalCommandObservation(observation CommandObservation) CommandObservation {
-	observation.StartedAt = observation.StartedAt.UTC().Truncate(time.Microsecond)
-	observation.FinishedAt = observation.FinishedAt.UTC().Truncate(time.Microsecond)
-	return observation
-}
-
-func commandArtifact(identity, revision string, observation CommandObservation) ([]byte, error) {
-	return json.Marshal(struct {
-		Identity        string    `json:"identity"`
-		Revision        string    `json:"revision"`
-		Producer        string    `json:"producer"`
-		Command         string    `json:"command"`
-		ExitCode        int       `json:"exit_code"`
-		StartedAt       time.Time `json:"started_at"`
-		FinishedAt      time.Time `json:"finished_at"`
-		Stdout          string    `json:"stdout"`
-		Stderr          string    `json:"stderr"`
-		StdoutTruncated bool      `json:"stdout_truncated"`
-		StderrTruncated bool      `json:"stderr_truncated"`
-		Redactions      []string  `json:"redactions"`
-	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
-}
-
-func (s ExecutionService) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
-	blob, err := s.blobs.Put(contents)
-	if err != nil {
-		return Evidence{}, err
-	}
-	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: kind, ActionID: actionID, AgentRunID: agentRunID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
 }
 
 func (s ExecutionService) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
@@ -703,22 +518,4 @@ func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, job Job, san
 		return err
 	}
 	return nil
-}
-
-// ExecuteRepositoryClone reconciles one workflow-owned remote Git input
-// without placing repository facts on Core Job.
-func (s RepositoryService) ExecuteRepositoryClone(ctx context.Context, job Job, sandbox Sandbox, action Action, repository, revision, branch string) error {
-	if action.Kind != ActionRepositoryClone {
-		return fmt.Errorf("repository clone requires the exact repository-clone Action")
-	}
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
-		return fmt.Errorf("repository clone does not belong to the exact Job and Sandbox")
-	}
-	if err := s.repository.RepositoryClone(ctx, job, sandbox, repository, revision, branch); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
 }
