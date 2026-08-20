@@ -27,13 +27,6 @@ type Execution interface {
 	SandboxExecution
 }
 
-// RepositoryExecution adds exact repository materialization shared by the
-// current repository-backed workflows.
-type RepositoryExecution interface {
-	Execution
-	ExecuteRepositoryClone(context.Context, spine.Job, spine.Sandbox, spine.Action, string, string, string) error
-}
-
 // CleanupExecution is the smallest Core capability needed after a client or
 // workflow requests Job cleanup.
 type CleanupExecution interface {

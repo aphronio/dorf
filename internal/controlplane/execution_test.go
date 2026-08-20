@@ -6,7 +6,6 @@ import (
 )
 
 var (
-	_ controlplane.Execution           = spine.ExecutionService{}
-	_ controlplane.RepositoryExecution = spine.RepositoryService{}
-	_ controlplane.CleanupExecution    = spine.ExecutionService{}
+	_ controlplane.Execution        = spine.ExecutionService{}
+	_ controlplane.CleanupExecution = spine.ExecutionService{}
 )

@@ -7,8 +7,8 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -16,7 +16,7 @@ import (
 // CodingExecution is the coding workflow's explicit composition of reusable
 // Core execution with only its own setup, Revision, Check, and review policy.
 type CodingExecution interface {
-	controlplane.RepositoryExecution
+	repository.Execution
 	BlobStore() blob.Store
 	ExecuteSetup(context.Context, spine.CodingJob, spine.Action) error
 	ObserveRevision(context.Context, spine.CodingJob, spine.AgentRun) error

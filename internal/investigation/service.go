@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -35,15 +35,15 @@ func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job spine.Job, r
 // Service composes shared repository execution with the retained-source
 // materialization owned only by codebase-investigation.
 type Service struct {
-	controlplane.RepositoryExecution
+	repository.Execution
 	store      Store
 	externals  Externals
 	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewService(repository controlplane.RepositoryExecution, store Store, externals Externals, blobs blob.Store, claimCheck func(context.Context) error) Service {
-	return Service{RepositoryExecution: repository, store: store, externals: externals, blobs: blobs, claimCheck: claimCheck}
+func NewService(execution repository.Execution, store Store, externals Externals, blobs blob.Store, claimCheck func(context.Context) error) Service {
+	return Service{Execution: execution, store: store, externals: externals, blobs: blobs, claimCheck: claimCheck}
 }
 
 func (s Service) BlobStore() blob.Store { return s.blobs }
