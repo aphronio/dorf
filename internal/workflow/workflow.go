@@ -35,7 +35,6 @@ type ProviderChecker interface {
 type sandboxProfileStore interface {
 	Job(context.Context, string) (spine.Job, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
-	SetCleanupAttention(context.Context, string, string) error
 }
 
 // Runtime is the provider-neutral execution bundle for one durably selected
@@ -59,7 +58,6 @@ type InvestigationRuntime struct {
 }
 
 type RuntimeResolver interface {
-	Resolve(context.Context, string) (Runtime, error)
 	ResolveCoding(context.Context, string) (CodingRuntime, error)
 	ResolveInvestigation(context.Context, string) (InvestigationRuntime, error)
 }
@@ -70,7 +68,7 @@ func WakeEvent(jobID string, sequence int64) string {
 
 func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver, core controlplane.Application) {
 	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
-		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
+		if err := core.VerifyAttachedTask(ctx, params.JobID, RunTaskName); err != nil {
 			return controlplane.TaskResultV1{}, err
 		}
 		runtime, err := codingRuntimeForJob(ctx, store, runtimes, params.JobID)
@@ -122,7 +120,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
-		if err := verifyAttachedTask(ctx, store, params.JobID, InvestigationTaskName); err != nil {
+		if err := core.VerifyAttachedTask(ctx, params.JobID, InvestigationTaskName); err != nil {
 			return controlplane.TaskResultV1{}, err
 		}
 		runtime, err := investigationRuntimeForJob(ctx, store, runtimes, params.JobID)
@@ -159,37 +157,6 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	client.MustRegister(absurd.Task(controlplane.CleanupTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
-		if err := verifyAttachedTask(ctx, store, params.JobID, controlplane.CleanupTaskName); err != nil {
-			return controlplane.TaskResultV1{}, err
-		}
-		job, err := store.Job(ctx, params.JobID)
-		if err != nil {
-			return controlplane.TaskResultV1{}, err
-		}
-		definition, err := definitionForJob(job)
-		if err != nil {
-			return controlplane.TaskResultV1{}, err
-		}
-		runtime, err := runtimeForLoadedJob(ctx, store, runtimes, job, definition, true)
-		if err != nil {
-			return controlplane.TaskResultV1{}, err
-		}
-		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (controlplane.TaskResultV1, error) {
-			if err := runCleanup(workCtx, runtime.Execution, store, params.JobID); err != nil {
-				return controlplane.TaskResultV1{}, err
-			}
-			return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
-		})
-	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-}
-
-func runtimeForJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, jobID string, expected Definition, cleanup bool) (Runtime, error) {
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		return Runtime{}, err
-	}
-	return runtimeForLoadedJob(ctx, store, runtimes, job, expected, cleanup)
 }
 
 func codingRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, jobID string) (CodingRuntime, error) {
@@ -198,7 +165,7 @@ func codingRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtime
 		return CodingRuntime{}, err
 	}
 	expected := CodingToProposalDefinition()
-	if err := requireWorkflow(ctx, store, job, expected, false); err != nil {
+	if err := requireWorkflow(ctx, store, job, expected); err != nil {
 		return CodingRuntime{}, err
 	}
 	if runtimes == nil {
@@ -208,7 +175,7 @@ func codingRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtime
 	if err != nil {
 		return CodingRuntime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 	}
-	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, false); err != nil {
+	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected); err != nil {
 		return CodingRuntime{}, err
 	}
 	return runtime, nil
@@ -220,7 +187,7 @@ func investigationRuntimeForJob(ctx context.Context, store sandboxProfileStore, 
 		return InvestigationRuntime{}, err
 	}
 	expected := CodebaseInvestigationDefinition()
-	if err := requireWorkflow(ctx, store, job, expected, false); err != nil {
+	if err := requireWorkflow(ctx, store, job, expected); err != nil {
 		return InvestigationRuntime{}, err
 	}
 	if runtimes == nil {
@@ -230,38 +197,16 @@ func investigationRuntimeForJob(ctx context.Context, store sandboxProfileStore, 
 	if err != nil {
 		return InvestigationRuntime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 	}
-	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, false); err != nil {
+	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected); err != nil {
 		return InvestigationRuntime{}, err
 	}
 	return runtime, nil
 }
 
-func runtimeForLoadedJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, job spine.Job, expected Definition, cleanup bool) (Runtime, error) {
-	if err := requireWorkflow(ctx, store, job, expected, cleanup); err != nil {
-		return Runtime{}, err
-	}
-	if runtimes == nil {
-		return Runtime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
-	}
-	runtime, err := runtimes.Resolve(ctx, job.SandboxProfile)
-	if err != nil {
-		return Runtime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
-	}
-	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, cleanup); err != nil {
-		return Runtime{}, err
-	}
-	return runtime, nil
-}
-
-func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.Job, expected Definition, cleanup bool) error {
+func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.Job, expected Definition) error {
 	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
 		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
-		var attentionErr error
-		if cleanup {
-			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
-		} else {
-			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "workflow-profile", detail)
-		}
+		attentionErr := store.SetWorkflowAttention(ctx, job.ID, "workflow-profile", detail)
 		if attentionErr != nil {
 			return fmt.Errorf("%s; record workflow mismatch attention: %w", detail, attentionErr)
 		}
@@ -270,16 +215,11 @@ func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.J
 	return nil
 }
 
-func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine.Job, profile RuntimeProfile, expected Definition, cleanup bool) error {
+func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine.Job, profile RuntimeProfile, expected Definition) error {
 	configured := strings.TrimSpace(profile.SandboxProfile)
 	if job.SandboxProfile != configured {
 		detail := fmt.Sprintf("Job requires Sandbox profile %q, but this worker resolved %q", job.SandboxProfile, configured)
-		var attentionErr error
-		if cleanup {
-			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
-		} else {
-			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "sandbox-profile", detail)
-		}
+		attentionErr := store.SetWorkflowAttention(ctx, job.ID, "sandbox-profile", detail)
 		if attentionErr != nil {
 			return fmt.Errorf("%s; record profile mismatch attention: %w", detail, attentionErr)
 		}
@@ -287,12 +227,7 @@ func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine
 	}
 	if err := profile.Require(expected); err != nil {
 		detail := err.Error()
-		var attentionErr error
-		if cleanup {
-			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
-		} else {
-			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "provider-capabilities", detail)
-		}
+		attentionErr := store.SetWorkflowAttention(ctx, job.ID, "provider-capabilities", detail)
 		if attentionErr != nil {
 			return fmt.Errorf("%s; record provider capability attention: %w", detail, attentionErr)
 		}
@@ -431,58 +366,4 @@ func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client
 		return action, message, created, fmt.Errorf("setup retry message %s sequence %d was accepted, but its wake hint failed; retry the same setup identity and input: %w", message.ID, message.Sequence, err)
 	}
 	return action, message, created, nil
-}
-
-func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {
-	task, ok := absurd.TaskFromContext(ctx)
-	if !ok {
-		return absurd.ErrNoTaskContext
-	}
-	if attachedID == "" {
-		return fmt.Errorf("%s task %s ran before its public Spawn result was attached", taskName, task.TaskID())
-	}
-	if task.TaskID() != attachedID || task.TaskName() != taskName {
-		return fmt.Errorf("%s task context %s conflicts with attached task %s", taskName, task.TaskID(), attachedID)
-	}
-	return nil
-}
-
-func verifyAttachedTask(ctx context.Context, store postgres.Store, jobID, taskName string) error {
-	return store.WithJobFence(ctx, jobID, func() error {
-		task, ok := absurd.TaskFromContext(ctx)
-		if !ok {
-			return absurd.ErrNoTaskContext
-		}
-		job, err := store.Job(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		attachments, err := store.JobTasks(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		for _, attachment := range attachments {
-			if attachment.TaskID != task.TaskID() {
-				continue
-			}
-			if attachment.TaskID != job.CurrentTaskID {
-				return fmt.Errorf("%s task %s is no longer the Job's current attachment", taskName, task.TaskID())
-			}
-			if attachment.TaskName != taskName {
-				return fmt.Errorf("task %s is durably attached as %s, not %s", task.TaskID(), attachment.TaskName, taskName)
-			}
-			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
-		}
-		if job.CurrentTaskID != task.TaskID() {
-			if taskName == controlplane.CleanupTaskName {
-				err = store.AttachCleanupTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
-			} else {
-				err = store.AttachJobTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
-			}
-			if err != nil {
-				return fmt.Errorf("recover public Spawn attachment for %s: %w", taskName, err)
-			}
-		}
-		return verifyTaskContext(ctx, task.TaskID(), taskName)
-	})
 }

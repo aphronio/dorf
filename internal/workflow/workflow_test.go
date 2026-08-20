@@ -16,23 +16,15 @@ type profileGuardStore struct {
 	job               spine.Job
 	jobCalls          int
 	workflowAttention string
-	cleanupAttention  string
 	attentionErr      error
 }
 
 type profileRuntimeResolverStub struct {
-	runtime              Runtime
 	codingRuntime        CodingRuntime
 	investigationRuntime InvestigationRuntime
 	err                  error
-	name                 string
 	codingName           string
 	investigationName    string
-}
-
-func (r *profileRuntimeResolverStub) Resolve(_ context.Context, name string) (Runtime, error) {
-	r.name = name
-	return r.runtime, r.err
 }
 
 func (r *profileRuntimeResolverStub) ResolveCoding(_ context.Context, name string) (CodingRuntime, error) {
@@ -62,69 +54,35 @@ func TestCodingRuntimeResolutionUsesOnlyCodingAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolver.codingName != "managed" || resolver.name != "" || runtime.Profile.SandboxProfile != "managed" {
-		t.Fatalf("base=%q coding=%q runtime=%#v", resolver.name, resolver.codingName, runtime)
+	if resolver.codingName != "managed" || runtime.Profile.SandboxProfile != "managed" {
+		t.Fatalf("coding=%q runtime=%#v", resolver.codingName, runtime)
 	}
 }
 func (s *profileGuardStore) SetWorkflowAttention(_ context.Context, _, _, detail string) error {
 	s.workflowAttention = detail
 	return s.attentionErr
 }
-func (s *profileGuardStore) SetCleanupAttention(_ context.Context, _, detail string) error {
-	s.cleanupAttention = detail
-	return s.attentionErr
-}
 
-func TestSandboxProfileGuardStopsMismatchedWorkAndCleanup(t *testing.T) {
+func TestSandboxProfileGuardStopsMismatchedWork(t *testing.T) {
 	definition := CodebaseInvestigationDefinition()
-	for _, cleanup := range []bool{false, true} {
-		store := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}}
-		err := requireJobProfile(context.Background(), store, store.job, RuntimeProfile{SandboxProfile: "e2b"}, definition, cleanup)
-		if err == nil || !strings.Contains(err.Error(), `requires Sandbox profile "incus"`) {
-			t.Fatalf("cleanup=%v mismatch error=%v", cleanup, err)
-		}
-		if cleanup && store.cleanupAttention == "" || !cleanup && store.workflowAttention == "" {
-			t.Fatalf("cleanup=%v did not persist profile attention: %#v", cleanup, store)
-		}
+	store := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}}
+	err := requireJobProfile(context.Background(), store, store.job, RuntimeProfile{SandboxProfile: "e2b"}, definition)
+	if err == nil || !strings.Contains(err.Error(), `requires Sandbox profile "incus"`) {
+		t.Fatalf("mismatch error=%v", err)
+	}
+	if store.workflowAttention == "" {
+		t.Fatalf("profile mismatch did not persist attention: %#v", store)
 	}
 	matching := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "e2b"}}
-	if err := requireJobProfile(context.Background(), matching, matching.job, RuntimeProfile{SandboxProfile: "e2b"}, definition, false); err != nil {
+	if err := requireJobProfile(context.Background(), matching, matching.job, RuntimeProfile{SandboxProfile: "e2b"}, definition); err != nil {
 		t.Fatal(err)
 	}
-	if matching.workflowAttention != "" || matching.cleanupAttention != "" {
+	if matching.workflowAttention != "" {
 		t.Fatalf("matching profile wrote attention: %#v", matching)
 	}
 	failedAttention := &profileGuardStore{job: spine.Job{ID: "job-1", SandboxProfile: "incus"}, attentionErr: errors.New("write failed")}
-	if err := requireJobProfile(context.Background(), failedAttention, failedAttention.job, RuntimeProfile{SandboxProfile: "e2b"}, definition, false); err == nil || !strings.Contains(err.Error(), "write failed") {
+	if err := requireJobProfile(context.Background(), failedAttention, failedAttention.job, RuntimeProfile{SandboxProfile: "e2b"}, definition); err == nil || !strings.Contains(err.Error(), "write failed") {
 		t.Fatalf("attention persistence error=%v", err)
-	}
-}
-
-func TestRuntimeResolutionUsesDurablyPinnedProfile(t *testing.T) {
-	definition := CodebaseInvestigationDefinition()
-	store := &profileGuardStore{job: spine.Job{
-		ID: "job-1", SandboxProfile: "managed", Workflow: definition.Name, WorkflowRevision: definition.Revision,
-	}}
-	resolver := &profileRuntimeResolverStub{runtime: Runtime{Profile: RuntimeProfile{SandboxProfile: "managed"}}}
-	runtime, err := runtimeForJob(context.Background(), store, resolver, store.job.ID, definition, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolver.name != "managed" || runtime.Profile.SandboxProfile != "managed" {
-		t.Fatalf("resolved name=%q runtime=%#v", resolver.name, runtime)
-	}
-	if store.jobCalls != 1 {
-		t.Fatalf("runtime resolution read Job %d times, want 1", store.jobCalls)
-	}
-
-	resolver.err = errors.New("credential unavailable")
-	store.jobCalls = 0
-	store.workflowAttention = ""
-	if _, err := runtimeForJob(context.Background(), store, resolver, store.job.ID, definition, false); err == nil || !strings.Contains(err.Error(), "credential unavailable") {
-		t.Fatalf("resolution error=%v", err)
-	}
-	if store.workflowAttention != "" {
-		t.Fatalf("transient resolution error wrote durable attention=%q", store.workflowAttention)
 	}
 }
 
@@ -190,29 +148,5 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 				t.Fatalf("Step name %q, want %q", test.got, test.want)
 			}
 		})
-	}
-}
-
-func TestCleanupActionOrderIsExactAndStable(t *testing.T) {
-	targets := cleanupTargets([]spine.Sandbox{
-		{ID: "sandbox-b", JobID: "job-1"},
-		{ID: "sandbox-a", JobID: "job-1"},
-	})
-	want := []struct {
-		sandbox string
-		kind    spine.ActionKind
-	}{
-		{"sandbox-a", spine.ActionRouteRevoke},
-		{"sandbox-a", spine.ActionSandboxDelete},
-		{"sandbox-b", spine.ActionRouteRevoke},
-		{"sandbox-b", spine.ActionSandboxDelete},
-	}
-	if len(targets) != len(want) {
-		t.Fatalf("cleanup targets = %d, want %d", len(targets), len(want))
-	}
-	for i := range want {
-		if targets[i].Sandbox.ID != want[i].sandbox || targets[i].Kind != want[i].kind {
-			t.Fatalf("cleanup target %d = %#v, want %s %s", i, targets[i], want[i].sandbox, want[i].kind)
-		}
 	}
 }

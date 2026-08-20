@@ -9,6 +9,7 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/codex"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -32,12 +33,15 @@ type profileRuntimeResolver struct {
 	barrier spine.FaultBarrier
 }
 
-func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workflow.Runtime, error) {
+func (r profileRuntimeResolver) ResolveExecution(ctx context.Context, name string) (controlplane.ExecutionRuntime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
-		return workflow.Runtime{}, err
+		return controlplane.ExecutionRuntime{}, err
 	}
-	return resolved.Runtime, nil
+	return controlplane.ExecutionRuntime{
+		Execution:      resolved.Runtime.Execution,
+		SandboxProfile: resolved.Runtime.Profile.SandboxProfile,
+	}, nil
 }
 
 func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (workflow.CodingRuntime, error) {

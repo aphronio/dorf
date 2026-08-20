@@ -37,11 +37,11 @@ type integrationRuntimeResolver struct {
 	investigationRuntime workflow.InvestigationRuntime
 }
 
-func (r integrationRuntimeResolver) Resolve(_ context.Context, name string) (workflow.Runtime, error) {
+func (r integrationRuntimeResolver) ResolveExecution(_ context.Context, name string) (controlplane.ExecutionRuntime, error) {
 	if name != r.runtime.Profile.SandboxProfile {
-		return workflow.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+		return controlplane.ExecutionRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return r.runtime, nil
+	return controlplane.ExecutionRuntime{Execution: r.runtime.Execution, SandboxProfile: r.runtime.Profile.SandboxProfile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (workflow.CodingRuntime, error) {
@@ -108,11 +108,14 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		Profile:   workflow.RuntimeProfile{SandboxProfile: "incus"},
 	}
 	investigationService := investigation.NewService(repository, store, externals, blob.Store{}, func(context.Context) error { return nil })
-	workflow.Register(client, store, integrationRuntimeResolver{
+	resolver := integrationRuntimeResolver{
 		runtime:              runtime,
 		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Repository: repository, Coding: coding},
 		investigationRuntime: workflow.InvestigationRuntime{Runtime: runtime, Investigation: investigationService},
-	}, controlplane.Application{Store: store, Tasks: client})
+	}
+	core := controlplane.Application{Store: store, Tasks: client, Runtimes: resolver}
+	core.RegisterCleanup()
+	workflow.Register(client, store, resolver, core)
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()

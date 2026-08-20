@@ -24,9 +24,21 @@ type TaskResultV1 struct {
 	Outcome string `json:"outcome"`
 }
 
+// ExecutionRuntime is the provider-neutral Core capability bundle resolved
+// from one Job's durably pinned Sandbox profile.
+type ExecutionRuntime struct {
+	Execution      spine.ExecutionService
+	SandboxProfile string
+}
+
+type RuntimeResolver interface {
+	ResolveExecution(context.Context, string) (ExecutionRuntime, error)
+}
+
 type Application struct {
-	Store postgres.Store
-	Tasks *absurd.Client
+	Store    postgres.Store
+	Tasks    *absurd.Client
+	Runtimes RuntimeResolver
 }
 
 // RequestCleanup closes further admission, settles the currently attached
@@ -98,4 +110,60 @@ func currentTaskID(ctx context.Context) string {
 		return ""
 	}
 	return task.TaskID()
+}
+
+// VerifyAttachedTask reconciles the public Absurd task identity with the
+// exact durable Job attachment before any task is allowed to act.
+func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName string) error {
+	return a.Store.WithJobFence(ctx, jobID, func() error {
+		task, ok := absurd.TaskFromContext(ctx)
+		if !ok {
+			return absurd.ErrNoTaskContext
+		}
+		job, err := a.Store.Job(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		attachments, err := a.Store.JobTasks(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		for _, attachment := range attachments {
+			if attachment.TaskID != task.TaskID() {
+				continue
+			}
+			if attachment.TaskID != job.CurrentTaskID {
+				return fmt.Errorf("%s task %s is no longer the Job's current attachment", taskName, task.TaskID())
+			}
+			if attachment.TaskName != taskName {
+				return fmt.Errorf("task %s is durably attached as %s, not %s", task.TaskID(), attachment.TaskName, taskName)
+			}
+			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
+		}
+		if job.CurrentTaskID != task.TaskID() {
+			if taskName == CleanupTaskName {
+				err = a.Store.AttachCleanupTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
+			} else {
+				err = a.Store.AttachJobTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
+			}
+			if err != nil {
+				return fmt.Errorf("recover public Spawn attachment for %s: %w", taskName, err)
+			}
+		}
+		return verifyTaskContext(ctx, task.TaskID(), taskName)
+	})
+}
+
+func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {
+	task, ok := absurd.TaskFromContext(ctx)
+	if !ok {
+		return absurd.ErrNoTaskContext
+	}
+	if attachedID == "" {
+		return fmt.Errorf("%s task %s ran before its public Spawn result was attached", taskName, task.TaskID())
+	}
+	if task.TaskID() != attachedID || task.TaskName() != taskName {
+		return fmt.Errorf("%s task context %s conflicts with attached task %s", taskName, task.TaskID(), attachedID)
+	}
+	return nil
 }

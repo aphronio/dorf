@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -149,7 +150,7 @@ func cleanupOperation(definition workflow.Definition, job spine.Job, sandboxes [
 	if job.CleanupState != spine.CleanupScheduled {
 		return "", false
 	}
-	if kind, _, pending := workflow.CurrentCleanupAction(sandboxes, actions); pending {
+	if kind, _, pending := controlplane.CurrentCleanupAction(sandboxes, actions); pending {
 		return definition.ActionLabel(kind), true
 	}
 	return "Finalizing cleanup", true
