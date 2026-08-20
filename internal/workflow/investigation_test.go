@@ -11,7 +11,8 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	job := spine.Job{ID: "job-1", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true, Revision: strings.Repeat("a", 40)}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	run := spine.AgentRun{ID: "run-1", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}
-	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Delivery: spine.Delivery{AgentRun: run}}
+	delivery := spine.Delivery{Message: spine.Message{Sequence: 1}, AgentRun: run}
+	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery}
 
 	steps := []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate}
 	for _, want := range steps {
@@ -32,10 +33,15 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		t.Fatalf("observation work=%#v", work)
 	}
 	snapshot.Delivery.AgentRun.State = spine.AgentRunCompleted
-	if work := snapshot.Project(); work.Kind != InvestigationWorkRecordReport {
-		t.Fatalf("report work=%#v", work)
+	if work := snapshot.Project(); work.Kind != InvestigationWorkRecordDraft {
+		t.Fatalf("draft work=%#v", work)
 	}
-	snapshot.Report = &spine.CodebaseInvestigationReport{JobID: job.ID}
+	draft := spine.CodebaseInvestigationDraft{JobID: job.ID, AgentRunID: run.ID, ArtifactID: "artifact-draft"}
+	snapshot.Drafts = []spine.CodebaseInvestigationDraft{draft}
+	if work := snapshot.Project(); work.Kind != InvestigationWorkWaitDecision || work.FactID != draft.ArtifactID {
+		t.Fatalf("waiting work=%#v", work)
+	}
+	snapshot.Decision = &spine.CodebaseInvestigationDecision{JobID: job.ID, ArtifactID: draft.ArtifactID, Disposition: spine.InvestigationAccepted}
 	if work := snapshot.Project(); work.Kind != InvestigationWorkComplete {
 		t.Fatalf("terminal work=%#v", work)
 	}

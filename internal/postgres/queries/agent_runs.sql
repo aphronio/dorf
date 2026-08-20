@@ -22,7 +22,7 @@ select sqlc.arg(id),j.id,sqlc.arg(message_id),'investigate','pending',
 from dorf.jobs j
 where j.id=sqlc.arg(job_id)
   and j.workflow_name='codebase-investigation'
-  and j.workflow_revision='1'
+  and j.workflow_revision='2'
 on conflict do nothing;
 
 -- name: ListImplementationThreadBindings :many

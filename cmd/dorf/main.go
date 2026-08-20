@@ -611,8 +611,14 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 }
 
 func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("workflow requires: run codebase-investigation or decide")
+	}
+	if args[0] == "decide" {
+		return decideCodebaseInvestigation(ctx, store, client, args[1:], stdout, stderr)
+	}
 	if len(args) < 2 || args[0] != "run" {
-		return fmt.Errorf("workflow requires: run codebase-investigation [options]")
+		return fmt.Errorf("workflow requires: run codebase-investigation or decide")
 	}
 	if args[1] != string(spine.WorkflowCodebaseInvestigation) {
 		return fmt.Errorf("unsupported workflow %q", args[1])
@@ -660,6 +666,46 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 		"created":                        created, "task_id": job.CurrentTaskID, "scheduled": true,
 		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
+}
+
+func decideCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("workflow decide", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	jobID := set.String("job", "", "codebase-investigation Job ID")
+	draftID := set.String("draft", "", "exact latest draft Artifact ID")
+	decisionValue := set.String("decision", "", "terminal decision: accept or reject")
+	decidedBy := set.String("by", "", "stable human identity")
+	reasonFile := set.String("reason-file", "", "optional file containing the decision reason")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("workflow decide accepts flags only")
+	}
+	var disposition spine.InvestigationDisposition
+	switch strings.TrimSpace(*decisionValue) {
+	case "accept":
+		disposition = spine.InvestigationAccepted
+	case "reject":
+		disposition = spine.InvestigationRejected
+	default:
+		return fmt.Errorf("workflow decide requires --decision accept or reject")
+	}
+	reason := ""
+	if strings.TrimSpace(*reasonFile) != "" {
+		var err error
+		reason, err = readInput(*reasonFile, "workflow decide", "decision reason")
+		if err != nil {
+			return err
+		}
+	}
+	decision, created, err := workflow.DecideCodebaseInvestigation(ctx, store, client, postgres.NewCodebaseInvestigationDecision{
+		JobID: *jobID, ArtifactID: *draftID, Disposition: disposition, DecidedBy: *decidedBy, Reason: reason,
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{"decision": decision, "created": created, "accepted": true})
 }
 
 func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -877,9 +923,9 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
-			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": snapshot.Report, "artifacts": artifacts,
+			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts, "decision": snapshot.Decision, "artifacts": artifacts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
-			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_run": snapshot.Delivery.AgentRun, "sandbox": snapshot.MainSandbox},
+			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(snapshot.Deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
 		})
 	}
@@ -899,13 +945,29 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
 	renderHistory(stdout, investigationHistory(snapshot))
-	if snapshot.Report == nil {
-		fmt.Fprintln(stdout, "  report: none")
+	if len(snapshot.Drafts) == 0 {
+		fmt.Fprintln(stdout, "  draft: none")
 		return nil
 	}
-	fmt.Fprintf(stdout, "  report: observed-at=%s Artifact=%s\n", snapshot.Report.ObservedAt.Format(time.RFC3339Nano), snapshot.Report.ReportArtifactID)
-	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", snapshot.Report.ReportArtifactID)
+	latest := snapshot.Drafts[len(snapshot.Drafts)-1]
+	fmt.Fprintf(stdout, "  latest draft: created-at=%s Artifact=%s\n", latest.CreatedAt.Format(time.RFC3339Nano), latest.ArtifactID)
+	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", latest.ArtifactID)
+	if snapshot.Decision == nil {
+		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
+		fmt.Fprintf(stdout, "  accept: dorf workflow decide --job %s --draft %s --decision accept --by HUMAN_ID\n", job.ID, latest.ArtifactID)
+		fmt.Fprintf(stdout, "  reject: dorf workflow decide --job %s --draft %s --decision reject --by HUMAN_ID\n", job.ID, latest.ArtifactID)
+	} else {
+		fmt.Fprintf(stdout, "  decision: %s by %s at %s\n", snapshot.Decision.Disposition, snapshot.Decision.DecidedBy, snapshot.Decision.DecidedAt.Format(time.RFC3339Nano))
+	}
 	return nil
+}
+
+func investigationAgentRuns(deliveries []spine.Delivery) []spine.AgentRun {
+	runs := make([]spine.AgentRun, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		runs = append(runs, delivery.AgentRun)
+	}
+	return runs
 }
 
 func investigationSourceSummary(source spine.CodebaseInvestigationSource) string {

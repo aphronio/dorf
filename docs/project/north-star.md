@@ -116,12 +116,13 @@ separate observable fact.
 
 ### Codebase investigation to a repository-grounded report
 
-A client delegates an exact reachable or locally committed repository Revision and an unstructured investigation brief. The
-workflow creates an isolated exact checkout, uses one bounded AgentRun for inspection and synthesis,
-checks its terminal result and unchanged checkout programmatically, and returns a flexible Markdown
-Report. An honest report may simply explain that no useful finding exists. It owns no publication or
-pull request. The client may use the result to answer the user, seek human acceptance, or admit
-another Job.
+A client delegates an exact reachable or locally committed repository Revision and an unstructured
+investigation brief. The workflow creates an isolated exact checkout, uses a bounded AgentRun for
+inspection and synthesis, checks its terminal result and unchanged checkout programmatically, and
+retains a flexible Markdown draft. An honest draft may simply explain that no useful finding exists.
+The human can send a follow-up into the same Harness Thread or accept or reject the exact latest
+draft. Only that typed decision makes the workflow terminal and starts cleanup. It owns no
+publication or pull request.
 
 The implementation proves this shape through PostgreSQL, shared cleanup, and a real Incus/Codex
 dogfood terminal.

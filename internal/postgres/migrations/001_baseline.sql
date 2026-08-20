@@ -195,7 +195,7 @@ create table dorf.agent_runs (
     foreign key(job_id,sandbox_id) references dorf.sandboxes(job_id,id)
 );
 create unique index agent_runs_one_revision_role on dorf.agent_runs(job_id,input_revision,role)
-    where role<>'implement';
+    where role not in ('implement','investigate');
 alter table dorf.agent_runs add constraint agent_runs_job_id_id_key unique(job_id,id);
 
 create table dorf.revisions (
@@ -270,13 +270,28 @@ create table dorf.artifacts (
     created_at timestamptz not null,
     unique(job_id,name),
     unique(job_id,id),
+    unique(job_id,id,agent_run_id),
     foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id)
 );
 
-create table dorf.codebase_investigation_reports (
+create table dorf.codebase_investigation_drafts (
+    job_id text not null references dorf.jobs(id),
+    agent_run_id text not null,
+    artifact_id text not null,
+    primary key(job_id,agent_run_id),
+    unique(job_id,artifact_id),
+    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id),
+    foreign key(job_id,artifact_id,agent_run_id) references dorf.artifacts(job_id,id,agent_run_id)
+);
+
+create table dorf.codebase_investigation_decisions (
     job_id text primary key references dorf.jobs(id),
-    report_artifact_id text not null,
-    foreign key(job_id,report_artifact_id) references dorf.artifacts(job_id,id)
+    artifact_id text not null,
+    disposition text not null check (disposition in ('accepted','rejected')),
+    decided_by text not null check (length(trim(decided_by))>0 and length(decided_by)<=256),
+    reason text not null default '' check (length(reason)<=1048576),
+    decided_at timestamptz not null default clock_timestamp(),
+    foreign key(job_id,artifact_id) references dorf.codebase_investigation_drafts(job_id,artifact_id)
 );
 
 alter table dorf.revisions
@@ -358,7 +373,8 @@ comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider
 comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
-comment on table dorf.codebase_investigation_reports is 'Typed terminal report identity for the codebase-investigation workflow; Markdown bytes live in the referenced Artifact';
+comment on table dorf.codebase_investigation_drafts is 'Immutable investigator drafts; Markdown bytes live in the referenced Artifact';
+comment on table dorf.codebase_investigation_decisions is 'Exact human terminal disposition of the latest codebase-investigation draft';
 comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

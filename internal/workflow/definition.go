@@ -58,11 +58,12 @@ func CodebaseInvestigationDefinition() Definition {
 		Name: spine.WorkflowCodebaseInvestigation, Revision: spine.CodebaseInvestigationRevision,
 		Presentation: Presentation{
 			Operations: map[string]string{
-				string(InvestigationWorkComplete):  "Complete",
-				string(InvestigationWorkAttention): "Needs attention",
+				string(InvestigationWorkComplete):     "Complete",
+				string(InvestigationWorkAttention):    "Needs attention",
+				string(InvestigationWorkWaitDecision): "Waiting for human decision",
 			},
 			AgentRoles: map[string]string{"investigate": "Investigator"},
-			Results:    map[string]string{"investigation-report": "Investigation report"},
+			Results:    map[string]string{"investigation-draft": "Investigation draft"},
 		},
 	}
 }

@@ -121,7 +121,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		work := snapshot.Project()
 		return followSnapshot{
 			Job: snapshot.Job, Profile: profile, Definition: workflow.CodebaseInvestigationDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
-			NeedsAttention: work.Kind == workflow.InvestigationWorkAttention, AgentRuns: []spine.AgentRun{snapshot.Delivery.AgentRun},
+			NeedsAttention: work.Kind == workflow.InvestigationWorkAttention, AgentRuns: investigationAgentRuns(snapshot.Deliveries),
 			Sandboxes: []spine.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	default:

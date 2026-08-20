@@ -381,7 +381,7 @@ select $1,j.id,$2,'investigate','pending',
 from dorf.jobs j
 where j.id=$5
   and j.workflow_name='codebase-investigation'
-  and j.workflow_revision='1'
+  and j.workflow_revision='2'
 on conflict do nothing
 `
 

@@ -472,23 +472,38 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 	if !job.AdmissionOpen {
 		return spine.Message{}, false, fmt.Errorf("Job %s admission is closed for cleanup", input.JobID)
 	}
-	if job.WorkflowName != spine.WorkflowCodingToProposal || job.WorkflowRevision != spine.CodingToProposalRevision {
-		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept follow-up Messages in this slice", job.WorkflowName, job.WorkflowRevision)
-	}
-	if job.OutcomeExists {
-		return spine.Message{}, false, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
-	}
 	var message spine.Message
-	role, harness, threadID := "implement", "", ""
-	if input.Intent == spine.MessageSteer {
-		active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular harness Turn")
+	role, harness, threadID := "", "", ""
+	switch {
+	case job.WorkflowName == spine.WorkflowCodingToProposal && job.WorkflowRevision == spine.CodingToProposalRevision:
+		if job.OutcomeExists {
+			return spine.Message{}, false, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
+		}
+		role = "implement"
+		if input.Intent == spine.MessageSteer {
+			active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return spine.Message{}, false, fmt.Errorf("steer delivery requires an exact active regular harness Turn")
+				}
+				return spine.Message{}, false, err
 			}
+			message.TargetTurnID, harness, threadID, role = active.TurnID, active.Harness, active.ThreadID, active.Role
+		}
+	case job.WorkflowName == spine.WorkflowCodebaseInvestigation && job.WorkflowRevision == spine.CodebaseInvestigationRevision:
+		if input.Intent != spine.MessageFollow {
+			return spine.Message{}, false, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
+		}
+		latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
+		if err != nil {
 			return spine.Message{}, false, err
 		}
-		message.TargetTurnID, harness, threadID, role = active.TurnID, active.Harness, active.ThreadID, active.Role
+		if latest.State != spine.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
+			return spine.Message{}, false, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
+		}
+		role, harness, threadID = "investigate", latest.Harness, latest.ThreadID
+	default:
+		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept follow-up Messages in this slice", job.WorkflowName, job.WorkflowRevision)
 	}
 	message.Sequence, err = queries.NextMessageSequence(ctx, input.JobID)
 	if err != nil {
@@ -500,15 +515,27 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input NewMessage) (spine.Me
 		return spine.Message{}, false, err
 	}
 	runID := spine.AgentRunID(message.ID)
-	if role != "implement" {
-		return spine.Message{}, false, fmt.Errorf("steer target AgentRun has unsupported role %s", role)
-	}
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)}); err != nil {
-		return spine.Message{}, false, err
+	switch role {
+	case "implement":
+		rows, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)})
+		if err := expectOneRows(rows, err); err != nil {
+			return spine.Message{}, false, fmt.Errorf("insert implementation follow-up AgentRun: %w", err)
+		}
+	case "investigate":
+		jobRow, err := queries.GetJob(ctx, message.JobID)
+		if err != nil {
+			return spine.Message{}, false, err
+		}
+		rows, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, InputRevision: nullableString(jobRow.Revision), SandboxID: spine.MainSandboxName(message.JobID)})
+		if err := expectOneRows(rows, err); err != nil {
+			return spine.Message{}, false, fmt.Errorf("insert investigation follow-up AgentRun: %w", err)
+		}
+	default:
+		return spine.Message{}, false, fmt.Errorf("unsupported follow-up AgentRun role %s", role)
 	}
 	if harness != "" || threadID != "" {
 		if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
-			return spine.Message{}, false, err
+			return spine.Message{}, false, fmt.Errorf("bind follow-up AgentRun to Harness Thread: %w", err)
 		}
 	}
 	storedMessage, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID})

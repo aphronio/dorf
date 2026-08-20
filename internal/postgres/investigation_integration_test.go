@@ -58,8 +58,8 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 	if _, _, err := store.Admit(ctx, changed); err == nil {
 		t.Fatal("same admission key changed workflow identity")
 	}
-	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "later", Input: "broaden the question"}); err == nil || created {
-		t.Fatalf("investigation accepted unsupported follow-up: created=%v err=%v", created, err)
+	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
+		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
 	}
 
 	deliveries, err := store.Deliveries(ctx, job.ID)
@@ -93,28 +93,70 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = deliveries[0].AgentRun
+	name := spine.CodebaseInvestigationDraftArtifactName(1)
 	artifact := spine.Artifact{
-		ID: spine.ArtifactID(job.ID, spine.CodebaseInvestigationReportArtifactName), JobID: job.ID,
-		Name: spine.CodebaseInvestigationReportArtifactName, Digest: strings.Repeat("b", 64), ByteSize: 16,
+		ID: spine.ArtifactID(job.ID, name), JobID: job.ID,
+		Name: name, Digest: strings.Repeat("b", 64), ByteSize: 16,
 		MediaType: "text/markdown", Producer: "dorf-codebase-investigation",
 		AgentRunID: run.ID, CreatedAt: run.FinishedAt,
 	}
-	stored, created, err := store.RecordCodebaseInvestigationReport(ctx, artifact)
-	if err != nil || !created || stored.JobID != artifact.JobID || stored.ReportArtifactID != artifact.ID || !stored.ObservedAt.Equal(artifact.CreatedAt) {
-		t.Fatalf("Report=%#v created=%v err=%v", stored, created, err)
+	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, artifact)
+	if err != nil || !created || stored.JobID != artifact.JobID || stored.ArtifactID != artifact.ID || !stored.CreatedAt.Equal(artifact.CreatedAt) {
+		t.Fatalf("Draft=%#v created=%v err=%v", stored, created, err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || !job.AdmissionOpen {
+		t.Fatalf("draft prematurely closed Job=%#v err=%v", job, err)
+	}
+	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, artifact)
+	if err != nil || created || replayed != stored {
+		t.Fatalf("idempotent Draft=%#v created=%v err=%v", replayed, created, err)
+	}
+	changedArtifact := artifact
+	changedArtifact.Digest = strings.Repeat("c", 64)
+	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
+		t.Fatalf("changed Artifact replay error=%v", err)
+	}
+	follow, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "later", Input: "broaden the question"})
+	if err != nil || !created || follow.Sequence != 2 {
+		t.Fatalf("follow-up=%#v created=%v err=%v", follow, created, err)
+	}
+	deliveries, err = store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 2 || deliveries[1].AgentRun.ThreadID != "thread-investigation" || deliveries[1].AgentRun.Role != "investigate" {
+		t.Fatalf("continued deliveries=%#v err=%v", deliveries, err)
+	}
+	secondRun := deliveries[1].AgentRun
+	if err := store.PrepareAgentRun(ctx, secondRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(ctx, secondRun.ID, "codex", "thread-investigation", "turn-investigation-2", "completed"); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = store.Deliveries(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRun = deliveries[1].AgentRun
+	secondName := spine.CodebaseInvestigationDraftArtifactName(2)
+	secondArtifact := spine.Artifact{ID: spine.ArtifactID(job.ID, secondName), JobID: job.ID, Name: secondName, Digest: strings.Repeat("d", 64), ByteSize: 24, MediaType: "text/markdown", Producer: "dorf-codebase-investigation", AgentRunID: secondRun.ID, CreatedAt: secondRun.FinishedAt}
+	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, secondArtifact); err != nil || !created {
+		t.Fatalf("second draft created=%v err=%v", created, err)
+	}
+	if _, _, err := store.RecordCodebaseInvestigationDecision(ctx, postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: artifact.ID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"}); err == nil || !strings.Contains(err.Error(), "latest") {
+		t.Fatalf("stale draft decision error=%v", err)
+	}
+	decisionInput := postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: secondArtifact.ID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"}
+	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, decisionInput)
+	if err != nil || !created || decision.ArtifactID != secondArtifact.ID || decision.Disposition != spine.InvestigationAccepted {
+		t.Fatalf("decision=%#v created=%v err=%v", decision, created, err)
+	}
+	repeatedDecision, created, err := store.RecordCodebaseInvestigationDecision(ctx, decisionInput)
+	if err != nil || created || repeatedDecision != decision {
+		t.Fatalf("idempotent decision=%#v created=%v err=%v", repeatedDecision, created, err)
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || job.AdmissionOpen {
 		t.Fatalf("terminal Job=%#v err=%v", job, err)
-	}
-	replayed, created, err := store.RecordCodebaseInvestigationReport(ctx, artifact)
-	if err != nil || created || replayed != stored {
-		t.Fatalf("idempotent Report=%#v created=%v err=%v", replayed, created, err)
-	}
-	changedArtifact := artifact
-	changedArtifact.Digest = strings.Repeat("c", 64)
-	if _, _, err := store.RecordCodebaseInvestigationReport(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
-		t.Fatalf("changed Artifact replay error=%v", err)
 	}
 }
 
@@ -194,6 +236,15 @@ func (e *investigationExternals) AgentInitialTurns(context.Context, spine.Job) (
 	defer e.mu.Unlock()
 	return spine.HarnessHistory{Harness: "codex", ThreadID: "thread-" + e.job.ID, Turns: []spine.HarnessTurn{e.turn}}, nil
 }
+func (e *investigationExternals) AgentSubmit(_ context.Context, job spine.Job, delivery spine.Delivery) (spine.HarnessBinding, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if delivery.AgentRun.ThreadID != "thread-"+job.ID {
+		return spine.HarnessBinding{}, fmt.Errorf("follow-up did not reuse the investigator Thread")
+	}
+	e.turn = spine.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Revised finding\n\nThe follow-up is grounded in `internal/workflow/investigation.go`.\n"}
+	return spine.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: e.turn}, nil
+}
 func (e *investigationExternals) AgentTurns(_ context.Context, job spine.Job, threadID string) (spine.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -204,7 +255,7 @@ func (*investigationExternals) RepositoryRevision(_ context.Context, job spine.J
 	return spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, nil
 }
 
-func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *testing.T) {
+func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	records := blob.Store{Root: t.TempDir()}
@@ -235,10 +286,10 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 		if err != nil {
 			return workflow.TaskResultV1{}, err
 		}
-		if work.Kind != workflow.InvestigationWorkComplete {
+		if work.Kind != workflow.InvestigationWorkWaitDecision {
 			return workflow.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
 		}
-		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "report-recorded"}, nil
+		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
 	}))
 	spawned, err := client.Spawn(ctx, taskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName})
 	if err != nil {
@@ -258,12 +309,12 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if !slices.Equal(effects, wantEffects) {
 		t.Fatalf("effects=%v want=%v", effects, wantEffects)
 	}
-	report, err := store.CodebaseInvestigationReport(ctx, job.ID)
-	if err != nil || report == nil {
-		t.Fatalf("Report=%#v err=%v", report, err)
+	drafts, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("Drafts=%#v err=%v", drafts, err)
 	}
 	artifacts, err := store.Artifacts(ctx, job.ID)
-	if err != nil || len(artifacts) != 1 || artifacts[0].ID != report.ReportArtifactID || artifacts[0].Name != spine.CodebaseInvestigationReportArtifactName {
+	if err != nil || len(artifacts) != 1 || artifacts[0].ID != drafts[0].ArtifactID || artifacts[0].Name != spine.CodebaseInvestigationDraftArtifactName(1) {
 		t.Fatalf("Artifacts=%#v err=%v", artifacts, err)
 	}
 	contents, err := records.ReadVerified(artifacts[0].Digest, artifacts[0].ByteSize)
@@ -274,9 +325,48 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if err != nil || len(allEvidence) != 0 {
 		t.Fatalf("agent prose was recorded as Evidence: %#v err=%v", allEvidence, err)
 	}
-	artifact, err := store.Artifact(ctx, report.ReportArtifactID)
+	artifact, err := store.Artifact(ctx, drafts[0].ArtifactID)
 	if err != nil || artifact != artifacts[0] {
 		t.Fatalf("Artifact=%#v err=%v want=%#v", artifact, err, artifacts[0])
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil || !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
+		t.Fatalf("Job did not remain open for human decision: %#v err=%v", job, err)
+	}
+	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
+		t.Fatalf("follow-up created=%v err=%v", created, err)
+	}
+	revisionTaskName := taskName + "-follow-up"
+	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params workflow.Params) (workflow.TaskResultV1, error) {
+		work, err := workflow.RunCodebaseInvestigation(taskCtx, service, store, params.JobID)
+		if err != nil {
+			return workflow.TaskResultV1{}, err
+		}
+		if work.Kind != workflow.InvestigationWorkWaitDecision {
+			return workflow.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
+		}
+		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
+	}))
+	revisionTask, err := client.Spawn(ctx, revisionTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: revisionTaskName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, spawned.TaskID, revisionTask.TaskID, revisionTaskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-follow-up", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	drafts, err = store.CodebaseInvestigationDrafts(ctx, job.ID)
+	if err != nil || len(drafts) != 2 {
+		t.Fatalf("revised Drafts=%#v err=%v", drafts, err)
+	}
+	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: drafts[1].ArtifactID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"})
+	if err != nil || !created || decision.Disposition != spine.InvestigationAccepted {
+		t.Fatalf("Decision=%#v created=%v err=%v", decision, created, err)
+	}
+	if work, err := workflow.RunCodebaseInvestigation(ctx, service, store, job.ID); err != nil || work.Kind != workflow.InvestigationWorkComplete {
+		t.Fatalf("terminal work=%#v err=%v", work, err)
 	}
 
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
@@ -307,7 +397,7 @@ func TestPostgresCodebaseInvestigationCoordinatorReachesReportAndCleanup(t *test
 	if err != nil || cleaned.CleanupState != spine.CleanupComplete {
 		t.Fatalf("cleaned Job=%#v err=%v", cleaned, err)
 	}
-	afterCleanup, err := store.Artifact(ctx, report.ReportArtifactID)
+	afterCleanup, err := store.Artifact(ctx, drafts[0].ArtifactID)
 	if err != nil || afterCleanup != artifact {
 		t.Fatalf("Artifact did not survive cleanup: %#v err=%v", afterCleanup, err)
 	}

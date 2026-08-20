@@ -1729,7 +1729,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D069 — Codebase investigation is the second explicit native workflow
 
-- **Status:** Accepted implementation slice; hermetic and live dogfood terminals proven — 2026-08-17
+- **Status:** Accepted initial implementation slice; one-shot terminal refined by D074 — 2026-08-17
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
   revision, repository Revision, unstructured brief, execution profile, Provider Connection, model,
@@ -1751,8 +1751,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Client boundary:** `dorf workflow run codebase-investigation` is the first CLI projection of the
   workflow-as-durable-function boundary. The workflow itself remains independent of whether a future
   caller is a CLI, schedule, GitHub event, Slack tag, assistant, or another product.
-- **Deliberate omissions:** This slice has no repository setup, coding Checks, branch mutation,
-  review, GitHub authority, publication, follow-up Messages, external web sources, cron scheduling,
+- **Deliberate omissions:** This initial slice had no repository setup, coding Checks, branch mutation,
+  review, GitHub authority, publication, external web sources, cron scheduling,
   automatic Job chaining, or persistent researcher identity. Clients own approval and composition;
   later use must earn each additional capability.
 - **Proof:** Unit coverage proves the independent decision order, flexible nonblank report edge, and
@@ -1859,10 +1859,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exact bytes by Artifact ID. Artifact metadata lives in PostgreSQL and its bytes share one neutral
   deployment-owned content-addressed blob store with Evidence. Sandbox cleanup does not remove
   Artifacts.
-- **First slice:** `codebase-investigation` records `report.md` as `text/markdown`; its typed Report
-  references that Artifact instead of misclassifying agent prose as Evidence. `dorf artifact list
-  JOB_ID` discovers deliverables and `dorf artifact get ARTIFACT_ID` writes exact bytes.
-  Inspection links to retrieval but does not inline potentially large or binary content.
+- **First slice, refined by D074:** `codebase-investigation` records numbered Markdown draft
+  Artifacts and its exact human terminal decision points to the accepted or rejected latest draft
+  instead of misclassifying agent prose as Evidence. `dorf artifact list JOB_ID` discovers
+  deliverables and `dorf artifact get ARTIFACT_ID` writes exact bytes. Inspection links to retrieval
+  but does not inline potentially large or binary content.
 - **Boundary:** Artifacts are results or claims, not proof of their own correctness. Evidence remains
   immutable observed proof linked to the fact it supports. There is no generic result JSON bag,
   artifact publication policy, retention service, archive format, streaming API, or interaction-layer
@@ -1903,3 +1904,36 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A real input exceeds the bounded in-memory transport, a provider-native
   streaming upload materially reduces memory or protocol risk, submodules or LFS become required,
   or another workflow earns a more general typed input-blob relation.
+
+## D074 — Investigation drafts wait for exact human disposition
+
+- **Status:** Accepted maintainer-radar interaction slice — 2026-08-20
+- **Decision:** A completed `codebase-investigation` AgentRun produces an immutable numbered Markdown
+  draft Artifact; it is not yet a terminal result. Dorf keeps admission, the Job-owned Sandbox,
+  Provider Route, and Harness Thread available while the workflow waits durably for human input.
+  An ordinary follow-up Message creates one new bounded `investigate` AgentRun on that same Thread.
+- **Human authority:** Accept and reject are typed workflow decisions, not ordinary Messages and not
+  prose interpreted by an agent. A decision must identify the exact latest draft Artifact, records
+  the human identity and optional reason, closes admission atomically, and wakes the waiting task.
+  Acceptance and rejection are both terminal; only then does the workflow schedule shared cleanup.
+  A stale decision loses to a concurrently admitted follow-up and is refused.
+- **Client boundary:** `dorf message` remains the unstructured revision path. `dorf workflow decide
+  --job JOB_ID --draft ARTIFACT_ID --decision accept|reject --by HUMAN_ID` is the first exact human
+  decision projection. Other interaction layers may translate buttons or events into the same facts;
+  Dorf does not become the interaction layer.
+- **Artifacts:** Each Turn retains `report-000N.md` so follow-up history is immutable and retrievable.
+  The terminal decision points to one exact draft. Agent prose remains a claim, not Evidence.
+- **Deliberate omission:** Dorf does not yet pause an idle Sandbox while awaiting the decision.
+  Managed-provider waiting cost may earn a provider-neutral pause/resume lifecycle later; it does not
+  justify speculative capability or state machinery in this slice.
+- **Proof:** PostgreSQL integration proves that follow-up is rejected before a draft, repeated
+  investigator AgentRuns reuse the original Harness Thread, each completed Turn produces a distinct
+  Artifact, stale acceptance is rejected, the exact decision is idempotent and closes admission,
+  cleanup starts only afterward, and retained draft bytes survive Sandbox deletion.
+- **Refines:** D069's one-shot investigation terminal and D072's first single-Artifact result shape.
+- **Why:** The proposed maintainer-radar dogfood requires challenging and refining a recommendation
+  before accepting it. Immediate cleanup preserved cost but destroyed the same-thread context before
+  the human decision, testing the wrong workflow lifecycle.
+- **Reconsider when:** Real dogfood shows one draft is sufficient, waiting cost materially dominates
+  use, a provider cannot preserve the Harness Thread across pause, or another workflow earns the same
+  exact draft-decision boundary.

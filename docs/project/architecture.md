@@ -13,8 +13,8 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 The verified implementation is deliberately narrow: one Go application, two explicit workflows,
 PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. The
-`codebase-investigation` workflow has an independent coordinator, typed Report, and live Incus
-dogfood terminal. This
+`codebase-investigation` workflow has an independent coordinator, retained drafts, an exact human
+decision boundary, and a live Incus dogfood terminal. This
 architecture must keep both concrete paths clear without treating coding-specific or investigation-
 specific records as the permanent public workflow API.
 
@@ -148,8 +148,8 @@ Workflow facts remain specific:
 
 - coding owns repository authority, Revisions, Checks tied to a Revision, review policy, Proposal,
   GitHub outcome, and coding inspection;
-- codebase investigation owns its exact repository input, flexible Markdown Report, and post-Turn
-  unchanged-checkout assertion; and
+- codebase investigation owns its exact repository input, flexible Markdown drafts, exact human
+  disposition, and post-Turn unchanged-checkout assertion; and
 - future workflows must not inherit Git or research semantics merely to reuse durable custody.
 
 Do not introduce a polymorphic fact owner, generic JSON result, arbitrary Action registry, or common
@@ -196,18 +196,22 @@ workflow revision, Sandbox profile, and model envelope. A source is either a rea
 repository or a content-addressed Git bundle retained before admission; retained inputs are not
 workflow-output Artifacts. Its explicit coordinator creates one Job-owned Sandbox, materializes the
 exact Revision through the provider-neutral file boundary when required, installs the scoped
-Provider Route, runs one `investigate` AgentRun, verifies the checkout remained exact and clean,
-retains nonblank Markdown as the named `report.md` Artifact, records a typed Report pointing to that
-Artifact, and enters the same Job cleanup path.
+Provider Route, and runs one bounded `investigate` AgentRun per accepted Message. Every completed
+Turn must leave the checkout exact and clean before its Markdown becomes an immutable numbered draft
+Artifact. The coordinator then waits durably: a follow-up Message creates another AgentRun in the
+same Harness Thread and Sandbox, while an exact accepted or rejected human decision over the latest
+draft closes admission and enters the shared Job cleanup path. Decisions are workflow authority, not
+prose delivered to an agent.
 
 Workflow capability requirements name only optional broad provider primitives beyond the baseline
 Sandbox and Harness contracts, such as browser workloads, nested containers, served endpoints,
 snapshots, or GPUs. Repository tools and services belong to its setup script or custom image. The
 two current workflows need no optional provider capability.
 
-This first slice deliberately has no repository setup, Checks, branch mutation, review, GitHub
-authority, publication, follow-up Messages, external source capture, scheduler, or generic workflow
-registry. Those boundaries require later dogfood evidence.
+The workflow deliberately has no repository setup, Checks, branch mutation, review, GitHub authority,
+publication, external source capture, scheduler, generic workflow registry, or automatic idle
+Sandbox pause. Provider-neutral pause and resume require measured waiting cost and a separate earned
+lifecycle contract.
 
 ## Failure and code evolution
 

@@ -16,7 +16,7 @@ import (
 
 const (
 	RunTaskName             = postgres.MessageTaskName
-	InvestigationTaskName   = "dorf-codebase-investigation-v1"
+	InvestigationTaskName   = "dorf-codebase-investigation-v2"
 	CleanupTaskName         = "dorf-job-cleanup-v3"
 	activeAgentPollInterval = time.Second
 	retryBaseDelaySeconds   = 5
@@ -151,16 +151,16 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				return TaskResultV1{}, err
 			}
 			if work.Kind == InvestigationWorkComplete {
-				report, err := store.CodebaseInvestigationReport(ctx, params.JobID)
+				decision, err := store.CodebaseInvestigationDecision(ctx, params.JobID)
 				if err != nil {
 					return TaskResultV1{}, err
 				}
-				if report != nil {
+				if decision != nil {
 					task := absurd.MustTaskContext(ctx)
 					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
 						return TaskResultV1{}, err
 					}
-					return TaskResultV1{JobID: params.JobID, Outcome: "report-recorded"}, nil
+					return TaskResultV1{JobID: params.JobID, Outcome: string(decision.Disposition)}, nil
 				}
 				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
@@ -168,9 +168,9 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			if err != nil {
 				return TaskResultV1{}, err
 			}
-			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v1/%020d", sequence)}
+			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
 			if work.Kind == InvestigationWorkObserveAgent {
-				options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v1/%s/%020d", work.FactID, sequence)
+				options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
 				options.Timeout = activeAgentPollInterval
 			}
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
@@ -313,7 +313,7 @@ func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewJob) (spine.Job, bool, error) {
 	input.Workflow = spine.WorkflowCodebaseInvestigation
 	input.WorkflowRevision = spine.CodebaseInvestigationRevision
-	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v1:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input)
+	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input)
 }
 
 func admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, definition Definition, taskName, taskKey string, input postgres.NewJob) (spine.Job, bool, error) {
@@ -373,6 +373,21 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same from ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
+}
+
+func DecideCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewCodebaseInvestigationDecision) (spine.CodebaseInvestigationDecision, bool, error) {
+	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, input)
+	if err != nil {
+		return spine.CodebaseInvestigationDecision{}, false, err
+	}
+	sequence, err := store.NextWakeSequence(ctx, decision.JobID)
+	if err != nil {
+		return decision, created, err
+	}
+	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(decision.JobID, sequence), WakeV1{JobID: decision.JobID, Sequence: sequence}); err != nil {
+		return decision, created, fmt.Errorf("investigation decision was retained, but its wake hint failed; retry the same exact decision: %w", err)
+	}
+	return decision, created, nil
 }
 
 // RetrySetup atomically records a new setup Action generation and its FIFO

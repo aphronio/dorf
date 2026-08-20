@@ -70,11 +70,18 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 
 func investigationHistory(snapshot workflow.InvestigationSnapshot) []historyEntry {
 	definition := workflow.CodebaseInvestigationDefinition()
-	delivery := snapshot.Delivery
-	entries := commonHistory(snapshot.Job, []spine.Delivery{delivery}, snapshot.Actions)
-	addAgentRunHistory(&entries, definition, delivery)
-	if snapshot.Report != nil {
-		addHistoryEntry(&entries, snapshot.Report.ObservedAt, definition.ResultLabel("investigation-report")+" ready")
+	entries := commonHistory(snapshot.Job, snapshot.Deliveries, snapshot.Actions)
+	for _, delivery := range snapshot.Deliveries {
+		if delivery.Message.Sequence > 1 {
+			addHistoryEntry(&entries, delivery.Message.AdmittedAt, fmt.Sprintf("Follow-up Message %d received", delivery.Message.Sequence))
+		}
+		addAgentRunHistory(&entries, definition, delivery)
+	}
+	for _, draft := range snapshot.Drafts {
+		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready · "+draft.ArtifactID)
+	}
+	if snapshot.Decision != nil {
+		addHistoryEntry(&entries, snapshot.Decision.DecidedAt, "Draft "+string(snapshot.Decision.Disposition)+" by "+snapshot.Decision.DecidedBy)
 	}
 	return sortedHistory(entries)
 }

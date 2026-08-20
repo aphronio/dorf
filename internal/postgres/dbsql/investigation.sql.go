@@ -17,7 +17,7 @@ const closeAdmissionForCodebaseInvestigation = `-- name: CloseAdmissionForCodeba
 update dorf.jobs
 set admission_open=false
 where id=$1 and admission_open and cleanup_state='pending'
-  and workflow_name='codebase-investigation' and workflow_revision='1'
+  and workflow_name='codebase-investigation' and workflow_revision='2'
 `
 
 func (q *Queries) CloseAdmissionForCodebaseInvestigation(ctx context.Context, jobID string) (int64, error) {
@@ -28,23 +28,49 @@ func (q *Queries) CloseAdmissionForCodebaseInvestigation(ctx context.Context, jo
 	return result.RowsAffected()
 }
 
-const getCodebaseInvestigationReport = `-- name: GetCodebaseInvestigationReport :one
-select r.job_id,r.report_artifact_id,a.created_at as observed_at
-from dorf.codebase_investigation_reports r
-join dorf.artifacts a on a.job_id=r.job_id and a.id=r.report_artifact_id
-where r.job_id=$1
+const getCodebaseInvestigationDecision = `-- name: GetCodebaseInvestigationDecision :one
+select job_id,artifact_id,disposition,decided_by,reason,decided_at
+from dorf.codebase_investigation_decisions
+where job_id=$1
 `
 
-type GetCodebaseInvestigationReportRow struct {
-	JobID            string
-	ReportArtifactID string
-	ObservedAt       time.Time
+func (q *Queries) GetCodebaseInvestigationDecision(ctx context.Context, jobID string) (DorfCodebaseInvestigationDecision, error) {
+	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationDecision, jobID)
+	var i DorfCodebaseInvestigationDecision
+	err := row.Scan(
+		&i.JobID,
+		&i.ArtifactID,
+		&i.Disposition,
+		&i.DecidedBy,
+		&i.Reason,
+		&i.DecidedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) GetCodebaseInvestigationReport(ctx context.Context, jobID string) (GetCodebaseInvestigationReportRow, error) {
-	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationReport, jobID)
-	var i GetCodebaseInvestigationReportRow
-	err := row.Scan(&i.JobID, &i.ReportArtifactID, &i.ObservedAt)
+const getCodebaseInvestigationJobForUpdate = `-- name: GetCodebaseInvestigationJobForUpdate :one
+select workflow_name,workflow_revision,admission_open,cleanup_state
+from dorf.jobs
+where id=$1
+for update
+`
+
+type GetCodebaseInvestigationJobForUpdateRow struct {
+	WorkflowName     spine.WorkflowName
+	WorkflowRevision string
+	AdmissionOpen    bool
+	CleanupState     spine.CleanupState
+}
+
+func (q *Queries) GetCodebaseInvestigationJobForUpdate(ctx context.Context, jobID string) (GetCodebaseInvestigationJobForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationJobForUpdate, jobID)
+	var i GetCodebaseInvestigationJobForUpdateRow
+	err := row.Scan(
+		&i.WorkflowName,
+		&i.WorkflowRevision,
+		&i.AdmissionOpen,
+		&i.CleanupState,
+	)
 	return i, err
 }
 
@@ -132,21 +158,89 @@ func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID stri
 	return i, err
 }
 
-const insertCodebaseInvestigationReport = `-- name: InsertCodebaseInvestigationReport :execrows
-insert into dorf.codebase_investigation_reports(
-    job_id,report_artifact_id
-) values(
-    $1,$2
-)
+const getLatestInvestigationRunAndDraft = `-- name: GetLatestInvestigationRunAndDraft :one
+select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
+       coalesce(ar.thread_id,'') as thread_id,ar.state,
+       coalesce(d.artifact_id,'') as artifact_id
+from dorf.agent_runs ar
+join dorf.job_messages m on m.id=ar.message_id
+left join dorf.codebase_investigation_drafts d
+  on d.job_id=ar.job_id and d.agent_run_id=ar.id
+where ar.job_id=$1 and ar.role='investigate'
+order by m.sequence desc
+limit 1
 `
 
-type InsertCodebaseInvestigationReportParams struct {
-	JobID            string
-	ReportArtifactID string
+type GetLatestInvestigationRunAndDraftRow struct {
+	AgentRunID string
+	Harness    string
+	ThreadID   string
+	State      spine.AgentRunState
+	ArtifactID string
 }
 
-func (q *Queries) InsertCodebaseInvestigationReport(ctx context.Context, arg InsertCodebaseInvestigationReportParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationReport, arg.JobID, arg.ReportArtifactID)
+func (q *Queries) GetLatestInvestigationRunAndDraft(ctx context.Context, jobID string) (GetLatestInvestigationRunAndDraftRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestInvestigationRunAndDraft, jobID)
+	var i GetLatestInvestigationRunAndDraftRow
+	err := row.Scan(
+		&i.AgentRunID,
+		&i.Harness,
+		&i.ThreadID,
+		&i.State,
+		&i.ArtifactID,
+	)
+	return i, err
+}
+
+const insertCodebaseInvestigationDecision = `-- name: InsertCodebaseInvestigationDecision :execrows
+insert into dorf.codebase_investigation_decisions(
+    job_id,artifact_id,disposition,decided_by,reason
+) values(
+    $1,$2,$3,
+    $4,$5
+)
+on conflict(job_id) do nothing
+`
+
+type InsertCodebaseInvestigationDecisionParams struct {
+	JobID       string
+	ArtifactID  string
+	Disposition string
+	DecidedBy   string
+	Reason      string
+}
+
+func (q *Queries) InsertCodebaseInvestigationDecision(ctx context.Context, arg InsertCodebaseInvestigationDecisionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDecision,
+		arg.JobID,
+		arg.ArtifactID,
+		arg.Disposition,
+		arg.DecidedBy,
+		arg.Reason,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertCodebaseInvestigationDraft = `-- name: InsertCodebaseInvestigationDraft :execrows
+insert into dorf.codebase_investigation_drafts(
+    job_id,agent_run_id,artifact_id
+) values(
+    $1,$2,$3
+)
+on conflict(job_id,agent_run_id) do nothing
+`
+
+type InsertCodebaseInvestigationDraftParams struct {
+	JobID      string
+	AgentRunID string
+	ArtifactID string
+}
+
+func (q *Queries) InsertCodebaseInvestigationDraft(ctx context.Context, arg InsertCodebaseInvestigationDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDraft, arg.JobID, arg.AgentRunID, arg.ArtifactID)
 	if err != nil {
 		return 0, err
 	}
@@ -180,4 +274,49 @@ func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg Ins
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const listCodebaseInvestigationDrafts = `-- name: ListCodebaseInvestigationDrafts :many
+select d.job_id,d.agent_run_id,d.artifact_id,a.created_at
+from dorf.codebase_investigation_drafts d
+join dorf.artifacts a on a.job_id=d.job_id and a.id=d.artifact_id
+join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
+join dorf.job_messages m on m.id=ar.message_id
+where d.job_id=$1
+order by m.sequence,d.artifact_id
+`
+
+type ListCodebaseInvestigationDraftsRow struct {
+	JobID      string
+	AgentRunID string
+	ArtifactID string
+	CreatedAt  time.Time
+}
+
+func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]ListCodebaseInvestigationDraftsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCodebaseInvestigationDrafts, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCodebaseInvestigationDraftsRow
+	for rows.Next() {
+		var i ListCodebaseInvestigationDraftsRow
+		if err := rows.Scan(
+			&i.JobID,
+			&i.AgentRunID,
+			&i.ArtifactID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -3,6 +3,7 @@ package spine
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -81,11 +82,10 @@ const (
 type WorkflowName string
 
 const (
-	WorkflowCodingToProposal                WorkflowName = "coding-to-proposal"
-	WorkflowCodebaseInvestigation           WorkflowName = "codebase-investigation"
-	CodingToProposalRevision                             = "3"
-	CodebaseInvestigationRevision                        = "1"
-	CodebaseInvestigationReportArtifactName              = "report.md"
+	WorkflowCodingToProposal      WorkflowName = "coding-to-proposal"
+	WorkflowCodebaseInvestigation WorkflowName = "codebase-investigation"
+	CodingToProposalRevision                   = "3"
+	CodebaseInvestigationRevision              = "2"
 )
 
 type SandboxProvider string
@@ -348,12 +348,29 @@ type JobOutcome struct {
 	ObservedAt     time.Time      `json:"observed_at"`
 }
 
-// CodebaseInvestigationReport is the typed terminal result of one repository-
-// grounded investigation. Its Markdown is the referenced Artifact.
-type CodebaseInvestigationReport struct {
-	JobID            string    `json:"job_id"`
-	ReportArtifactID string    `json:"report_artifact_id"`
-	ObservedAt       time.Time `json:"observed_at"`
+type CodebaseInvestigationDraft struct {
+	JobID      string    `json:"job_id"`
+	AgentRunID string    `json:"agent_run_id"`
+	ArtifactID string    `json:"artifact_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type InvestigationDisposition string
+
+const (
+	InvestigationAccepted InvestigationDisposition = "accepted"
+	InvestigationRejected InvestigationDisposition = "rejected"
+)
+
+// CodebaseInvestigationDecision is the exact human disposition of the latest
+// retained draft. It is terminal workflow authority, not agent input.
+type CodebaseInvestigationDecision struct {
+	JobID       string                   `json:"job_id"`
+	ArtifactID  string                   `json:"artifact_id"`
+	Disposition InvestigationDisposition `json:"disposition"`
+	DecidedBy   string                   `json:"decided_by"`
+	Reason      string                   `json:"reason,omitempty"`
+	DecidedAt   time.Time                `json:"decided_at"`
 }
 
 type HarnessTurn struct {
@@ -399,6 +416,10 @@ func AgentRunID(messageID string) string {
 
 func ArtifactID(jobID, name string) string {
 	return "artifact-" + digest(jobID+"\x00"+name, 24)
+}
+
+func CodebaseInvestigationDraftArtifactName(sequence int64) string {
+	return fmt.Sprintf("report-%04d.md", sequence)
 }
 
 func ReviewRequestFromID(revision, role string) string {

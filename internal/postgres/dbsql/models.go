@@ -33,6 +33,16 @@ type DorfArtifact struct {
 	CreatedAt  time.Time
 }
 
+// Exact human terminal disposition of the latest codebase-investigation draft
+type DorfCodebaseInvestigationDecision struct {
+	JobID       string
+	ArtifactID  string
+	Disposition string
+	DecidedBy   string
+	Reason      string
+	DecidedAt   time.Time
+}
+
 // One exact-Revision GitHub proposal projection per Job
 type DorfGithubProposal struct {
 	JobID            string
