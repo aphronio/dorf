@@ -68,7 +68,6 @@ access to the selected repository. Keep its metadata and private key at the path
 dorf doctor \
   --provider personal-chatgpt \
   --profile local-codex \
-  --contract .dorf.toml \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --github-repo OWNER/REPOSITORY \
   --github-installation INSTALLATION_ID \

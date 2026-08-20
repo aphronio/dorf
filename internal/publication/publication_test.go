@@ -123,12 +123,11 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.CodingJob{Job: spine.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
-	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact checks and selected review settled"}
-	checks := []spine.Check{{Name: "smoke", State: "passed", Revision: revision, EvidenceID: "e-smoke"}, {Name: "check", State: "passed", Revision: revision, EvidenceID: "e-check"}}
-	evidence := []spine.Evidence{{ID: "e-check", Digest: strings.Repeat("1", 64)}, {ID: "e-smoke", Digest: strings.Repeat("2", 64)}}
-	first := Body(job, assessment, checks, evidence, nil, nil)
-	second := Body(job, assessment, checks, evidence, nil, nil)
-	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) || !strings.Contains(first, "e-check") {
+	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact revision and selected review settled"}
+	evidence := []spine.Evidence{{ID: "e-git", Digest: strings.Repeat("1", 64)}}
+	first := Body(job, assessment, evidence, nil, nil)
+	second := Body(job, assessment, evidence, nil, nil)
+	if first != second || BodyDigest(first) != BodyDigest(second) || len(BodyDigest(first)) != 64 || !strings.Contains(first, revision) {
 		t.Fatalf("non-deterministic or incomplete body:\n%s", first)
 	}
 }
@@ -161,7 +160,7 @@ func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "review feedback handled"}
 	plan := &spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 
-	body := Body(job, assessment, nil, evidence, plan, runs)
+	body := Body(job, assessment, evidence, plan, runs)
 	for _, want := range []string{role, runID, feedbackMessageID, observedID, strings.Repeat("2", 64)} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body is missing %q:\n%s", want, body)
@@ -190,7 +189,6 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	body := Body(
 		spine.CodingJob{Job: spine.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
 		spine.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
-		nil,
 		[]spine.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
 		plan,
 		runs,

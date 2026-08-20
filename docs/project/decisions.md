@@ -2094,11 +2094,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D083 — Git and coding behavior are workflow modules, not Core
 
-- **Status:** Accepted ownership correction — 2026-08-20
-- **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action, Check,
+- **Status:** Refined by D084 — 2026-08-20
+- **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action,
   Artifact, Evidence, recovery, and requested-cleanup custody described by the North Star. Place
-  exact Git checkout and Revision observation in the repository module. Place repository setup,
-  coding Checks, review execution, and proposal-facing Action kinds in the coding workflow module.
+  exact Git checkout and Revision observation in the repository module. Place review execution and
+  proposal-facing Action kinds in the coding workflow module.
   Sandbox providers expose only their provider-neutral Sandbox contract; they do not implement Git
   clone policy. Shared use by multiple workflows does not make a behavior Core.
 - **Composition:** Native coding and investigation workflows statically compose the repository
@@ -2119,3 +2119,23 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   same observable behavior.
 - **Reconsider when:** Independently distributed workflow modules require dynamic loading, or a
   non-workflow consumer proves a smaller reusable repository boundary.
+
+## D084 — Coding no longer owns an implicit repository setup/check contract
+
+- **Status:** Accepted deletion after Core/workflow boundary review — 2026-08-20
+- **Decision:** Remove `.dorf.toml`, repository setup commands, coding Check records, Check Evidence,
+  setup retry, and the associated coordinator stages. The coding workflow retains exact Git
+  Revision observation, deterministic ReviewPolicy over observed changed paths, selected review,
+  exact-Revision publication, and cleanup. No hidden convention or replacement configuration is
+  introduced.
+- **Why:** The repository file was an implicit Dorf-specific workflow input and its command/check
+  pipeline had become mistaken for a Core facility. A general image cannot promise arbitrary
+  repository dependencies, while silently asking repositories to adopt a Dorf contract is the
+  wrong boundary. Removing the unearned machinery is smaller and more truthful than relocating it.
+- **Proof:** The baseline schema contains no setup action, repository command, Check, or Check-linked
+  Evidence tables or columns. Coding reaches review directly after exact Git observation. Inspect,
+  follow, publication, release proof, and current authority docs contain no setup/check phase, and
+  the full Go, SQL, and PostgreSQL verification contract passes.
+- **Reconsider when:** A concrete workflow needs deterministic evaluation as an explicit accepted
+  input with its own result and recovery semantics. Add that workflow-owned contract from the real
+  use case; do not restore an ambient repository file or a generic Core Check primitive.

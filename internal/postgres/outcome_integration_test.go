@@ -17,7 +17,7 @@ func preparePublishedOutcomeJob(t *testing.T, store postgres.Store, label string
 	t.Helper()
 	ctx := context.Background()
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "outcome-"+label+fmt.Sprintf("-%d", time.Now().UnixNano()))
-	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/outcome.md"}, true, false)
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/outcome.md"})
 	if err != nil {
 		t.Fatal(err)
 	}

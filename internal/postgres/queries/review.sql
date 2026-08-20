@@ -10,18 +10,6 @@ join dorf.coding_to_proposal_inputs c on c.job_id=dorf.jobs.id
 where id=sqlc.arg(job_id)
 for update;
 
--- name: ListReviewCheckInputs :many
-select r.name,coalesce(e.id,'') as evidence_id
-from dorf.repository_commands r
-left join dorf.checks c
-  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
- and c.revision=sqlc.arg(revision)
- and c.state='passed' and c.exit_code=0
-left join dorf.evidence e
-  on e.id=c.evidence_id and e.job_id=c.job_id and e.check_id=c.id and e.revision=c.revision
-where r.job_id=sqlc.arg(job_id) and r.name in ('check','smoke')
-order by r.name;
-
 -- name: ListReviewPlans :many
 select job_id,revision,facts::text as facts,plan::text as plan,created_at
 from dorf.review_plans

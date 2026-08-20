@@ -169,7 +169,6 @@ prove_harness() {
     --reasoning low)"
   JOB_ID="$(jq -er .job_id <<<"$admission")"
   inspection="$(drive_job_until "$JOB_ID" '.observed_facts.agent_runs | any(.message_id != null and .turn_outcome != null)' "$harness turn")"
-  jq -e '.observed_facts.actions | any(.kind == "repository-setup" and .state == "succeeded")' <<<"$inspection" >/dev/null
   jq -e --arg harness "$harness" '.observed_facts.agent_runs | map(select(.harness == $harness and (.thread_id | length > 0) and .turn_outcome == "completed" and (.turn_id | length > 0))) | length == 1' <<<"$inspection" >/dev/null
   jq -e --arg source "$SOURCE_COMMIT" '
     (.observed_facts.messages | map(select(.sequence == 1)) | .[0].id) as $message_id |
@@ -184,7 +183,6 @@ prove_harness() {
       (.started_at | length > 0) and
       (.finished_at | length > 0)
     )) and
-    (.observed_facts.checks | length == 0) and
     ([.observed_facts.agent_runs[] | select(.role != "implement")] | length == 0) and
     .proposal == null
   ' <<<"$inspection" >/dev/null
@@ -199,7 +197,7 @@ prove_harness() {
     --arg source "$SOURCE_COMMIT" \
     --arg provider "$PROVIDER_CONNECTION" \
     --arg job "$JOB_ID" \
-    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"repository setup and one real no-change implementation AgentRun",observed:{repository_setup:"succeeded",implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",checks:"not run or claimed",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
+    '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"one real no-change implementation AgentRun",observed:{implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Job spine",cleanup_state:"complete"}' \
     >"$EVIDENCE_DIR/$harness-image-proof.json"
   JOB_ID=""
 }

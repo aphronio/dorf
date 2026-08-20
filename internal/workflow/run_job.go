@@ -15,13 +15,11 @@ import (
 )
 
 // CodingExecution is the coding workflow's explicit composition of reusable
-// Core execution with only its own setup, Revision, Check, and review policy.
+// Core execution with only its own Revision and review policy.
 type CodingExecution interface {
 	repository.Execution
 	BlobStore() blob.Store
-	ExecuteSetup(context.Context, spine.CodingJob, spine.Action) error
 	ObserveRevision(context.Context, spine.CodingJob, spine.AgentRun) error
-	ExecuteCheck(context.Context, spine.CodingJob, spine.Check) error
 	PlanReview(context.Context, spine.CodingJob) error
 	RunReview(context.Context, spine.CodingJob, string) error
 	ExecuteReviewCheckout(context.Context, spine.CodingJob, string, spine.Action) error
@@ -33,7 +31,6 @@ type FactStepResultV1 struct {
 
 func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
-func checkStepName(id string) string    { return "dorf/check/v1/" + id }
 func reviewPolicyStepName(job, revision string) string {
 	return fmt.Sprintf("dorf/review-policy/v1/%s/%s", job, revision)
 }
@@ -61,8 +58,6 @@ func RunJob(ctx context.Context, service CodingExecution, store postgres.Store, 
 		switch work.Kind {
 		case WorkAction:
 			err = runSandboxAction(ctx, service, store, job, snapshot, work)
-		case WorkSetupRepository:
-			err = runSetupStep(ctx, service, store, job, work)
 		case WorkRunReviewer:
 			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.RunReview(workCtx, job, work.FactID)
@@ -80,8 +75,6 @@ func RunJob(ctx context.Context, service CodingExecution, store postgres.Store, 
 			return work, nil
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
-		case WorkRunChecks:
-			err = runCheckStep(ctx, service, store, job, work)
 		case WorkChooseReview:
 			err = runFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
 				return service.PlanReview(workCtx, job)
@@ -118,22 +111,6 @@ func observeAgentRun(ctx context.Context, service CodingExecution, job spine.Cod
 		return service.ObserveAgentRun(ctx, job.Job, run)
 	}
 	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
-}
-
-func runSetupStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
-	setup, err := store.BeginSetup(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if setup.ID != work.FactID {
-		return fmt.Errorf("selected setup Action changed from %s to %s", work.FactID, setup.ID)
-	}
-	if setup.State == spine.ActionSucceeded || setup.State == spine.ActionFailed {
-		return nil
-	}
-	return absurdruntime.RunActionStep(ctx, setup.ID, func(workCtx context.Context) error {
-		return service.ExecuteSetup(workCtx, job, setup)
-	})
 }
 
 func runDeliveryStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
@@ -249,32 +226,6 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 		}
 		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)
 	})
-}
-
-func runCheckStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
-	declared, err := store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	for _, declaration := range declared {
-		if spine.CheckID(job.ID, job.Revision, declaration.Name) != work.FactID {
-			continue
-		}
-		check, err := store.BeginCheck(ctx, job.ID, job.Revision, declaration.Name, declaration.Command)
-		if err != nil {
-			return err
-		}
-		if check.State == "passed" {
-			return nil
-		}
-		if err := runFactStep(ctx, checkStepName(check.ID), check.ID, func(workCtx context.Context) error {
-			return service.ExecuteCheck(workCtx, job, check)
-		}); err != nil {
-			return err
-		}
-		return nil
-	}
-	return fmt.Errorf("selected Check %s is not declared for Revision %s", work.FactID, job.Revision)
 }
 
 func runFactStep(ctx context.Context, name, factID string, work func(context.Context) error) error {

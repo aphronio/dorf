@@ -714,10 +714,6 @@ func agentRunFromValues(id, jobID, messageID string, state spine.AgentRunState, 
 	return spine.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
 }
 
-func checkFromValues(id, jobID, name, command, revision, state string, exitCode int32, evidenceID string, startedAt, finishedAt sql.NullTime) spine.Check {
-	return spine.Check{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision, State: state, ExitCode: int(exitCode), EvidenceID: evidenceID, StartedAt: timeValue(startedAt), FinishedAt: timeValue(finishedAt)}
-}
-
 func timeValue(value sql.NullTime) time.Time {
 	if !value.Valid {
 		return time.Time{}
@@ -877,143 +873,6 @@ func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) erro
 	return expectOneRows(q.InterruptAgentRun(ctx, dbsql.InterruptAgentRunParams{Reason: reason, RunID: runID}))
 }
 
-// BeginSetup returns only the setup generation currently selected by the Job.
-// A failed generation is terminal; RetrySetup selects a new scoped Action
-// without changing or deleting its retained Evidence.
-func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	desiredID := spine.ActionID(jobID, coding.ActionRepositorySetup)
-	currentID, err := queries.GetSetupActionIDForUpdate(ctx, jobID)
-	if err != nil {
-		return spine.Action{}, err
-	}
-	if currentID == "" {
-		if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup}); err != nil {
-			return spine.Action{}, err
-		}
-		if err := expectOneRows(queries.SelectInitialSetupAction(ctx, dbsql.SelectInitialSetupActionParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID})); err != nil {
-			return spine.Action{}, err
-		}
-		currentID = desiredID
-	}
-	row, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: currentID, JobID: jobID, Kind: coding.ActionRepositorySetup})
-	if err != nil {
-		return spine.Action{}, err
-	}
-	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt)
-	if err := tx.Commit(); err != nil {
-		return spine.Action{}, err
-	}
-	return action, nil
-}
-
-// SelectedSetup returns the exact setup generation selected by the Job without
-// creating one. Inspection and CurrentWork use this read-only boundary.
-func (s Store) SelectedSetup(ctx context.Context, jobID string) (*spine.Action, error) {
-	row, err := dbsql.New(s.DB).GetSelectedSetupAction(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	action := actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt)
-	return &action, nil
-}
-
-// RetrySetup atomically selects one explicit setup generation and admits its
-// durable wake after a terminal failure. retryID is the stable operator
-// identity for the Action/message pair.
-func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (spine.Action, spine.Message, bool, error) {
-	jobID = strings.TrimSpace(jobID)
-	retryID = strings.TrimSpace(retryID)
-	if jobID == "" || retryID == "" {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry requires a Job ID and stable retry identity")
-	}
-	if len(retryID) > 239 || strings.HasPrefix(retryID, "dorf:") || strings.HasPrefix(retryID, "review:") {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity must be at most 239 characters and must not use a reserved dorf: or review: prefix")
-	}
-	// The workflow owns this durable wake. Keep its stable retry identity in
-	// FromID, while avoiding the human namespace used by public callers.
-	messageInput, err := normalizeMessage(NewMessage{JobID: jobID, FromKind: spine.MessageFromWorkflow, FromID: retryID, Input: input})
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	locked, err := queries.GetSetupRetryJobForUpdate(ctx, jobID)
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	desiredID := spine.ScopedActionID(jobID, coding.ActionRepositorySetup, retryID)
-	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup})
-	if err == nil {
-		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ScopeKey, existingRow.CreatedAt, existingRow.SettledAt)
-		message, _, messageErr := admitMessageTx(ctx, tx, messageInput, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
-		if messageErr != nil {
-			return spine.Action{}, spine.Message{}, false, fmt.Errorf("recover setup retry Action/message pair: %w", messageErr)
-		}
-		if err := tx.Commit(); err != nil {
-			return spine.Action{}, spine.Message{}, false, err
-		}
-		return existing, message, false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	if !locked.AdmissionOpen || locked.OutcomeExists {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s admission is closed; repository setup cannot be retried", jobID)
-	}
-	if locked.SetupActionID == "" {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s has no selected repository setup Action to retry", jobID)
-	}
-	current, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: locked.SetupActionID, JobID: jobID, Kind: coding.ActionRepositorySetup})
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	if current.ID != locked.SetupActionID || current.JobID != jobID || current.Kind != coding.ActionRepositorySetup {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s conflicts with its selected identity", jobID, locked.SetupActionID)
-	}
-	if current.State != spine.ActionFailed {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s is %s, not terminal failed", jobID, locked.SetupActionID, current.State)
-	}
-	createdRows, err := queries.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup, ScopeKey: retryID})
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	if createdRows != 1 {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q was already used by another generation", retryID)
-	}
-	if err := expectOneRows(queries.SelectSetupRetry(ctx, dbsql.SelectSetupRetryParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID, PreviousActionID: sql.NullString{String: locked.SetupActionID, Valid: true}})); err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	message, messageCreated, err := admitMessageTx(ctx, tx, messageInput, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	if !messageCreated {
-		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q already has a message without its Action", retryID)
-	}
-	actionRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup})
-	if err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	action := actionFromValues(actionRow.ID, actionRow.JobID, actionRow.Kind, actionRow.State, actionRow.ScopeKey, actionRow.CreatedAt, actionRow.SettledAt)
-	if err := tx.Commit(); err != nil {
-		return spine.Action{}, spine.Message{}, false, err
-	}
-	return action, message, true, nil
-}
-
 func revisionCandidateTx(ctx context.Context, tx *sql.Tx, jobID string) (spine.AgentRun, bool, error) {
 	queries := dbsql.New(tx)
 	unsettled, err := queries.CountUnsettledInputs(ctx, jobID)
@@ -1055,7 +914,7 @@ func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spin
 	err := queries.InsertEvidence(ctx, dbsql.InsertEvidenceParams{
 		ID: evidence.ID, JobID: jobID, Digest: evidence.Digest, ByteSize: evidence.ByteSize,
 		MediaType: evidence.MediaType, Producer: evidence.Producer,
-		Kind: evidence.Kind, ActionID: evidence.ActionID, CheckID: evidence.CheckID, AgentRunID: evidence.AgentRunID, Revision: evidence.Revision,
+		Kind: evidence.Kind, ActionID: evidence.ActionID, AgentRunID: evidence.AgentRunID, Revision: evidence.Revision,
 		StartedAt: nullableTime(evidence.StartedAt), FinishedAt: nullableTime(evidence.FinishedAt),
 	})
 	if err != nil {
@@ -1065,7 +924,7 @@ func insertEvidence(ctx context.Context, tx *sql.Tx, jobID string, evidence spin
 	if err != nil {
 		return err
 	}
-	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.CheckID != evidence.CheckID || stored.AgentRunID != evidence.AgentRunID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
+	if stored.JobID != jobID || stored.Digest != evidence.Digest || stored.ByteSize != evidence.ByteSize || stored.MediaType != evidence.MediaType || stored.Producer != evidence.Producer || stored.Kind != evidence.Kind || stored.ActionID != evidence.ActionID || stored.AgentRunID != evidence.AgentRunID || stored.Revision != evidence.Revision || !stored.StartedAt.Equal(evidence.StartedAt) || !stored.FinishedAt.Equal(evidence.FinishedAt) {
 		return fmt.Errorf("Evidence identity %s conflicts with immutable retained metadata or content", evidence.ID)
 	}
 	return nil
@@ -1082,60 +941,6 @@ func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: value != ""}
 }
 
-func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.Evidence, observation spine.CommandObservation, checks []spine.DeclaredCheck) error {
-	if len(checks) == 0 {
-		return fmt.Errorf("repository setup requires at least one pinned Check")
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	setup, err := queries.GetSetupActionForUpdate(ctx, actionID)
-	if err != nil {
-		return err
-	}
-	if spine.ActionKind(setup.Kind) != coding.ActionRepositorySetup || evidence.ActionID != actionID || setup.SetupActionID != actionID {
-		return fmt.Errorf("setup Evidence does not match its Action")
-	}
-	if err := insertEvidence(ctx, tx, setup.JobID, evidence); err != nil {
-		return err
-	}
-	commands := append([]spine.DeclaredCheck{{Name: "prepare", Command: observation.Command}}, checks...)
-	for _, command := range commands {
-		if command.Name != "prepare" && command.Name != "check" && command.Name != "smoke" || strings.TrimSpace(command.Command) == "" {
-			return fmt.Errorf("invalid pinned repository command %q", command.Name)
-		}
-		if err := queries.InsertRepositoryCommand(ctx, dbsql.InsertRepositoryCommandParams{JobID: setup.JobID, Name: command.Name, Command: command.Command}); err != nil {
-			return err
-		}
-		storedCommand, err := queries.GetRepositoryCommand(ctx, dbsql.GetRepositoryCommandParams{JobID: setup.JobID, Name: command.Name})
-		if err != nil {
-			return err
-		}
-		if storedCommand != command.Command {
-			return fmt.Errorf("repository command %s conflicts with its pinned command", command.Name)
-		}
-	}
-	state, attention := spine.ActionSucceeded, ""
-	if observation.ExitCode != 0 {
-		state = spine.ActionFailed
-		attention = fmt.Sprintf("repository setup failed with exit %d; Evidence %s", observation.ExitCode, evidence.Digest)
-	}
-	if err := expectOneRows(queries.FinishSetupAction(ctx, dbsql.FinishSetupActionParams{State: state, ActionID: actionID})); err != nil {
-		return err
-	}
-	if attention == "" {
-		if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{JobID: setup.JobID, Source: sql.NullString{String: actionID, Valid: true}}); err != nil {
-			return err
-		}
-	} else if err := expectOneRows(queries.SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{Detail: sql.NullString{String: attention, Valid: true}, Source: sql.NullString{String: actionID, Valid: true}, JobID: setup.JobID})); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func (s Store) SetWorkflowAttention(ctx context.Context, jobID, source, detail string) error {
 	source, detail = strings.TrimSpace(source), strings.TrimSpace(detail)
 	if jobID == "" || source == "" || detail == "" {
@@ -1145,21 +950,6 @@ func (s Store) SetWorkflowAttention(ctx context.Context, jobID, source, detail s
 		detail = detail[:4096]
 	}
 	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{JobID: jobID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
-}
-
-func (s Store) DeclaredChecks(ctx context.Context, jobID string) ([]spine.DeclaredCheck, error) {
-	rows, err := dbsql.New(s.DB).ListDeclaredChecks(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	var checks []spine.DeclaredCheck
-	for _, row := range rows {
-		checks = append(checks, spine.DeclaredCheck{Name: row.Name, Command: row.Command})
-	}
-	if len(checks) == 0 {
-		return nil, fmt.Errorf("pinned repository contract has no Checks")
-	}
-	return checks, nil
 }
 
 func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID string, observation spine.RevisionObservation, evidence spine.Evidence) error {
@@ -1173,7 +963,7 @@ func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID strin
 	if err != nil {
 		return err
 	}
-	if evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.CheckID != "" || evidence.AgentRunID != runID || evidence.Kind != "git-revision" || evidence.Revision != observation.Revision ||
+	if evidence.ID != spine.EvidenceID(runID, "git-revision") || evidence.ActionID != "" || evidence.AgentRunID != runID || evidence.Kind != "git-revision" || evidence.Revision != observation.Revision ||
 		!ValidRevision(observation.ComparisonBase) || !ValidRevision(observation.Revision) || !ValidRevision(observation.Tree) {
 		return fmt.Errorf("Git Revision observation conflicts with durable comparison base, branch, AgentRun, or Evidence")
 	}
@@ -1233,121 +1023,6 @@ func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID strin
 		return err
 	}
 	return nil
-}
-
-func (s Store) BeginCheck(ctx context.Context, jobID, revision, name, command string) (spine.Check, error) {
-	id := spine.CheckID(jobID, revision, name)
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Check{}, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	if err := queries.InsertCheck(ctx, dbsql.InsertCheckParams{ID: id, JobID: jobID, Name: name, Command: command, Revision: revision}); err != nil {
-		return spine.Check{}, err
-	}
-	row, err := queries.GetCheck(ctx, id)
-	if err != nil {
-		return spine.Check{}, err
-	}
-	check := checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.StartedAt, row.FinishedAt)
-	if check.Command != command {
-		return spine.Check{}, fmt.Errorf("Check %s command conflicts at Revision %s", name, revision)
-	}
-	if err := tx.Commit(); err != nil {
-		return spine.Check{}, err
-	}
-	return check, nil
-}
-
-func (s Store) RecordCheck(ctx context.Context, check spine.Check, evidence spine.Evidence, observation spine.CommandObservation) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	locked, err := queries.GetCheckForUpdate(ctx, check.ID)
-	if err != nil {
-		return err
-	}
-	if locked.JobID != check.JobID || locked.Revision != check.Revision || locked.Command != observation.Command || evidence.CheckID != check.ID || evidence.Revision != locked.Revision {
-		return fmt.Errorf("Check observation conflicts with its exact Revision or command")
-	}
-	if err := insertEvidence(ctx, tx, locked.JobID, evidence); err != nil {
-		return err
-	}
-	state := "passed"
-	if observation.ExitCode != 0 {
-		state = "failed"
-	}
-	if err := queries.CompleteCheck(ctx, dbsql.CompleteCheckParams{State: state, ExitCode: sql.NullInt32{Int32: int32(observation.ExitCode), Valid: true}, EvidenceID: sql.NullString{String: evidence.ID, Valid: true}, StartedAt: nullableTime(observation.StartedAt), FinishedAt: nullableTime(observation.FinishedAt), ID: check.ID}); err != nil {
-		return err
-	}
-	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{JobID: locked.JobID, Source: sql.NullString{String: check.ID, Valid: true}}); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s Store) AdmitCheckMessage(ctx context.Context, check spine.Check) (spine.Message, bool, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	locked, err := queries.GetRevisionJobForUpdate(ctx, check.JobID)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	messageSender := dbsql.GetMessageBySenderParams{JobID: check.JobID, FromKind: spine.MessageFromWorkflow, FromID: check.ID}
-	existingRow, err := queries.GetMessageBySender(ctx, messageSender)
-	if err == nil {
-		existing := messageFromValues(existingRow.ID, existingRow.JobID, existingRow.FromKind, existingRow.FromID, existingRow.Sequence, existingRow.Input, existingRow.DeliveryIntent, existingRow.SteerTargetTurnID)
-		existing.AdmittedAt = existingRow.AdmittedAt
-		if err := tx.Commit(); err != nil {
-			return spine.Message{}, false, err
-		}
-		return existing, false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return spine.Message{}, false, err
-	}
-	if !locked.AdmissionOpen || locked.OutcomeExists {
-		return spine.Message{}, false, fmt.Errorf("Job %s no longer accepts failed Check feedback", check.JobID)
-	}
-	if locked.Revision != check.Revision || check.State != "failed" {
-		return spine.Message{}, false, fmt.Errorf("failed Check Message is not admissible for the current Check")
-	}
-	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, check.JobID); err != nil {
-		return spine.Message{}, false, fmt.Errorf("failed Check Message admission blocked: %w", err)
-	}
-	sequence, err := allocateMessageSequenceTx(ctx, tx, check.JobID)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	input := fmt.Sprintf("The deterministic %s Check failed at exact Revision %s with exit %d. Its command was %q and the observed output is retained as Evidence %s. Resolve the failure if code changes are warranted, keep the checkout clean, and return control so Dorf can observe either a new Revision or an unchanged HEAD before rerunning verification programmatically.", check.Name, check.Revision, check.ExitCode, check.Command, check.EvidenceID)
-	message := spine.Message{ID: spine.MessageID(check.JobID, spine.MessageFromWorkflow, check.ID), JobID: check.JobID, FromKind: spine.MessageFromWorkflow, FromID: check.ID, Sequence: sequence, Input: input, Intent: spine.MessageFollow}
-	if err := queries.InsertMessage(ctx, dbsql.InsertMessageParams{ID: message.ID, JobID: message.JobID, FromKind: message.FromKind, FromID: message.FromID, Sequence: message.Sequence, Input: message.Input, DeliveryIntent: message.Intent}); err != nil {
-		return spine.Message{}, false, err
-	}
-	runID := spine.AgentRunID(message.ID)
-	if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: message.JobID, MessageID: message.ID, SandboxID: spine.MainSandboxName(message.JobID)})); err != nil {
-		return spine.Message{}, false, err
-	}
-	if _, err := queries.ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{JobID: check.JobID, Source: sql.NullString{String: check.ID, Valid: true}}); err != nil {
-		return spine.Message{}, false, err
-	}
-	storedMessage, err := queries.GetMessageBySender(ctx, messageSender)
-	if err != nil {
-		return spine.Message{}, false, err
-	}
-	message.AdmittedAt = storedMessage.AdmittedAt
-	if err := tx.Commit(); err != nil {
-		return spine.Message{}, false, err
-	}
-	return message, true, nil
 }
 
 func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error {
@@ -1705,18 +1380,6 @@ func (s Store) Actions(ctx context.Context, jobID string) ([]spine.Action, error
 	return actions, nil
 }
 
-func (s Store) Checks(ctx context.Context, jobID string) ([]spine.Check, error) {
-	rows, err := dbsql.New(s.DB).ListChecks(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	var checks []spine.Check
-	for _, row := range rows {
-		checks = append(checks, checkFromValues(row.ID, row.JobID, row.Name, row.Command, row.Revision, row.State, row.ExitCode, row.EvidenceID, row.StartedAt, row.FinishedAt))
-	}
-	return checks, nil
-}
-
 func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, error) {
 	rows, err := dbsql.New(s.DB).ListEvidence(ctx, jobID)
 	if err != nil {
@@ -1724,7 +1387,7 @@ func (s Store) Evidence(ctx context.Context, jobID string) ([]spine.Evidence, er
 	}
 	var records []spine.Evidence
 	for _, row := range rows {
-		records = append(records, spine.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Kind: row.Kind, ActionID: row.ActionID, AgentRunID: row.AgentRunID, CheckID: row.CheckID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
+		records = append(records, spine.Evidence{ID: row.ID, Digest: row.Digest, ByteSize: row.ByteSize, MediaType: row.MediaType, Producer: row.Producer, Kind: row.Kind, ActionID: row.ActionID, AgentRunID: row.AgentRunID, Revision: row.Revision, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt})
 	}
 	return records, nil
 }

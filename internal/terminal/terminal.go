@@ -102,38 +102,12 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) RepositorySetup(ctx context.Context, job spine.CodingJob, action spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
-	if err != nil {
-		return spine.CommandObservation{}, nil, err
-	}
-	manager := e.repository()
-	contract, err := manager.LoadContract(ctx, owner)
-	if err != nil {
-		return spine.CommandObservation{}, nil, err
-	}
-	observation, err := manager.RunCommand(ctx, owner, action.ID, job.StartingRevision, contract.Prepare)
-	checks := make([]spine.DeclaredCheck, 0, len(contract.Checks))
-	for _, check := range contract.Checks {
-		checks = append(checks, spine.DeclaredCheck{Name: check.Name, Command: check.Command})
-	}
-	return observation, checks, err
-}
-
 func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return spine.RevisionObservation{}, err
 	}
 	return e.repository().ObserveRevision(ctx, owner, branch, revision)
-}
-
-func (e Externals) RepositoryCheck(ctx context.Context, job spine.CodingJob, check spine.Check) (spine.CommandObservation, error) {
-	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
-	if err != nil {
-		return spine.CommandObservation{}, err
-	}
-	return e.repository().RunCommand(ctx, owner, check.ID, job.Revision, check.Command)
 }
 
 func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJob) (policy.ChangeFacts, error) {

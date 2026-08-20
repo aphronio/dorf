@@ -47,8 +47,6 @@ const (
 	BarrierBeforeSubmit          = "before-submit"
 	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
 	BarrierHarnessActive         = "harness-active"
-	BarrierSetupComplete         = "setup-complete-before-record"
-	BarrierCheckExited           = "check-exited-before-record"
 	BarrierPushAccepted          = "push-accepted-before-record"
 	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
 	BarrierRouteRevoked          = "route-revoked-before-record"

@@ -29,7 +29,6 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
-	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -108,8 +107,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return workflowCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
-	case "setup-retry":
-		return setupRetry(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
 		return worker(ctx, client, cfg, args[1:], stdout, stderr)
 	case "evidence":
@@ -521,7 +518,6 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
 	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
 	base := set.String("base", "", "explicit GitHub base branch")
-	contractPath := set.String("contract", "", "local repository contract to validate")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -534,18 +530,6 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	}
 	checks := doctor.Run(ctx, db, cfg, profile, *connection)
 	checks = appendProfileVerificationCheck(checks, profile)
-	if *contractPath != "" {
-		contents, readErr := os.ReadFile(*contractPath)
-		if readErr == nil {
-			_, readErr = repository.ParseContract(string(contents))
-		}
-		detail := "ready"
-		status := "ready"
-		if readErr != nil {
-			status, detail = "failed", readErr.Error()+"; provide commands.prepare and Go-first commands.check/smoke"
-		}
-		checks = append(checks, doctor.Check{Name: "repository-contract", Status: status, Detail: detail})
-	}
 	githubValues := []string{*cloneURL, *githubRepository, *githubInstallation, *base}
 	wantsGitHub := false
 	completeGitHub := true
@@ -696,28 +680,6 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": "queued"})
 }
 
-func setupRetry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("setup-retry", flag.ContinueOnError)
-	set.SetOutput(stderr)
-	retryID := set.String("id", "", "stable operator identity for this retry generation")
-	inputFile := set.String("input-file", "", "file containing the durable repair/wake note")
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 1 {
-		return fmt.Errorf("setup-retry requires one Job ID")
-	}
-	input, err := readInput(*inputFile, "setup-retry", "repair note")
-	if err != nil {
-		return err
-	}
-	action, message, created, err := workflow.RetrySetup(ctx, store, client, set.Arg(0), *retryID, input)
-	if err != nil {
-		return err
-	}
-	return writeJSON(stdout, map[string]any{"job_id": action.JobID, "action_id": action.ID, "action_state": action.State, "message_id": message.ID, "retry_created": created, "wake_sequence": message.Sequence})
-}
-
 func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -820,7 +782,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			"outcome":                        snapshot.Outcome,
 			"observed_facts": map[string]any{
 				"actions": snapshot.Actions, "agent_runs": agentRuns, "revisions": snapshot.Revisions,
-				"checks": snapshot.Checks, "evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
+				"evidence": snapshot.Evidence, "review_plans": snapshot.ReviewPlans,
 				"sandboxes": snapshot.Sandboxes, "messages": messages,
 			},
 			"execution": executions,
@@ -992,18 +954,7 @@ func evidenceCommand(ctx context.Context, store postgres.Store, evidenceStore bl
 		}
 		fmt.Fprintf(stdout, "%s sha256=%s bytes=%d verified\n", record.ID, record.Digest, record.ByteSize)
 	}
-	declared, err := store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	checks, err := store.Checks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, evidenceStore); err != nil {
-		return fmt.Errorf("current Revision %s readiness Evidence: %w", job.Revision, err)
-	}
-	fmt.Fprintf(stdout, "Revision %s: proving Evidence artifacts independently verified against Check rows\n", job.Revision)
+	fmt.Fprintf(stdout, "Revision %s: retained Evidence blobs independently verified\n", job.Revision)
 	return nil
 }
 
@@ -1090,10 +1041,10 @@ func openClosed(open bool) string {
 
 func renderWorkflow(output io.Writer, work workflow.Work) {
 	fmt.Fprintln(output, "\nWorkflow")
-	fmt.Fprintln(output, "  Sandbox → repository clone → Setup → provider Route → Message → AgentRun → Revision → Checks → ReviewPolicy")
-	fmt.Fprintln(output, "                                                        ↑                                        │")
-	fmt.Fprintln(output, "                                                        └──── feedback ← review AgentRun ←────────┤ review")
-	fmt.Fprintln(output, "                                                                                                 └ no review")
+	fmt.Fprintln(output, "  Sandbox → repository clone → provider Route → Message → AgentRun → Revision → ReviewPolicy")
+	fmt.Fprintln(output, "                                                ↑                                  │")
+	fmt.Fprintln(output, "                                                └──── feedback ← review AgentRun ←──┤ review")
+	fmt.Fprintln(output, "                                                                                   └ no review")
 	fmt.Fprintln(output, "  ready exact Revision → Proposal → Outcome → Cleanup")
 	fmt.Fprintf(output, "  → current: %s", work.Description())
 	if work.Detail != "" {
@@ -1205,6 +1156,6 @@ func renderWorkflowExecutionAttention(output io.Writer, job spine.Job, execution
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|setup-retry|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

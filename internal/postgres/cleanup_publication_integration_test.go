@@ -14,7 +14,7 @@ func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, spin
 	t.Helper()
 	_, store, _ := testDatabase(t)
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "cleanup-publication-"+label)
-	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/cleanup.md"}, true, false)
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/cleanup.md"})
 	if err != nil {
 		t.Fatal(err)
 	}

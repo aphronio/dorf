@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 )
 
 const (
-	commandEvidenceProducer = "dorf-command-observer"
+	commandEvidenceProducer = "dorf-git-observer"
 	reviewEvidenceProducer  = "dorf-agent-review"
 )
 
@@ -41,94 +40,8 @@ func StartsImplementationTurn(message Message, run AgentRun) bool {
 		message.Intent == MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
 }
 
-type commandEvidenceObservation struct {
-	Identity        string    `json:"identity"`
-	Revision        string    `json:"revision"`
-	Producer        string    `json:"producer"`
-	Command         string    `json:"command"`
-	ExitCode        int       `json:"exit_code"`
-	StartedAt       time.Time `json:"started_at"`
-	FinishedAt      time.Time `json:"finished_at"`
-	Stdout          string    `json:"stdout"`
-	Stderr          string    `json:"stderr"`
-	StdoutTruncated bool      `json:"stdout_truncated"`
-	StderrTruncated bool      `json:"stderr_truncated"`
-	Redactions      []string  `json:"redactions"`
-}
-
-func VerifyRevisionEvidence(jobID, revision string, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store) error {
-	checksByID := make(map[string]Check, len(checks))
-	for _, check := range checks {
-		checksByID[check.ID] = check
-	}
-	recordsByID := make(map[string]Evidence, len(records))
-	for _, record := range records {
-		recordsByID[record.ID] = record
-	}
-	declarations := append([]DeclaredCheck(nil), declared...)
-	sort.Slice(declarations, func(i, j int) bool { return declarations[i].Name < declarations[j].Name })
-	seen := map[string]bool{}
-	for _, declaration := range declarations {
-		checkID := CheckID(jobID, revision, declaration.Name)
-		fail := func(format string, args ...any) error {
-			return fmt.Errorf("Check %s: %s", declaration.Name, fmt.Sprintf(format, args...))
-		}
-		if declaration.Name == "" || declaration.Command == "" || seen[declaration.Name] {
-			return fail("declared Check identity is empty or duplicated")
-		}
-		seen[declaration.Name] = true
-		check, ok := checksByID[checkID]
-		if !ok {
-			return fail("current-Revision Check row is missing")
-		}
-		if check.JobID != jobID || check.Revision != revision || check.Name != declaration.Name || check.Command != declaration.Command {
-			return fail("persisted Check facts do not match the declaration and exact Revision")
-		}
-		if check.State != "passed" || check.ExitCode != 0 {
-			return fail("persisted Check outcome is %s with exit %d", check.State, check.ExitCode)
-		}
-		if check.EvidenceID == "" {
-			return fail("passing Check has no Evidence reference")
-		}
-		record, ok := recordsByID[check.EvidenceID]
-		if !ok {
-			return fail("referenced Evidence metadata is missing")
-		}
-		if record.ID != EvidenceID(check.ID, "check-output") || record.CheckID != check.ID || record.ActionID != "" || record.AgentRunID != "" || record.Revision != revision || record.Kind != "check-output" || record.MediaType != "application/vnd.dorf.observation+json" || record.Producer != commandEvidenceProducer {
-			return fail("Evidence metadata does not match its Check, Revision, producer, or digest")
-		}
-		if record.StartedAt.IsZero() || record.FinishedAt.Before(record.StartedAt) || !record.StartedAt.Equal(check.StartedAt) || !record.FinishedAt.Equal(check.FinishedAt) {
-			return fail("Evidence timing does not match the bounded Check observation")
-		}
-		contents, err := blobs.ReadVerified(record.Digest, record.ByteSize)
-		if err != nil {
-			return fail("immutable Evidence blob is unavailable or invalid: %v", err)
-		}
-		var observation commandEvidenceObservation
-		decoder := json.NewDecoder(bytes.NewReader(contents))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&observation); err != nil {
-			return fail("observation artifact is invalid: %v", err)
-		} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			return fail("observation artifact has trailing content")
-		}
-		if observation.Identity != check.ID || observation.Revision != revision || observation.Producer != record.Producer || observation.Command != check.Command || observation.ExitCode != check.ExitCode || !observation.StartedAt.Equal(check.StartedAt) || !observation.FinishedAt.Equal(check.FinishedAt) {
-			return fail("observation artifact facts do not match the persisted Check row")
-		}
-	}
-	if len(declarations) == 0 {
-		return fmt.Errorf("no declared Checks prove Revision %s", revision)
-	}
-	return nil
-}
-
-func AssessReviewReadiness(job CodingJob, declared []DeclaredCheck, checks []Check, records []Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
-	err := VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, blobs)
+func AssessReviewReadiness(job CodingJob, records []Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []Delivery) ReadinessAssessment {
 	assessment := ReadinessAssessment{Revision: job.Revision}
-	if err != nil {
-		assessment.Reason = "current-Revision proving Evidence is invalid: " + err.Error()
-		return assessment
-	}
 	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
 		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
 		return assessment
@@ -231,9 +144,9 @@ func AssessReviewReadiness(job CodingJob, declared []DeclaredCheck, checks []Che
 	}
 	assessment.Ready = true
 	if plan.Plan.Decision == "no-review" {
-		assessment.Reason = "Checks have observed Evidence and ReviewPolicy explicitly selected no agent review for the exact Revision"
+		assessment.Reason = "the exact Revision has observed Git Evidence and ReviewPolicy explicitly selected no agent review"
 	} else {
-		assessment.Reason = "Checks have observed Evidence and every selected Revision-bound review AgentRun returned feedback to the implementation thread"
+		assessment.Reason = "the exact Revision has observed Git Evidence and every selected review AgentRun returned feedback that was handled"
 	}
 	return assessment
 }
@@ -263,7 +176,7 @@ func verifyGitRevisionObservation(job CodingJob, run AgentRun, records []Evidenc
 			break
 		}
 	}
-	if observed.ID == "" || observed.AgentRunID != run.ID || observed.ActionID != "" || observed.CheckID != "" || observed.Revision != job.Revision || observed.Kind != "git-revision" || observed.Producer != commandEvidenceProducer || observed.MediaType != "application/vnd.dorf.observation+json" {
+	if observed.ID == "" || observed.AgentRunID != run.ID || observed.ActionID != "" || observed.Revision != job.Revision || observed.Kind != "git-revision" || observed.Producer != commandEvidenceProducer || observed.MediaType != "application/vnd.dorf.observation+json" {
 		return fmt.Errorf("Evidence metadata does not match the AgentRun and exact Revision")
 	}
 	if observed.StartedAt.IsZero() || observed.FinishedAt.Before(observed.StartedAt) {
@@ -301,7 +214,7 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []Evidence, blobs blob.S
 	if !observedOK {
 		return fmt.Errorf("observed Evidence metadata is missing or has the wrong stable identity")
 	}
-	if observed.ActionID != "" || observed.CheckID != "" || observed.AgentRunID != run.ID || observed.Revision != run.InputRevision || observed.Producer != reviewEvidenceProducer || observed.Kind != "review-observation" || observed.MediaType != "application/vnd.dorf.observation+json" || !observed.StartedAt.Equal(run.StartedAt) || !observed.FinishedAt.Equal(run.FinishedAt) {
+	if observed.ActionID != "" || observed.AgentRunID != run.ID || observed.Revision != run.InputRevision || observed.Producer != reviewEvidenceProducer || observed.Kind != "review-observation" || observed.MediaType != "application/vnd.dorf.observation+json" || !observed.StartedAt.Equal(run.StartedAt) || !observed.FinishedAt.Equal(run.FinishedAt) {
 		return fmt.Errorf("observed Evidence does not match its AgentRun, Revision, producer, or bounded timing")
 	}
 	observedBytes, err := blobs.ReadVerified(observed.Digest, observed.ByteSize)

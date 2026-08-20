@@ -84,7 +84,6 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Turn** | One request/response cycle in a Harness Thread |
 | **Role** | The bounded responsibility and capability envelope of an AgentRun |
 | **Action** | Code-owned work that changes external state and must be reconciled safely |
-| **Check** | Code-owned observation or assertion |
 | **Artifact** | An immutable named deliverable retained for a Job and retrievable by clients |
 | **Evidence** | Immutable observed proof tied to the fact it supports |
 | **Outcome** | A typed consumer-defined terminal result, when used, separate from resource cleanup |
@@ -106,7 +105,7 @@ flowchart TD
     Admit --> Contract["Pin caller contract, capabilities, and budget"]
     Contract --> Sandbox["Create isolated Sandbox when needed"]
     Sandbox --> Work["Run deterministic operations and bounded AgentRuns"]
-    Work --> Observe["Observe facts, Checks, Artifacts, and external effects"]
+    Work --> Observe["Observe facts, Artifacts, Evidence, and external effects"]
     Observe --> Decide{"Workflow or client policy"}
     Decide -->|"more work"| Work
     Decide -->|"human judgment"| Attention["Request input through a client"]
@@ -127,8 +126,8 @@ retain the product facts needed to explain and recover the Job.
 ### Coding to a verified proposal
 
 A client delegates a complete coding goal. The coding workflow creates an isolated clone and branch,
-runs repository setup, lets an implementation AgentRun commit, observes an exact Revision, runs
-deterministic Checks, selects only useful review, and publishes an exact-Revision pull request.
+lets an implementation AgentRun commit, observes an exact Revision, selects only useful review, and
+publishes an exact-Revision pull request.
 GitHub merge, close, or explicit abandonment supplies the workflow outcome; the workflow then
 requests cleanup, which remains a separate observable fact.
 
@@ -152,7 +151,7 @@ request, or cleanup timing.
 | Sequence durable input and reconcile retries | Implement, investigate, synthesize, or review |
 | Run declared commands, schemas, probes, and policy rules | Interpret evidence that has no complete mechanical rule |
 | Observe external authorities and retain Artifacts | Explain uncertainty and material decisions |
-| Hash, pin, invalidate, and render Evidence | Decide how to respond to human, Check, or reviewer Messages |
+| Hash, pin, invalidate, and render Evidence | Decide how to respond to human or reviewer Messages |
 | Reconcile external effects and cleanup | Request human judgment when no safe default exists |
 
 This boundary is a product promise: agent context is not spent rediscovering facts that code can
@@ -186,7 +185,7 @@ proof.
 
 ```text
 L0  Existing tools       Harnesses, Sandbox providers, source hosts, APIs, provider SDKs
-L1  Deterministic edge   Actions, Checks, capability enforcement, adapters
+L1  Deterministic edge   Actions, observations, capability enforcement, adapters
 L2  Durable custody      Job identity, inbox, AgentRuns, Artifacts, Evidence, recovery, requested cleanup
 L3  Core consumers        clients, external products, and native workflows
 L4  Triggers and views    translate intent and render the same Job facts
@@ -206,7 +205,7 @@ The intended authoring unit is a versioned, inspectable workflow contract:
 - deterministic operations and external effects;
 - bounded AgentRun judgment points;
 - budgets and human-attention boundaries;
-- Checks, evaluation cases, and honest terminal conditions; and
+- evaluation cases and honest terminal conditions; and
 - source, version, provenance, and upgrade policy.
 
 Agents and developers should author ordinary code with excellent scaffolding, machine-readable
@@ -233,7 +232,7 @@ Core contract and must not create a privileged execution path.
 - speculative matrices of Harnesses, Sandboxes, models, languages, and providers;
 - one mutable Sandbox shared by unrelated simultaneous Jobs;
 - persistent Worker personalities or cross-Job memory without a real consumer;
-- a mandatory agent review ritual when deterministic Checks suffice;
+- a mandatory agent review ritual without an earned workflow need;
 - compatibility with superseded Python, SQLite, Worker, Room, or Assignment representations; and
 - preservation or migration of pre-release local data.
 

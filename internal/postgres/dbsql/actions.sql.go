@@ -11,26 +11,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const finishSetupAction = `-- name: FinishSetupAction :execrows
-update dorf.actions
-set state=$1,settled_at=coalesce(settled_at,clock_timestamp())
-where dorf.actions.id=$2
-  and (state='unsettled' or state=$1)
-`
-
-type FinishSetupActionParams struct {
-	State    spine.ActionState
-	ActionID string
-}
-
-func (q *Queries) FinishSetupAction(ctx context.Context, arg FinishSetupActionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, finishSetupAction, arg.State, arg.ActionID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getAction = `-- name: GetAction :one
 select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions
@@ -132,27 +112,6 @@ func (q *Queries) GetScopedAction(ctx context.Context, arg GetScopedActionParams
 		&i.CreatedAt,
 		&i.SettledAt,
 	)
-	return i, err
-}
-
-const getSetupActionForUpdate = `-- name: GetSetupActionForUpdate :one
-select a.job_id,a.kind,coalesce(c.setup_action_id,'') as setup_action_id
-from dorf.actions a
-join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
-where a.id=$1
-for update of a,c
-`
-
-type GetSetupActionForUpdateRow struct {
-	JobID         string
-	Kind          spine.ActionKind
-	SetupActionID string
-}
-
-func (q *Queries) GetSetupActionForUpdate(ctx context.Context, actionID string) (GetSetupActionForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getSetupActionForUpdate, actionID)
-	var i GetSetupActionForUpdateRow
-	err := row.Scan(&i.JobID, &i.Kind, &i.SetupActionID)
 	return i, err
 }
 

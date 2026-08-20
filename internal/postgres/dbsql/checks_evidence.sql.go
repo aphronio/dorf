@@ -11,97 +11,9 @@ import (
 	"time"
 )
 
-const completeCheck = `-- name: CompleteCheck :exec
-update dorf.checks
-set state=$1,exit_code=$2,
-    evidence_id=$3,started_at=$4,
-    finished_at=$5
-where id=$6
-`
-
-type CompleteCheckParams struct {
-	State      string
-	ExitCode   sql.NullInt32
-	EvidenceID sql.NullString
-	StartedAt  sql.NullTime
-	FinishedAt sql.NullTime
-	ID         string
-}
-
-func (q *Queries) CompleteCheck(ctx context.Context, arg CompleteCheckParams) error {
-	_, err := q.db.ExecContext(ctx, completeCheck,
-		arg.State,
-		arg.ExitCode,
-		arg.EvidenceID,
-		arg.StartedAt,
-		arg.FinishedAt,
-		arg.ID,
-	)
-	return err
-}
-
-const getCheck = `-- name: GetCheck :one
-select id,job_id,name,command,revision,state,coalesce(exit_code,0)::integer as exit_code,
-       coalesce(evidence_id,'') as evidence_id,started_at,finished_at
-from dorf.checks
-where id=$1
-`
-
-type GetCheckRow struct {
-	ID         string
-	JobID      string
-	Name       string
-	Command    string
-	Revision   string
-	State      string
-	ExitCode   int32
-	EvidenceID string
-	StartedAt  sql.NullTime
-	FinishedAt sql.NullTime
-}
-
-func (q *Queries) GetCheck(ctx context.Context, id string) (GetCheckRow, error) {
-	row := q.db.QueryRowContext(ctx, getCheck, id)
-	var i GetCheckRow
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Name,
-		&i.Command,
-		&i.Revision,
-		&i.State,
-		&i.ExitCode,
-		&i.EvidenceID,
-		&i.StartedAt,
-		&i.FinishedAt,
-	)
-	return i, err
-}
-
-const getCheckForUpdate = `-- name: GetCheckForUpdate :one
-select job_id,revision,command
-from dorf.checks
-where id=$1
-for update
-`
-
-type GetCheckForUpdateRow struct {
-	JobID    string
-	Revision string
-	Command  string
-}
-
-func (q *Queries) GetCheckForUpdate(ctx context.Context, id string) (GetCheckForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getCheckForUpdate, id)
-	var i GetCheckForUpdateRow
-	err := row.Scan(&i.JobID, &i.Revision, &i.Command)
-	return i, err
-}
-
 const getEvidenceIdentity = `-- name: GetEvidenceIdentity :one
 select job_id,digest,byte_size,media_type,producer,kind,
-       coalesce(action_id,'') as action_id,coalesce(check_id,'') as check_id,
-       coalesce(agent_run_id,'') as agent_run_id,
+       coalesce(action_id,'') as action_id,coalesce(agent_run_id,'') as agent_run_id,
        coalesce(revision,'') as revision,started_at,finished_at
 from dorf.evidence
 where id=$1
@@ -115,7 +27,6 @@ type GetEvidenceIdentityRow struct {
 	Producer   string
 	Kind       string
 	ActionID   string
-	CheckID    string
 	AgentRunID string
 	Revision   string
 	StartedAt  time.Time
@@ -133,7 +44,6 @@ func (q *Queries) GetEvidenceIdentity(ctx context.Context, id string) (GetEviden
 		&i.Producer,
 		&i.Kind,
 		&i.ActionID,
-		&i.CheckID,
 		&i.AgentRunID,
 		&i.Revision,
 		&i.StartedAt,
@@ -142,60 +52,16 @@ func (q *Queries) GetEvidenceIdentity(ctx context.Context, id string) (GetEviden
 	return i, err
 }
 
-const getRepositoryCommand = `-- name: GetRepositoryCommand :one
-select command
-from dorf.repository_commands
-where job_id=$1 and name=$2
-`
-
-type GetRepositoryCommandParams struct {
-	JobID string
-	Name  string
-}
-
-func (q *Queries) GetRepositoryCommand(ctx context.Context, arg GetRepositoryCommandParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, getRepositoryCommand, arg.JobID, arg.Name)
-	var command string
-	err := row.Scan(&command)
-	return command, err
-}
-
-const insertCheck = `-- name: InsertCheck :exec
-insert into dorf.checks(id,job_id,name,command,revision,state)
-values($1,$2,$3,$4,$5,'running')
-on conflict do nothing
-`
-
-type InsertCheckParams struct {
-	ID       string
-	JobID    string
-	Name     string
-	Command  string
-	Revision string
-}
-
-func (q *Queries) InsertCheck(ctx context.Context, arg InsertCheckParams) error {
-	_, err := q.db.ExecContext(ctx, insertCheck,
-		arg.ID,
-		arg.JobID,
-		arg.Name,
-		arg.Command,
-		arg.Revision,
-	)
-	return err
-}
-
 const insertEvidence = `-- name: InsertEvidence :exec
 insert into dorf.evidence(
     id,job_id,digest,byte_size,media_type,producer,kind,
-    action_id,check_id,agent_run_id,revision,started_at,finished_at
+    action_id,agent_run_id,revision,started_at,finished_at
 )
 values(
     $1,$2,$3,$4,
     $5,$6,$7,
     nullif($8::text,''),nullif($9::text,''),
-    nullif($10::text,''),
-    nullif($11::text,''),$12,$13
+    nullif($10::text,''),$11,$12
 )
 on conflict(id) do nothing
 `
@@ -209,7 +75,6 @@ type InsertEvidenceParams struct {
 	Producer   string
 	Kind       string
 	ActionID   string
-	CheckID    string
 	AgentRunID string
 	Revision   string
 	StartedAt  sql.NullTime
@@ -226,7 +91,6 @@ func (q *Queries) InsertEvidence(ctx context.Context, arg InsertEvidenceParams) 
 		arg.Producer,
 		arg.Kind,
 		arg.ActionID,
-		arg.CheckID,
 		arg.AgentRunID,
 		arg.Revision,
 		arg.StartedAt,
@@ -235,119 +99,9 @@ func (q *Queries) InsertEvidence(ctx context.Context, arg InsertEvidenceParams) 
 	return err
 }
 
-const insertRepositoryCommand = `-- name: InsertRepositoryCommand :exec
-insert into dorf.repository_commands(job_id,name,command)
-values($1,$2,$3)
-on conflict do nothing
-`
-
-type InsertRepositoryCommandParams struct {
-	JobID   string
-	Name    string
-	Command string
-}
-
-func (q *Queries) InsertRepositoryCommand(ctx context.Context, arg InsertRepositoryCommandParams) error {
-	_, err := q.db.ExecContext(ctx, insertRepositoryCommand, arg.JobID, arg.Name, arg.Command)
-	return err
-}
-
-const listChecks = `-- name: ListChecks :many
-select id,job_id,name,command,revision,state,
-       coalesce(exit_code,0)::integer as exit_code,
-       coalesce(evidence_id,'') as evidence_id,
-       started_at,finished_at
-from dorf.checks
-where job_id=$1
-order by started_at nulls last,id
-`
-
-type ListChecksRow struct {
-	ID         string
-	JobID      string
-	Name       string
-	Command    string
-	Revision   string
-	State      string
-	ExitCode   int32
-	EvidenceID string
-	StartedAt  sql.NullTime
-	FinishedAt sql.NullTime
-}
-
-func (q *Queries) ListChecks(ctx context.Context, jobID string) ([]ListChecksRow, error) {
-	rows, err := q.db.QueryContext(ctx, listChecks, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListChecksRow
-	for rows.Next() {
-		var i ListChecksRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.JobID,
-			&i.Name,
-			&i.Command,
-			&i.Revision,
-			&i.State,
-			&i.ExitCode,
-			&i.EvidenceID,
-			&i.StartedAt,
-			&i.FinishedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listDeclaredChecks = `-- name: ListDeclaredChecks :many
-select name,command
-from dorf.repository_commands
-where job_id=$1 and name in ('check','smoke')
-order by case name when 'check' then 1 else 2 end
-`
-
-type ListDeclaredChecksRow struct {
-	Name    string
-	Command string
-}
-
-func (q *Queries) ListDeclaredChecks(ctx context.Context, jobID string) ([]ListDeclaredChecksRow, error) {
-	rows, err := q.db.QueryContext(ctx, listDeclaredChecks, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListDeclaredChecksRow
-	for rows.Next() {
-		var i ListDeclaredChecksRow
-		if err := rows.Scan(&i.Name, &i.Command); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listEvidence = `-- name: ListEvidence :many
 select id,digest,byte_size,media_type,producer,kind,
-       coalesce(action_id,'') as action_id,coalesce(check_id,'') as check_id,
-       coalesce(agent_run_id,'') as agent_run_id,
+       coalesce(action_id,'') as action_id,coalesce(agent_run_id,'') as agent_run_id,
        coalesce(revision,'') as revision,started_at,finished_at
 from dorf.evidence
 where job_id=$1
@@ -362,7 +116,6 @@ type ListEvidenceRow struct {
 	Producer   string
 	Kind       string
 	ActionID   string
-	CheckID    string
 	AgentRunID string
 	Revision   string
 	StartedAt  time.Time
@@ -386,7 +139,6 @@ func (q *Queries) ListEvidence(ctx context.Context, jobID string) ([]ListEvidenc
 			&i.Producer,
 			&i.Kind,
 			&i.ActionID,
-			&i.CheckID,
 			&i.AgentRunID,
 			&i.Revision,
 			&i.StartedAt,

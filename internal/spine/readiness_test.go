@@ -2,8 +2,6 @@ package spine
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,79 +10,20 @@ import (
 	policy "github.com/aphronio/dorf/internal/review"
 )
 
-func TestRevisionReadinessRejectsMissingTamperedAndRowMismatchedEvidence(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		mutate func(*testing.T, blob.Store, *Check, *Evidence)
-		want   string
-	}{
-		{
-			name: "missing blob",
-			mutate: func(t *testing.T, store blob.Store, _ *Check, record *Evidence) {
-				t.Helper()
-				if err := os.Remove(evidencePath(store.Root, record.Digest)); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "unavailable or invalid",
-		},
-		{
-			name: "tampered blob",
-			mutate: func(t *testing.T, store blob.Store, _ *Check, record *Evidence) {
-				t.Helper()
-				path := evidencePath(store.Root, record.Digest)
-				if err := os.Chmod(path, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte("tampered"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-			want: "independent rehash",
-		},
-		{
-			name: "blob versus row",
-			mutate: func(t *testing.T, store blob.Store, check *Check, record *Evidence) {
-				t.Helper()
-				observation := CommandObservation{Command: "go vet ./...", StartedAt: check.StartedAt, FinishedAt: check.FinishedAt}
-				contents, err := commandArtifact(check.ID, check.Revision, observation)
-				if err != nil {
-					t.Fatal(err)
-				}
-				blob, err := store.Put(contents)
-				if err != nil {
-					t.Fatal(err)
-				}
-				record.Digest, record.ByteSize = blob.Digest, blob.ByteSize
-			},
-			want: "observation artifact facts",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			store, jobID, revision, declared, check, record := readinessFixture(t)
-			test.mutate(t, store, &check, &record)
-			err := VerifyRevisionEvidence(jobID, revision, declared, []Check{check}, []Evidence{record}, store)
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("err=%v want=%q", err, test.want)
-			}
-		})
-	}
-}
-
 func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testing.T) {
-	store, jobID, revision, declared, check, record := readinessFixture(t)
+	store, jobID, revision := readinessFixture(t)
 	job := CodingJob{Job: Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
-	withoutPlan := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, nil, nil, nil)
+	withoutPlan := AssessReviewReadiness(job, nil, store, nil, nil, nil)
 	if withoutPlan.Ready || !strings.Contains(withoutPlan.Reason, "no explicit persisted") {
 		t.Fatalf("missing plan readiness=%#v", withoutPlan)
 	}
 	noReview := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
-	explicit := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &noReview, nil, nil)
+	explicit := AssessReviewReadiness(job, nil, store, &noReview, nil, nil)
 	if !explicit.Ready || !strings.Contains(explicit.Reason, "explicitly selected no agent review") {
 		t.Fatalf("explicit no-review readiness=%#v", explicit)
 	}
 	pending := AgentRun{ID: "agent-run-pending", JobID: jobID, MessageID: "message-pending", Role: "implement", State: AgentRunPending}
-	lateInput := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &noReview, nil, []Delivery{{Message: Message{ID: pending.MessageID}, AgentRun: pending}})
+	lateInput := AssessReviewReadiness(job, nil, store, &noReview, nil, []Delivery{{Message: Message{ID: pending.MessageID}, AgentRun: pending}})
 	if lateInput.Ready || !strings.Contains(lateInput.Reason, "not terminal") {
 		t.Fatalf("late input satisfied readiness: %#v", lateInput)
 	}
@@ -93,12 +32,12 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	failedRun := AgentRun{ID: "agent-run-failed", JobID: jobID, MessageID: failedMessage.ID, Role: "implement", InputRevision: revision, State: AgentRunFailed, TurnOutcome: "failed"}
 	recoveryRun := AgentRun{ID: "agent-run-recovery", JobID: jobID, MessageID: recoveryMessage.ID, Role: "implement", InputRevision: revision, State: AgentRunCompleted, TurnOutcome: "completed"}
 	recoveryEvidence := gitObservationEvidence(t, store, job, recoveryRun, time.Now().UTC().Truncate(time.Microsecond))
-	recovered := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, recoveryEvidence}, store, &noReview, nil, []Delivery{{Message: failedMessage, AgentRun: failedRun}, {Message: recoveryMessage, AgentRun: recoveryRun}})
+	recovered := AssessReviewReadiness(job, []Evidence{recoveryEvidence}, store, &noReview, nil, []Delivery{{Message: failedMessage, AgentRun: failedRun}, {Message: recoveryMessage, AgentRun: recoveryRun}})
 	if !recovered.Ready {
 		t.Fatalf("later successful observed Follow did not recover old failure: %#v", recovered)
 	}
 	selected := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.RoleCriticalBoundary}}}
-	incomplete := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record}, store, &selected, nil, nil)
+	incomplete := AssessReviewReadiness(job, nil, store, &selected, nil, nil)
 	if incomplete.Ready || !strings.Contains(incomplete.Reason, "has not returned a feedback Message") {
 		t.Fatalf("incomplete selected readiness=%#v", incomplete)
 	}
@@ -113,13 +52,13 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	}
 	observed := reviewObservationEvidence(t, store, run, ReviewCheckoutObservation{Revision: revision, Tree: strings.Repeat("c", 40)})
 	foreign := Message{ID: feedbackID, JobID: jobID, FromKind: MessageFromAgent, FromID: "agent-run-foreign", Sequence: 3, Input: "Foreign feedback.", Intent: MessageFollow}
-	wrong := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run}, []Delivery{{Message: foreign}})
+	wrong := AssessReviewReadiness(job, []Evidence{observed}, store, &selected, []ReviewRunView{run}, []Delivery{{Message: foreign}})
 	if wrong.Ready || !strings.Contains(wrong.Reason, "has not returned a feedback Message") {
 		t.Fatalf("foreign feedback Message satisfied readiness: %#v", wrong)
 	}
 	feedback := Message{ID: feedbackID, JobID: jobID, FromKind: MessageFromAgent, FromID: runID, Sequence: 3, Input: "Consider simplifying the boundary.", Intent: MessageFollow}
 	implementation := AgentRun{ID: AgentRunID(feedback.ID), JobID: jobID, MessageID: feedback.ID, Role: "implement", InputRevision: revision, State: AgentRunCompleted, TurnOutcome: "completed"}
-	handled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed}, store, &selected, []ReviewRunView{run}, []Delivery{{Message: feedback, AgentRun: implementation}})
+	handled := AssessReviewReadiness(job, []Evidence{observed}, store, &selected, []ReviewRunView{run}, []Delivery{{Message: feedback, AgentRun: implementation}})
 	if handled.Ready || !strings.Contains(handled.Reason, "no valid Git observation") {
 		t.Fatalf("feedback without Git observation satisfied readiness: %#v", handled)
 	}
@@ -128,14 +67,14 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	stale.ID = "zz-stale-same-role-run"
 	stale.InputRevision = strings.Repeat("f", 40)
 	stale.State = AgentRunFailed
-	settled := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{record, observed, gitEvidence}, store, &selected, []ReviewRunView{run, stale}, []Delivery{{Message: feedback, AgentRun: implementation}})
+	settled := AssessReviewReadiness(job, []Evidence{observed, gitEvidence}, store, &selected, []ReviewRunView{run, stale}, []Delivery{{Message: feedback, AgentRun: implementation}})
 	if !settled.Ready || !strings.Contains(settled.Reason, "returned feedback") {
 		t.Fatalf("stale same-Role review blocked exact-Revision readiness=%#v", settled)
 	}
 }
 
 func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *testing.T) {
-	store, jobID, revision, declared, check, checkEvidence := readinessFixture(t)
+	store, jobID, revision := readinessFixture(t)
 	job := CodingJob{Job: Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
 	plan := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
 	message := Message{
@@ -147,17 +86,17 @@ func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *test
 		InputRevision: revision, State: AgentRunCompleted, TurnID: "turn-new", TurnOutcome: "completed",
 	}
 	observed := gitObservationEvidence(t, store, job, run, time.Now().UTC().Truncate(time.Microsecond))
-	ready := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence, observed}, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
+	ready := AssessReviewReadiness(job, []Evidence{observed}, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
 	if !ready.Ready {
 		t.Fatalf("observed terminal-target steer fallback was not ready: %#v", ready)
 	}
 
-	missing := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence}, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
+	missing := AssessReviewReadiness(job, nil, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
 	if missing.Ready || !strings.Contains(missing.Reason, "no valid Git observation") {
 		t.Fatalf("unobserved terminal-target steer fallback satisfied readiness: %#v", missing)
 	}
 	run.State, run.TurnID, run.TurnOutcome = AgentRunFailed, "", "failed"
-	failed := AssessReviewReadiness(job, declared, []Check{check}, []Evidence{checkEvidence}, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
+	failed := AssessReviewReadiness(job, nil, store, &plan, nil, []Delivery{{Message: message, AgentRun: run}})
 	if failed.Ready || !strings.Contains(failed.Reason, "has not completed successfully") {
 		t.Fatalf("failed terminal-target steer fallback satisfied readiness: %#v", failed)
 	}
@@ -204,44 +143,9 @@ func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView
 	}
 }
 
-func readinessFixture(t *testing.T) (blob.Store, string, string, []DeclaredCheck, Check, Evidence) {
+func readinessFixture(t *testing.T) (blob.Store, string, string) {
 	t.Helper()
 	store := blob.Store{Root: t.TempDir()}
 	jobID, revision := "job-readiness", strings.Repeat("a", 40)
-	declared := []DeclaredCheck{{Name: "check", Command: "go test ./..."}}
-	checkID := CheckID(jobID, revision, "check")
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	observation := CommandObservation{Command: declared[0].Command, StartedAt: now, FinishedAt: now.Add(time.Second)}
-	contents, err := commandArtifact(checkID, revision, observation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blob, err := store.Put(contents)
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := Evidence{ID: EvidenceID(checkID, "check-output"), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: "check-output", CheckID: checkID, Revision: revision, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
-	check := Check{ID: checkID, JobID: jobID, Name: declared[0].Name, Command: declared[0].Command, Revision: revision, State: "passed", EvidenceID: record.ID, StartedAt: observation.StartedAt, FinishedAt: observation.FinishedAt}
-	return store, jobID, revision, declared, check, record
-}
-
-func commandArtifact(identity, revision string, observation CommandObservation) ([]byte, error) {
-	return json.Marshal(struct {
-		Identity        string    `json:"identity"`
-		Revision        string    `json:"revision"`
-		Producer        string    `json:"producer"`
-		Command         string    `json:"command"`
-		ExitCode        int       `json:"exit_code"`
-		StartedAt       time.Time `json:"started_at"`
-		FinishedAt      time.Time `json:"finished_at"`
-		Stdout          string    `json:"stdout"`
-		Stderr          string    `json:"stderr"`
-		StdoutTruncated bool      `json:"stdout_truncated"`
-		StderrTruncated bool      `json:"stderr_truncated"`
-		Redactions      []string  `json:"redactions"`
-	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
-}
-
-func evidencePath(root, digest string) string {
-	return filepath.Join(root, "sha256", digest[:2], digest[2:])
+	return store, jobID, revision
 }

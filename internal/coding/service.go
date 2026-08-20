@@ -12,23 +12,17 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const commandEvidenceProducer = "dorf-command-observer"
+const commandEvidenceProducer = "dorf-git-observer"
 
 const (
-	ActionRepositorySetup   spine.ActionKind = "repository-setup"
 	ActionRepositoryPush    spine.ActionKind = "repository-push"
 	ActionGitHubPullRequest spine.ActionKind = "github-pull-request"
 	ActionReviewCheckout    spine.ActionKind = "review-checkout"
 )
 
 type Store interface {
-	RecordSetup(context.Context, string, spine.Evidence, spine.CommandObservation, []spine.DeclaredCheck) error
 	RecordRevisionObservation(context.Context, string, string, spine.RevisionObservation, spine.Evidence) error
-	RecordCheck(context.Context, spine.Check, spine.Evidence, spine.CommandObservation) error
-	AdmitCheckMessage(context.Context, spine.Check) (spine.Message, bool, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
-	DeclaredChecks(context.Context, string) ([]spine.DeclaredCheck, error)
-	Checks(context.Context, string) ([]spine.Check, error)
 	Evidence(context.Context, string) ([]spine.Evidence, error)
 	Actions(context.Context, string) ([]spine.Action, error)
 	RecordReviewPolicy(context.Context, spine.ReviewPlanRecord) error
@@ -44,8 +38,6 @@ type Store interface {
 
 type Externals interface {
 	Harness() string
-	RepositorySetup(context.Context, spine.CodingJob, spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error)
-	RepositoryCheck(context.Context, spine.CodingJob, spine.Check) (spine.CommandObservation, error)
 	RepositoryChangeFacts(context.Context, spine.CodingJob) (policy.ChangeFacts, error)
 	PrepareReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) error
 	VerifyReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.ReviewCheckoutObservation, error)
@@ -60,7 +52,7 @@ type RepositoryExecution interface {
 	ObserveRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
 }
 
-// Service owns setup, Revision, Check, and review execution for the
+// Service owns Revision and review execution for the
 // coding-to-proposal workflow while delegating shared custody to Core.
 type Service struct {
 	RepositoryExecution
@@ -77,32 +69,6 @@ func NewService(repository RepositoryExecution, store Store, externals Externals
 
 func (s Service) BlobStore() blob.Store { return s.blobs }
 
-func (s Service) ExecuteSetup(ctx context.Context, job spine.CodingJob, action spine.Action) error {
-	observation, declared, err := s.externals.RepositorySetup(ctx, job, action)
-	if err != nil {
-		if attentionNeeded(err) {
-			return s.setWorkflowAttention(ctx, job.ID, action.ID, err)
-		}
-		return err
-	}
-	observation = canonicalCommandObservation(observation)
-	artifact, err := commandArtifact(action.ID, job.StartingRevision, observation)
-	if err != nil {
-		return err
-	}
-	evidenceRecord, err := s.retainEvidence(action.ID, "repository-setup", action.ID, "", "", job.StartingRevision, observation.StartedAt, observation.FinishedAt, artifact)
-	if err != nil {
-		return err
-	}
-	if err := s.reachWorkflow(ctx, spine.BarrierSetupComplete, job.ID, action.ID); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	return s.store.RecordSetup(ctx, action.ID, evidenceRecord, observation, declared)
-}
-
 func (s Service) ObserveRevision(ctx context.Context, job spine.CodingJob, run spine.AgentRun) error {
 	observation, err := s.RepositoryExecution.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
 	if err != nil {
@@ -117,7 +83,7 @@ func (s Service) ObserveRevision(ctx context.Context, job spine.CodingJob, run s
 	if err != nil {
 		return err
 	}
-	evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", run.ID, "", observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+	evidenceRecord, err := s.retainEvidence(run.ID, "git-revision", "", run.ID, observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
 	if err != nil {
 		return err
 	}
@@ -125,46 +91,6 @@ func (s Service) ObserveRevision(ctx context.Context, job spine.CodingJob, run s
 		return err
 	}
 	return s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
-}
-
-func (s Service) ExecuteCheck(ctx context.Context, job spine.CodingJob, check spine.Check) error {
-	if check.State == "passed" {
-		return nil
-	}
-	if check.State == "failed" {
-		return s.handleFailedCheck(ctx, check)
-	}
-	observation, err := s.externals.RepositoryCheck(ctx, job, check)
-	if err != nil {
-		if attentionNeeded(err) {
-			return s.setWorkflowAttention(ctx, job.ID, check.ID, err)
-		}
-		return err
-	}
-	observation = canonicalCommandObservation(observation)
-	artifact, err := commandArtifact(check.ID, job.Revision, observation)
-	if err != nil {
-		return err
-	}
-	evidenceRecord, err := s.retainEvidence(check.ID, "check-output", "", "", check.ID, job.Revision, observation.StartedAt, observation.FinishedAt, artifact)
-	if err != nil {
-		return err
-	}
-	if err := s.reachWorkflow(ctx, spine.BarrierCheckExited, job.ID, check.ID); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	if err := s.store.RecordCheck(ctx, check, evidenceRecord, observation); err != nil {
-		return err
-	}
-	check.State, check.ExitCode, check.EvidenceID = "passed", observation.ExitCode, evidenceRecord.ID
-	if observation.ExitCode != 0 {
-		check.State = "failed"
-		return s.handleFailedCheck(ctx, check)
-	}
-	return nil
 }
 
 func (s Service) requireClaim(ctx context.Context) error {
@@ -208,40 +134,12 @@ func attentionNeeded(err error) bool {
 	return errors.As(err, &attention) && attention.AttentionNeeded()
 }
 
-func (s Service) handleFailedCheck(ctx context.Context, check spine.Check) error {
-	_, _, err := s.store.AdmitCheckMessage(ctx, check)
-	return err
-}
-
-func canonicalCommandObservation(observation spine.CommandObservation) spine.CommandObservation {
-	observation.StartedAt = observation.StartedAt.UTC().Truncate(time.Microsecond)
-	observation.FinishedAt = observation.FinishedAt.UTC().Truncate(time.Microsecond)
-	return observation
-}
-
-func commandArtifact(identity, revision string, observation spine.CommandObservation) ([]byte, error) {
-	return json.Marshal(struct {
-		Identity        string    `json:"identity"`
-		Revision        string    `json:"revision"`
-		Producer        string    `json:"producer"`
-		Command         string    `json:"command"`
-		ExitCode        int       `json:"exit_code"`
-		StartedAt       time.Time `json:"started_at"`
-		FinishedAt      time.Time `json:"finished_at"`
-		Stdout          string    `json:"stdout"`
-		Stderr          string    `json:"stderr"`
-		StdoutTruncated bool      `json:"stdout_truncated"`
-		StderrTruncated bool      `json:"stderr_truncated"`
-		Redactions      []string  `json:"redactions"`
-	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
-}
-
-func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (spine.Evidence, error) {
+func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, revision string, startedAt, finishedAt time.Time, contents []byte) (spine.Evidence, error) {
 	stored, err := s.blobs.Put(contents)
 	if err != nil {
 		return spine.Evidence{}, err
 	}
-	return spine.Evidence{ID: spine.EvidenceID(ownerID, kind), Digest: stored.Digest, ByteSize: stored.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: kind, ActionID: actionID, AgentRunID: agentRunID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
+	return spine.Evidence{ID: spine.EvidenceID(ownerID, kind), Digest: stored.Digest, ByteSize: stored.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: kind, ActionID: actionID, AgentRunID: agentRunID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
 }
 
 func (s Service) reach(ctx context.Context, point string, delivery spine.Delivery) error {
@@ -249,11 +147,4 @@ func (s Service) reach(ctx context.Context, point string, delivery spine.Deliver
 		return nil
 	}
 	return s.barrier.Reach(ctx, point, delivery)
-}
-
-func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
-	if s.barrier == nil {
-		return nil
-	}
-	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }

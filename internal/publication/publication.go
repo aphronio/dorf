@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,7 +58,6 @@ func (e *AttentionError) Error() string { return e.Reason }
 
 type readinessView struct {
 	Assessment spine.ReadinessAssessment
-	Checks     []spine.Check
 	Evidence   []spine.Evidence
 	Plan       *spine.ReviewPlanRecord
 	ReviewRuns []spine.ReviewRunView
@@ -67,14 +65,7 @@ type readinessView struct {
 
 func (s Service) readiness(ctx context.Context, job spine.CodingJob, intentAt time.Time) (readinessView, error) {
 	var view readinessView
-	declared, err := s.Store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return view, err
-	}
-	view.Checks, err = s.Store.Checks(ctx, job.ID)
-	if err != nil {
-		return view, err
-	}
+	var err error
 	view.Evidence, err = s.Store.Evidence(ctx, job.ID)
 	if err != nil {
 		return view, err
@@ -103,7 +94,7 @@ func (s Service) readiness(ctx context.Context, job spine.CodingJob, intentAt ti
 		}
 	}
 	view.Plan = plan
-	view.Assessment = spine.AssessReviewReadiness(job, declared, view.Checks, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
+	view.Assessment = spine.AssessReviewReadiness(job, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
 	return view, nil
 }
 
@@ -216,7 +207,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 	if !readiness.Assessment.Ready || readiness.Assessment.Revision != job.Revision {
 		return s.block(ctx, job, pullAction, "publication lost exact-Revision readiness: "+readiness.Assessment.Reason)
 	}
-	body := Body(job, readiness.Assessment, readiness.Checks, readiness.Evidence, readiness.Plan, readiness.ReviewRuns)
+	body := Body(job, readiness.Assessment, readiness.Evidence, readiness.Plan, readiness.ReviewRuns)
 	bodyDigest := BodyDigest(body)
 	title := Title(job.Goal)
 	owner := strings.SplitN(job.GitHubRepository, "/", 2)[0]
@@ -374,24 +365,13 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job spine.CodingJob, readiness spine.ReadinessAssessment, checks []spine.Check, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
+func Body(job spine.CodingJob, readiness spine.ReadinessAssessment, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
 	}
 	var lines []string
-	lines = append(lines, "## Goal", "", projectGoal(job.Goal), "", "## Exact proposal", "", "- Base: `"+job.BaseBranch+"`", "- Head: `"+job.Branch+"`", "- Revision: `"+job.Revision+"`", "", "## Checks", "")
-	currentChecks := make([]spine.Check, 0)
-	for _, check := range checks {
-		if check.Revision == job.Revision {
-			currentChecks = append(currentChecks, check)
-		}
-	}
-	sort.Slice(currentChecks, func(i, j int) bool { return currentChecks[i].Name < currentChecks[j].Name })
-	for _, check := range currentChecks {
-		lines = append(lines, fmt.Sprintf("- %s: %s (Evidence `%s`, sha256 `%s`)", check.Name, check.State, check.EvidenceID, digests[check.EvidenceID]))
-	}
-	lines = append(lines, "", "## Selected review", "")
+	lines = append(lines, "## Goal", "", projectGoal(job.Goal), "", "## Exact proposal", "", "- Base: `"+job.BaseBranch+"`", "- Head: `"+job.Branch+"`", "- Revision: `"+job.Revision+"`", "", "## Selected review", "")
 	runsByRole := make(map[string]spine.ReviewRunView, len(runs))
 	for _, run := range runs {
 		if run.JobID == job.ID && run.InputRevision == job.Revision {

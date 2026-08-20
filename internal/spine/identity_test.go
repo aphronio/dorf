@@ -37,7 +37,4 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	if ReviewRequestMessageID(jobA, revisionA, role) != MessageID(jobA, MessageFromWorkflow, ReviewRequestFromID(revisionA, role)) || ReviewRequestMessageID(jobA, revisionA, role) == ReviewRequestMessageID(jobA, revisionB, role) {
 		t.Fatal("review request Message identity is not stable and Revision-scoped")
 	}
-	if CheckID(jobA, revisionA, "check") != CheckID(jobA, revisionA, "check") || CheckID(jobA, revisionA, "check") == CheckID(jobA, revisionB, "check") || CheckID(jobA, revisionA, "check") == CheckID(jobA, revisionA, "smoke") {
-		t.Fatal("Check identity is not stable and scoped to semantic name plus exact Revision")
-	}
 }

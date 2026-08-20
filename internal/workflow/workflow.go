@@ -340,21 +340,3 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	}
 	return message, created, nil
 }
-
-// RetrySetup atomically records a new setup Action generation and its FIFO
-// wake, then emits the recoverable Absurd event hint.
-func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID, retryID, input string) (spine.Action, spine.Message, bool, error) {
-	action, message, created, err := store.RetrySetup(ctx, jobID, retryID, input)
-	if err != nil {
-		return action, message, created, err
-	}
-	if action.State == spine.ActionFailed {
-		return action, message, false, nil
-	}
-	// Events carry no delivery truth. Re-emission is the recovery path for a
-	// crash after the Action/message transaction and before this wake hint.
-	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(message.JobID, message.Sequence), WakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
-		return action, message, created, fmt.Errorf("setup retry message %s sequence %d was accepted, but its wake hint failed; retry the same setup identity and input: %w", message.ID, message.Sequence, err)
-	}
-	return action, message, created, nil
-}

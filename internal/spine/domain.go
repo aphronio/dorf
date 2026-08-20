@@ -224,18 +224,6 @@ type Action struct {
 	SettledAt time.Time   `json:"settled_at,omitempty"`
 }
 
-type CommandObservation struct {
-	Command    string
-	ExitCode   int
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Stdout     []byte
-	Stderr     []byte
-	StdoutCut  bool
-	StderrCut  bool
-	Redactions []string
-}
-
 type RevisionObservation struct {
 	ComparisonBase string    `json:"comparison_base"`
 	Revision       string    `json:"revision"`
@@ -256,24 +244,6 @@ type Revision struct {
 	ObservedAt     time.Time `json:"observed_at"`
 }
 
-type Check struct {
-	ID         string    `json:"id"`
-	JobID      string    `json:"job_id"`
-	Name       string    `json:"name"`
-	Command    string    `json:"command"`
-	Revision   string    `json:"revision"`
-	State      string    `json:"state"`
-	ExitCode   int       `json:"exit_code"`
-	EvidenceID string    `json:"evidence_id,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
-}
-
-type DeclaredCheck struct {
-	Name    string
-	Command string
-}
-
 type Evidence struct {
 	ID         string    `json:"id"`
 	Digest     string    `json:"digest"`
@@ -283,7 +253,6 @@ type Evidence struct {
 	Kind       string    `json:"kind"`
 	ActionID   string    `json:"action_id,omitempty"`
 	AgentRunID string    `json:"agent_run_id,omitempty"`
-	CheckID    string    `json:"check_id,omitempty"`
 	Revision   string    `json:"revision,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitempty"`
 	FinishedAt time.Time `json:"finished_at,omitempty"`
@@ -417,10 +386,6 @@ func ActionID(jobID string, kind ActionKind) string {
 
 func ScopedActionID(jobID string, kind ActionKind, scope string) string {
 	return "action-" + digest(jobID+"\x00"+string(kind)+"\x00"+scope, 24)
-}
-
-func CheckID(jobID, revision, name string) string {
-	return "check-" + digest(jobID+"\x00"+revision+"\x00"+name, 24)
 }
 
 func EvidenceID(ownerID, kind string) string {

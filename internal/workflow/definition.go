@@ -12,8 +12,7 @@ import (
 )
 
 // ProviderCapability names an optional provider primitive beyond Dorf's
-// baseline Sandbox and Harness contracts. Software dependencies belong to a
-// repository setup script or custom image, not this vocabulary.
+// baseline Sandbox and Harness contracts.
 type ProviderCapability string
 
 // Presentation is optional human copy owned by one workflow revision. It is
@@ -44,9 +43,7 @@ func CodingToProposalDefinition() Definition {
 			Operations: map[string]string{
 				string(WorkComplete):        "Complete",
 				string(WorkAttention):       "Needs attention",
-				string(WorkSetupRepository): "Running repository setup",
 				string(WorkObserveRevision): "Inspecting implementation checkout",
-				string(WorkRunChecks):       "Running deterministic Checks",
 				string(WorkChooseReview):    "Choosing deterministic review",
 				string(WorkPublishProposal): "Publishing exact-Revision Proposal",
 				string(WorkObserveProposal): "Waiting for Proposal decision",
@@ -83,8 +80,6 @@ func (d Definition) ActionLabel(kind spine.ActionKind) string {
 		return "Cloning repository"
 	case investigation.ActionRepositoryRestore:
 		return "Restoring retained repository"
-	case coding.ActionRepositorySetup:
-		return "Setting up repository"
 	case coding.ActionRepositoryPush:
 		return "Publishing Revision"
 	case coding.ActionGitHubPullRequest:

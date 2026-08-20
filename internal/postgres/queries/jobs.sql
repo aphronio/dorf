@@ -136,52 +136,6 @@ update dorf.jobs
 set cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end
 where id=sqlc.arg(job_id);
 
--- name: GetSetupActionIDForUpdate :one
-select coalesce(setup_action_id,'') as setup_action_id
-from dorf.coding_to_proposal_inputs
-where job_id=sqlc.arg(job_id)
-for update;
-
--- name: GetSelectedSetupAction :one
-select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
-from dorf.coding_to_proposal_inputs c
-join dorf.actions a on a.id=c.setup_action_id and a.job_id=c.job_id
-where c.job_id=sqlc.arg(job_id);
-
--- name: SelectInitialSetupAction :execrows
-update dorf.coding_to_proposal_inputs
-set setup_action_id=sqlc.arg(action_id)
-where job_id=sqlc.arg(job_id) and setup_action_id is null;
-
--- name: GetSetupRetryJobForUpdate :one
-select coalesce(c.setup_action_id,'') as setup_action_id,j.admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
-from dorf.jobs j
-join dorf.coding_to_proposal_inputs c on c.job_id=j.id
-where j.id=sqlc.arg(job_id)
-for update of j,c;
-
--- name: SelectSetupRetry :execrows
-with selected as (
-  update dorf.coding_to_proposal_inputs c
-  set setup_action_id=sqlc.arg(action_id)
-  where c.job_id=sqlc.arg(job_id) and c.setup_action_id=sqlc.arg(previous_action_id)
-    and exists (
-      select 1 from dorf.jobs j
-      where j.id=c.job_id and (j.workflow_attention_source is null or j.workflow_attention_source=sqlc.arg(previous_action_id))
-    )
-    and exists (
-      select 1 from dorf.actions a
-      where a.id=sqlc.arg(previous_action_id) and a.job_id=c.job_id
-        and a.kind='repository-setup' and a.state='failed'
-    )
-  returning c.job_id
-)
-update dorf.jobs j
-set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-from selected
-where j.id=selected.job_id;
-
 -- name: SetWorkflowAttention :execrows
 update dorf.jobs
 set workflow_attention=sqlc.arg(detail),

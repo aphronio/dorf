@@ -7,7 +7,7 @@ import (
 
 func TestRolePromptRequestsConciseOrdinaryText(t *testing.T) {
 	facts := ChangeFacts{Revision: "rev", BaseRevision: "base"}
-	prompt := RolePrompt(RoleGeneral, facts, []string{"test"})
+	prompt := RolePrompt(RoleGeneral, facts)
 	if containsAny(prompt, "JSON", "FindingOutputContract", "affected_roles", "Return exactly one") {
 		t.Fatalf("prompt still describes structured output: %s", prompt)
 	}

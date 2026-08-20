@@ -361,17 +361,6 @@ func (q *Queries) NextMessageSequence(ctx context.Context, jobID string) (int64,
 const nextWakeSequence = `-- name: NextWakeSequence :one
 select coalesce(
     (
-        select m.sequence
-        from dorf.jobs j
-        join dorf.coding_to_proposal_inputs c on c.job_id=j.id
-        join dorf.actions a on a.id=c.setup_action_id
-        join dorf.job_messages m
-          on m.job_id=j.id and m.from_kind='workflow' and m.from_id=a.scope_key
-        where j.id=$1 and c.setup_action_id=a.id
-          and a.kind='repository-setup' and a.scope_key<>''
-          and a.state='unsettled'
-    ),
-    (
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id

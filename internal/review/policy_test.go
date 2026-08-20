@@ -11,23 +11,20 @@ func TestReviewPolicyTable(t *testing.T) {
 	tests := []struct {
 		name     string
 		paths    []string
-		perf     bool
 		decision string
 		roles    []Role
 	}{
-		{"green docs only", []string{"README.md", "docs/review.md"}, false, "no-review", nil},
-		{"docs web marker stays documentation", []string{"docs/web/guide.md"}, false, "no-review", nil},
-		{"docs auth marker stays documentation", []string{"docs/auth/README.md"}, false, "no-review", nil},
-		{"browser UI", []string{"web/app.tsx"}, false, "selected", []Role{RoleBrowserUI}},
-		{"authentication authority", []string{"internal/auth/policy.go"}, false, "selected", []Role{RoleAuthAuthority}},
-		{"declared performance plus unknown selects general", []string{"internal/cache/cache.go"}, true, "selected", []Role{RoleGeneral, RolePerformance}},
-		{"covered UI plus declared performance", []string{"web/app.tsx"}, true, "selected", []Role{RoleBrowserUI, RolePerformance}},
-		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, false, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
-		{"unknown", []string{"internal/spine/service.go"}, false, "selected", []Role{RoleGeneral}},
+		{"docs only", []string{"README.md", "docs/review.md"}, "no-review", nil},
+		{"docs web marker stays documentation", []string{"docs/web/guide.md"}, "no-review", nil},
+		{"docs auth marker stays documentation", []string{"docs/auth/README.md"}, "no-review", nil},
+		{"browser UI", []string{"web/app.tsx"}, "selected", []Role{RoleBrowserUI}},
+		{"authentication authority", []string{"internal/auth/policy.go"}, "selected", []Role{RoleAuthAuthority}},
+		{"docs markers plus real UI and auth", []string{"docs/web/guide.md", "docs/auth/README.md", "web/app.tsx", "internal/auth/policy.go"}, "selected", []Role{RoleAuthAuthority, RoleBrowserUI}},
+		{"unknown", []string{"internal/spine/service.go"}, "selected", []Role{RoleGeneral}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			facts, err := FactsFromPaths(base, revision, test.paths, true, test.perf)
+			facts, err := FactsFromPaths(base, revision, test.paths)
 			if err != nil {
 				t.Fatal(err)
 			}

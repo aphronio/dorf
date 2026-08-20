@@ -18,25 +18,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func reviewCheckInputs(ctx context.Context, queries *dbsql.Queries, jobID, revision string) ([]string, error) {
-	rows, err := queries.ListReviewCheckInputs(ctx, dbsql.ListReviewCheckInputsParams{JobID: jobID, Revision: revision})
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(rows))
-	verified := 0
-	for _, row := range rows {
-		names = append(names, row.Name)
-		if row.EvidenceID != "" {
-			verified++
-		}
-	}
-	if len(rows) == 0 || verified != len(rows) {
-		return nil, fmt.Errorf("Revision %s is not review-admissible: %d of %d declared Checks have passing Evidence", revision, verified, len(rows))
-	}
-	return names, nil
-}
-
 func (s Store) ReviewPlans(ctx context.Context, jobID string) ([]spine.ReviewPlanRecord, error) {
 	rows, err := dbsql.New(s.DB).ListReviewPlans(ctx, jobID)
 	if err != nil {
@@ -109,10 +90,6 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 	if !job.AdmissionOpen || job.OutcomeExists {
 		return fmt.Errorf("Job %s cannot record a new review policy after admission closes or an Outcome is recorded", proposed.JobID)
 	}
-	declaredChecks, err := reviewCheckInputs(ctx, queries, proposed.JobID, proposed.Revision)
-	if err != nil {
-		return err
-	}
 	if err := ensureInputsTerminalForWorkflowTx(ctx, tx, proposed.JobID); err != nil {
 		return fmt.Errorf("review policy blocked: %w", err)
 	}
@@ -131,7 +108,7 @@ func (s Store) RecordReviewPolicy(ctx context.Context, proposed spine.ReviewPlan
 		}
 	}
 	for index, role := range proposed.Plan.Roles {
-		if _, err := createReviewRunTx(ctx, queries, proposed.JobID, proposed.Revision, string(role), proposed.Facts, declaredChecks, nextSequence+int64(index)); err != nil {
+		if _, err := createReviewRunTx(ctx, queries, proposed.JobID, proposed.Revision, string(role), proposed.Facts, nextSequence+int64(index)); err != nil {
 			return err
 		}
 	}
@@ -149,8 +126,8 @@ func clearReviewPolicyAttention(ctx context.Context, queries *dbsql.Queries, job
 	return err
 }
 
-func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts, declaredChecks []string, sequence int64) (string, error) {
-	input := policy.RolePrompt(policy.Role(role), facts, declaredChecks)
+func createReviewRunTx(ctx context.Context, queries *dbsql.Queries, jobID, revision, role string, facts policy.ChangeFacts, sequence int64) (string, error) {
+	input := policy.RolePrompt(policy.Role(role), facts)
 	fromID := spine.ReviewRequestFromID(revision, role)
 	message := spine.Message{
 		ID: spine.ReviewRequestMessageID(jobID, revision, role), JobID: jobID,
@@ -239,7 +216,7 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome s
 	}
 	if !policy.Allowed(policy.Role(run.Role)) || run.Capability != spine.ReviewReadOnlyCapability || run.State != spine.AgentRunCompleted ||
 		run.TurnID == "" || outcome.ID != run.TurnID || run.InputRevision != run.CurrentRevision || observed.Revision != run.InputRevision || observed.AgentRunID != runID ||
-		observed.ID != spine.EvidenceID(runID, "review-observation") || observed.Kind != "review-observation" || observed.ActionID != "" || observed.CheckID != "" {
+		observed.ID != spine.EvidenceID(runID, "review-observation") || observed.Kind != "review-observation" || observed.ActionID != "" {
 		return spine.Message{}, false, fmt.Errorf("review feedback conflicts with its completed exact-Revision reviewer AgentRun")
 	}
 	if !run.BoundaryReady {

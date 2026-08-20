@@ -57,7 +57,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.ID != spine.EvidenceID(run.ID, "review-observation") || record.AgentRunID != run.ID || record.ActionID != "" || record.CheckID != "" {
+	if record.ID != spine.EvidenceID(run.ID, "review-observation") || record.AgentRunID != run.ID || record.ActionID != "" {
 		t.Fatalf("review Evidence metadata = %#v", record)
 	}
 	contents, err := blobs.ReadVerified(record.Digest, record.ByteSize)

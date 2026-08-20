@@ -345,64 +345,6 @@ func (q *Queries) GetRevisionJobForUpdate(ctx context.Context, jobID string) (Ge
 	return i, err
 }
 
-const getSelectedSetupAction = `-- name: GetSelectedSetupAction :one
-select a.id,a.job_id,a.kind,a.state,a.scope_key,a.created_at,a.settled_at
-from dorf.coding_to_proposal_inputs c
-join dorf.actions a on a.id=c.setup_action_id and a.job_id=c.job_id
-where c.job_id=$1
-`
-
-func (q *Queries) GetSelectedSetupAction(ctx context.Context, jobID string) (DorfAction, error) {
-	row := q.db.QueryRowContext(ctx, getSelectedSetupAction, jobID)
-	var i DorfAction
-	err := row.Scan(
-		&i.ID,
-		&i.JobID,
-		&i.Kind,
-		&i.State,
-		&i.ScopeKey,
-		&i.CreatedAt,
-		&i.SettledAt,
-	)
-	return i, err
-}
-
-const getSetupActionIDForUpdate = `-- name: GetSetupActionIDForUpdate :one
-select coalesce(setup_action_id,'') as setup_action_id
-from dorf.coding_to_proposal_inputs
-where job_id=$1
-for update
-`
-
-func (q *Queries) GetSetupActionIDForUpdate(ctx context.Context, jobID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getSetupActionIDForUpdate, jobID)
-	var setup_action_id string
-	err := row.Scan(&setup_action_id)
-	return setup_action_id, err
-}
-
-const getSetupRetryJobForUpdate = `-- name: GetSetupRetryJobForUpdate :one
-select coalesce(c.setup_action_id,'') as setup_action_id,j.admission_open,
-       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
-from dorf.jobs j
-join dorf.coding_to_proposal_inputs c on c.job_id=j.id
-where j.id=$1
-for update of j,c
-`
-
-type GetSetupRetryJobForUpdateRow struct {
-	SetupActionID string
-	AdmissionOpen bool
-	OutcomeExists bool
-}
-
-func (q *Queries) GetSetupRetryJobForUpdate(ctx context.Context, jobID string) (GetSetupRetryJobForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getSetupRetryJobForUpdate, jobID)
-	var i GetSetupRetryJobForUpdateRow
-	err := row.Scan(&i.SetupActionID, &i.AdmissionOpen, &i.OutcomeExists)
-	return i, err
-}
-
 const insertAdmittedJob = `-- name: InsertAdmittedJob :execrows
 insert into dorf.jobs(
     id,admission_key,workflow_name,workflow_revision,goal,
@@ -671,61 +613,6 @@ func (q *Queries) NextRevisionGeneration(ctx context.Context, jobID string) (int
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
-}
-
-const selectInitialSetupAction = `-- name: SelectInitialSetupAction :execrows
-update dorf.coding_to_proposal_inputs
-set setup_action_id=$1
-where job_id=$2 and setup_action_id is null
-`
-
-type SelectInitialSetupActionParams struct {
-	ActionID sql.NullString
-	JobID    string
-}
-
-func (q *Queries) SelectInitialSetupAction(ctx context.Context, arg SelectInitialSetupActionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, selectInitialSetupAction, arg.ActionID, arg.JobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const selectSetupRetry = `-- name: SelectSetupRetry :execrows
-with selected as (
-  update dorf.coding_to_proposal_inputs c
-  set setup_action_id=$1
-  where c.job_id=$2 and c.setup_action_id=$3
-    and exists (
-      select 1 from dorf.jobs j
-      where j.id=c.job_id and (j.workflow_attention_source is null or j.workflow_attention_source=$3)
-    )
-    and exists (
-      select 1 from dorf.actions a
-      where a.id=$3 and a.job_id=c.job_id
-        and a.kind='repository-setup' and a.state='failed'
-    )
-  returning c.job_id
-)
-update dorf.jobs j
-set workflow_attention=null,workflow_attention_source=null,workflow_attention_at=null
-from selected
-where j.id=selected.job_id
-`
-
-type SelectSetupRetryParams struct {
-	ActionID         sql.NullString
-	JobID            string
-	PreviousActionID sql.NullString
-}
-
-func (q *Queries) SelectSetupRetry(ctx context.Context, arg SelectSetupRetryParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, selectSetupRetry, arg.ActionID, arg.JobID, arg.PreviousActionID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const setCleanupAttention = `-- name: SetCleanupAttention :execrows

@@ -41,11 +41,6 @@ func workflowHistory(snapshot workflow.Snapshot) []historyEntry {
 		}
 		add(revision.ObservedAt, text)
 	}
-	for _, check := range snapshot.Checks {
-		add(check.StartedAt, fmt.Sprintf("Check %s started", check.Name))
-		text := fmt.Sprintf("Check %s %s · exit %d", check.Name, check.State, check.ExitCode)
-		add(check.FinishedAt, text)
-	}
 	for _, plan := range snapshot.ReviewPlans {
 		text := fmt.Sprintf("Review %s · roles %v", plan.Plan.Decision, plan.Plan.Roles)
 		add(plan.RecordedAt, text)
@@ -139,8 +134,6 @@ func actionStartedText(job spine.Job, runs []spine.AgentRun, action spine.Action
 		return withHumanDetails("Creating "+sandbox, sandboxProviderName(job.SandboxProfile))
 	case repository.ActionRepositoryClone:
 		return "Cloning repository"
-	case coding.ActionRepositorySetup:
-		return "Setting up repository"
 	case coding.ActionRepositoryPush:
 		return "Publishing Revision"
 	case coding.ActionGitHubPullRequest:
@@ -170,8 +163,6 @@ func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action
 		return withHumanDetails(sandbox+" ready", sandboxProviderName(job.SandboxProfile), duration)
 	case repository.ActionRepositoryClone:
 		return withHumanDetails("Repository cloned", duration)
-	case coding.ActionRepositorySetup:
-		return withHumanDetails("Repository setup complete", duration)
 	case coding.ActionRepositoryPush:
 		return withHumanDetails("Revision published", duration)
 	case coding.ActionGitHubPullRequest:
@@ -199,8 +190,6 @@ func actionFailureSubject(kind spine.ActionKind, sandbox string) string {
 		return sandbox + " creation"
 	case repository.ActionRepositoryClone:
 		return "Repository clone"
-	case coding.ActionRepositorySetup:
-		return "Repository setup"
 	case coding.ActionRepositoryPush:
 		return "Revision publication"
 	case coding.ActionGitHubPullRequest:

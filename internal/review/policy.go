@@ -12,23 +12,20 @@ type Role string
 const (
 	RoleBrowserUI        Role = "browser-ui"
 	RoleAuthAuthority    Role = "auth-authority"
-	RolePerformance      Role = "performance"
 	RoleCriticalBoundary Role = "critical-boundary"
 	RoleGeneral          Role = "general"
 )
 
-var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RoleGeneral, RolePerformance}
+var allowedRoles = []Role{RoleAuthAuthority, RoleBrowserUI, RoleCriticalBoundary, RoleGeneral}
 
 type ChangeFacts struct {
-	Revision            string   `json:"revision"`
-	BaseRevision        string   `json:"base_revision"`
-	Paths               []string `json:"paths"`
-	ChecksGreen         bool     `json:"checks_green"`
-	DocumentationOnly   bool     `json:"documentation_only"`
-	BrowserUI           bool     `json:"browser_ui"`
-	Authentication      bool     `json:"authentication_authority"`
-	DeclaredPerformance bool     `json:"declared_performance"`
-	Unknown             bool     `json:"unknown"`
+	Revision          string   `json:"revision"`
+	BaseRevision      string   `json:"base_revision"`
+	Paths             []string `json:"paths"`
+	DocumentationOnly bool     `json:"documentation_only"`
+	BrowserUI         bool     `json:"browser_ui"`
+	Authentication    bool     `json:"authentication_authority"`
+	Unknown           bool     `json:"unknown"`
 }
 
 type Reason struct {
@@ -44,14 +41,11 @@ type ReviewPlan struct {
 }
 
 // FactsFromPaths classifies only facts that are mechanically apparent from an
-// immutable Git diff and a repository declaration. Anything else remains
-// unknown and is not guessed from agent prose.
-func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, declaredPerformance bool) (ChangeFacts, error) {
+// immutable Git diff. Anything else remains unknown and is not guessed from
+// agent prose.
+func FactsFromPaths(baseRevision, revision string, paths []string) (ChangeFacts, error) {
 	if strings.TrimSpace(baseRevision) == "" || strings.TrimSpace(revision) == "" {
 		return ChangeFacts{}, fmt.Errorf("change facts require exact base and current Revisions")
-	}
-	if !checksGreen {
-		return ChangeFacts{}, fmt.Errorf("review policy requires green exact-Revision Checks")
 	}
 	if len(paths) == 0 {
 		return ChangeFacts{}, fmt.Errorf("change facts require at least one changed path")
@@ -80,17 +74,16 @@ func FactsFromPaths(baseRevision, revision string, paths []string, checksGreen, 
 	}
 	sort.Strings(clean)
 	return ChangeFacts{
-		Revision: revision, BaseRevision: baseRevision, Paths: clean, ChecksGreen: true,
+		Revision: revision, BaseRevision: baseRevision, Paths: clean,
 		DocumentationOnly: docsOnly, BrowserUI: browserUI, Authentication: authentication,
-		DeclaredPerformance: declaredPerformance,
-		Unknown:             !docsOnly && !covered,
+		Unknown: !docsOnly && !covered,
 	}, nil
 }
 
 // ReviewPolicy is pure and deterministic. Explicit facts select the mandatory
 // review floor; unknown classification selects one general read-only reviewer.
 func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
-	if !facts.ChecksGreen || facts.Revision == "" || facts.BaseRevision == "" || len(facts.Paths) == 0 {
+	if facts.Revision == "" || facts.BaseRevision == "" || len(facts.Paths) == 0 {
 		return ReviewPlan{}, fmt.Errorf("incomplete ChangeFacts cannot select review")
 	}
 	selected := map[Role]bool{}
@@ -106,9 +99,6 @@ func ReviewPolicy(facts ChangeFacts) (ReviewPlan, error) {
 	}
 	if facts.Authentication {
 		add(RoleAuthAuthority, "mandatory", "authentication or authority paths changed")
-	}
-	if facts.DeclaredPerformance {
-		add(RolePerformance, "mandatory", "repository declared performance-sensitive change")
 	}
 	if facts.Unknown {
 		add(RoleGeneral, "unknown", "change risk could not be classified mechanically")

@@ -50,7 +50,7 @@ func (r *forbiddenPublicationRepository) Push(context.Context, spine.CodingJob, 
 func TestPostgresInvalidEvidenceNeverReachesPushExternals(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "push-invalid-evidence")
-	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/readiness.md"}, true, false)
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/readiness.md"})
 	if err != nil {
 		t.Fatal(err)
 	}

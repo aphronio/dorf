@@ -203,52 +203,6 @@ func (q *Queries) InsertReviewPlan(ctx context.Context, arg InsertReviewPlanPara
 	return result.RowsAffected()
 }
 
-const listReviewCheckInputs = `-- name: ListReviewCheckInputs :many
-select r.name,coalesce(e.id,'') as evidence_id
-from dorf.repository_commands r
-left join dorf.checks c
-  on c.job_id=r.job_id and c.name=r.name and c.command=r.command
- and c.revision=$1
- and c.state='passed' and c.exit_code=0
-left join dorf.evidence e
-  on e.id=c.evidence_id and e.job_id=c.job_id and e.check_id=c.id and e.revision=c.revision
-where r.job_id=$2 and r.name in ('check','smoke')
-order by r.name
-`
-
-type ListReviewCheckInputsParams struct {
-	Revision string
-	JobID    string
-}
-
-type ListReviewCheckInputsRow struct {
-	Name       string
-	EvidenceID string
-}
-
-func (q *Queries) ListReviewCheckInputs(ctx context.Context, arg ListReviewCheckInputsParams) ([]ListReviewCheckInputsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listReviewCheckInputs, arg.Revision, arg.JobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListReviewCheckInputsRow
-	for rows.Next() {
-		var i ListReviewCheckInputsRow
-		if err := rows.Scan(&i.Name, &i.EvidenceID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listReviewPlans = `-- name: ListReviewPlans :many
 select job_id,revision,facts::text as facts,plan::text as plan,created_at
 from dorf.review_plans

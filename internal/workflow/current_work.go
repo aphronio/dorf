@@ -21,19 +21,17 @@ const (
 	WorkComplete        WorkKind = "complete"
 	WorkAttention       WorkKind = "attention"
 	WorkAction          WorkKind = "action"
-	WorkSetupRepository WorkKind = "setup-repository"
 	WorkRunReviewer     WorkKind = "run-reviewer"
 	WorkDeliverMessage  WorkKind = "deliver-message"
 	WorkObserveAgent    WorkKind = "observe-agent-run"
 	WorkObserveRevision WorkKind = "observe-revision"
-	WorkRunChecks       WorkKind = "run-checks"
 	WorkChooseReview    WorkKind = "choose-review"
 	WorkPublishProposal WorkKind = "publish-proposal"
 	WorkObserveProposal WorkKind = "observe-proposal"
 )
 
 // Work names the natural fact which owns the next operation. FactID is an
-// Action, AgentRun, Check, Revision, Proposal, or Outcome identity as
+// Action, AgentRun, Revision, Proposal, or Outcome identity as
 // appropriate. Scope names the concrete resource only when an Action needs
 // one. Work is useful for explanation and exact execution, but deliberately
 // not durable.
@@ -68,20 +66,17 @@ func (w Work) Description() string {
 // database read. The reads are not a database transaction; every operation
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
-	Job            spine.CodingJob
-	Sandboxes      []spine.Sandbox
-	MainSandbox    spine.Sandbox
-	Actions        []spine.Action
-	SelectedSetup  *spine.Action
-	Delivery       *spine.Delivery
-	Deliveries     []spine.Delivery
-	Revisions      []spine.Revision
-	DeclaredChecks []spine.DeclaredCheck
-	Checks         []spine.Check
-	Evidence       []spine.Evidence
-	ReviewPlans    []spine.ReviewPlanRecord
-	Proposal       *spine.GitHubProposal
-	Outcome        *spine.JobOutcome
+	Job         spine.CodingJob
+	Sandboxes   []spine.Sandbox
+	MainSandbox spine.Sandbox
+	Actions     []spine.Action
+	Delivery    *spine.Delivery
+	Deliveries  []spine.Delivery
+	Revisions   []spine.Revision
+	Evidence    []spine.Evidence
+	ReviewPlans []spine.ReviewPlanRecord
+	Proposal    *spine.GitHubProposal
+	Outcome     *spine.JobOutcome
 }
 
 // Projection is a disposable explanation derived from one Snapshot. It is
@@ -100,10 +95,7 @@ func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
 	if err != nil {
 		return Projection{}, err
 	}
-	readiness := spine.AssessReviewReadiness(
-		s.Job, s.DeclaredChecks, s.Checks, s.Evidence, evidenceStore,
-		s.currentReviewPlan(), reviewRuns, deliveries,
-	)
+	readiness := spine.AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
 	work := decideCurrentWorkWithReviewRuns(s, reviewRuns)
 	if work.Kind == WorkPublishProposal && !readiness.Ready {
 		work.Kind = WorkAttention
@@ -121,8 +113,7 @@ func publicationIntentAt(actions []spine.Action, revision string) time.Time {
 	return time.Time{}
 }
 
-// LoadSnapshot performs one staged load of the coding product facts. Check
-// contracts are intentionally loaded only after repository setup succeeds.
+// LoadSnapshot performs one staged load of the coding product facts.
 func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snapshot, error) {
 	var snapshot Snapshot
 	var err error
@@ -147,10 +138,6 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.SelectedSetup, err = store.SelectedSetup(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
 	snapshot.Deliveries, err = store.Deliveries(ctx, jobID)
 	if err != nil {
 		return snapshot, err
@@ -172,17 +159,6 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 		return snapshot, err
 	}
 	snapshot.Outcome, err = store.Outcome(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
-	if !codingPrerequisitesComplete(snapshot) {
-		return snapshot, nil
-	}
-	snapshot.DeclaredChecks, err = store.DeclaredChecks(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.Checks, err = store.Checks(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -221,7 +197,6 @@ func (s Snapshot) currentReviewRuns() ([]spine.ReviewRunView, error) {
 func codingPrerequisitesComplete(f Snapshot) bool {
 	return actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) &&
 		actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) &&
-		f.SelectedSetup != nil && f.SelectedSetup.State == spine.ActionSucceeded &&
 		actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID)
 }
 
@@ -261,15 +236,6 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	}
 	if !actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) {
 		return actionWork(repository.ActionRepositoryClone, f.MainSandbox.ID, "")
-	}
-	if f.SelectedSetup == nil {
-		return work(WorkSetupRepository, spine.ActionID(f.Job.ID, coding.ActionRepositorySetup), "")
-	}
-	if f.SelectedSetup.State == spine.ActionFailed {
-		return work(WorkAttention, f.SelectedSetup.ID, attentionDetail(f.Job, f.SelectedSetup.ID, "repository setup failed"))
-	}
-	if f.SelectedSetup.State != spine.ActionSucceeded {
-		return work(WorkSetupRepository, f.SelectedSetup.ID, attentionDetail(f.Job, f.SelectedSetup.ID, ""))
 	}
 	if !actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID) {
 		return actionWork(spine.ActionRouteCreate, f.MainSandbox.ID, "")
@@ -343,7 +309,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 		}
 		// A pending or submitting Run without a delivery candidate cannot be
 		// executed safely. In particular, submission must be reconciled rather
-		// than letting Checks race its harness mutation.
+		// than letting later workflow decisions race its harness mutation.
 		return work(WorkAttention, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, agentRunAttention(*latestTurnStart)))
 	}
 
@@ -359,33 +325,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 		return work(WorkAttention, id, detail)
 	}
 
-	// Checks are exact-Revision facts. A failed Check first creates an ordinary
-	// workflow Message; delivery and Git observation above then handle its loop.
-	if len(f.DeclaredChecks) == 0 {
-		return work(WorkAttention, f.Job.Revision, "repository setup declared no deterministic Checks")
-	}
-	checks := make(map[string]spine.Check)
-	for _, check := range f.Checks {
-		if check.Revision == f.Job.Revision {
-			checks[check.Name] = check
-		}
-	}
-	for _, declaration := range f.DeclaredChecks {
-		check, ok := checks[declaration.Name]
-		if !ok || check.State == "running" {
-			id := spine.CheckID(f.Job.ID, f.Job.Revision, declaration.Name)
-			return work(WorkRunChecks, id, attentionDetail(f.Job, id, declaration.Name))
-		}
-		if check.State == "failed" {
-			return work(WorkRunChecks, check.ID, declaration.Name)
-		}
-		if check.State != "passed" || check.EvidenceID == "" {
-			return work(WorkAttention, check.ID, fmt.Sprintf("Check %s has incomplete result %q", check.Name, check.State))
-		}
-	}
-
 	// The ReviewPlan is the final deterministic decision. There is no pending
-	// plan or separate "Checks verified" handoff fact.
+	// plan or a separate handoff fact.
 	if plan == nil {
 		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, spine.ReviewPolicyAttentionSource(f.Job.Revision), ""))
 	}
@@ -484,7 +425,7 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *spine.A
 }
 
 // unchangedAttention distinguishes an intentionally adjudicated review or
-// Proposal feedback batch from an initial request or failed-Check response
+// Proposal feedback batch from an initial request or reviewer response
 // that returned without fixing anything. Equality is already carried by the
 // AgentRun input Revision and its git-revision Evidence.
 func unchangedAttention(f Snapshot) (string, string) {

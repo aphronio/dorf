@@ -27,10 +27,7 @@ func readyFacts() Snapshot {
 			action(repository.ActionRepositoryClone),
 			action(spine.ActionRouteCreate),
 		},
-		SelectedSetup:  &spine.Action{ID: spine.ActionID(job.ID, coding.ActionRepositorySetup), State: spine.ActionSucceeded},
-		DeclaredChecks: []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}},
-		Checks:         []spine.Check{{ID: spine.CheckID(job.ID, job.Revision, "check"), Name: "check", Revision: job.Revision, State: "passed", EvidenceID: "e-check"}},
-		ReviewPlans:    []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
+		ReviewPlans: []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
 	}
 }
 
@@ -96,20 +93,18 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("message precedes Git observation and Checks", func(t *testing.T) {
+	t.Run("message precedes Git observation", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans = nil
-		facts.Checks = nil
 		facts.Delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkDeliverMessage || got.FactID != "implement-2" {
 			t.Fatalf("CurrentWork = %#v, want Message delivery", got)
 		}
 	})
 
-	t.Run("submitting Follow is reconciled before Checks", func(t *testing.T) {
+	t.Run("submitting Follow is reconciled before review", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans = nil
-		facts.Checks = nil
 		message := spine.Message{ID: "message-2", JobID: facts.Job.ID, Sequence: 2, Intent: spine.MessageFollow}
 		run := spine.AgentRun{ID: spine.AgentRunID(message.ID), JobID: facts.Job.ID, MessageID: message.ID, Role: "implement", State: spine.AgentRunSubmitting}
 		facts.Deliveries = []spine.Delivery{factDelivery(message, run)}
@@ -143,11 +138,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
 	facts := readyFacts()
 	if !codingPrerequisitesComplete(facts) {
-		t.Fatal("complete infrastructure and setup were not ready for coding facts")
-	}
-	facts.SelectedSetup.State = spine.ActionFailed
-	if codingPrerequisitesComplete(facts) {
-		t.Fatal("failed setup exposed downstream coding facts")
+		t.Fatal("complete infrastructure was not ready for coding facts")
 	}
 	facts = readyFacts()
 	facts.Actions = facts.Actions[1:]
@@ -166,7 +157,7 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 		{name: "initial human request", from: spine.MessageFromHuman, attention: true},
 		{name: "review feedback", from: spine.MessageFromAgent},
 		{name: "current Proposal feedback", from: spine.MessageFromHuman, proposal: true},
-		{name: "failed Check feedback", from: spine.MessageFromWorkflow, attention: true},
+		{name: "workflow feedback", from: spine.MessageFromWorkflow, attention: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -225,7 +216,6 @@ func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 
 func TestTerminalTargetSteerFallbackBecomesLatestRevisionBoundary(t *testing.T) {
 	facts := readyFacts()
-	facts.Checks = nil
 	facts.ReviewPlans = nil
 	facts.Deliveries = []spine.Delivery{
 		factDelivery(spine.Message{ID: "initial", Sequence: 1, Intent: spine.MessageFollow}, spine.AgentRun{ID: "run-initial", MessageID: "initial", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-old", TurnOutcome: "completed"}),
@@ -278,12 +268,11 @@ func TestLatestImplementationInputStateCannotFallThrough(t *testing.T) {
 		{name: "interrupted", state: spine.AgentRunInterrupted, want: WorkAttention},
 		{name: "uncertain", state: spine.AgentRunUncertain, want: WorkAttention},
 		{name: "completed awaits Git observation", state: spine.AgentRunCompleted, want: WorkObserveRevision},
-		{name: "completed and observed may run Checks", state: spine.AgentRunCompleted, observed: true, want: WorkRunChecks},
+		{name: "completed and observed may choose review", state: spine.AgentRunCompleted, observed: true, want: WorkChooseReview},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			facts := readyFacts()
-			facts.Checks = nil
 			facts.ReviewPlans = nil
 			message := spine.Message{ID: "message-1", Sequence: 1, Intent: spine.MessageFollow}
 			run := spine.AgentRun{ID: "run-1", MessageID: message.ID, Role: "implement", State: test.state, InputRevision: facts.Job.Revision}
@@ -292,7 +281,7 @@ func TestLatestImplementationInputStateCannotFallThrough(t *testing.T) {
 			if test.observed {
 				facts.Deliveries[0].AgentRun.InputRevision = "rev-0"
 				facts.Evidence = []spine.Evidence{{Kind: "git-revision", AgentRunID: run.ID, Revision: facts.Job.Revision}}
-				wantFactID = spine.CheckID(facts.Job.ID, facts.Job.Revision, "check")
+				wantFactID = facts.Job.Revision
 			}
 			got := decideCurrentWork(facts)
 			if got.Kind != test.want || got.FactID != wantFactID {

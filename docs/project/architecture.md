@@ -16,7 +16,7 @@ flowchart LR
     Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
-    Absurd --> Edge["Actions · Checks · AgentRuns"]
+    Absurd --> Edge["Actions · observations · AgentRuns"]
     Edge --> Sandbox["Sandbox provider"]
     Edge --> External["Workflow external authorities"]
     Sandbox --> Harness["Agent Harness"]
@@ -100,8 +100,8 @@ primitive.
 
 ### Deterministic operations
 
-A Check observes or asserts without mutating an external authority. An Action is a code-owned
-external mutation with stable identity, intended scope, settlement state, and a reconciliation path.
+An Action is a code-owned external mutation with stable identity, intended scope, settlement state,
+and a reconciliation path.
 Before repeating an unsettled Action, Dorf inspects the actual authority. Immutable success makes an
 identical retry a no-op.
 
@@ -118,7 +118,7 @@ Artifact metadata is durable PostgreSQL state; bytes live in the deployment-owne
 blob store and survive Sandbox cleanup. Artifact content may contain claims and is not its own proof.
 
 Evidence is immutable observed proof linked to the supported fact it proves, currently an AgentRun,
-Action, Check, or Revision. Its validity follows the claim it supports: a coding Revision change may
+Action, or Revision. Its validity follows the claim it supports: a coding Revision change may
 invalidate Revision-bound evidence, while a captured source or lifecycle observation may remain
 valid.
 
@@ -235,7 +235,7 @@ correctness.
 - Do not build a Python compatibility facade, dual-write SQLite and PostgreSQL, or migrate old local
   data.
 - Do not create a generic durable-engine interface. Keep Absurd sequencing localized and domain
-  facts, deterministic policy, Actions, Checks, and reconciliation independent.
+  facts, deterministic policy, Actions, observations, and reconciliation independent.
 - Use Absurd's public APIs for production behavior. Raw tables may support version-pinned tests or
   operator diagnostics but are not workflow authority.
 - Preserve useful provisioning assets and observed behavior, not obsolete package or schema shape.

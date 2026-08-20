@@ -31,19 +31,6 @@ insert into dorf.actions(id,job_id,kind,state,scope_key)
 values(sqlc.arg(id),sqlc.arg(job_id),sqlc.arg(kind),'unsettled',sqlc.arg(scope_key))
 on conflict do nothing;
 
--- name: GetSetupActionForUpdate :one
-select a.job_id,a.kind,coalesce(c.setup_action_id,'') as setup_action_id
-from dorf.actions a
-join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
-where a.id=sqlc.arg(action_id)
-for update of a,c;
-
--- name: FinishSetupAction :execrows
-update dorf.actions
-set state=sqlc.arg(state),settled_at=coalesce(settled_at,clock_timestamp())
-where dorf.actions.id=sqlc.arg(action_id)
-  and (state='unsettled' or state=sqlc.arg(state));
-
 -- name: GetActionByIDForUpdate :one
 select id,job_id,kind,state,scope_key,created_at,settled_at
 from dorf.actions

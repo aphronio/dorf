@@ -17,7 +17,7 @@ const (
 
 // RequireClaim closes the gap between an opaque external operation and the
 // Dorf receipt that adopts its result. Call it immediately before recording a
-// successful Action, AgentRun, Revision, or Check fact.
+// successful Action, AgentRun, Revision, or other workflow fact.
 func RequireClaim(ctx context.Context) error {
 	if err := absurd.Heartbeat(ctx, HeartbeatLease); err != nil {
 		return fmt.Errorf("validate claim before recording external result: %w", err)

@@ -33,21 +33,6 @@ type reviewObservationArtifact struct {
 }
 
 func (s Service) PlanReview(ctx context.Context, job spine.CodingJob) error {
-	declared, err := s.store.DeclaredChecks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	checks, err := s.store.Checks(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	records, err := s.store.Evidence(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if err := spine.VerifyRevisionEvidence(job.ID, job.Revision, declared, checks, records, s.blobs); err != nil {
-		return s.setWorkflowAttention(ctx, job.ID, spine.ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("Revision %s Evidence verification failed: %w", job.Revision, err))
-	}
 	facts, err := s.externals.RepositoryChangeFacts(ctx, job)
 	if err != nil {
 		return s.setWorkflowAttention(ctx, job.ID, spine.ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("deterministic ChangeFacts failed: %w", err))
