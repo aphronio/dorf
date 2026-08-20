@@ -162,7 +162,10 @@ AgentRun, Artifact-byte, attention, and cleanup custody. `RepositoryService` add
 materialization and observation for workflows that use Git. `CodingService` adds setup, mutable
 Revision observation, Checks, and review. Coding receives the composed coding service;
 codebase-investigation receives only repository plus execution capabilities; cleanup receives only
-execution custody. Provider and Harness selection still happens once at the composition root.
+execution custody. Provider and Harness selection still happens once at the composition root. The
+base runtime contains only those shared services. GitHub, publication, outcome observation, and the
+coding service are constructed only when the coding workflow resolves its typed runtime; an
+investigation or cleanup cannot acquire that authority through the common runtime shape.
 
 ## Client boundary
 

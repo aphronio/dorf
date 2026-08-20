@@ -32,16 +32,54 @@ type profileRuntimeResolver struct {
 }
 
 func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workflow.Runtime, error) {
-	profile, err := r.store.SandboxProfile(ctx, name)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return workflow.Runtime{}, err
 	}
+	return resolved.Runtime, nil
+}
+
+func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (workflow.CodingRuntime, error) {
+	resolved, err := r.resolveBase(ctx, name)
+	if err != nil {
+		return workflow.CodingRuntime{}, err
+	}
+	coding := spine.NewCodingService(resolved.Runtime.Repository, r.store, resolved.Externals)
+	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
+	publicationService := publication.Service{
+		Store: r.store, GitHub: githubClient,
+		Repository: publication.GitRepository{Sandbox: resolved.Sandbox, Workspace: r.cfg.Workspace, Ownership: resolved.Ownership},
+		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
+	}
+	return workflow.CodingRuntime{
+		Runtime: resolved.Runtime,
+		Coding:  coding,
+		Proposal: workflow.ProposalRuntime{
+			Publication: publicationService, GitHub: githubClient,
+			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
+			Store:   r.store, Client: r.client,
+		},
+	}, nil
+}
+
+type resolvedBaseRuntime struct {
+	Runtime   workflow.Runtime
+	Externals terminal.Externals
+	Sandbox   provider.Sandbox
+	Ownership func(context.Context, string) (provider.Ownership, error)
+}
+
+func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (resolvedBaseRuntime, error) {
+	profile, err := r.store.SandboxProfile(ctx, name)
+	if err != nil {
+		return resolvedBaseRuntime{}, err
+	}
 	if !profile.BaseVerified() {
-		return workflow.Runtime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, spine.BaseProfileContract)
+		return resolvedBaseRuntime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, spine.BaseProfileContract)
 	}
 	sandbox, err := sandboxForProfile(r.cfg, profile)
 	if err != nil {
-		return workflow.Runtime{}, err
+		return resolvedBaseRuntime{}, err
 	}
 	var agent terminal.Harness
 	switch profile.Harness {
@@ -50,7 +88,7 @@ func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workf
 	case piagent.Harness:
 		agent = piagent.Agent{Sandbox: sandbox, Timeout: r.cfg.TurnTimeout}
 	default:
-		return workflow.Runtime{}, fmt.Errorf("unsupported Harness %q in Sandbox profile %q", profile.Harness, profile.Name)
+		return resolvedBaseRuntime{}, fmt.Errorf("unsupported Harness %q in Sandbox profile %q", profile.Harness, profile.Name)
 	}
 	ownership := func(ctx context.Context, sandboxID string) (provider.Ownership, error) {
 		owned, err := r.store.Sandbox(ctx, sandboxID)
@@ -65,23 +103,12 @@ func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workf
 	}
 	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	repository := spine.NewRepositoryService(execution, externals)
-	coding := spine.NewCodingService(repository, r.store, externals)
-	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
-	publicationService := publication.Service{
-		Store: r.store, GitHub: githubClient,
-		Repository: publication.GitRepository{Sandbox: sandbox, Workspace: r.cfg.Workspace, Ownership: ownership},
-		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
-	}
-	return workflow.Runtime{
-		Execution:  execution,
-		Repository: repository,
-		Coding:     coding,
-		Proposal: workflow.ProposalRuntime{
-			Publication: publicationService, GitHub: githubClient,
-			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
-			Store:   r.store, Client: r.client,
+	return resolvedBaseRuntime{
+		Runtime: workflow.Runtime{
+			Execution: execution, Repository: repository,
+			Profile: workflow.RuntimeProfile{SandboxProfile: profile.Name},
 		},
-		Profile: workflow.RuntimeProfile{SandboxProfile: profile.Name},
+		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil
 }
 

@@ -57,13 +57,18 @@ type sandboxProfileStore interface {
 type Runtime struct {
 	Execution  spine.ExecutionService
 	Repository spine.RepositoryService
-	Coding     spine.CodingService
-	Proposal   ProposalRuntime
 	Profile    RuntimeProfile
+}
+
+type CodingRuntime struct {
+	Runtime
+	Coding   spine.CodingService
+	Proposal ProposalRuntime
 }
 
 type RuntimeResolver interface {
 	Resolve(context.Context, string) (Runtime, error)
+	ResolveCoding(context.Context, string) (CodingRuntime, error)
 }
 
 func WakeEvent(jobID string, sequence int64) string {
@@ -90,7 +95,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID, CodingToProposalDefinition(), false)
+		runtime, err := codingRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
 			return TaskResultV1{}, err
 		}
@@ -210,20 +215,31 @@ func runtimeForJob(ctx context.Context, store sandboxProfileStore, runtimes Runt
 	return runtimeForLoadedJob(ctx, store, runtimes, job, expected, cleanup)
 }
 
+func codingRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, jobID string) (CodingRuntime, error) {
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return CodingRuntime{}, err
+	}
+	expected := CodingToProposalDefinition()
+	if err := requireWorkflow(ctx, store, job, expected, false); err != nil {
+		return CodingRuntime{}, err
+	}
+	if runtimes == nil {
+		return CodingRuntime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
+	}
+	runtime, err := runtimes.ResolveCoding(ctx, job.SandboxProfile)
+	if err != nil {
+		return CodingRuntime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
+	}
+	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, false); err != nil {
+		return CodingRuntime{}, err
+	}
+	return runtime, nil
+}
+
 func runtimeForLoadedJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, job spine.Job, expected Definition, cleanup bool) (Runtime, error) {
-	jobID := job.ID
-	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
-		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
-		var attentionErr error
-		if cleanup {
-			attentionErr = store.SetCleanupAttention(ctx, jobID, detail)
-		} else {
-			attentionErr = store.SetWorkflowAttention(ctx, jobID, "workflow-profile", detail)
-		}
-		if attentionErr != nil {
-			return Runtime{}, fmt.Errorf("%s; record workflow mismatch attention: %w", detail, attentionErr)
-		}
-		return Runtime{}, errors.New(detail)
+	if err := requireWorkflow(ctx, store, job, expected, cleanup); err != nil {
+		return Runtime{}, err
 	}
 	if runtimes == nil {
 		return Runtime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
@@ -236,6 +252,23 @@ func runtimeForLoadedJob(ctx context.Context, store sandboxProfileStore, runtime
 		return Runtime{}, err
 	}
 	return runtime, nil
+}
+
+func requireWorkflow(ctx context.Context, store sandboxProfileStore, job spine.Job, expected Definition, cleanup bool) error {
+	if job.Workflow != expected.Name || job.WorkflowRevision != expected.Revision {
+		detail := fmt.Sprintf("Job requires workflow %s revision %s, but task executes %s revision %s", job.Workflow, job.WorkflowRevision, expected.Name, expected.Revision)
+		var attentionErr error
+		if cleanup {
+			attentionErr = store.SetCleanupAttention(ctx, job.ID, detail)
+		} else {
+			attentionErr = store.SetWorkflowAttention(ctx, job.ID, "workflow-profile", detail)
+		}
+		if attentionErr != nil {
+			return fmt.Errorf("%s; record workflow mismatch attention: %w", detail, attentionErr)
+		}
+		return errors.New(detail)
+	}
+	return nil
 }
 
 func requireJobProfile(ctx context.Context, store sandboxProfileStore, job spine.Job, profile RuntimeProfile, expected Definition, cleanup bool) error {

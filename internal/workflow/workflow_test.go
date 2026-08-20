@@ -20,9 +20,11 @@ type profileGuardStore struct {
 }
 
 type profileRuntimeResolverStub struct {
-	runtime Runtime
-	err     error
-	name    string
+	runtime       Runtime
+	codingRuntime CodingRuntime
+	err           error
+	name          string
+	codingName    string
 }
 
 func (r *profileRuntimeResolverStub) Resolve(_ context.Context, name string) (Runtime, error) {
@@ -30,9 +32,31 @@ func (r *profileRuntimeResolverStub) Resolve(_ context.Context, name string) (Ru
 	return r.runtime, r.err
 }
 
+func (r *profileRuntimeResolverStub) ResolveCoding(_ context.Context, name string) (CodingRuntime, error) {
+	r.codingName = name
+	return r.codingRuntime, r.err
+}
+
 func (s *profileGuardStore) Job(context.Context, string) (spine.Job, error) {
 	s.jobCalls++
 	return s.job, nil
+}
+
+func TestCodingRuntimeResolutionUsesOnlyCodingAuthority(t *testing.T) {
+	definition := CodingToProposalDefinition()
+	store := &profileGuardStore{job: spine.Job{
+		ID: "job-1", SandboxProfile: "managed", Workflow: definition.Name, WorkflowRevision: definition.Revision,
+	}}
+	resolver := &profileRuntimeResolverStub{codingRuntime: CodingRuntime{
+		Runtime: Runtime{Profile: RuntimeProfile{SandboxProfile: "managed"}},
+	}}
+	runtime, err := codingRuntimeForJob(context.Background(), store, resolver, store.job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolver.codingName != "managed" || resolver.name != "" || runtime.Profile.SandboxProfile != "managed" {
+		t.Fatalf("base=%q coding=%q runtime=%#v", resolver.name, resolver.codingName, runtime)
+	}
 }
 func (s *profileGuardStore) SetWorkflowAttention(_ context.Context, _, _, detail string) error {
 	s.workflowAttention = detail

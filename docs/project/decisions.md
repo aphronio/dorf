@@ -1991,3 +1991,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   and vet contract passes without changing provider behavior.
 - **Reconsider when:** Another non-Git workflow needs a different materialization service, or repeated
   non-coding operations earn a smaller composition than repository custody.
+
+## D078 — Coding authority is absent from the base runtime
+
+- **Status:** Accepted Core/runtime separation slice — 2026-08-20
+- **Decision:** Resolve a base workflow runtime containing only the selected profile,
+  `ExecutionService`, and `RepositoryService`. Resolve a separate `CodingRuntime` for
+  `coding-to-proposal`; only that path constructs `CodingService`, the GitHub client, publication,
+  Proposal observation, and outcome services.
+- **Why:** A common runtime carrying optional coding fields made GitHub authority appear available to
+  investigation and cleanup and forced their startup path to construct irrelevant dependencies.
+  Runtime types should make granted authority visible and impossible to acquire accidentally.
+- **Proof:** Investigation and cleanup call only base resolution; coding calls only typed coding
+  resolution. Unit coverage proves the two resolver paths remain distinct, and the complete Go and
+  PostgreSQL verification contract passes with unchanged provider behavior.
+- **Reconsider when:** Another workflow legitimately needs one of the coding authorities with the
+  same lifecycle and recovery meaning. Add a typed composition for that workflow rather than
+  widening the base runtime.
