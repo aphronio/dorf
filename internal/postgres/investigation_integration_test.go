@@ -19,7 +19,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
+func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("codebase-investigation-%d", time.Now().UnixNano())
@@ -142,21 +142,9 @@ func TestPostgresCodebaseInvestigationIdentityAndTypedReport(t *testing.T) {
 	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, secondArtifact); err != nil || !created {
 		t.Fatalf("second draft created=%v err=%v", created, err)
 	}
-	if _, _, err := store.RecordCodebaseInvestigationDecision(ctx, postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: artifact.ID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"}); err == nil || !strings.Contains(err.Error(), "latest") {
-		t.Fatalf("stale draft decision error=%v", err)
-	}
-	decisionInput := postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: secondArtifact.ID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"}
-	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, decisionInput)
-	if err != nil || !created || decision.ArtifactID != secondArtifact.ID || decision.Disposition != spine.InvestigationAccepted {
-		t.Fatalf("decision=%#v created=%v err=%v", decision, created, err)
-	}
-	repeatedDecision, created, err := store.RecordCodebaseInvestigationDecision(ctx, decisionInput)
-	if err != nil || created || repeatedDecision != decision {
-		t.Fatalf("idempotent decision=%#v created=%v err=%v", repeatedDecision, created, err)
-	}
 	job, err = store.Job(ctx, job.ID)
-	if err != nil || job.AdmissionOpen {
-		t.Fatalf("terminal Job=%#v err=%v", job, err)
+	if err != nil || !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
+		t.Fatalf("second draft did not remain available for follow-up or cleanup: Job=%#v err=%v", job, err)
 	}
 }
 
@@ -255,7 +243,7 @@ func (*investigationExternals) RepositoryRevision(_ context.Context, job spine.J
 	return spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, nil
 }
 
-func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t *testing.T) {
+func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	records := blob.Store{Root: t.TempDir()}
@@ -286,7 +274,7 @@ func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t
 		if err != nil {
 			return workflow.TaskResultV1{}, err
 		}
-		if work.Kind != workflow.InvestigationWorkWaitDecision {
+		if work.Kind != workflow.InvestigationWorkWaitInput {
 			return workflow.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
 		}
 		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
@@ -331,7 +319,7 @@ func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen || job.CleanupState != spine.CleanupPending {
-		t.Fatalf("Job did not remain open for human decision: %#v err=%v", job, err)
+		t.Fatalf("Job did not remain open for follow-up or cleanup: %#v err=%v", job, err)
 	}
 	if _, created, err := store.AdmitMessage(ctx, postgres.NewMessage{JobID: job.ID, FromKind: spine.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
 		t.Fatalf("follow-up created=%v err=%v", created, err)
@@ -342,7 +330,7 @@ func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t
 		if err != nil {
 			return workflow.TaskResultV1{}, err
 		}
-		if work.Kind != workflow.InvestigationWorkWaitDecision {
+		if work.Kind != workflow.InvestigationWorkWaitInput {
 			return workflow.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
 		}
 		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
@@ -361,17 +349,12 @@ func TestPostgresCodebaseInvestigationCoordinatorWaitsForDecisionBeforeCleanup(t
 	if err != nil || len(drafts) != 2 {
 		t.Fatalf("revised Drafts=%#v err=%v", drafts, err)
 	}
-	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, postgres.NewCodebaseInvestigationDecision{JobID: job.ID, ArtifactID: drafts[1].ArtifactID, Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer"})
-	if err != nil || !created || decision.Disposition != spine.InvestigationAccepted {
-		t.Fatalf("Decision=%#v created=%v err=%v", decision, created, err)
-	}
-	if work, err := workflow.RunCodebaseInvestigation(ctx, service, store, job.ID); err != nil || work.Kind != workflow.InvestigationWorkComplete {
-		t.Fatalf("terminal work=%#v err=%v", work, err)
-	}
-
 	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cleaning.AdmissionOpen || cleaning.CleanupState != spine.CleanupScheduled {
+		t.Fatalf("explicit cleanup did not close admission and schedule release: %#v", cleaning)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CurrentTaskID) })
 	cleanupService := spine.NewService(store, externals, records, nil, func(context.Context) error { return nil })

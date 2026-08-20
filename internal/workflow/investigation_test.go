@@ -38,12 +38,12 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	}
 	draft := spine.CodebaseInvestigationDraft{JobID: job.ID, AgentRunID: run.ID, ArtifactID: "artifact-draft"}
 	snapshot.Drafts = []spine.CodebaseInvestigationDraft{draft}
-	if work := snapshot.Project(); work.Kind != InvestigationWorkWaitDecision || work.FactID != draft.ArtifactID {
+	if work := snapshot.Project(); work.Kind != InvestigationWorkWaitInput || work.FactID != draft.ArtifactID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
 		t.Fatalf("waiting work=%#v", work)
 	}
-	snapshot.Decision = &spine.CodebaseInvestigationDecision{JobID: job.ID, ArtifactID: draft.ArtifactID, Disposition: spine.InvestigationAccepted}
+	snapshot.Job.AdmissionOpen = false
 	if work := snapshot.Project(); work.Kind != InvestigationWorkComplete {
-		t.Fatalf("terminal work=%#v", work)
+		t.Fatalf("closed-admission work=%#v", work)
 	}
 }
 

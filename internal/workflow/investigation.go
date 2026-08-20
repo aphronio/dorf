@@ -19,7 +19,7 @@ const (
 	InvestigationWorkDeliver      InvestigationWorkKind = "deliver-message"
 	InvestigationWorkObserveAgent InvestigationWorkKind = "observe-agent-run"
 	InvestigationWorkRecordDraft  InvestigationWorkKind = "record-draft"
-	InvestigationWorkWaitDecision InvestigationWorkKind = "wait-human-decision"
+	InvestigationWorkWaitInput    InvestigationWorkKind = "wait-client-input"
 )
 
 type InvestigationWork struct {
@@ -54,7 +54,6 @@ type InvestigationSnapshot struct {
 	Deliveries  []spine.Delivery
 	Delivery    spine.Delivery
 	Drafts      []spine.CodebaseInvestigationDraft
-	Decision    *spine.CodebaseInvestigationDecision
 	Source      spine.CodebaseInvestigationSource
 }
 
@@ -126,15 +125,11 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 	if snapshot.Delivery.AgentRun.ID == "" {
 		snapshot.Delivery = snapshot.Deliveries[len(snapshot.Deliveries)-1]
 	}
-	snapshot.Decision, err = store.CodebaseInvestigationDecision(ctx, jobID)
-	return snapshot, err
+	return snapshot, nil
 }
 
 func (s InvestigationSnapshot) Project() InvestigationWork {
 	run := s.Delivery.AgentRun
-	if s.Decision != nil {
-		return InvestigationWork{Kind: InvestigationWorkComplete, FactID: s.Decision.JobID, Detail: string(s.Decision.Disposition)}
-	}
 	if !s.Job.AdmissionOpen {
 		return InvestigationWork{Kind: InvestigationWorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
 	}
@@ -156,7 +151,7 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	}
 	for _, draft := range s.Drafts {
 		if draft.AgentRunID == run.ID {
-			return InvestigationWork{Kind: InvestigationWorkWaitDecision, FactID: draft.ArtifactID, Detail: "accept, reject, or send a follow-up"}
+			return InvestigationWork{Kind: InvestigationWorkWaitInput, FactID: draft.ArtifactID, Detail: "send a follow-up or request cleanup"}
 		}
 	}
 	switch run.State {
@@ -188,7 +183,7 @@ func RunCodebaseInvestigation(ctx context.Context, service spine.Service, store 
 		}
 		work := snapshot.Project()
 		switch work.Kind {
-		case InvestigationWorkComplete, InvestigationWorkAttention, InvestigationWorkWaitDecision:
+		case InvestigationWorkComplete, InvestigationWorkAttention, InvestigationWorkWaitInput:
 			return work, nil
 		case InvestigationWorkAction:
 			err = runInvestigationAction(ctx, service, store, snapshot, work)

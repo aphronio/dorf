@@ -168,11 +168,10 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 			Role: "investigate", State: spine.AgentRunCompleted,
 			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
 		}}},
-		Drafts:   []spine.CodebaseInvestigationDraft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
-		Decision: &spine.CodebaseInvestigationDecision{Disposition: spine.InvestigationAccepted, DecidedBy: "maintainer", DecidedAt: base.Add(9*time.Minute + 30*time.Second)},
+		Drafts: []spine.CodebaseInvestigationDraft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
 	}
 	history := investigationHistory(snapshot)
-	if len(history) != 8 {
+	if len(history) != 7 {
 		t.Fatalf("history entries=%d: %#v", len(history), history)
 	}
 	for i := 1; i < len(history); i++ {

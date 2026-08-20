@@ -80,9 +80,6 @@ func investigationHistory(snapshot workflow.InvestigationSnapshot) []historyEntr
 	for _, draft := range snapshot.Drafts {
 		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready · "+draft.ArtifactID)
 	}
-	if snapshot.Decision != nil {
-		addHistoryEntry(&entries, snapshot.Decision.DecidedAt, "Draft "+string(snapshot.Decision.Disposition)+" by "+snapshot.Decision.DecidedBy)
-	}
 	return sortedHistory(entries)
 }
 

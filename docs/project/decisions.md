@@ -1920,7 +1920,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D075 — Core mechanisms do not own workflow or interaction policy
 
-- **Status:** Accepted product-boundary correction; implementation correction pending — 2026-08-20
+- **Status:** Accepted and implemented — 2026-08-20
 - **Decision:** Make the [North Star product boundary](north-star.md#product-boundary) the sole current
   authority for Core, workflow, and client ownership. This entry records the correction and its
   rationale rather than restating that contract.
@@ -1939,6 +1939,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   That made a useful client policy look like a Core requirement and contradicted the intended role of
   workflows as ordinary Core consumers. The reusable primitives are drafts, Messages, AgentRuns,
   retained Harness context, and requested cleanup—not the meaning a caller assigns to a draft.
+- **Proof:** The decision table, domain type, CLI command, workflow wake wrapper, automatic cleanup
+  branch, and decision rendering are deleted. Unit and PostgreSQL integration coverage prove that
+  numbered drafts remain open for same-Thread follow-up, explicit cleanup closes admission and
+  schedules shared route-before-Sandbox cleanup, and retained Artifact bytes survive it. Live Incus
+  dogfood produced two drafts on one Codex Thread, exposed only follow-up or cleanup while open,
+  accepted an explicit cleanup request, confirmed the exact Sandbox absent, and retrieved both
+  Artifact digests afterward.
 - **Reconsider when:** A reusable custody mechanism cannot support multiple real workflows without
   knowing their terminal policy. A single workflow needing a typed decision is not sufficient; that
   decision remains workflow-owned.

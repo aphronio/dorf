@@ -22,11 +22,6 @@ join dorf.job_messages m on m.id=ar.message_id
 where d.job_id=sqlc.arg(job_id)
 order by m.sequence,d.artifact_id;
 
--- name: GetCodebaseInvestigationDecision :one
-select job_id,artifact_id,disposition,decided_by,reason,decided_at
-from dorf.codebase_investigation_decisions
-where job_id=sqlc.arg(job_id);
-
 -- name: GetCodebaseInvestigationRunForUpdate :one
 select j.workflow_name,j.workflow_revision,j.revision,j.admission_open,j.cleanup_state,
        ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
@@ -56,24 +51,3 @@ left join dorf.codebase_investigation_drafts d
 where ar.job_id=sqlc.arg(job_id) and ar.role='investigate'
 order by m.sequence desc
 limit 1;
-
--- name: GetCodebaseInvestigationJobForUpdate :one
-select workflow_name,workflow_revision,admission_open,cleanup_state
-from dorf.jobs
-where id=sqlc.arg(job_id)
-for update;
-
--- name: InsertCodebaseInvestigationDecision :execrows
-insert into dorf.codebase_investigation_decisions(
-    job_id,artifact_id,disposition,decided_by,reason
-) values(
-    sqlc.arg(job_id),sqlc.arg(artifact_id),sqlc.arg(disposition),
-    sqlc.arg(decided_by),sqlc.arg(reason)
-)
-on conflict(job_id) do nothing;
-
--- name: CloseAdmissionForCodebaseInvestigation :execrows
-update dorf.jobs
-set admission_open=false
-where id=sqlc.arg(job_id) and admission_open and cleanup_state='pending'
-  and workflow_name='codebase-investigation' and workflow_revision='2';

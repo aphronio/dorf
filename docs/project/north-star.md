@@ -231,7 +231,8 @@ workflow, named verified Sandbox profiles, local Incus on the supported host, Co
 Git/GitHub as proposal and acceptance authorities. E2B has proved the same complete workflow seam
 but still requires a stable deployment-owned remote Gateway route. The implemented
 `codebase-investigation` workflow has produced and revised durable drafts on one Incus/Codex Thread;
-the corrected client-owned cleanup boundary and the same workflow through E2B remain proof follow-ups.
+the client-owned cleanup boundary has PostgreSQL integration and a live Incus terminal. The same
+workflow through E2B remains a proof follow-up.
 This narrow support claim is evidence, not the permanent product boundary.
 
 The current coding implementation may contain repository, Revision, review, and GitHub fields in

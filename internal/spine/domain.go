@@ -355,24 +355,6 @@ type CodebaseInvestigationDraft struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-type InvestigationDisposition string
-
-const (
-	InvestigationAccepted InvestigationDisposition = "accepted"
-	InvestigationRejected InvestigationDisposition = "rejected"
-)
-
-// CodebaseInvestigationDecision is the exact human disposition of the latest
-// retained draft. It is terminal workflow authority, not agent input.
-type CodebaseInvestigationDecision struct {
-	JobID       string                   `json:"job_id"`
-	ArtifactID  string                   `json:"artifact_id"`
-	Disposition InvestigationDisposition `json:"disposition"`
-	DecidedBy   string                   `json:"decided_by"`
-	Reason      string                   `json:"reason,omitempty"`
-	DecidedAt   time.Time                `json:"decided_at"`
-}
-
 type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`

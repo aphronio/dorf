@@ -284,16 +284,6 @@ create table dorf.codebase_investigation_drafts (
     foreign key(job_id,artifact_id,agent_run_id) references dorf.artifacts(job_id,id,agent_run_id)
 );
 
-create table dorf.codebase_investigation_decisions (
-    job_id text primary key references dorf.jobs(id),
-    artifact_id text not null,
-    disposition text not null check (disposition in ('accepted','rejected')),
-    decided_by text not null check (length(trim(decided_by))>0 and length(decided_by)<=256),
-    reason text not null default '' check (length(reason)<=1048576),
-    decided_at timestamptz not null default clock_timestamp(),
-    foreign key(job_id,artifact_id) references dorf.codebase_investigation_drafts(job_id,artifact_id)
-);
-
 alter table dorf.revisions
     add constraint revisions_evidence_fk foreign key(evidence_id) references dorf.evidence(id);
 alter table dorf.checks add constraint checks_evidence_id_fkey foreign key(evidence_id) references dorf.evidence(id);
@@ -374,7 +364,6 @@ comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
 comment on table dorf.codebase_investigation_drafts is 'Immutable investigator drafts; Markdown bytes live in the referenced Artifact';
-comment on table dorf.codebase_investigation_decisions is 'Exact human terminal disposition of the latest codebase-investigation draft';
 comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

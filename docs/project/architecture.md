@@ -13,8 +13,8 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 The verified implementation is deliberately narrow: one Go application, two explicit workflows,
 PostgreSQL, Absurd, named Incus or E2B Sandbox profiles, Codex and Pi, Git, and GitHub. The
-`codebase-investigation` workflow has an independent coordinator, retained drafts, an exact human
-decision boundary, and a live Incus dogfood terminal. This
+`codebase-investigation` workflow has an independent coordinator, retained drafts, same-Thread
+follow-ups, explicit client-requested cleanup, and a live Incus dogfood terminal. This
 architecture must keep both concrete paths clear without treating coding-specific or investigation-
 specific records as the permanent public workflow API.
 
@@ -149,8 +149,8 @@ Workflow facts remain specific:
 
 - coding owns repository authority, Revisions, Checks tied to a Revision, review policy, Proposal,
   GitHub outcome, and coding inspection;
-- codebase investigation owns its exact repository input, flexible Markdown drafts, exact human
-  disposition, and post-Turn unchanged-checkout assertion; and
+- codebase investigation owns its exact repository input, flexible Markdown drafts, and post-Turn
+  unchanged-checkout assertion; and
 - future workflows must not inherit Git or research semantics merely to reuse durable custody.
 
 Do not introduce a polymorphic fact owner, generic JSON result, arbitrary Action registry, or common

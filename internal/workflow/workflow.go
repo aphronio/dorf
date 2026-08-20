@@ -151,17 +151,6 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				return TaskResultV1{}, err
 			}
 			if work.Kind == InvestigationWorkComplete {
-				decision, err := store.CodebaseInvestigationDecision(ctx, params.JobID)
-				if err != nil {
-					return TaskResultV1{}, err
-				}
-				if decision != nil {
-					task := absurd.MustTaskContext(ctx)
-					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
-						return TaskResultV1{}, err
-					}
-					return TaskResultV1{JobID: params.JobID, Outcome: string(decision.Disposition)}, nil
-				}
 				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
@@ -373,21 +362,6 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 		return message, created, fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same from ID and input: %w", message.ID, message.Sequence, err)
 	}
 	return message, created, nil
-}
-
-func DecideCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, input postgres.NewCodebaseInvestigationDecision) (spine.CodebaseInvestigationDecision, bool, error) {
-	decision, created, err := store.RecordCodebaseInvestigationDecision(ctx, input)
-	if err != nil {
-		return spine.CodebaseInvestigationDecision{}, false, err
-	}
-	sequence, err := store.NextWakeSequence(ctx, decision.JobID)
-	if err != nil {
-		return decision, created, err
-	}
-	if err := client.EmitEvent(ctx, config.QueueName, WakeEvent(decision.JobID, sequence), WakeV1{JobID: decision.JobID, Sequence: sequence}); err != nil {
-		return decision, created, fmt.Errorf("investigation decision was retained, but its wake hint failed; retry the same exact decision: %w", err)
-	}
-	return decision, created, nil
 }
 
 // RetrySetup atomically records a new setup Action generation and its FIFO

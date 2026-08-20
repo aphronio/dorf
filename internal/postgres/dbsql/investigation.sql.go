@@ -13,67 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-const closeAdmissionForCodebaseInvestigation = `-- name: CloseAdmissionForCodebaseInvestigation :execrows
-update dorf.jobs
-set admission_open=false
-where id=$1 and admission_open and cleanup_state='pending'
-  and workflow_name='codebase-investigation' and workflow_revision='2'
-`
-
-func (q *Queries) CloseAdmissionForCodebaseInvestigation(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, closeAdmissionForCodebaseInvestigation, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const getCodebaseInvestigationDecision = `-- name: GetCodebaseInvestigationDecision :one
-select job_id,artifact_id,disposition,decided_by,reason,decided_at
-from dorf.codebase_investigation_decisions
-where job_id=$1
-`
-
-func (q *Queries) GetCodebaseInvestigationDecision(ctx context.Context, jobID string) (DorfCodebaseInvestigationDecision, error) {
-	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationDecision, jobID)
-	var i DorfCodebaseInvestigationDecision
-	err := row.Scan(
-		&i.JobID,
-		&i.ArtifactID,
-		&i.Disposition,
-		&i.DecidedBy,
-		&i.Reason,
-		&i.DecidedAt,
-	)
-	return i, err
-}
-
-const getCodebaseInvestigationJobForUpdate = `-- name: GetCodebaseInvestigationJobForUpdate :one
-select workflow_name,workflow_revision,admission_open,cleanup_state
-from dorf.jobs
-where id=$1
-for update
-`
-
-type GetCodebaseInvestigationJobForUpdateRow struct {
-	WorkflowName     spine.WorkflowName
-	WorkflowRevision string
-	AdmissionOpen    bool
-	CleanupState     spine.CleanupState
-}
-
-func (q *Queries) GetCodebaseInvestigationJobForUpdate(ctx context.Context, jobID string) (GetCodebaseInvestigationJobForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationJobForUpdate, jobID)
-	var i GetCodebaseInvestigationJobForUpdateRow
-	err := row.Scan(
-		&i.WorkflowName,
-		&i.WorkflowRevision,
-		&i.AdmissionOpen,
-		&i.CleanupState,
-	)
-	return i, err
-}
-
 const getCodebaseInvestigationRunForUpdate = `-- name: GetCodebaseInvestigationRunForUpdate :one
 select j.workflow_name,j.workflow_revision,j.revision,j.admission_open,j.cleanup_state,
        ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
@@ -190,38 +129,6 @@ func (q *Queries) GetLatestInvestigationRunAndDraft(ctx context.Context, jobID s
 		&i.ArtifactID,
 	)
 	return i, err
-}
-
-const insertCodebaseInvestigationDecision = `-- name: InsertCodebaseInvestigationDecision :execrows
-insert into dorf.codebase_investigation_decisions(
-    job_id,artifact_id,disposition,decided_by,reason
-) values(
-    $1,$2,$3,
-    $4,$5
-)
-on conflict(job_id) do nothing
-`
-
-type InsertCodebaseInvestigationDecisionParams struct {
-	JobID       string
-	ArtifactID  string
-	Disposition string
-	DecidedBy   string
-	Reason      string
-}
-
-func (q *Queries) InsertCodebaseInvestigationDecision(ctx context.Context, arg InsertCodebaseInvestigationDecisionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDecision,
-		arg.JobID,
-		arg.ArtifactID,
-		arg.Disposition,
-		arg.DecidedBy,
-		arg.Reason,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const insertCodebaseInvestigationDraft = `-- name: InsertCodebaseInvestigationDraft :execrows
