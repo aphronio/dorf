@@ -12,7 +12,7 @@ import (
 
 func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
-	for _, directory := range []string{"core", "workflow", "gitworkspace", "publication", "terminal", "codex", "pi"} {
+	for _, directory := range []string{"core", "gitworkspace", "publication", "terminal", "codex", "pi"} {
 		path := filepath.Join(root, "internal", directory)
 		entries, err := os.ReadDir(path)
 		if err != nil {

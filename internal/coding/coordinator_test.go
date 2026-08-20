@@ -1,16 +1,8 @@
 package coding
 
 import (
-	"encoding/json"
 	"testing"
 )
-
-func TestPersistedFactStepResultV1(t *testing.T) {
-	encoded, err := json.Marshal(FactStepResultV1{FactID: "action-1"})
-	if err != nil || string(encoded) != `{"fact_id":"action-1"}` {
-		t.Fatalf("persisted JSON = %s, want exact v1 shape: %v", encoded, err)
-	}
-}
 
 func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 	tests := []struct {

@@ -9,12 +9,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
-
-type investigationFactStepResultV1 struct {
-	FactID string `json:"fact_id"`
-}
 
 func investigationAgentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 
@@ -196,7 +191,7 @@ func Run(ctx context.Context, service Service, store Store, jobID string) (Work,
 		case WorkAction:
 			err = runInvestigationAction(ctx, service, store, snapshot, work)
 		case WorkDeliver:
-			err = runInvestigationFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
+			err = absurdruntime.RunFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
 			})
 		case WorkObserveAgent:
@@ -209,7 +204,7 @@ func Run(ctx context.Context, service Service, store Store, jobID string) (Work,
 			}
 			return work, nil
 		case WorkRecordDraft:
-			err = runInvestigationFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
+			err = absurdruntime.RunFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
 				return recordInvestigationDraft(workCtx, service, store, snapshot)
 			})
 		default:
@@ -317,22 +312,4 @@ func investigationActionSucceeded(actions []core.Action, kind core.ActionKind, s
 		}
 	}
 	return false
-}
-
-func runInvestigationFactStep(ctx context.Context, name, factID string, work func(context.Context) error) error {
-	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (investigationFactStepResultV1, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (investigationFactStepResultV1, error) {
-			if err := work(workCtx); err != nil {
-				return investigationFactStepResultV1{}, err
-			}
-			return investigationFactStepResultV1{FactID: factID}, nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-	if result.FactID != factID {
-		return fmt.Errorf("Step %s returned fact %q, want %q", name, result.FactID, factID)
-	}
-	return nil
 }

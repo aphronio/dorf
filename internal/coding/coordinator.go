@@ -9,7 +9,6 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 // CodingExecution is the coding workflow's explicit composition of reusable
@@ -21,10 +20,6 @@ type CodingExecution interface {
 	PlanReview(context.Context, Job) error
 	RunReview(context.Context, Job, string) error
 	ExecuteReviewCheckout(context.Context, Job, string, core.Action) error
-}
-
-type FactStepResultV1 struct {
-	FactID string `json:"fact_id"`
 }
 
 func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
@@ -57,7 +52,7 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 		case WorkAction:
 			err = runSandboxAction(ctx, service, store, job, snapshot, work)
 		case WorkRunReviewer:
-			err = runFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
+			err = absurdruntime.RunFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.RunReview(workCtx, job, work.FactID)
 			})
 		case WorkDeliverMessage:
@@ -74,7 +69,7 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
 		case WorkChooseReview:
-			err = runFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
+			err = absurdruntime.RunFactStep(ctx, reviewPolicyStepName(job.ID, job.Revision), job.Revision, func(workCtx context.Context) error {
 				return service.PlanReview(workCtx, job)
 			})
 		case WorkPublishProposal:
@@ -126,7 +121,7 @@ func runDeliveryStep(ctx context.Context, service CodingExecution, store Store, 
 	if delivery.AgentRun.ID != work.FactID {
 		return fmt.Errorf("delivery candidate changed from AgentRun %s to %s", work.FactID, delivery.AgentRun.ID)
 	}
-	return runFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
+	return absurdruntime.RunFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
 		return service.Deliver(workCtx, job.Job, *delivery, codingAgentInput(job, *delivery))
 	})
 }
@@ -149,7 +144,7 @@ func runRevisionStep(ctx context.Context, service CodingExecution, job Job, snap
 	if run == nil || run.JobID != job.ID || run.Role != "implement" || run.InputRevision != job.Revision {
 		return fmt.Errorf("Revision observation has no exact current implementation AgentRun %s", work.FactID)
 	}
-	return runFactStep(ctx, revisionStepName(run.ID), run.ID, func(workCtx context.Context) error {
+	return absurdruntime.RunFactStep(ctx, revisionStepName(run.ID), run.ID, func(workCtx context.Context) error {
 		return service.ObserveRevision(workCtx, job, *run)
 	})
 }
@@ -228,22 +223,4 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store Store,
 		}
 		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)
 	})
-}
-
-func runFactStep(ctx context.Context, name, factID string, work func(context.Context) error) error {
-	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (FactStepResultV1, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (FactStepResultV1, error) {
-			if err := work(workCtx); err != nil {
-				return FactStepResultV1{}, err
-			}
-			return FactStepResultV1{FactID: factID}, nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-	if result.FactID != factID {
-		return fmt.Errorf("Step %s returned fact %q, want %q", name, result.FactID, factID)
-	}
-	return nil
 }
