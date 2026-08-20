@@ -14,7 +14,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -28,7 +27,7 @@ const (
 type followSnapshot struct {
 	Job             core.Job
 	Profile         core.SandboxProfile
-	Definition      workflow.Definition
+	Definition      workflowPresentation
 	History         []historyEntry
 	Operation       string
 	OperationDetail string
@@ -111,19 +110,19 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			runs = append(runs, delivery.AgentRun)
 		}
 		return followSnapshot{
-			Job: snapshot.Job.Job, Profile: profile, Definition: workflow.CodingToProposalDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
+			Job: snapshot.Job.Job, Profile: profile, Definition: coding.WorkflowDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == coding.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	case investigation.Workflow:
-		snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, jobID)
+		snapshot, err := investigation.LoadSnapshot(ctx, store, jobID)
 		if err != nil {
 			return followSnapshot{}, err
 		}
 		work := snapshot.Project()
 		return followSnapshot{
-			Job: snapshot.Job, Profile: profile, Definition: workflow.CodebaseInvestigationDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
-			NeedsAttention: work.Kind == workflow.InvestigationWorkAttention, AgentRuns: investigationAgentRuns(snapshot.Deliveries),
+			Job: snapshot.Job, Profile: profile, Definition: investigation.WorkflowDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
+			NeedsAttention: work.Kind == investigation.WorkAttention, AgentRuns: investigationAgentRuns(snapshot.Deliveries),
 			Sandboxes: []core.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	default:
@@ -147,7 +146,7 @@ func (s followSnapshot) withCleanupOperation() followSnapshot {
 	return s
 }
 
-func cleanupOperation(definition workflow.Definition, job core.Job, sandboxes []core.Sandbox, actions []core.Action) (string, bool) {
+func cleanupOperation(definition workflowPresentation, job core.Job, sandboxes []core.Sandbox, actions []core.Action) (string, bool) {
 	if job.CleanupState != core.CleanupScheduled {
 		return "", false
 	}

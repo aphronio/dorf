@@ -12,7 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -23,7 +22,7 @@ func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
 		Job:        job,
-		Definition: workflow.CodingToProposalDefinition(),
+		Definition: coding.WorkflowDefinition(),
 		History:    []historyEntry{{At: now.Add(-11 * time.Minute), Text: "Job admitted"}},
 		Operation:  "Implementation agent running",
 		AgentRuns:  []core.AgentRun{{Role: "implement", State: core.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
@@ -117,7 +116,7 @@ func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 	job := core.Job{ID: "job-cleanup", CleanupState: core.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Complete",
+		Job: job, Definition: investigation.WorkflowDefinition(), Operation: "Complete",
 		Sandboxes: []core.Sandbox{sandbox},
 		Actions: []core.Action{{
 			Kind: core.ActionRouteRevoke, Scope: sandbox.ID, State: core.ActionUnsettled,
@@ -160,7 +159,7 @@ func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 
 func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testing.T) {
 	base := time.Date(2026, 8, 18, 14, 0, 0, 0, time.UTC)
-	snapshot := workflow.InvestigationSnapshot{
+	snapshot := investigation.Snapshot{
 		Job: core.Job{AdmittedAt: base, CleanedAt: base.Add(10 * time.Minute)},
 		Actions: []core.Action{{
 			Kind: core.ActionSandboxCreate, State: core.ActionSucceeded,
@@ -212,7 +211,7 @@ func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.
 	job := core.Job{ID: "job-123", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Profile: core.SandboxProfile{Name: "local-codex", Provider: core.SandboxProviderIncus}, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",
+		Job: job, Profile: core.SandboxProfile{Name: "local-codex", Provider: core.SandboxProviderIncus}, Definition: investigation.WorkflowDefinition(), Operation: "Investigator running",
 		AgentRuns: []core.AgentRun{{Role: "investigate", State: core.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
 		Sandboxes: []core.Sandbox{sandbox},
 		Actions:   []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},

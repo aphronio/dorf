@@ -117,11 +117,11 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			return core.TaskResultV1{}, err
 		}
 		for {
-			work, err := RunCodebaseInvestigation(ctx, runtime.Investigation, store, params.JobID)
+			work, err := investigation.Run(ctx, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				return core.TaskResultV1{}, err
 			}
-			if work.Kind == InvestigationWorkComplete {
+			if work.Kind == investigation.WorkComplete {
 				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
@@ -129,14 +129,14 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				return core.TaskResultV1{}, err
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
-			if work.Kind == InvestigationWorkObserveAgent {
+			if work.Kind == investigation.WorkObserveAgent {
 				options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
 				options.Timeout = activeAgentPollInterval
 			}
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if work.Kind == InvestigationWorkObserveAgent && errors.As(err, &timeout) {
+				if work.Kind == investigation.WorkObserveAgent && errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err

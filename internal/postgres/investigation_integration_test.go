@@ -18,7 +18,6 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
-	"github.com/aphronio/dorf/internal/workflow"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -283,11 +282,11 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	taskName := "test-codebase-investigation-" + suffix
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		work, err := workflow.RunCodebaseInvestigation(taskCtx, service, store, params.JobID)
+		work, err := investigation.Run(taskCtx, service, store, params.JobID)
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if work.Kind != workflow.InvestigationWorkWaitInput {
+		if work.Kind != investigation.WorkWaitInput {
 			return core.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
 		}
 		return core.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
@@ -339,11 +338,11 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	revisionTaskName := taskName + "-follow-up"
 	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		work, err := workflow.RunCodebaseInvestigation(taskCtx, service, store, params.JobID)
+		work, err := investigation.Run(taskCtx, service, store, params.JobID)
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if work.Kind != workflow.InvestigationWorkWaitInput {
+		if work.Kind != investigation.WorkWaitInput {
 			return core.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
 		}
 		return core.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil

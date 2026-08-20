@@ -10,8 +10,15 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/workflow"
+	"github.com/aphronio/dorf/internal/investigation"
 )
+
+type workflowPresentation interface {
+	OperationLabel(string, string) string
+	ActionLabel(core.ActionKind) string
+	AgentRoleLabel(string) string
+	ResultLabel(string) string
+}
 
 // historyEntry is disposable human copy projected from durable product facts.
 // It is neither persisted nor exposed by inspect --json.
@@ -21,7 +28,7 @@ type historyEntry struct {
 }
 
 func workflowHistory(snapshot coding.Snapshot) []historyEntry {
-	definition := workflow.CodingToProposalDefinition()
+	definition := coding.WorkflowDefinition()
 	entries := commonHistory(snapshot.Job.Job, snapshot.Deliveries, snapshot.Actions)
 	add := func(at time.Time, text string) { addHistoryEntry(&entries, at, text) }
 
@@ -65,8 +72,8 @@ func workflowHistory(snapshot coding.Snapshot) []historyEntry {
 	return sortedHistory(entries)
 }
 
-func investigationHistory(snapshot workflow.InvestigationSnapshot) []historyEntry {
-	definition := workflow.CodebaseInvestigationDefinition()
+func investigationHistory(snapshot investigation.Snapshot) []historyEntry {
+	definition := investigation.WorkflowDefinition()
 	entries := commonHistory(snapshot.Job, snapshot.Deliveries, snapshot.Actions)
 	for _, delivery := range snapshot.Deliveries {
 		if delivery.Message.Sequence > 1 {
@@ -100,7 +107,7 @@ func commonHistory(job core.Job, deliveries []core.Delivery, actions []core.Acti
 	return entries
 }
 
-func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition, delivery core.Delivery) {
+func addAgentRunHistory(entries *[]historyEntry, definition workflowPresentation, delivery core.Delivery) {
 	run := delivery.AgentRun
 	role := agentRunHumanRole(definition, run)
 	context := ""
@@ -118,7 +125,7 @@ func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition,
 	addHistoryEntry(entries, run.FinishedAt, text+context)
 }
 
-func agentRunHumanRole(definition workflow.Definition, run core.AgentRun) string {
+func agentRunHumanRole(definition workflowPresentation, run core.AgentRun) string {
 	role := definition.AgentRoleLabel(run.Role)
 	if run.Capability == coding.ReviewReadOnlyCapability && !strings.Contains(strings.ToLower(role), "reviewer") {
 		role += " reviewer"

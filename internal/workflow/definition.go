@@ -52,13 +52,15 @@ func CodingToProposalDefinition() Definition {
 }
 
 func CodebaseInvestigationDefinition() Definition {
+	definition := investigation.WorkflowDefinition()
 	return Definition{
-		Name: investigation.Workflow, Revision: investigation.WorkflowRevision,
+		Name: definition.Name, Revision: definition.Revision,
+		RequiredProviderCapabilities: definition.RequiredProviderCapabilities,
 		Presentation: Presentation{
 			Operations: map[string]string{
-				string(InvestigationWorkComplete):  "Complete",
-				string(InvestigationWorkAttention): "Needs attention",
-				string(InvestigationWorkWaitInput): "Waiting for follow-up or cleanup",
+				string(investigation.WorkComplete):  "Complete",
+				string(investigation.WorkAttention): "Needs attention",
+				string(investigation.WorkWaitInput): "Waiting for follow-up or cleanup",
 			},
 			AgentRoles: map[string]string{"investigate": "Investigator"},
 			Results:    map[string]string{"investigation-draft": "Investigation draft"},

@@ -13,6 +13,15 @@ import (
 const ActionRepositoryRestore core.ActionKind = "repository-restore"
 
 type Store interface {
+	Job(context.Context, string) (core.Job, error)
+	CodebaseInvestigationSource(context.Context, string) (Source, error)
+	Sandboxes(context.Context, string) ([]core.Sandbox, error)
+	Actions(context.Context, string) ([]core.Action, error)
+	Deliveries(context.Context, string) ([]core.Delivery, error)
+	CodebaseInvestigationDrafts(context.Context, string) ([]Draft, error)
+	SetWorkflowAttention(context.Context, string, string, string) error
+	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
+	RecordCodebaseInvestigationDraft(context.Context, core.Artifact) (Draft, bool, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 }
 

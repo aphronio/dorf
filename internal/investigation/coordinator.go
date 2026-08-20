@@ -1,4 +1,4 @@
-package workflow
+package investigation
 
 import (
 	"context"
@@ -9,8 +9,6 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
-	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -20,62 +18,62 @@ type investigationFactStepResultV1 struct {
 
 func investigationAgentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 
-type InvestigationWorkKind string
+type WorkKind string
 
 const (
-	InvestigationWorkComplete     InvestigationWorkKind = "complete"
-	InvestigationWorkAttention    InvestigationWorkKind = "attention"
-	InvestigationWorkAction       InvestigationWorkKind = "action"
-	InvestigationWorkDeliver      InvestigationWorkKind = "deliver-message"
-	InvestigationWorkObserveAgent InvestigationWorkKind = "observe-agent-run"
-	InvestigationWorkRecordDraft  InvestigationWorkKind = "record-draft"
-	InvestigationWorkWaitInput    InvestigationWorkKind = "wait-client-input"
+	WorkComplete     WorkKind = "complete"
+	WorkAttention    WorkKind = "attention"
+	WorkAction       WorkKind = "action"
+	WorkDeliver      WorkKind = "deliver-message"
+	WorkObserveAgent WorkKind = "observe-agent-run"
+	WorkRecordDraft  WorkKind = "record-draft"
+	WorkWaitInput    WorkKind = "wait-client-input"
 )
 
-type InvestigationWork struct {
-	Kind       InvestigationWorkKind `json:"kind"`
-	FactID     string                `json:"fact_id,omitempty"`
-	ActionKind core.ActionKind       `json:"action,omitempty"`
-	Scope      string                `json:"scope,omitempty"`
-	Detail     string                `json:"detail,omitempty"`
+type Work struct {
+	Kind       WorkKind        `json:"kind"`
+	FactID     string          `json:"fact_id,omitempty"`
+	ActionKind core.ActionKind `json:"action,omitempty"`
+	Scope      string          `json:"scope,omitempty"`
+	Detail     string          `json:"detail,omitempty"`
 }
 
-func (w InvestigationWork) Description() string {
-	definition := CodebaseInvestigationDefinition()
-	if w.Kind == InvestigationWorkAction {
+func (w Work) Description() string {
+	definition := WorkflowDefinition()
+	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
-	if w.Kind == InvestigationWorkObserveAgent {
+	if w.Kind == WorkObserveAgent {
 		return definition.AgentRoleLabel("investigate") + " running"
 	}
-	if w.Kind == InvestigationWorkDeliver {
+	if w.Kind == WorkDeliver {
 		return "Delivering brief to " + lowerFirst(definition.AgentRoleLabel("investigate"))
 	}
-	if w.Kind == InvestigationWorkRecordDraft {
+	if w.Kind == WorkRecordDraft {
 		return "Recording " + lowerFirst(definition.ResultLabel("investigation-draft"))
 	}
 	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
 
-type InvestigationSnapshot struct {
+type Snapshot struct {
 	Job         core.Job
 	MainSandbox core.Sandbox
 	Actions     []core.Action
 	Deliveries  []core.Delivery
 	Delivery    core.Delivery
-	Drafts      []investigation.Draft
-	Source      investigation.Source
+	Drafts      []Draft
+	Source      Source
 }
 
-func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID string) (InvestigationSnapshot, error) {
-	var snapshot InvestigationSnapshot
+func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, error) {
+	var snapshot Snapshot
 	var err error
 	snapshot.Job, err = store.Job(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.Job.Workflow != investigation.Workflow || snapshot.Job.WorkflowRevision != investigation.WorkflowRevision {
-		return snapshot, fmt.Errorf("Job %s is not codebase-investigation revision %s", jobID, investigation.WorkflowRevision)
+	if snapshot.Job.Workflow != Workflow || snapshot.Job.WorkflowRevision != WorkflowRevision {
+		return snapshot, fmt.Errorf("Job %s is not codebase-investigation revision %s", jobID, WorkflowRevision)
 	}
 	snapshot.Source, err = store.CodebaseInvestigationSource(ctx, jobID)
 	if err != nil {
@@ -95,7 +93,7 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 		}
 	}
 	if snapshot.MainSandbox.ID == "" {
-		return snapshot, fmt.Errorf("main Sandbox %s: %w", core.MainSandboxName(jobID), postgres.ErrNotFound)
+		return snapshot, fmt.Errorf("main Sandbox %s is not durably reserved", core.MainSandboxName(jobID))
 	}
 	snapshot.Actions, err = store.Actions(ctx, jobID)
 	if err != nil {
@@ -138,20 +136,20 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 	return snapshot, nil
 }
 
-func (s InvestigationSnapshot) Project() InvestigationWork {
+func (s Snapshot) Project() Work {
 	run := s.Delivery.AgentRun
 	if !s.Job.AdmissionOpen {
-		return InvestigationWork{Kind: InvestigationWorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
+		return Work{Kind: WorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
 	}
-	action := func(kind core.ActionKind) InvestigationWork {
-		return InvestigationWork{Kind: InvestigationWorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
+	action := func(kind core.ActionKind) Work {
+		return Work{Kind: WorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
 	}
 	if !investigationActionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(core.ActionSandboxCreate)
 	}
 	materializationAction := gitworkspace.ActionRepositoryClone
-	if s.Source.Kind == investigation.SourceGitBundle {
-		materializationAction = investigation.ActionRepositoryRestore
+	if s.Source.Kind == SourceGitBundle {
+		materializationAction = ActionRepositoryRestore
 	}
 	if !investigationActionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
 		return action(materializationAction)
@@ -161,76 +159,76 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	}
 	for _, draft := range s.Drafts {
 		if draft.AgentRunID == run.ID {
-			return InvestigationWork{Kind: InvestigationWorkWaitInput, FactID: draft.ArtifactID, Detail: "send a follow-up or request cleanup"}
+			return Work{Kind: WorkWaitInput, FactID: draft.ArtifactID, Detail: "send a follow-up or request cleanup"}
 		}
 	}
 	switch run.State {
 	case core.AgentRunPending, core.AgentRunSubmitting:
-		return InvestigationWork{Kind: InvestigationWorkDeliver, FactID: run.ID}
+		return Work{Kind: WorkDeliver, FactID: run.ID}
 	case core.AgentRunActive:
-		return InvestigationWork{Kind: InvestigationWorkObserveAgent, FactID: run.ID}
+		return Work{Kind: WorkObserveAgent, FactID: run.ID}
 	case core.AgentRunCompleted:
 		if s.Job.WorkflowAttentionSource == run.ID && s.Job.WorkflowAttention != "" {
-			return InvestigationWork{Kind: InvestigationWorkAttention, FactID: run.ID, Detail: s.Job.WorkflowAttention}
+			return Work{Kind: WorkAttention, FactID: run.ID, Detail: s.Job.WorkflowAttention}
 		}
-		return InvestigationWork{Kind: InvestigationWorkRecordDraft, FactID: run.ID}
+		return Work{Kind: WorkRecordDraft, FactID: run.ID}
 	case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
 		detail := run.Attention
 		if detail == "" {
 			detail = string(run.State)
 		}
-		return InvestigationWork{Kind: InvestigationWorkAttention, FactID: run.ID, Detail: detail}
+		return Work{Kind: WorkAttention, FactID: run.ID, Detail: detail}
 	default:
-		return InvestigationWork{Kind: InvestigationWorkAttention, FactID: run.ID, Detail: "unsupported investigator AgentRun state " + string(run.State)}
+		return Work{Kind: WorkAttention, FactID: run.ID, Detail: "unsupported investigator AgentRun state " + string(run.State)}
 	}
 }
 
-func RunCodebaseInvestigation(ctx context.Context, service investigation.Service, store postgres.Store, jobID string) (InvestigationWork, error) {
+func Run(ctx context.Context, service Service, store Store, jobID string) (Work, error) {
 	for {
-		snapshot, err := LoadCodebaseInvestigation(ctx, store, jobID)
+		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
-			return InvestigationWork{}, err
+			return Work{}, err
 		}
 		work := snapshot.Project()
 		switch work.Kind {
-		case InvestigationWorkComplete, InvestigationWorkAttention, InvestigationWorkWaitInput:
+		case WorkComplete, WorkAttention, WorkWaitInput:
 			return work, nil
-		case InvestigationWorkAction:
+		case WorkAction:
 			err = runInvestigationAction(ctx, service, store, snapshot, work)
-		case InvestigationWorkDeliver:
+		case WorkDeliver:
 			err = runInvestigationFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
 			})
-		case InvestigationWorkObserveAgent:
+		case WorkObserveAgent:
 			turn, observeErr := service.ObserveAgentRunTurn(ctx, snapshot.Job, snapshot.Delivery.AgentRun, "investigate")
 			if observeErr != nil {
-				return InvestigationWork{}, observeErr
+				return Work{}, observeErr
 			}
 			if turn.Status == "completed" || turn.Status == "failed" || turn.Status == "interrupted" {
 				continue
 			}
 			return work, nil
-		case InvestigationWorkRecordDraft:
+		case WorkRecordDraft:
 			err = runInvestigationFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
 				return recordInvestigationDraft(workCtx, service, store, snapshot)
 			})
 		default:
-			return InvestigationWork{}, fmt.Errorf("unsupported codebase-investigation work %q", work.Kind)
+			return Work{}, fmt.Errorf("unsupported codebase-investigation work %q", work.Kind)
 		}
 		if err != nil {
 			var contractErr investigationContractError
 			if errors.As(err, &contractErr) {
 				if attentionErr := store.SetWorkflowAttention(ctx, snapshot.Job.ID, work.FactID, contractErr.Error()); attentionErr != nil {
-					return InvestigationWork{}, errors.Join(err, attentionErr)
+					return Work{}, errors.Join(err, attentionErr)
 				}
-				return InvestigationWork{Kind: InvestigationWorkAttention, FactID: work.FactID, Detail: contractErr.Error()}, nil
+				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: contractErr.Error()}, nil
 			}
-			return InvestigationWork{}, err
+			return Work{}, err
 		}
 	}
 }
 
-func investigationAgentInput(source investigation.Source, delivery core.Delivery) string {
+func investigationAgentInput(source Source, delivery core.Delivery) string {
 	return fmt.Sprintf(`%s
 
 Dorf codebase-investigation contract:
@@ -241,7 +239,7 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
 }
 
-func runInvestigationAction(ctx context.Context, service investigation.Service, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
+func runInvestigationAction(ctx context.Context, service Service, store Store, snapshot Snapshot, work Work) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != core.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}
@@ -256,7 +254,7 @@ func runInvestigationAction(ctx context.Context, service investigation.Service, 
 		return nil
 	}
 	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == investigation.ActionRepositoryRestore {
+		if work.ActionKind == ActionRepositoryRestore {
 			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
 		}
 		if work.ActionKind == gitworkspace.ActionRepositoryClone {
@@ -270,7 +268,7 @@ type investigationContractError string
 
 func (e investigationContractError) Error() string { return string(e) }
 
-func recordInvestigationDraft(ctx context.Context, service investigation.Service, store postgres.Store, snapshot InvestigationSnapshot) error {
+func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot) error {
 	run := snapshot.Delivery.AgentRun
 	turn, err := service.ObserveAgentRunTurn(ctx, snapshot.Job, run, "investigate")
 	if err != nil {
@@ -290,7 +288,7 @@ func recordInvestigationDraft(ctx context.Context, service investigation.Service
 	if err != nil {
 		return err
 	}
-	name := investigation.DraftArtifactName(snapshot.Delivery.Message.Sequence)
+	name := DraftArtifactName(snapshot.Delivery.Message.Sequence)
 	artifact := core.Artifact{
 		ID:    core.ArtifactID(snapshot.Job.ID, name),
 		JobID: snapshot.Job.ID, Name: name,

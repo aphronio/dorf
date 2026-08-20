@@ -653,7 +653,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	}
 	return writeJSON(stdout, map[string]any{
 		"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision,
-		"required_provider_capabilities": workflow.CodebaseInvestigationDefinition().RequiredProviderCapabilities,
+		"required_provider_capabilities": investigation.WorkflowDefinition().RequiredProviderCapabilities,
 		"created":                        created, "task_id": job.CurrentTaskID, "scheduled": true,
 		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
@@ -755,7 +755,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
 	history := workflowHistory(snapshot)
-	definition := workflow.CodingToProposalDefinition()
+	definition := coding.WorkflowDefinition()
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
@@ -777,7 +777,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 			"sandbox_profile":                profileView(profile),
 			"current_work":                   currentWork,
 			"readiness":                      assessment,
-			"required_provider_capabilities": workflow.CodingToProposalDefinition().RequiredProviderCapabilities,
+			"required_provider_capabilities": coding.WorkflowDefinition().RequiredProviderCapabilities,
 			"proposal":                       snapshot.Proposal,
 			"outcome":                        snapshot.Outcome,
 			"observed_facts": map[string]any{
@@ -829,7 +829,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 }
 
 func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, job core.Job, profile core.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
-	snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, job.ID)
+	snapshot, err := investigation.LoadSnapshot(ctx, store, job.ID)
 	if err != nil {
 		return err
 	}
@@ -846,7 +846,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return err
 	}
 	currentExecution := currentTaskExecution(executions)
-	definition := workflow.CodebaseInvestigationDefinition()
+	definition := investigation.WorkflowDefinition()
 	executionOperation := work.Description()
 	if operation, ok := cleanupOperation(definition, job, []core.Sandbox{snapshot.MainSandbox}, snapshot.Actions); ok {
 		executionOperation = operation
