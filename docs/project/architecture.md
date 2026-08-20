@@ -160,12 +160,12 @@ workflow phase to make unlike facts look similar.
 Runtime composition mirrors that durable boundary. `ExecutionService` owns shared Sandbox, Route,
 AgentRun, Artifact-byte, attention, and cleanup custody. `RepositoryService` adds exact checkout
 materialization and observation for workflows that use Git. `CodingService` adds setup, mutable
-Revision observation, Checks, and review. Coding receives the composed coding service;
-codebase-investigation receives only repository plus execution capabilities; cleanup receives only
-execution custody. Provider and Harness selection still happens once at the composition root. The
-base runtime contains only those shared services. GitHub, publication, outcome observation, and the
-coding service are constructed only when the coding workflow resolves its typed runtime; an
-investigation or cleanup cannot acquire that authority through the common runtime shape.
+Revision observation, Checks, and review. The investigation package composes repository execution
+with its retained-source restore and exact unchanged-checkout proof. Coding and investigation each
+receive their own typed runtime; cleanup receives only execution custody. Provider and Harness
+selection still happens once at the composition root. The base runtime contains only shared
+execution. GitHub, publication, outcome observation, coding services, and investigation source or
+draft policy are constructed only by the workflow runtime that owns them.
 
 ## Client boundary
 

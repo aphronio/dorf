@@ -13,6 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -29,7 +30,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
-		Source: spine.CodebaseInvestigationSource{Kind: spine.InvestigationSourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
+		Source: investigation.Source{Kind: investigation.SourceRemote, Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40)},
 	}
 	job, created, err := store.AdmitInvestigation(ctx, input)
 	if err != nil || !created || job.Workflow != input.Workflow || job.WorkflowRevision != input.WorkflowRevision {
@@ -40,12 +41,12 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatalf("idempotent Job=%#v created=%v err=%v", repeated, created, err)
 	}
 	source, err := store.CodebaseInvestigationSource(ctx, job.ID)
-	if err != nil || source.JobID != job.ID || source.Kind != spine.InvestigationSourceRemote || source.Repository != input.Source.Repository || source.Revision != input.Source.Revision {
+	if err != nil || source.JobID != job.ID || source.Kind != investigation.SourceRemote || source.Repository != input.Source.Repository || source.Revision != input.Source.Revision {
 		t.Fatalf("source=%#v err=%v", source, err)
 	}
 	changedSource := input
-	changedSource.Source = spine.CodebaseInvestigationSource{
-		Kind: spine.InvestigationSourceGitBundle, Revision: input.Source.Revision,
+	changedSource.Source = investigation.Source{
+		Kind: investigation.SourceGitBundle, Revision: input.Source.Revision,
 		BundleDigest: strings.Repeat("e", 64), BundleByteSize: 123,
 	}
 	if _, _, err := store.AdmitInvestigation(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
@@ -95,7 +96,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = deliveries[0].AgentRun
-	name := spine.CodebaseInvestigationDraftArtifactName(1)
+	name := investigation.DraftArtifactName(1)
 	artifact := spine.Artifact{
 		ID: spine.ArtifactID(job.ID, name), JobID: job.ID,
 		Name: name, Digest: strings.Repeat("b", 64), ByteSize: 16,
@@ -139,7 +140,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRun = deliveries[1].AgentRun
-	secondName := spine.CodebaseInvestigationDraftArtifactName(2)
+	secondName := investigation.DraftArtifactName(2)
 	secondArtifact := spine.Artifact{ID: spine.ArtifactID(job.ID, secondName), JobID: job.ID, Name: secondName, Digest: strings.Repeat("d", 64), ByteSize: 24, MediaType: "text/markdown", Producer: "dorf-codebase-investigation", AgentRunID: secondRun.ID, CreatedAt: secondRun.FinishedAt}
 	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, secondArtifact); err != nil || !created {
 		t.Fatalf("second draft created=%v err=%v", created, err)
@@ -154,8 +155,8 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	revision := strings.Repeat("9", 40)
-	supplied := spine.CodebaseInvestigationSource{
-		Kind: spine.InvestigationSourceGitBundle, Revision: revision,
+	supplied := investigation.Source{
+		Kind: investigation.SourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("8", 64), BundleByteSize: 4096,
 	}
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
@@ -201,7 +202,7 @@ func (e *investigationExternals) SandboxCreate(context.Context, spine.Job, spine
 func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
 	return e.effect(spine.ActionRepositoryClone)
 }
-func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source spine.CodebaseInvestigationSource, contents []byte) error {
+func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source investigation.Source, contents []byte) error {
 	if source.JobID != job.ID || string(contents) != "retained repository input" {
 		return fmt.Errorf("unexpected retained repository restore")
 	}
@@ -257,7 +258,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	externals := &investigationExternals{}
 	execution := spine.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
-	service := spine.NewRepositoryService(execution, externals)
+	repository := spine.NewRepositoryService(execution, externals)
+	service := investigation.NewService(repository, store, externals, records, absurdruntime.RequireClaim)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{
@@ -266,8 +268,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 			Goal: "Find one concrete simplification.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
-		Source: spine.CodebaseInvestigationSource{
-			Kind: spine.InvestigationSourceGitBundle, Revision: strings.Repeat("d", 40),
+		Source: investigation.Source{
+			Kind: investigation.SourceGitBundle, Revision: strings.Repeat("d", 40),
 			BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
 		},
 	})
@@ -308,7 +310,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatalf("Drafts=%#v err=%v", drafts, err)
 	}
 	artifacts, err := store.Artifacts(ctx, job.ID)
-	if err != nil || len(artifacts) != 1 || artifacts[0].ID != drafts[0].ArtifactID || artifacts[0].Name != spine.CodebaseInvestigationDraftArtifactName(1) {
+	if err != nil || len(artifacts) != 1 || artifacts[0].ID != drafts[0].ArtifactID || artifacts[0].Name != investigation.DraftArtifactName(1) {
 		t.Fatalf("Artifacts=%#v err=%v", artifacts, err)
 	}
 	contents, err := records.ReadVerified(artifacts[0].Digest, artifacts[0].ByteSize)

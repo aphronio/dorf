@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/gateway"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -39,9 +40,9 @@ func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox s
 	return e.Sandbox.ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
 }
 
-func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source spine.CodebaseInvestigationSource, contents []byte) error {
+func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source investigation.Source, contents []byte) error {
 	if owned.JobID != job.ID || owned.ID != spine.MainSandboxName(job.ID) || source.JobID != job.ID ||
-		source.Kind != spine.InvestigationSourceGitBundle || len(contents) == 0 {
+		source.Kind != investigation.SourceGitBundle || len(contents) == 0 {
 		return fmt.Errorf("repository restore requires the exact retained source and main Sandbox")
 	}
 	owner := ownershipMetadata(owned)
@@ -411,4 +412,5 @@ var (
 	_ spine.Externals                  = Externals{}
 	_ spine.RepositoryServiceExternals = Externals{}
 	_ spine.CodingServiceExternals     = Externals{}
+	_ investigation.Externals          = Externals{}
 )

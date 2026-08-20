@@ -13,6 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	piagent "github.com/aphronio/dorf/internal/pi"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -44,7 +45,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return workflow.CodingRuntime{}, err
 	}
-	coding := spine.NewCodingService(resolved.Runtime.Repository, r.store, resolved.Externals)
+	repository := spine.NewRepositoryService(resolved.Runtime.Execution, resolved.Externals)
+	coding := spine.NewCodingService(repository, r.store, resolved.Externals)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -52,14 +54,24 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}
 	return workflow.CodingRuntime{
-		Runtime: resolved.Runtime,
-		Coding:  coding,
+		Runtime:    resolved.Runtime,
+		Repository: repository, Coding: coding,
 		Proposal: workflow.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
 			Store:   r.store, Client: r.client,
 		},
 	}, nil
+}
+
+func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (workflow.InvestigationRuntime, error) {
+	resolved, err := r.resolveBase(ctx, name)
+	if err != nil {
+		return workflow.InvestigationRuntime{}, err
+	}
+	repository := spine.NewRepositoryService(resolved.Runtime.Execution, resolved.Externals)
+	service := investigation.NewService(repository, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	return workflow.InvestigationRuntime{Runtime: resolved.Runtime, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
@@ -102,11 +114,10 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		Agent: agent, Ownership: ownership,
 	}
 	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
-	repository := spine.NewRepositoryService(execution, externals)
 	return resolvedBaseRuntime{
 		Runtime: workflow.Runtime{
-			Execution: execution, Repository: repository,
-			Profile: workflow.RuntimeProfile{SandboxProfile: profile.Name},
+			Execution: execution,
+			Profile:   workflow.RuntimeProfile{SandboxProfile: profile.Name},
 		},
 		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil

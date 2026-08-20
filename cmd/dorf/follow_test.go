@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -168,7 +169,7 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 			Role: "investigate", State: spine.AgentRunCompleted,
 			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
 		}}},
-		Drafts: []spine.CodebaseInvestigationDraft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
+		Drafts: []investigation.Draft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
 	}
 	history := investigationHistory(snapshot)
 	if len(history) != 7 {

@@ -20,11 +20,13 @@ type profileGuardStore struct {
 }
 
 type profileRuntimeResolverStub struct {
-	runtime       Runtime
-	codingRuntime CodingRuntime
-	err           error
-	name          string
-	codingName    string
+	runtime              Runtime
+	codingRuntime        CodingRuntime
+	investigationRuntime InvestigationRuntime
+	err                  error
+	name                 string
+	codingName           string
+	investigationName    string
 }
 
 func (r *profileRuntimeResolverStub) Resolve(_ context.Context, name string) (Runtime, error) {
@@ -35,6 +37,11 @@ func (r *profileRuntimeResolverStub) Resolve(_ context.Context, name string) (Ru
 func (r *profileRuntimeResolverStub) ResolveCoding(_ context.Context, name string) (CodingRuntime, error) {
 	r.codingName = name
 	return r.codingRuntime, r.err
+}
+
+func (r *profileRuntimeResolverStub) ResolveInvestigation(_ context.Context, name string) (InvestigationRuntime, error) {
+	r.investigationName = name
+	return r.investigationRuntime, r.err
 }
 
 func (s *profileGuardStore) Job(context.Context, string) (spine.Job, error) {

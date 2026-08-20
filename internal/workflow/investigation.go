@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -53,8 +54,8 @@ type InvestigationSnapshot struct {
 	Actions     []spine.Action
 	Deliveries  []spine.Delivery
 	Delivery    spine.Delivery
-	Drafts      []spine.CodebaseInvestigationDraft
-	Source      spine.CodebaseInvestigationSource
+	Drafts      []investigation.Draft
+	Source      investigation.Source
 }
 
 func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID string) (InvestigationSnapshot, error) {
@@ -140,7 +141,7 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 		return action(spine.ActionSandboxCreate)
 	}
 	repositoryAction := spine.ActionRepositoryClone
-	if s.Source.Kind == spine.InvestigationSourceGitBundle {
+	if s.Source.Kind == investigation.SourceGitBundle {
 		repositoryAction = spine.ActionRepositoryRestore
 	}
 	if !actionSucceeded(s.Actions, repositoryAction, s.MainSandbox.ID) {
@@ -175,7 +176,7 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	}
 }
 
-func RunCodebaseInvestigation(ctx context.Context, service spine.RepositoryService, store postgres.Store, jobID string) (InvestigationWork, error) {
+func RunCodebaseInvestigation(ctx context.Context, service investigation.Service, store postgres.Store, jobID string) (InvestigationWork, error) {
 	for {
 		snapshot, err := LoadCodebaseInvestigation(ctx, store, jobID)
 		if err != nil {
@@ -220,7 +221,7 @@ func RunCodebaseInvestigation(ctx context.Context, service spine.RepositoryServi
 	}
 }
 
-func investigationAgentInput(source spine.CodebaseInvestigationSource, delivery spine.Delivery) string {
+func investigationAgentInput(source investigation.Source, delivery spine.Delivery) string {
 	return fmt.Sprintf(`%s
 
 Dorf codebase-investigation contract:
@@ -231,7 +232,7 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
 }
 
-func runInvestigationAction(ctx context.Context, service spine.RepositoryService, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
+func runInvestigationAction(ctx context.Context, service investigation.Service, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != spine.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}
@@ -260,7 +261,7 @@ type investigationContractError string
 
 func (e investigationContractError) Error() string { return string(e) }
 
-func recordInvestigationDraft(ctx context.Context, service spine.RepositoryService, store postgres.Store, snapshot InvestigationSnapshot) error {
+func recordInvestigationDraft(ctx context.Context, service investigation.Service, store postgres.Store, snapshot InvestigationSnapshot) error {
 	run := snapshot.Delivery.AgentRun
 	turn, err := service.ObserveAgentRunTurn(ctx, snapshot.Job, run, "investigate")
 	if err != nil {
@@ -280,7 +281,7 @@ func recordInvestigationDraft(ctx context.Context, service spine.RepositoryServi
 	if err != nil {
 		return err
 	}
-	name := spine.CodebaseInvestigationDraftArtifactName(snapshot.Delivery.Message.Sequence)
+	name := investigation.DraftArtifactName(snapshot.Delivery.Message.Sequence)
 	artifact := spine.Artifact{
 		ID:    spine.ArtifactID(snapshot.Job.ID, name),
 		JobID: snapshot.Job.ID, Name: name,

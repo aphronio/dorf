@@ -12,6 +12,7 @@ import (
 	"time"
 
 	githubapi "github.com/aphronio/dorf/internal/github"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -80,7 +81,7 @@ type NewCodingJob struct {
 
 type NewInvestigationJob struct {
 	NewJob
-	Source spine.CodebaseInvestigationSource
+	Source investigation.Source
 }
 
 type admissionInput struct {
@@ -91,7 +92,7 @@ type admissionInput struct {
 	GitHubRepository    string
 	GitHubInstallation  string
 	BaseBranch          string
-	InvestigationSource spine.CodebaseInvestigationSource
+	InvestigationSource investigation.Source
 }
 
 type NewMessage struct {
@@ -251,7 +252,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 	}
 	switch input.Workflow {
 	case spine.WorkflowCodingToProposal:
-		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (spine.CodebaseInvestigationSource{}) {
+		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (investigation.Source{}) {
 			return spine.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", spine.CodingToProposalRevision)
 		}
 		if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
@@ -318,7 +319,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 	expectedCore := input
 	expectedCore.Repository, expectedCore.Revision, expectedCore.Branch = "", "", ""
 	expectedCore.GitHubRepository, expectedCore.GitHubInstallation, expectedCore.BaseBranch = "", "", ""
-	expectedCore.InvestigationSource = spine.CodebaseInvestigationSource{}
+	expectedCore.InvestigationSource = investigation.Source{}
 	if storedRow.ID != id || stored != expectedCore {
 		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
 	}
@@ -397,25 +398,25 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 	return job, rows == 1, err
 }
 
-func normalizeInvestigationSource(source spine.CodebaseInvestigationSource) spine.CodebaseInvestigationSource {
+func normalizeInvestigationSource(source investigation.Source) investigation.Source {
 	source.JobID = ""
-	source.Kind = spine.CodebaseInvestigationSourceKind(strings.TrimSpace(string(source.Kind)))
+	source.Kind = investigation.SourceKind(strings.TrimSpace(string(source.Kind)))
 	source.Repository = strings.TrimSpace(source.Repository)
 	source.Revision = strings.TrimSpace(source.Revision)
 	source.BundleDigest = strings.TrimSpace(source.BundleDigest)
 	return source
 }
 
-func validateInvestigationSource(source spine.CodebaseInvestigationSource) error {
+func validateInvestigationSource(source investigation.Source) error {
 	if !ValidRevision(source.Revision) {
 		return fmt.Errorf("codebase-investigation source requires a lowercase full commit OID")
 	}
 	switch source.Kind {
-	case spine.InvestigationSourceRemote:
+	case investigation.SourceRemote:
 		if source.Repository == "" || source.BundleDigest != "" || source.BundleByteSize != 0 {
 			return fmt.Errorf("remote investigation source requires only a repository URL and exact Revision")
 		}
-	case spine.InvestigationSourceGitBundle:
+	case investigation.SourceGitBundle:
 		if source.Repository != "" || !sha256Digest.MatchString(source.BundleDigest) || source.BundleByteSize <= 0 {
 			return fmt.Errorf("Git-bundle investigation source requires exact retained digest, byte size, and Revision")
 		}
@@ -425,7 +426,7 @@ func validateInvestigationSource(source spine.CodebaseInvestigationSource) error
 	return nil
 }
 
-func investigationSourceParams(jobID string, source spine.CodebaseInvestigationSource) dbsql.InsertCodebaseInvestigationSourceParams {
+func investigationSourceParams(jobID string, source investigation.Source) dbsql.InsertCodebaseInvestigationSourceParams {
 	return dbsql.InsertCodebaseInvestigationSourceParams{
 		JobID: jobID, Kind: string(source.Kind), Repository: source.Repository, Revision: source.Revision,
 		BundleDigest:   nullableString(source.BundleDigest),
@@ -433,8 +434,8 @@ func investigationSourceParams(jobID string, source spine.CodebaseInvestigationS
 	}
 }
 
-func investigationSourceFromValues(jobID, kind, repository, revision, digest string, byteSize int64) spine.CodebaseInvestigationSource {
-	return spine.CodebaseInvestigationSource{JobID: jobID, Kind: spine.CodebaseInvestigationSourceKind(kind), Repository: repository, Revision: revision, BundleDigest: digest, BundleByteSize: byteSize}
+func investigationSourceFromValues(jobID, kind, repository, revision, digest string, byteSize int64) investigation.Source {
+	return investigation.Source{JobID: jobID, Kind: investigation.SourceKind(kind), Repository: repository, Revision: revision, BundleDigest: digest, BundleByteSize: byteSize}
 }
 
 func (s Store) AdmitMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {

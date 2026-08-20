@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/repository"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/spine"
@@ -93,8 +94,8 @@ func TestRepositoryRestoreMaterializesExactRetainedBundleAndReconcilesReplay(t *
 	digest := fmt.Sprintf("%x", sha256.Sum256(bundle.Contents))
 	job := spine.Job{ID: "job-local-source"}
 	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("a", 64)}
-	source := spine.CodebaseInvestigationSource{
-		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: bundle.Revision,
+	source := investigation.Source{
+		JobID: job.ID, Kind: investigation.SourceGitBundle, Revision: bundle.Revision,
 		BundleDigest: digest, BundleByteSize: int64(len(bundle.Contents)),
 	}
 	sandbox := localRestoreSandbox{root: t.TempDir(), workspace: "/workspace/job"}
@@ -129,8 +130,8 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := spine.Job{ID: "job-foreign"}
 	owned := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID, OwnershipNonce: strings.Repeat("b", 64)}
-	source := spine.CodebaseInvestigationSource{
-		JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: revision,
+	source := investigation.Source{
+		JobID: job.ID, Kind: investigation.SourceGitBundle, Revision: revision,
 		BundleDigest: strings.Repeat("c", 64), BundleByteSize: 1,
 	}
 	err := (Externals{Sandbox: sandbox}).RepositoryRestore(context.Background(), job, owned, source, []byte("x"))

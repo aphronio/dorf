@@ -7,90 +7,91 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
-func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (spine.CodebaseInvestigationSource, error) {
+func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (investigation.Source, error) {
 	row, err := dbsql.New(s.DB).GetCodebaseInvestigationSource(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return spine.CodebaseInvestigationSource{}, ErrNotFound
+		return investigation.Source{}, ErrNotFound
 	}
 	if err != nil {
-		return spine.CodebaseInvestigationSource{}, err
+		return investigation.Source{}, err
 	}
 	return investigationSourceFromValues(row.JobID, row.Kind, row.Repository, row.Revision, row.BundleDigest, row.BundleByteSize), nil
 }
 
-func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]spine.CodebaseInvestigationDraft, error) {
+func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]investigation.Draft, error) {
 	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationDrafts(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	drafts := make([]spine.CodebaseInvestigationDraft, 0, len(rows))
+	drafts := make([]investigation.Draft, 0, len(rows))
 	for _, row := range rows {
-		drafts = append(drafts, spine.CodebaseInvestigationDraft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
+		drafts = append(drafts, investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
 	}
 	return drafts, nil
 }
 
-func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact spine.Artifact) (spine.CodebaseInvestigationDraft, bool, error) {
+func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact spine.Artifact) (investigation.Draft, bool, error) {
 	if err := validateInvestigationDraft(artifact); err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
 	run, err := queries.GetCodebaseInvestigationRunForUpdate(ctx, dbsql.GetCodebaseInvestigationRunForUpdateParams{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return spine.CodebaseInvestigationDraft{}, false, ErrNotFound
+			return investigation.Draft{}, false, ErrNotFound
 		}
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	if run.WorkflowName != spine.WorkflowCodebaseInvestigation || run.WorkflowRevision != spine.CodebaseInvestigationRevision || run.Role != "investigate" ||
 		run.State != spine.AgentRunCompleted || run.TurnID == "" || run.TurnOutcome != "completed" || run.InputRevision != run.Revision ||
 		!run.StartedAt.Valid || !run.FinishedAt.Valid {
-		return spine.CodebaseInvestigationDraft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")
+		return investigation.Draft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")
 	}
 	drafts, err := queries.ListCodebaseInvestigationDrafts(ctx, artifact.JobID)
 	if err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	for _, row := range drafts {
 		if row.AgentRunID != artifact.AgentRunID {
 			continue
 		}
-		existing := spine.CodebaseInvestigationDraft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
+		existing := investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
 		if existing.ArtifactID != artifact.ID {
-			return spine.CodebaseInvestigationDraft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", artifact.AgentRunID)
+			return investigation.Draft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", artifact.AgentRunID)
 		}
 		if err := insertArtifact(ctx, tx, artifact); err != nil {
-			return spine.CodebaseInvestigationDraft{}, false, err
+			return investigation.Draft{}, false, err
 		}
 		return existing, false, nil
 	}
 	if !run.AdmissionOpen || run.CleanupState != spine.CleanupPending {
-		return spine.CodebaseInvestigationDraft{}, false, fmt.Errorf("investigation draft cannot be recorded after admission closes or cleanup begins")
+		return investigation.Draft{}, false, fmt.Errorf("investigation draft cannot be recorded after admission closes or cleanup begins")
 	}
 	if !artifact.CreatedAt.Equal(run.FinishedAt.Time) {
-		return spine.CodebaseInvestigationDraft{}, false, fmt.Errorf("investigation draft timing conflicts with its completed AgentRun")
+		return investigation.Draft{}, false, fmt.Errorf("investigation draft timing conflicts with its completed AgentRun")
 	}
 	if err := insertArtifact(ctx, tx, artifact); err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	if err := expectOneRows(queries.InsertCodebaseInvestigationDraft(ctx, dbsql.InsertCodebaseInvestigationDraftParams{
 		JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID,
 	})); err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return spine.CodebaseInvestigationDraft{}, false, err
+		return investigation.Draft{}, false, err
 	}
-	stored := spine.CodebaseInvestigationDraft{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
+	stored := investigation.Draft{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
 	return stored, true, nil
 }
 

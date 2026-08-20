@@ -42,7 +42,6 @@ type Externals interface {
 
 type RepositoryServiceExternals interface {
 	RepositoryClone(context.Context, Job, Sandbox, string, string, string) error
-	RepositoryRestore(context.Context, Job, Sandbox, CodebaseInvestigationSource, []byte) error
 	RepositoryRevision(context.Context, Job, string, string) (RevisionObservation, error)
 }
 
@@ -426,19 +425,6 @@ func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run 
 	return turn, nil
 }
 
-// VerifyRepositoryUnchanged proves the investigation left the admitted exact
-// checkout clean before its report becomes a terminal workflow fact.
-func (s RepositoryService) VerifyRepositoryUnchanged(ctx context.Context, job Job, revision string) error {
-	observation, err := s.repository.RepositoryRevision(ctx, job, "", revision)
-	if err != nil {
-		return err
-	}
-	if observation.Revision != revision || observation.ComparisonBase != revision || observation.Branch != "" {
-		return fmt.Errorf("investigation changed the admitted repository checkout")
-	}
-	return nil
-}
-
 func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
 	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
@@ -729,26 +715,6 @@ func (s RepositoryService) ExecuteRepositoryClone(ctx context.Context, job Job, 
 		return fmt.Errorf("repository clone does not belong to the exact Job and Sandbox")
 	}
 	if err := s.repository.RepositoryClone(ctx, job, sandbox, repository, revision, branch); err != nil {
-		return err
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
-}
-
-// ExecuteRepositoryRestore reconciles a retained exact repository input and
-// records the same scoped Action only after the provider checkout converges.
-func (s RepositoryService) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox Sandbox, action Action, source CodebaseInvestigationSource) error {
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
-		source.JobID != job.ID || source.Kind != InvestigationSourceGitBundle {
-		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
-	}
-	contents, err := s.blobs.ReadVerified(source.BundleDigest, source.BundleByteSize)
-	if err != nil {
-		return fmt.Errorf("read retained repository bundle: %w", err)
-	}
-	if err := s.repository.RepositoryRestore(ctx, job, sandbox, source, contents); err != nil {
 		return err
 	}
 	if err := s.requireClaim(ctx); err != nil {

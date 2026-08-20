@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -13,7 +14,7 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	run := spine.AgentRun{ID: "run-1", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}
 	delivery := spine.Delivery{Message: spine.Message{Sequence: 1}, AgentRun: run}
-	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery, Source: spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
+	snapshot := InvestigationSnapshot{Job: job, MainSandbox: sandbox, Deliveries: []spine.Delivery{delivery}, Delivery: delivery, Source: investigation.Source{JobID: job.ID, Kind: investigation.SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRouteCreate}
 	for _, want := range steps {
@@ -37,8 +38,8 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	if work := snapshot.Project(); work.Kind != InvestigationWorkRecordDraft {
 		t.Fatalf("draft work=%#v", work)
 	}
-	draft := spine.CodebaseInvestigationDraft{JobID: job.ID, AgentRunID: run.ID, ArtifactID: "artifact-draft"}
-	snapshot.Drafts = []spine.CodebaseInvestigationDraft{draft}
+	draft := investigation.Draft{JobID: job.ID, AgentRunID: run.ID, ArtifactID: "artifact-draft"}
+	snapshot.Drafts = []investigation.Draft{draft}
 	if work := snapshot.Project(); work.Kind != InvestigationWorkWaitInput || work.FactID != draft.ArtifactID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
 		t.Fatalf("waiting work=%#v", work)
 	}
@@ -54,7 +55,7 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := InvestigationSnapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   spine.CodebaseInvestigationSource{JobID: job.ID, Kind: spine.InvestigationSourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
+		Source:   investigation.Source{JobID: job.ID, Kind: investigation.SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
 		Delivery: spine.Delivery{AgentRun: spine.AgentRun{ID: "run-local", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}},
 		Actions:  []spine.Action{{Kind: spine.ActionSandboxCreate, Scope: sandbox.ID, State: spine.ActionSucceeded}},
 	}
@@ -85,7 +86,7 @@ func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
 func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	input := investigationAgentInput(
-		spine.CodebaseInvestigationSource{Revision: revision},
+		investigation.Source{Revision: revision},
 		spine.Delivery{Message: spine.Message{Input: "Find one architectural weakness."}, AgentRun: spine.AgentRun{Role: "investigate"}},
 	)
 	for _, required := range []string{

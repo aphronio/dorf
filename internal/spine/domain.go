@@ -3,7 +3,6 @@ package spine
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"time"
 )
 
@@ -40,24 +39,6 @@ const (
 	ActionRouteRevoke       ActionKind = "provider-route-revoke"
 	ActionSandboxDelete     ActionKind = "sandbox-delete"
 )
-
-type CodebaseInvestigationSourceKind string
-
-const (
-	InvestigationSourceRemote    CodebaseInvestigationSourceKind = "remote"
-	InvestigationSourceGitBundle CodebaseInvestigationSourceKind = "git-bundle"
-)
-
-// CodebaseInvestigationSource is the immutable materialization input for one
-// investigation. A retained bundle is input custody, not an output Artifact.
-type CodebaseInvestigationSource struct {
-	JobID          string                          `json:"job_id,omitempty"`
-	Kind           CodebaseInvestigationSourceKind `json:"kind"`
-	Repository     string                          `json:"repository,omitempty"`
-	Revision       string                          `json:"revision"`
-	BundleDigest   string                          `json:"bundle_digest,omitempty"`
-	BundleByteSize int64                           `json:"bundle_byte_size,omitempty"`
-}
 
 type ActionState string
 
@@ -354,13 +335,6 @@ type JobOutcome struct {
 	ObservedAt     time.Time      `json:"observed_at"`
 }
 
-type CodebaseInvestigationDraft struct {
-	JobID      string    `json:"job_id"`
-	AgentRunID string    `json:"agent_run_id"`
-	ArtifactID string    `json:"artifact_id"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
 type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
@@ -404,10 +378,6 @@ func AgentRunID(messageID string) string {
 
 func ArtifactID(jobID, name string) string {
 	return "artifact-" + digest(jobID+"\x00"+name, 24)
-}
-
-func CodebaseInvestigationDraftArtifactName(sequence int64) string {
-	return fmt.Sprintf("report-%04d.md", sequence)
 }
 
 func ReviewRequestFromID(revision, role string) string {

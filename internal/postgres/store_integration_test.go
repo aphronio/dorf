@@ -15,6 +15,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
@@ -30,8 +31,9 @@ type providerCheck struct {
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
 type integrationRuntimeResolver struct {
-	runtime       workflow.Runtime
-	codingRuntime workflow.CodingRuntime
+	runtime              workflow.Runtime
+	codingRuntime        workflow.CodingRuntime
+	investigationRuntime workflow.InvestigationRuntime
 }
 
 func (r integrationRuntimeResolver) Resolve(_ context.Context, name string) (workflow.Runtime, error) {
@@ -46,6 +48,13 @@ func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string
 		return workflow.CodingRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
 	return r.codingRuntime, nil
+}
+
+func (r integrationRuntimeResolver) ResolveInvestigation(_ context.Context, name string) (workflow.InvestigationRuntime, error) {
+	if name != r.investigationRuntime.Profile.SandboxProfile {
+		return workflow.InvestigationRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+	}
+	return r.investigationRuntime, nil
 }
 
 func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
@@ -94,11 +103,14 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	repository := spine.NewRepositoryService(execution, externals)
 	coding := spine.NewCodingService(repository, store, externals)
 	runtime := workflow.Runtime{
-		Execution: execution, Repository: repository,
-		Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
+		Execution: execution,
+		Profile:   workflow.RuntimeProfile{SandboxProfile: "incus"},
 	}
+	investigationService := investigation.NewService(repository, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	workflow.Register(client, store, integrationRuntimeResolver{
-		runtime: runtime, codingRuntime: workflow.CodingRuntime{Runtime: runtime, Coding: coding},
+		runtime:              runtime,
+		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Repository: repository, Coding: coding},
+		investigationRuntime: workflow.InvestigationRuntime{Runtime: runtime, Investigation: investigationService},
 	})
 	t.Cleanup(func() {
 		client.Close()
@@ -1722,6 +1734,9 @@ func (e *integrationExternals) SandboxCreate(context.Context, spine.Job, spine.S
 }
 func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
 	return e.effect(spine.ActionRepositoryClone)
+}
+func (e *integrationExternals) RepositoryRestore(context.Context, spine.Job, spine.Sandbox, investigation.Source, []byte) error {
+	return e.effect(spine.ActionRepositoryRestore)
 }
 func (e *integrationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
 	return e.effect(spine.ActionRouteCreate)

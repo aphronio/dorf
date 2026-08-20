@@ -2008,3 +2008,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Another workflow legitimately needs one of the coding authorities with the
   same lifecycle and recovery meaning. Add a typed composition for that workflow rather than
   widening the base runtime.
+
+## D079 — Investigation owns its source, draft, and restore policy
+
+- **Status:** Accepted Core/domain separation slice — 2026-08-20
+- **Decision:** Move the investigation `Source`, `Draft`, Artifact naming, retained-bundle restore,
+  and unchanged detached-checkout proof into `internal/investigation`. Its typed runtime composes
+  that service over shared repository execution. The base runtime now grants only execution;
+  coding and investigation each add their own repository-backed authority explicitly.
+- **Why:** Keeping investigation types and restore rules in `spine` made the second workflow look
+  like shared Core semantics. Core owns the Action, Sandbox, AgentRun, blob, and cleanup mechanisms;
+  the investigation workflow owns what its retained source and draft mean.
+- **Proof:** `internal/spine` contains no investigation source, draft, restore, or unchanged-report
+  policy. PostgreSQL, CLI, terminal, coordinator, and typed runtime consume the investigation-owned
+  contract directly; real bundle materialization and PostgreSQL workflow tests retain their prior
+  behavioral coverage.
+- **Reconsider when:** Another workflow needs retained repository input with the same accepted-input
+  and recovery semantics. Extract a neutral repository-input contract only after that second use,
+  rather than moving this workflow's type back into Core.

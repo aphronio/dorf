@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/spine"
+	"github.com/aphronio/dorf/internal/investigation"
 )
 
 func TestPrepareInvestigationSourceRetainsLocalCommittedRevisionBeforeAdmission(t *testing.T) {
@@ -37,7 +37,7 @@ func TestPrepareInvestigationSourceRetainsLocalCommittedRevisionBeforeAdmission(
 	}
 	records := blob.Store{Root: t.TempDir()}
 	source, excluded, err := prepareInvestigationSource(context.Background(), records, "", repo, "HEAD")
-	if err != nil || source.Kind != spine.InvestigationSourceGitBundle || source.Revision != revision || !excluded {
+	if err != nil || source.Kind != investigation.SourceGitBundle || source.Revision != revision || !excluded {
 		t.Fatalf("source=%#v excluded=%v err=%v", source, excluded, err)
 	}
 	if _, err := records.ReadVerified(source.BundleDigest, source.BundleByteSize); err != nil {

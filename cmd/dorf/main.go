@@ -23,6 +23,7 @@ import (
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/investigation"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/proofbarrier"
@@ -925,8 +926,8 @@ func investigationAgentRuns(deliveries []spine.Delivery) []spine.AgentRun {
 	return runs
 }
 
-func investigationSourceSummary(source spine.CodebaseInvestigationSource) string {
-	if source.Kind == spine.InvestigationSourceGitBundle {
+func investigationSourceSummary(source investigation.Source) string {
+	if source.Kind == investigation.SourceGitBundle {
 		return fmt.Sprintf("retained Git bundle sha256:%s (%d bytes)", source.BundleDigest, source.BundleByteSize)
 	}
 	return "remote Git " + source.Repository

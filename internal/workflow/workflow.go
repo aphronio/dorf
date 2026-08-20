@@ -9,6 +9,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -55,20 +56,26 @@ type sandboxProfileStore interface {
 // Sandbox profile. Provider and Harness selection remain in the composition
 // root; workflows only consume their established contracts.
 type Runtime struct {
-	Execution  spine.ExecutionService
-	Repository spine.RepositoryService
-	Profile    RuntimeProfile
+	Execution spine.ExecutionService
+	Profile   RuntimeProfile
 }
 
 type CodingRuntime struct {
 	Runtime
-	Coding   spine.CodingService
-	Proposal ProposalRuntime
+	Repository spine.RepositoryService
+	Coding     spine.CodingService
+	Proposal   ProposalRuntime
+}
+
+type InvestigationRuntime struct {
+	Runtime
+	Investigation investigation.Service
 }
 
 type RuntimeResolver interface {
 	Resolve(context.Context, string) (Runtime, error)
 	ResolveCoding(context.Context, string) (CodingRuntime, error)
+	ResolveInvestigation(context.Context, string) (InvestigationRuntime, error)
 }
 
 func WakeEvent(jobID string, sequence int64) string {
@@ -148,12 +155,12 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		if err := verifyAttachedTask(ctx, store, params.JobID, InvestigationTaskName); err != nil {
 			return TaskResultV1{}, err
 		}
-		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID, CodebaseInvestigationDefinition(), false)
+		runtime, err := investigationRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
 			return TaskResultV1{}, err
 		}
 		for {
-			work, err := RunCodebaseInvestigation(ctx, runtime.Repository, store, params.JobID)
+			work, err := RunCodebaseInvestigation(ctx, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				return TaskResultV1{}, err
 			}
@@ -233,6 +240,28 @@ func codingRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtime
 	}
 	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, false); err != nil {
 		return CodingRuntime{}, err
+	}
+	return runtime, nil
+}
+
+func investigationRuntimeForJob(ctx context.Context, store sandboxProfileStore, runtimes RuntimeResolver, jobID string) (InvestigationRuntime, error) {
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return InvestigationRuntime{}, err
+	}
+	expected := CodebaseInvestigationDefinition()
+	if err := requireWorkflow(ctx, store, job, expected, false); err != nil {
+		return InvestigationRuntime{}, err
+	}
+	if runtimes == nil {
+		return InvestigationRuntime{}, fmt.Errorf("Sandbox runtime resolution is not configured")
+	}
+	runtime, err := runtimes.ResolveInvestigation(ctx, job.SandboxProfile)
+	if err != nil {
+		return InvestigationRuntime{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
+	}
+	if err := requireJobProfile(ctx, store, job, runtime.Profile, expected, false); err != nil {
+		return InvestigationRuntime{}, err
 	}
 	return runtime, nil
 }
