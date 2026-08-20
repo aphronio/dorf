@@ -18,6 +18,7 @@ import (
 	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -134,8 +135,13 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 		client.Close()
 		return nil, err
 	}
-	workflow.Register(client, store, profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier})
+	core := coreApplication(store, client)
+	workflow.Register(client, store, profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}, core)
 	return client, nil
+}
+
+func coreApplication(store postgres.Store, client *absurd.Client) controlplane.Application {
+	return controlplane.Application{Store: store, Tasks: client}
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -1007,7 +1013,7 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if set.NArg() != 1 {
 		return fmt.Errorf("cleanup requires one Job ID")
 	}
-	job, err := workflow.ScheduleCleanup(ctx, store, client, set.Arg(0))
+	job, err := coreApplication(store, client).RequestCleanup(ctx, set.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -1025,7 +1031,7 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	if err != nil {
 		return err
 	}
-	job, err := workflow.ScheduleCleanup(ctx, store, client, receipt.JobID)
+	job, err := coreApplication(store, client).RequestCleanup(ctx, receipt.JobID)
 	if err != nil {
 		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
 	}

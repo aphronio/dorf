@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -133,7 +134,7 @@ func TestPersistedWorkflowContractsV1(t *testing.T) {
 		value any
 		want  string
 	}{
-		{"task result", TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
+		{"task result", controlplane.TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
 		{"wake", WakeV1{JobID: "job-1", Sequence: 2}, `{"job_id":"job-1","sequence":2}`},
 		{"fact step result", FactStepResultV1{FactID: "action-1"}, `{"fact_id":"action-1"}`},
 		{"Action step result", ActionStepResultV1{ActionID: "action-1"}, `{"action_id":"action-1"}`},
@@ -157,30 +158,6 @@ func TestWakeEventIsStableAndFIFOScoped(t *testing.T) {
 	}
 	if WakeEvent("job-a", 2) == WakeEvent("job-a", 3) {
 		t.Fatal("distinct FIFO positions share an immutable Absurd event")
-	}
-}
-
-func TestTaskSpawnOptionsUseBoundedExponentialRetry(t *testing.T) {
-	first := taskSpawnOptions("job-key")
-	second := taskSpawnOptions("cleanup-key")
-
-	if first.IdempotencyKey != "job-key" {
-		t.Fatalf("idempotency key = %q", first.IdempotencyKey)
-	}
-	if first.RetryStrategy == nil {
-		t.Fatal("retry strategy is missing")
-	}
-	if first.RetryStrategy.Kind != "exponential" ||
-		first.RetryStrategy.BaseSeconds != 5 ||
-		first.RetryStrategy.Factor != 2 ||
-		first.RetryStrategy.MaxSeconds != 60 {
-		t.Fatalf("retry strategy = %#v", first.RetryStrategy)
-	}
-	if second.IdempotencyKey != "cleanup-key" || second.RetryStrategy == nil {
-		t.Fatalf("second spawn options = %#v", second)
-	}
-	if first.RetryStrategy == second.RetryStrategy {
-		t.Fatal("spawn options share a mutable retry strategy")
 	}
 }
 

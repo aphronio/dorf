@@ -15,6 +15,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -111,7 +112,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		runtime:              runtime,
 		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Repository: repository, Coding: coding},
 		investigationRuntime: workflow.InvestigationRuntime{Runtime: runtime, Investigation: investigationService},
-	})
+	}, controlplane.Application{Store: store, Tasks: client})
 	t.Cleanup(func() {
 		client.Close()
 		db.Close()
@@ -288,7 +289,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	cleanupDone := make(chan cleanupResult, 1)
 	go func() {
-		cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+		cleaning, err := (controlplane.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
 		cleanupDone <- cleanupResult{job: cleaning, err: err}
 	}()
 	select {
@@ -1632,7 +1633,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
 	}
 	externals := &integrationExternals{turns: []spine.HarnessTurn{{ID: turnID, Status: "completed"}}, submitted: []int64{1}}
-	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+	cleaning, err := (controlplane.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1815,7 +1816,7 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	unrelated, err := client.Spawn(ctx, "unrelated-task", workflow.Params{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "unrelated:" + job.ID})
+	unrelated, err := client.Spawn(ctx, "unrelated-task", controlplane.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "unrelated:" + job.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1823,7 +1824,7 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err := store.AttachJobTask(ctx, job.ID, "", unrelated.TaskID, "unrelated-task"); err != nil {
 		t.Fatal(err)
 	}
-	spawned, err := client.Spawn(ctx, postgres.MessageTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
+	spawned, err := client.Spawn(ctx, postgres.MessageTaskName, controlplane.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: postgres.MessageTaskKey(job.ID)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1935,7 +1936,7 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, "cleanup-task-"+job.ID, workflow.CleanupTaskName); err != nil {
+	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, "cleanup-task-"+job.ID, controlplane.CleanupTaskName); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CompleteCleanup(ctx, job.ID); err != nil {

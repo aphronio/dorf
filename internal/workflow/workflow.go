@@ -9,6 +9,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
@@ -18,23 +19,8 @@ import (
 const (
 	RunTaskName             = postgres.MessageTaskName
 	InvestigationTaskName   = "dorf-codebase-investigation-v2"
-	CleanupTaskName         = "dorf-job-cleanup-v3"
 	activeAgentPollInterval = time.Second
-	retryBaseDelaySeconds   = 5
-	retryBackoffFactor      = 2
-	retryMaxDelaySeconds    = 60
 )
-
-type Params struct {
-	JobID string `json:"job_id"`
-}
-
-// TaskResultV1 is persisted by Absurd as the stable result contract for both
-// Job and cleanup tasks.
-type TaskResultV1 struct {
-	JobID   string `json:"job_id"`
-	Outcome string `json:"outcome"`
-}
 
 // WakeV1 is persisted by Absurd under one immutable Job-local FIFO event.
 type WakeV1 struct {
@@ -82,29 +68,14 @@ func WakeEvent(jobID string, sequence int64) string {
 	return fmt.Sprintf("dorf.job-message:%s:%020d", jobID, sequence)
 }
 
-// taskSpawnOptions keeps Dorf's bounded task retry policy explicit at the
-// Absurd authority boundary. Absurd persists and applies the resulting
-// schedule; Dorf does not mirror attempt timing in its own facts.
-func taskSpawnOptions(idempotencyKey string) absurd.SpawnOptions {
-	return absurd.SpawnOptions{
-		IdempotencyKey: idempotencyKey,
-		RetryStrategy: &absurd.RetryStrategy{
-			Kind:        "exponential",
-			BaseSeconds: retryBaseDelaySeconds,
-			Factor:      retryBackoffFactor,
-			MaxSeconds:  retryMaxDelaySeconds,
-		},
-	}
-}
-
-func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver) {
-	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
+func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResolver, core controlplane.Application) {
+	client.MustRegister(absurd.Task(RunTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, RunTaskName); err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		runtime, err := codingRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		proposal := runtime.Proposal
 		proposal.Publication = proposal.Publication.WithClaimCheck(absurdruntime.RequireClaim)
@@ -117,25 +88,24 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		for {
 			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			if work.Kind == WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
 				if err != nil {
-					return TaskResultV1{}, err
+					return controlplane.TaskResultV1{}, err
 				}
 				if outcome != nil {
-					task := absurd.MustTaskContext(ctx)
-					if _, err := scheduleCleanup(ctx, store, client, params.JobID, task.TaskID()); err != nil {
-						return TaskResultV1{}, err
+					if _, err := core.RequestCleanup(ctx, params.JobID); err != nil {
+						return controlplane.TaskResultV1{}, err
 					}
-					return TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
+					return controlplane.TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
 				}
-				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
+				return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			options := wakeOptions(work, sequence, proposal.PollInterval)
 			wake, err := absurd.AwaitEvent[WakeV1](ctx, WakeEvent(params.JobID, sequence), options)
@@ -144,32 +114,32 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
 					continue
 				}
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+				return controlplane.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
+	client.MustRegister(absurd.Task(InvestigationTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
 		if err := verifyAttachedTask(ctx, store, params.JobID, InvestigationTaskName); err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		runtime, err := investigationRuntimeForJob(ctx, store, runtimes, params.JobID)
 		if err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		for {
 			work, err := RunCodebaseInvestigation(ctx, runtime.Investigation, store, params.JobID)
 			if err != nil {
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			if work.Kind == InvestigationWorkComplete {
-				return TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
+				return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
 			}
 			sequence, err := store.NextWakeSequence(ctx, params.JobID)
 			if err != nil {
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
 			if work.Kind == InvestigationWorkObserveAgent {
@@ -182,34 +152,34 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 				if work.Kind == InvestigationWorkObserveAgent && errors.As(err, &timeout) {
 					continue
 				}
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
 			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
+				return controlplane.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
-	client.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params Params) (TaskResultV1, error) {
-		if err := verifyAttachedTask(ctx, store, params.JobID, CleanupTaskName); err != nil {
-			return TaskResultV1{}, err
+	client.MustRegister(absurd.Task(controlplane.CleanupTaskName, func(ctx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
+		if err := verifyAttachedTask(ctx, store, params.JobID, controlplane.CleanupTaskName); err != nil {
+			return controlplane.TaskResultV1{}, err
 		}
 		job, err := store.Job(ctx, params.JobID)
 		if err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		definition, err := definitionForJob(job)
 		if err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		runtime, err := runtimeForLoadedJob(ctx, store, runtimes, job, definition, true)
 		if err != nil {
-			return TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
-		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
+		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (controlplane.TaskResultV1, error) {
 			if err := runCleanup(workCtx, runtime.Execution, store, params.JobID); err != nil {
-				return TaskResultV1{}, err
+				return controlplane.TaskResultV1{}, err
 			}
-			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
+			return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil
 		})
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
@@ -403,7 +373,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, pro
 		return job, created, nil
 	}
 	err = store.WithJobFence(ctx, job.ID, func() error {
-		spawned, err := client.Spawn(ctx, taskName, Params{JobID: job.ID}, taskSpawnOptions(taskKey))
+		spawned, err := client.Spawn(ctx, taskName, controlplane.JobTaskParams{JobID: job.ID}, absurdruntime.TaskSpawnOptions(taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
@@ -463,77 +433,6 @@ func RetrySetup(ctx context.Context, store postgres.Store, client *absurd.Client
 	return action, message, created, nil
 }
 
-func ScheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID string) (spine.Job, error) {
-	return scheduleCleanup(ctx, store, client, jobID, "")
-}
-
-func scheduleCleanup(ctx context.Context, store postgres.Store, client *absurd.Client, jobID, skipTaskID string) (spine.Job, error) {
-	job, err := store.Job(ctx, jobID)
-	if err != nil {
-		return spine.Job{}, err
-	}
-	if job.CleanupState == spine.CleanupComplete {
-		return job, nil
-	}
-	// Publication and cleanup both lock the Job before claiming authority.
-	// The winner makes the loser fail without leaving a half-owned workflow.
-	if err := store.CloseAdmissionForCleanup(ctx, jobID); err != nil {
-		return spine.Job{}, err
-	}
-	// Close admission before taking the long Job effect fence, then cancel
-	// through Absurd's public API. A running handler observes cancellation at
-	// its heartbeat and cancels the opaque child context; the Job fence still
-	// prevents cleanup from overtaking any late external effect.
-	// Reload after admission closes so cancellation uses the current durable
-	// task binding rather than the earlier snapshot.
-	job, err = store.Job(ctx, jobID)
-	if err != nil {
-		return spine.Job{}, err
-	}
-	if err := cancelAttachedTasks(ctx, client, job, skipTaskID); err != nil {
-		return spine.Job{}, err
-	}
-	var result spine.Job
-	err = store.WithJobFence(ctx, jobID, func() error {
-		current, err := store.Job(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		// Recheck the binding under the Job fence before cleanup becomes eligible.
-		if err := cancelAttachedTasks(ctx, client, current, skipTaskID); err != nil {
-			return err
-		}
-		spawned, err := client.Spawn(ctx, CleanupTaskName, Params{JobID: jobID}, taskSpawnOptions("cleanup:v3:"+jobID))
-		if err != nil {
-			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
-		}
-		if err := store.AttachCleanupTask(ctx, jobID, current.CurrentTaskID, spawned.TaskID, CleanupTaskName); err != nil {
-			return err
-		}
-		result, err = store.Job(ctx, jobID)
-		return err
-	})
-	return result, err
-}
-
-func cancelAttachedTasks(ctx context.Context, client *absurd.Client, job spine.Job, skipTaskID string) error {
-	taskID := job.CurrentTaskID
-	if taskID == "" || taskID == skipTaskID {
-		return nil
-	}
-	if err := client.CancelTask(ctx, client.QueueName(), taskID); err != nil {
-		return fmt.Errorf("cancel attached Absurd task %s: %w", taskID, err)
-	}
-	snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), taskID)
-	if err != nil {
-		return err
-	}
-	if snapshot == nil || !snapshot.IsTerminal() {
-		return fmt.Errorf("attached Absurd task %s did not reach a public terminal result", taskID)
-	}
-	return nil
-}
-
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {
 	task, ok := absurd.TaskFromContext(ctx)
 	if !ok {
@@ -575,7 +474,7 @@ func verifyAttachedTask(ctx context.Context, store postgres.Store, jobID, taskNa
 			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
 		}
 		if job.CurrentTaskID != task.TaskID() {
-			if taskName == CleanupTaskName {
+			if taskName == controlplane.CleanupTaskName {
 				err = store.AttachCleanupTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
 			} else {
 				err = store.AttachJobTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)

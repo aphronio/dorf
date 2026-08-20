@@ -13,6 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
@@ -280,17 +281,17 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
 	taskName := "test-codebase-investigation-" + suffix
-	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, params workflow.Params) (workflow.TaskResultV1, error) {
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
 		work, err := workflow.RunCodebaseInvestigation(taskCtx, service, store, params.JobID)
 		if err != nil {
-			return workflow.TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		if work.Kind != workflow.InvestigationWorkWaitInput {
-			return workflow.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
+			return controlplane.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
 		}
-		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
+		return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
 	}))
-	spawned, err := client.Spawn(ctx, taskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName})
+	spawned, err := client.Spawn(ctx, taskName, controlplane.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,17 +337,17 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatalf("follow-up created=%v err=%v", created, err)
 	}
 	revisionTaskName := taskName + "-follow-up"
-	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params workflow.Params) (workflow.TaskResultV1, error) {
+	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params controlplane.JobTaskParams) (controlplane.TaskResultV1, error) {
 		work, err := workflow.RunCodebaseInvestigation(taskCtx, service, store, params.JobID)
 		if err != nil {
-			return workflow.TaskResultV1{}, err
+			return controlplane.TaskResultV1{}, err
 		}
 		if work.Kind != workflow.InvestigationWorkWaitInput {
-			return workflow.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
+			return controlplane.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
 		}
-		return workflow.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
+		return controlplane.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
 	}))
-	revisionTask, err := client.Spawn(ctx, revisionTaskName, workflow.Params{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: revisionTaskName})
+	revisionTask, err := client.Spawn(ctx, revisionTaskName, controlplane.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: revisionTaskName})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +361,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || len(drafts) != 2 {
 		t.Fatalf("revised Drafts=%#v err=%v", drafts, err)
 	}
-	cleaning, err := workflow.ScheduleCleanup(ctx, store, client, job.ID)
+	cleaning, err := (controlplane.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
