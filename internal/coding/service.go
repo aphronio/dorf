@@ -8,14 +8,32 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/repository"
+	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
 const commandEvidenceProducer = "dorf-command-observer"
 
+const (
+	ActionRepositorySetup   spine.ActionKind = "repository-setup"
+	ActionRepositoryPush    spine.ActionKind = "repository-push"
+	ActionGitHubPullRequest spine.ActionKind = "github-pull-request"
+	ActionReviewCheckout    spine.ActionKind = "review-checkout"
+)
+
 type Store interface {
-	spine.CodingStore
-	spine.ReviewStore
+	RecordSetup(context.Context, string, spine.Evidence, spine.CommandObservation, []spine.DeclaredCheck) error
+	RecordRevisionObservation(context.Context, string, string, spine.RevisionObservation, spine.Evidence) error
+	RecordCheck(context.Context, spine.Check, spine.Evidence, spine.CommandObservation) error
+	AdmitCheckMessage(context.Context, spine.Check) (spine.Message, bool, error)
+	SetWorkflowAttention(context.Context, string, string, string) error
+	DeclaredChecks(context.Context, string) ([]spine.DeclaredCheck, error)
+	Checks(context.Context, string) ([]spine.Check, error)
+	Evidence(context.Context, string) ([]spine.Evidence, error)
+	Actions(context.Context, string) ([]spine.Action, error)
+	RecordReviewPolicy(context.Context, spine.ReviewPlanRecord) error
+	ReviewRun(context.Context, string) (spine.ReviewRunView, error)
+	RecordReviewFeedback(context.Context, string, spine.HarnessTurn, spine.Evidence) (spine.Message, bool, error)
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
@@ -26,8 +44,15 @@ type Store interface {
 
 type Externals interface {
 	Harness() string
-	spine.RepositoryExternals
-	spine.ReviewExternals
+	RepositorySetup(context.Context, spine.CodingJob, spine.Action) (spine.CommandObservation, []spine.DeclaredCheck, error)
+	RepositoryCheck(context.Context, spine.CodingJob, spine.Check) (spine.CommandObservation, error)
+	RepositoryChangeFacts(context.Context, spine.CodingJob) (policy.ChangeFacts, error)
+	PrepareReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) error
+	VerifyReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.ReviewCheckoutObservation, error)
+	ReviewInitialTurn(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessBinding, error)
+	ReviewRecover(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessBinding, error)
+	ReviewTurns(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessHistory, error)
+	ReviewWait(context.Context, spine.CodingJob, spine.ReviewRunView, string) (spine.HarnessBinding, error)
 }
 
 type RepositoryExecution interface {

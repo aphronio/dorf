@@ -141,13 +141,6 @@ func (a Adapter) AttestReview(ctx context.Context, owner provider.Ownership, rev
 	return nil
 }
 
-func (a Adapter) ReconcileClone(ctx context.Context, owner provider.Ownership, repository, revision, branch string) error {
-	if err := a.AttestOwnership(ctx, owner); err != nil {
-		return err
-	}
-	return reconcileClone(ctx, a, owner, repository, revision, branch)
-}
-
 func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {
 	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
 }
@@ -229,68 +222,6 @@ func (a Adapter) providerGatewayURL() (*url.URL, error) {
 		return nil, fmt.Errorf("E2B Provider Gateway URL must be an exact HTTPS /v1 endpoint")
 	}
 	return parsed, nil
-}
-
-func reconcileClone(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, repository, revision, branch string) error {
-	workspace := runtime.Workspace()
-	gitDir, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "rev-parse", "--git-dir")
-	if err != nil {
-		return err
-	}
-	if gitDir.ExitCode != 0 {
-		clone, err := runtime.Exec(ctx, owner, nil, "git", "clone", "--no-checkout", repository, workspace)
-		if err != nil {
-			return err
-		}
-		if clone.ExitCode != 0 {
-			return fmt.Errorf("clone repository: %s", strings.TrimSpace(clone.Stderr))
-		}
-	} else {
-		remote, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "remote", "get-url", "origin")
-		if err != nil {
-			return err
-		}
-		if remote.ExitCode != 0 || strings.TrimSpace(remote.Stdout) != repository {
-			return fmt.Errorf("existing Sandbox clone origin does not match admitted repository")
-		}
-		fetch, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "fetch", "--prune", "origin")
-		if err != nil {
-			return err
-		}
-		if fetch.ExitCode != 0 {
-			return fmt.Errorf("refresh existing Sandbox clone: %s", strings.TrimSpace(fetch.Stderr))
-		}
-	}
-	checkoutArgs := []string{"git", "-C", workspace, "checkout"}
-	if branch == "" {
-		checkoutArgs = append(checkoutArgs, "--detach", revision)
-	} else {
-		checkoutArgs = append(checkoutArgs, "-B", branch, revision)
-	}
-	checkout, err := runtime.Exec(ctx, owner, nil, checkoutArgs...)
-	if err != nil {
-		return err
-	}
-	if checkout.ExitCode != 0 {
-		return fmt.Errorf("checkout admitted Revision: %s", strings.TrimSpace(checkout.Stderr))
-	}
-	head, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
-	if head.ExitCode != 0 || strings.TrimSpace(head.Stdout) != revision {
-		return fmt.Errorf("Sandbox HEAD does not match admitted Revision %q", revision)
-	}
-	for _, identity := range [][2]string{{"user.name", "Dorf Agent"}, {"user.email", "dorf-agent@localhost"}} {
-		configured, err := runtime.Exec(ctx, owner, nil, "git", "-C", workspace, "config", "--local", identity[0], identity[1])
-		if err != nil {
-			return err
-		}
-		if configured.ExitCode != 0 {
-			return fmt.Errorf("configure repository-local agent commit identity: %s", strings.TrimSpace(configured.Stderr))
-		}
-	}
-	return nil
 }
 
 var _ provider.Sandbox = Adapter{}

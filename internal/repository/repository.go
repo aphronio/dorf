@@ -55,6 +55,81 @@ type AttentionError struct{ Reason string }
 func (e *AttentionError) Error() string         { return e.Reason }
 func (e *AttentionError) AttentionNeeded() bool { return true }
 
+// ReconcileClone materializes one exact remote Revision through the neutral
+// Sandbox command boundary. Git behavior belongs to this repository module,
+// not to Sandbox providers.
+func (m Manager) ReconcileClone(ctx context.Context, owner provider.Ownership, remote, revision, branch string) error {
+	if err := m.Sandbox.AttestOwnership(ctx, owner); err != nil {
+		return err
+	}
+	gitDir, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "--git-dir")
+	if err != nil {
+		return err
+	}
+	if gitDir.ExitCode != 0 {
+		clone, err := m.Sandbox.Exec(ctx, owner, nil, "git", "clone", "--no-checkout", remote, m.Workspace)
+		if err != nil {
+			return err
+		}
+		if clone.ExitCode != 0 {
+			return sandboxCommandFailure("clone repository", clone)
+		}
+	} else {
+		observed, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "remote", "get-url", "origin")
+		if err != nil {
+			return err
+		}
+		if observed.ExitCode != 0 || strings.TrimSpace(observed.Stdout) != remote {
+			return fmt.Errorf("existing Sandbox clone origin does not match admitted repository")
+		}
+		fetched, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "fetch", "--prune", "origin")
+		if err != nil {
+			return err
+		}
+		if fetched.ExitCode != 0 {
+			return sandboxCommandFailure("refresh existing Sandbox clone", fetched)
+		}
+	}
+	checkoutArgs := []string{"git", "-C", m.Workspace, "checkout"}
+	if branch == "" {
+		checkoutArgs = append(checkoutArgs, "--detach", revision)
+	} else {
+		checkoutArgs = append(checkoutArgs, "-B", branch, revision)
+	}
+	checkedOut, err := m.Sandbox.Exec(ctx, owner, nil, checkoutArgs...)
+	if err != nil {
+		return err
+	}
+	if checkedOut.ExitCode != 0 {
+		return sandboxCommandFailure("checkout admitted Revision", checkedOut)
+	}
+	head, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if head.ExitCode != 0 || strings.TrimSpace(head.Stdout) != revision {
+		return fmt.Errorf("Sandbox HEAD %q does not match admitted Revision %q", strings.TrimSpace(head.Stdout), revision)
+	}
+	for _, identity := range [][2]string{{"user.name", "Dorf Agent"}, {"user.email", "dorf-agent@localhost"}} {
+		configured, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "config", "--local", identity[0], identity[1])
+		if err != nil {
+			return err
+		}
+		if configured.ExitCode != 0 {
+			return sandboxCommandFailure("configure repository-local agent commit identity", configured)
+		}
+	}
+	return nil
+}
+
+func sandboxCommandFailure(operation string, result provider.Result) error {
+	detail := strings.TrimSpace(result.Stderr)
+	if detail == "" {
+		detail = strings.TrimSpace(result.Stdout)
+	}
+	return fmt.Errorf("%s: %s", operation, detail)
+}
+
 func ParseContract(contents string) (Contract, error) {
 	var contract Contract
 	section := ""

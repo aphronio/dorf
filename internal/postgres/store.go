@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -801,7 +803,7 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 		return spine.Action{}, err
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRepositoryRestore, spine.ActionRouteCreate, spine.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, repository.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate, coding.ActionReviewCheckout, spine.ActionRouteRevoke, spine.ActionSandboxDelete:
 	default:
 		return spine.Action{}, fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}
@@ -885,13 +887,13 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	desiredID := spine.ActionID(jobID, spine.ActionRepositorySetup)
+	desiredID := spine.ActionID(jobID, coding.ActionRepositorySetup)
 	currentID, err := queries.GetSetupActionIDForUpdate(ctx, jobID)
 	if err != nil {
 		return spine.Action{}, err
 	}
 	if currentID == "" {
-		if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup}); err != nil {
+		if err := queries.InsertActionIfAbsent(ctx, dbsql.InsertActionIfAbsentParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup}); err != nil {
 			return spine.Action{}, err
 		}
 		if err := expectOneRows(queries.SelectInitialSetupAction(ctx, dbsql.SelectInitialSetupActionParams{ActionID: sql.NullString{String: desiredID, Valid: true}, JobID: jobID})); err != nil {
@@ -899,7 +901,7 @@ func (s Store) BeginSetup(ctx context.Context, jobID string) (spine.Action, erro
 		}
 		currentID = desiredID
 	}
-	row, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: currentID, JobID: jobID, Kind: spine.ActionRepositorySetup})
+	row, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: currentID, JobID: jobID, Kind: coding.ActionRepositorySetup})
 	if err != nil {
 		return spine.Action{}, err
 	}
@@ -952,8 +954,8 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
-	desiredID := spine.ScopedActionID(jobID, spine.ActionRepositorySetup, retryID)
-	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
+	desiredID := spine.ScopedActionID(jobID, coding.ActionRepositorySetup, retryID)
+	existingRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup})
 	if err == nil {
 		existing := actionFromValues(existingRow.ID, existingRow.JobID, existingRow.Kind, existingRow.State, existingRow.ScopeKey, existingRow.CreatedAt, existingRow.SettledAt)
 		message, _, messageErr := admitMessageTx(ctx, tx, messageInput, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
@@ -974,17 +976,17 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if locked.SetupActionID == "" {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s has no selected repository setup Action to retry", jobID)
 	}
-	current, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: locked.SetupActionID, JobID: jobID, Kind: spine.ActionRepositorySetup})
+	current, err := queries.GetActionForUpdate(ctx, dbsql.GetActionForUpdateParams{ID: locked.SetupActionID, JobID: jobID, Kind: coding.ActionRepositorySetup})
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
-	if current.ID != locked.SetupActionID || current.JobID != jobID || current.Kind != spine.ActionRepositorySetup {
+	if current.ID != locked.SetupActionID || current.JobID != jobID || current.Kind != coding.ActionRepositorySetup {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s conflicts with its selected identity", jobID, locked.SetupActionID)
 	}
 	if current.State != spine.ActionFailed {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("Job %s current repository setup Action %s is %s, not terminal failed", jobID, locked.SetupActionID, current.State)
 	}
-	createdRows, err := queries.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup, ScopeKey: retryID})
+	createdRows, err := queries.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup, ScopeKey: retryID})
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
@@ -1001,7 +1003,7 @@ func (s Store) RetrySetup(ctx context.Context, jobID, retryID, input string) (sp
 	if !messageCreated {
 		return spine.Action{}, spine.Message{}, false, fmt.Errorf("setup retry identity %q already has a message without its Action", retryID)
 	}
-	actionRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: spine.ActionRepositorySetup})
+	actionRow, err := queries.GetAction(ctx, dbsql.GetActionParams{ID: desiredID, JobID: jobID, Kind: coding.ActionRepositorySetup})
 	if err != nil {
 		return spine.Action{}, spine.Message{}, false, err
 	}
@@ -1094,7 +1096,7 @@ func (s Store) RecordSetup(ctx context.Context, actionID string, evidence spine.
 	if err != nil {
 		return err
 	}
-	if spine.ActionKind(setup.Kind) != spine.ActionRepositorySetup || evidence.ActionID != actionID || setup.SetupActionID != actionID {
+	if spine.ActionKind(setup.Kind) != coding.ActionRepositorySetup || evidence.ActionID != actionID || setup.SetupActionID != actionID {
 		return fmt.Errorf("setup Evidence does not match its Action")
 	}
 	if err := insertEvidence(ctx, tx, setup.JobID, evidence); err != nil {
@@ -1367,8 +1369,8 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
 	}
 	switch kind {
-	case spine.ActionSandboxCreate, spine.ActionRepositoryClone, spine.ActionRepositoryRestore, spine.ActionRouteCreate,
-		spine.ActionRouteRevoke, spine.ActionReviewCheckout, spine.ActionSandboxDelete:
+	case spine.ActionSandboxCreate, repository.ActionRepositoryClone, investigation.ActionRepositoryRestore, spine.ActionRouteCreate,
+		spine.ActionRouteRevoke, coding.ActionReviewCheckout, spine.ActionSandboxDelete:
 	default:
 		return fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}

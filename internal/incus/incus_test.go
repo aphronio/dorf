@@ -172,40 +172,6 @@ func TestOwnedSandboxCreationUsesRecordedIdentityAndCredentialFreeBoundary(t *te
 	}
 }
 
-func TestRepositoryCloneVerifiesExactAdmittedHead(t *testing.T) {
-	revision := strings.Repeat("a", 40)
-	runner := &scriptedRunner{head: revision}
-	sandbox := Sandbox{Config: Config{Workspace: "/workspace/job"}, Runner: runner}
-	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", "https://example.test/repo.git", revision, "dorf/proof"); err != nil {
-		t.Fatal(err)
-	}
-	if !hasCall(runner.calls, "git -C /workspace/job rev-parse HEAD") {
-		t.Fatal("Sandbox HEAD was not observed after checkout")
-	}
-	if !hasCall(runner.calls, "git -C /workspace/job config --local user.name Dorf Agent") || !hasCall(runner.calls, "git -C /workspace/job config --local user.email dorf-agent@localhost") {
-		t.Fatal("repository-local agent commit identity was not configured")
-	}
-
-	runner = &scriptedRunner{head: strings.Repeat("b", 40)}
-	sandbox.Runner = runner
-	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", "https://example.test/repo.git", revision, "dorf/proof"); err == nil || !strings.Contains(err.Error(), "does not match admitted Revision") {
-		t.Fatalf("mismatched Sandbox HEAD error = %v", err)
-	}
-}
-
-func TestRepositoryCloneRefreshesAnExistingVerifiedOrigin(t *testing.T) {
-	revision := strings.Repeat("a", 40)
-	repository := "https://example.test/repo.git"
-	runner := &scriptedRunner{existing: true, head: revision, remote: repository}
-	sandbox := Sandbox{Config: Config{Workspace: "/workspace/job"}, Runner: runner}
-	if err := sandbox.ReconcileClone(context.Background(), "dorf-job", repository, revision, "dorf/proof"); err != nil {
-		t.Fatal(err)
-	}
-	if !hasCall(runner.calls, "git -C /workspace/job fetch --prune origin") {
-		t.Fatal("existing verified clone was not refreshed before checkout")
-	}
-}
-
 func TestConfiguredBridgeIPv4ComesFromExactIncusNetwork(t *testing.T) {
 	runner := &scriptedRunner{}
 	sandbox := Sandbox{Config: Config{Network: "dorfbr0"}, Runner: runner}

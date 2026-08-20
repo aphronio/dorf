@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/incus"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
@@ -135,18 +134,70 @@ func TestObserveRevisionFromRealGitCheckout(t *testing.T) {
 	}
 }
 
-type localIncusRunner struct{}
-
-func (localIncusRunner) Run(ctx context.Context, command string, input []byte, args ...string) (incus.Result, error) {
-	if command != "incus" || len(args) < 4 || args[0] != "exec" || args[2] != "--" {
-		return incus.Result{}, errors.New("unexpected fake Incus command")
+func TestReconcileCloneOwnsExactCheckoutAboveSandboxProvider(t *testing.T) {
+	remote, revision := testRepository(t)
+	workspace := filepath.Join(t.TempDir(), "checkout")
+	manager := testManager(workspace)
+	if err := manager.ReconcileClone(context.Background(), repositoryTestOwner, remote, revision, "dorf/proof"); err != nil {
+		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(ctx, args[3], args[4:]...)
+	if got := gitOutput(t, workspace, "rev-parse", "HEAD"); got != revision {
+		t.Fatalf("checkout HEAD=%s want=%s", got, revision)
+	}
+	if got := gitOutput(t, workspace, "config", "--local", "user.name"); got != "Dorf Agent" {
+		t.Fatalf("checkout user.name=%q", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(remote, "tracked.txt"), []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, remote, "add", "tracked.txt")
+	runGit(t, remote, "commit", "-m", "second")
+	second := gitOutput(t, remote, "rev-parse", "HEAD")
+	if err := manager.ReconcileClone(context.Background(), repositoryTestOwner, remote, second, "dorf/proof"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, workspace, "rev-parse", "HEAD"); got != second {
+		t.Fatalf("refreshed checkout HEAD=%s want=%s", got, second)
+	}
+
+	foreign, _ := testRepository(t)
+	if err := manager.ReconcileClone(context.Background(), repositoryTestOwner, foreign, second, "dorf/proof"); err == nil || !strings.Contains(err.Error(), "origin does not match") {
+		t.Fatalf("foreign origin error=%v", err)
+	}
+}
+
+type localSandbox struct{ workspace string }
+
+func (s localSandbox) Workspace() string                                            { return s.workspace }
+func (localSandbox) ReconcileOwnedCreate(context.Context, provider.Ownership) error { return nil }
+func (localSandbox) AttestOwnership(context.Context, provider.Ownership) error      { return nil }
+func (localSandbox) AttachReviewMetadata(context.Context, provider.Ownership, provider.ReviewMetadata) error {
+	return nil
+}
+func (localSandbox) OwnedPresent(context.Context, provider.Ownership) (bool, error) { return true, nil }
+func (localSandbox) DeleteOwned(context.Context, provider.Ownership) error          { return nil }
+func (localSandbox) AttestReview(context.Context, provider.Ownership, provider.ReviewMetadata) error {
+	return nil
+}
+func (localSandbox) PutFile(_ context.Context, _ provider.Ownership, path string, contents []byte) error {
+	return os.WriteFile(path, contents, 0o600)
+}
+func (localSandbox) Endpoint(context.Context, provider.Ownership, int) (provider.Endpoint, error) {
+	return provider.Endpoint{}, nil
+}
+func (localSandbox) ProviderRouteURL(context.Context, string) (string, error) { return "", nil }
+
+func (localSandbox) Exec(ctx context.Context, _ provider.Ownership, input []byte, args ...string) (provider.Result, error) {
+	if len(args) == 0 {
+		return provider.Result{}, errors.New("missing command")
+	}
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	result := incus.Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	result := provider.Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err == nil {
 		return result, nil
 	}
@@ -159,7 +210,7 @@ func (localIncusRunner) Run(ctx context.Context, command string, input []byte, a
 }
 
 func testManager(workspace string) Manager {
-	return Manager{Sandbox: incus.Adapter{Sandbox: incus.Sandbox{Runner: localIncusRunner{}}}, Workspace: workspace}
+	return Manager{Sandbox: localSandbox{workspace: workspace}, Workspace: workspace}
 }
 
 func testRepository(t *testing.T) (string, string) {

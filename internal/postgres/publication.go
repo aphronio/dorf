@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	"github.com/aphronio/dorf/internal/spine"
@@ -33,7 +34,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 		return spine.CodingJob{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication authority unresolved: %w", err)
 	}
 	intentStarted := false
-	for _, kind := range []spine.ActionKind{spine.ActionRepositoryPush, spine.ActionGitHubPullRequest} {
+	for _, kind := range []spine.ActionKind{coding.ActionRepositoryPush, coding.ActionGitHubPullRequest} {
 		row, actionErr := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: jobID, Kind: kind, ScopeKey: revision})
 		if actionErr == nil {
 			if _, exactErr := exactScopedAction(row, jobID, kind, revision); exactErr != nil {
@@ -64,11 +65,11 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (sp
 			return spine.CodingJob{}, spine.Action{}, spine.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}
 	}
-	push, err := beginPublicationAction(ctx, queries, jobID, spine.ActionRepositoryPush, revision)
+	push, err := beginPublicationAction(ctx, queries, jobID, coding.ActionRepositoryPush, revision)
 	if err != nil {
 		return spine.CodingJob{}, spine.Action{}, spine.Action{}, err
 	}
-	pull, err := beginPublicationAction(ctx, queries, jobID, spine.ActionGitHubPullRequest, revision)
+	pull, err := beginPublicationAction(ctx, queries, jobID, coding.ActionGitHubPullRequest, revision)
 	if err != nil {
 		return spine.CodingJob{}, spine.Action{}, spine.Action{}, err
 	}
@@ -100,11 +101,11 @@ func (s Store) PublicationActions(ctx context.Context, jobID, revision string) (
 		}
 		return exactScopedAction(row, jobID, kind, revision)
 	}
-	push, err := load(spine.ActionRepositoryPush)
+	push, err := load(coding.ActionRepositoryPush)
 	if err != nil {
 		return spine.Action{}, spine.Action{}, err
 	}
-	pull, err := load(spine.ActionGitHubPullRequest)
+	pull, err := load(coding.ActionGitHubPullRequest)
 	return push, pull, err
 }
 
@@ -141,11 +142,11 @@ func (s Store) RecordProposal(ctx context.Context, actionID string, proposal spi
 	if locked.Revision != proposal.ProposedRevision || !locked.AdmissionOpen || locked.CleanupState != spine.CleanupPending {
 		return fmt.Errorf("Proposal conflicts with the exact current Job Revision")
 	}
-	pushRow, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: proposal.JobID, Kind: spine.ActionRepositoryPush, ScopeKey: locked.Revision})
+	pushRow, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: proposal.JobID, Kind: coding.ActionRepositoryPush, ScopeKey: locked.Revision})
 	if err != nil {
 		return fmt.Errorf("proposal cannot be recorded before exact repository push success")
 	}
-	push, err := exactScopedAction(pushRow, proposal.JobID, spine.ActionRepositoryPush, locked.Revision)
+	push, err := exactScopedAction(pushRow, proposal.JobID, coding.ActionRepositoryPush, locked.Revision)
 	if err != nil || push.State != spine.ActionSucceeded {
 		return fmt.Errorf("proposal cannot be recorded before exact repository push success")
 	}

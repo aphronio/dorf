@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/repository"
 	policy "github.com/aphronio/dorf/internal/review"
 	"github.com/aphronio/dorf/internal/spine"
 )
@@ -22,10 +24,10 @@ func readyFacts() Snapshot {
 		Sandboxes:   []spine.Sandbox{sandbox},
 		Actions: []spine.Action{
 			action(spine.ActionSandboxCreate),
-			action(spine.ActionRepositoryClone),
+			action(repository.ActionRepositoryClone),
 			action(spine.ActionRouteCreate),
 		},
-		SelectedSetup:  &spine.Action{ID: spine.ActionID(job.ID, spine.ActionRepositorySetup), State: spine.ActionSucceeded},
+		SelectedSetup:  &spine.Action{ID: spine.ActionID(job.ID, coding.ActionRepositorySetup), State: spine.ActionSucceeded},
 		DeclaredChecks: []spine.DeclaredCheck{{Name: "check", Command: "go test ./..."}},
 		Checks:         []spine.Check{{ID: spine.CheckID(job.ID, job.Revision, "check"), Name: "check", Revision: job.Revision, State: "passed", EvidenceID: "e-check"}},
 		ReviewPlans:    []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
@@ -63,7 +65,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 			action spine.ActionKind
 		}{
 			{WorkAction, spine.ActionSandboxCreate},
-			{WorkAction, spine.ActionReviewCheckout},
+			{WorkAction, coding.ActionReviewCheckout},
 			{WorkAction, spine.ActionRouteCreate},
 		}
 		for _, step := range steps {
@@ -120,8 +122,8 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("started publication settles before a later Message", func(t *testing.T) {
 		facts := readyFacts()
 		facts.Actions = append(facts.Actions,
-			spine.Action{Kind: spine.ActionRepositoryPush, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
-			spine.Action{Kind: spine.ActionGitHubPullRequest, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
+			spine.Action{Kind: coding.ActionRepositoryPush, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
+			spine.Action{Kind: coding.ActionGitHubPullRequest, State: spine.ActionUnsettled, Scope: facts.Job.Revision},
 		)
 		facts.Delivery = &spine.Delivery{Message: spine.Message{Sequence: 2}, AgentRun: spine.AgentRun{ID: "implement-2", State: spine.AgentRunPending}}
 		if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
@@ -304,7 +306,7 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 	facts := readyFacts()
 	startedAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	facts.Actions = append(facts.Actions, spine.Action{
-		Kind:      spine.ActionGitHubPullRequest,
+		Kind:      coding.ActionGitHubPullRequest,
 		State:     spine.ActionUnsettled,
 		Scope:     facts.Job.Revision,
 		CreatedAt: startedAt,

@@ -37,7 +37,7 @@ func (s Service) ObserveRevision(ctx context.Context, job spine.Job, branch, rev
 // ExecuteRepositoryClone reconciles one workflow-owned remote Git input and
 // records the scoped Action only after the checkout converges.
 func (s Service) ExecuteRepositoryClone(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, remote, revision, branch string) error {
-	if action.Kind != spine.ActionRepositoryClone {
+	if action.Kind != ActionRepositoryClone {
 		return fmt.Errorf("repository clone requires the exact repository-clone Action")
 	}
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {

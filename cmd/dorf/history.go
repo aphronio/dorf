@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
 )
@@ -135,15 +137,15 @@ func actionStartedText(job spine.Job, runs []spine.AgentRun, action spine.Action
 	switch action.Kind {
 	case spine.ActionSandboxCreate:
 		return withHumanDetails("Creating "+sandbox, sandboxProviderName(job.SandboxProfile))
-	case spine.ActionRepositoryClone:
+	case repository.ActionRepositoryClone:
 		return "Cloning repository"
-	case spine.ActionRepositorySetup:
+	case coding.ActionRepositorySetup:
 		return "Setting up repository"
-	case spine.ActionRepositoryPush:
+	case coding.ActionRepositoryPush:
 		return "Publishing Revision"
-	case spine.ActionGitHubPullRequest:
+	case coding.ActionGitHubPullRequest:
 		return "Creating pull request"
-	case spine.ActionReviewCheckout:
+	case coding.ActionReviewCheckout:
 		return "Preparing reviewer checkout"
 	case spine.ActionRouteCreate:
 		return "Connecting model access"
@@ -166,15 +168,15 @@ func actionSettledText(job spine.Job, runs []spine.AgentRun, action spine.Action
 	switch action.Kind {
 	case spine.ActionSandboxCreate:
 		return withHumanDetails(sandbox+" ready", sandboxProviderName(job.SandboxProfile), duration)
-	case spine.ActionRepositoryClone:
+	case repository.ActionRepositoryClone:
 		return withHumanDetails("Repository cloned", duration)
-	case spine.ActionRepositorySetup:
+	case coding.ActionRepositorySetup:
 		return withHumanDetails("Repository setup complete", duration)
-	case spine.ActionRepositoryPush:
+	case coding.ActionRepositoryPush:
 		return withHumanDetails("Revision published", duration)
-	case spine.ActionGitHubPullRequest:
+	case coding.ActionGitHubPullRequest:
 		return withHumanDetails("Pull request created", duration)
-	case spine.ActionReviewCheckout:
+	case coding.ActionReviewCheckout:
 		return withHumanDetails("Reviewer checkout ready", duration)
 	case spine.ActionRouteCreate:
 		return withHumanDetails("Model access connected", duration)
@@ -195,15 +197,15 @@ func actionFailureSubject(kind spine.ActionKind, sandbox string) string {
 	switch kind {
 	case spine.ActionSandboxCreate:
 		return sandbox + " creation"
-	case spine.ActionRepositoryClone:
+	case repository.ActionRepositoryClone:
 		return "Repository clone"
-	case spine.ActionRepositorySetup:
+	case coding.ActionRepositorySetup:
 		return "Repository setup"
-	case spine.ActionRepositoryPush:
+	case coding.ActionRepositoryPush:
 		return "Revision publication"
-	case spine.ActionGitHubPullRequest:
+	case coding.ActionGitHubPullRequest:
 		return "Pull request creation"
-	case spine.ActionReviewCheckout:
+	case coding.ActionReviewCheckout:
 		return "Reviewer checkout"
 	case spine.ActionRouteCreate:
 		return "Model access connection"
@@ -311,7 +313,7 @@ func proposalActionSettledAt(s workflow.Snapshot) time.Time {
 		return time.Time{}
 	}
 	for _, action := range s.Actions {
-		if action.Kind == spine.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && action.Scope == s.Proposal.ProposedRevision {
+		if action.Kind == coding.ActionGitHubPullRequest && action.State == spine.ActionSucceeded && action.Scope == s.Proposal.ProposedRevision {
 			return action.SettledAt
 		}
 	}

@@ -43,13 +43,6 @@ func (a Adapter) AttestReview(ctx context.Context, owner provider.Ownership, rev
 	return a.Sandbox.AttestReview(ctx, owner.SandboxID, review)
 }
 
-func (a Adapter) ReconcileClone(ctx context.Context, owner provider.Ownership, repository, revision, branch string) error {
-	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
-		return err
-	}
-	return a.Sandbox.ReconcileClone(ctx, owner.SandboxID, repository, revision, branch)
-}
-
 func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destination string, contents []byte) error {
 	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
 		return err

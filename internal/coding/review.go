@@ -90,7 +90,7 @@ func (s Service) ExecuteReviewCheckout(ctx context.Context, job spine.CodingJob,
 		return err
 	}
 	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != spine.ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID ||
-		action.ID != spine.ScopedActionID(job.ID, spine.ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != spine.ActionReviewCheckout || action.Scope != run.Sandbox.ID {
+		action.ID != spine.ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
 		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
 	}
 	if action.State == spine.ActionSucceeded {
@@ -238,7 +238,7 @@ func (s Service) requireReviewActions(ctx context.Context, job spine.CodingJob, 
 	if err != nil {
 		return err
 	}
-	for _, kind := range []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionReviewCheckout, spine.ActionRouteCreate} {
+	for _, kind := range []spine.ActionKind{spine.ActionSandboxCreate, ActionReviewCheckout, spine.ActionRouteCreate} {
 		expectedID := spine.ScopedActionID(job.ID, kind, run.Sandbox.ID)
 		ready := false
 		for _, action := range actions {

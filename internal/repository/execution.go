@@ -7,6 +7,8 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+const ActionRepositoryClone spine.ActionKind = "repository-clone"
+
 // Execution is the repository module's composition of Core execution with
 // exact remote repository materialization. It is not part of the Core
 // application contract.

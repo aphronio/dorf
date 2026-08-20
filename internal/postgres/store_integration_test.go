@@ -1355,7 +1355,7 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 			t.Fatal(err)
 		}
 	}
-	checkout, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionReviewCheckout)
+	checkout, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, coding.ActionReviewCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1444,7 +1444,7 @@ func TestFailedSetupRetryPreservesTerminalEvidenceAndSelectsNewAction(t *testing
 	}
 	job, err = store.Job(ctx, job.ID)
 	actions, actionsErr := store.Actions(ctx, job.ID)
-	invalidActionID := spine.ScopedActionID(job.ID, spine.ActionRepositorySetup, "invalid-no-wake")
+	invalidActionID := spine.ScopedActionID(job.ID, coding.ActionRepositorySetup, "invalid-no-wake")
 	invalidActionPresent := false
 	for _, action := range actions {
 		invalidActionPresent = invalidActionPresent || action.ID == invalidActionID
@@ -1741,10 +1741,10 @@ func (e *integrationExternals) SandboxCreate(context.Context, spine.Job, spine.S
 	return e.effect(spine.ActionSandboxCreate)
 }
 func (e *integrationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
-	return e.effect(spine.ActionRepositoryClone)
+	return e.effect(repository.ActionRepositoryClone)
 }
 func (e *integrationExternals) RepositoryRestore(context.Context, spine.Job, spine.Sandbox, investigation.Source, []byte) error {
-	return e.effect(spine.ActionRepositoryRestore)
+	return e.effect(investigation.ActionRepositoryRestore)
 }
 func (e *integrationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
 	return e.effect(spine.ActionRouteCreate)

@@ -205,13 +205,13 @@ func (e *investigationExternals) SandboxCreate(context.Context, spine.Job, spine
 	return e.effect(spine.ActionSandboxCreate)
 }
 func (e *investigationExternals) RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error {
-	return e.effect(spine.ActionRepositoryClone)
+	return e.effect(repository.ActionRepositoryClone)
 }
 func (e *investigationExternals) RepositoryRestore(_ context.Context, job spine.Job, _ spine.Sandbox, source investigation.Source, contents []byte) error {
 	if source.JobID != job.ID || string(contents) != "retained repository input" {
 		return fmt.Errorf("unexpected retained repository restore")
 	}
-	return e.effect(spine.ActionRepositoryRestore)
+	return e.effect(investigation.ActionRepositoryRestore)
 }
 func (e *investigationExternals) RouteCreate(context.Context, spine.Job, spine.Sandbox, spine.Route) error {
 	return e.effect(spine.ActionRouteCreate)
@@ -306,7 +306,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	externals.mu.Lock()
 	effects := append([]spine.ActionKind(nil), externals.effects...)
 	externals.mu.Unlock()
-	wantEffects := []spine.ActionKind{spine.ActionSandboxCreate, spine.ActionRepositoryRestore, spine.ActionRouteCreate}
+	wantEffects := []spine.ActionKind{spine.ActionSandboxCreate, investigation.ActionRepositoryRestore, spine.ActionRouteCreate}
 	if !slices.Equal(effects, wantEffects) {
 		t.Fatalf("effects=%v want=%v", effects, wantEffects)
 	}

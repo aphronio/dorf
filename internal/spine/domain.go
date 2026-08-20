@@ -28,16 +28,10 @@ type JobTask struct {
 type ActionKind string
 
 const (
-	ActionSandboxCreate     ActionKind = "sandbox-create"
-	ActionRepositoryClone   ActionKind = "repository-clone"
-	ActionRepositoryRestore ActionKind = "repository-restore"
-	ActionRepositorySetup   ActionKind = "repository-setup"
-	ActionRepositoryPush    ActionKind = "repository-push"
-	ActionGitHubPullRequest ActionKind = "github-pull-request"
-	ActionReviewCheckout    ActionKind = "review-checkout"
-	ActionRouteCreate       ActionKind = "provider-route-create"
-	ActionRouteRevoke       ActionKind = "provider-route-revoke"
-	ActionSandboxDelete     ActionKind = "sandbox-delete"
+	ActionSandboxCreate ActionKind = "sandbox-create"
+	ActionRouteCreate   ActionKind = "provider-route-create"
+	ActionRouteRevoke   ActionKind = "provider-route-revoke"
+	ActionSandboxDelete ActionKind = "sandbox-delete"
 )
 
 type ActionState string

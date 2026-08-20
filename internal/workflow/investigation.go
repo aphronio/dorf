@@ -9,6 +9,7 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -141,9 +142,9 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	if !actionSucceeded(s.Actions, spine.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(spine.ActionSandboxCreate)
 	}
-	repositoryAction := spine.ActionRepositoryClone
+	repositoryAction := repository.ActionRepositoryClone
 	if s.Source.Kind == investigation.SourceGitBundle {
-		repositoryAction = spine.ActionRepositoryRestore
+		repositoryAction = investigation.ActionRepositoryRestore
 	}
 	if !actionSucceeded(s.Actions, repositoryAction, s.MainSandbox.ID) {
 		return action(repositoryAction)
@@ -248,10 +249,10 @@ func runInvestigationAction(ctx context.Context, service investigation.Service, 
 		return nil
 	}
 	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == spine.ActionRepositoryRestore {
+		if work.ActionKind == investigation.ActionRepositoryRestore {
 			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
 		}
-		if work.ActionKind == spine.ActionRepositoryClone {
+		if work.ActionKind == repository.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source.Repository, snapshot.Source.Revision, "")
 		}
 		return service.ExecuteSandboxAction(workCtx, snapshot.Job, snapshot.MainSandbox, action)

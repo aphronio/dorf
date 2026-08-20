@@ -1975,7 +1975,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D077 — Runtime services compose from shared custody outward
 
-- **Status:** Accepted Core/service separation slice — 2026-08-20
+- **Status:** Superseded by D083 — 2026-08-20
 - **Decision:** Replace the single coding-shaped service bundle with three explicit compositions.
   `ExecutionService` requires only shared Job, Sandbox, Route, AgentRun, attention, blob, and cleanup
   contracts. `RepositoryService` embeds it and adds exact Git checkout materialization/observation.
@@ -1994,7 +1994,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D078 — Coding authority is absent from the base runtime
 
-- **Status:** Accepted Core/runtime separation slice — 2026-08-20
+- **Status:** Superseded by D083 — 2026-08-20
 - **Decision:** Resolve a base workflow runtime containing only the selected profile,
   `ExecutionService`, and `RepositoryService`. Resolve a separate `CodingRuntime` for
   `coding-to-proposal`; only that path constructs `CodingService`, the GitHub client, publication,
@@ -2072,21 +2072,50 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D082 — Native workflows consume narrow Core capability interfaces
 
-- **Status:** Accepted in-process application boundary slice — 2026-08-20
+- **Status:** Refined by D083 — 2026-08-20
 - **Decision:** Define provider-neutral Core interfaces for AgentRun delivery and observation,
-  stable Sandbox Actions, repository materialization, cleanup reconciliation, and durable Core
-  storage. Native workflows consume those interfaces through typed runtime compositions. The
-  composition root alone constructs the current `spine` and PostgreSQL implementations.
+  stable Sandbox Actions, cleanup reconciliation, and durable Core storage. Native workflows
+  consume those interfaces through typed runtime compositions. Repository materialization is a
+  workflow-module composition over Core execution, not a Core capability. The composition root
+  alone constructs the current `spine` and PostgreSQL implementations.
 - **Why:** Depending on concrete `ExecutionService`, `RepositoryService`, and `postgres.Store`
   implementations made in-process workflow reuse look like a privileged path and prevented a
   workflow-owned service from importing the Core contract without an import cycle. Interfaces must
   describe capabilities actually consumed, not speculate about a public transport schema.
-- **Proof:** Coding accepts a workflow-owned interface composed over Core execution; investigation
-  embeds the repository execution interface; cleanup accepts only cleanup execution; compile-time
-  assertions prove the current implementations satisfy each contract. Common runtimes no longer
-  carry unused concrete execution or repository fields.
+- **Proof:** Coding and investigation accept a repository-module interface composed over Core
+  execution; cleanup accepts only cleanup execution; compile-time assertions prove the current
+  implementations satisfy each contract. Common runtimes and Core interfaces carry no repository
+  capability.
 - **Not included:** No network API, authentication model, direct-execution resource, or SDK is
   claimed. A future external client may earn a transport contract over these capabilities without
   exposing adapters, PostgreSQL, or Absurd.
 - **Reconsider when:** A real transport needs a materially different resource boundary, or another
   workflow proves one of these capability groupings is too broad.
+
+## D083 — Git and coding behavior are workflow modules, not Core
+
+- **Status:** Accepted ownership correction — 2026-08-20
+- **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action, Check,
+  Artifact, Evidence, recovery, and requested-cleanup custody described by the North Star. Place
+  exact Git checkout and Revision observation in the repository module. Place repository setup,
+  coding Checks, review execution, and proposal-facing Action kinds in the coding workflow module.
+  Sandbox providers expose only their provider-neutral Sandbox contract; they do not implement Git
+  clone policy. Shared use by multiple workflows does not make a behavior Core.
+- **Composition:** Native coding and investigation workflows statically compose the repository
+  module over Core execution. `coding-to-proposal` additionally composes its coding service and
+  GitHub authorities. Incus and E2B remain interchangeable Sandbox adapters beneath the same
+  provider-neutral boundary.
+- **Why:** The first two workflows both used Git, so horizontal reuse had been mistaken for Core
+  ownership. Non-repository workflows must be able to consume Core without receiving Git or coding
+  authority. Provider adapters should translate infrastructure, not contain workflow semantics.
+- **No plugin system:** Ordinary Go package composition is sufficient for the currently compiled
+  native workflows. Dynamic discovery, loading, trust, compatibility, distribution, and upgrade
+  contracts remain unearned and are not introduced by this correction.
+- **Vocabulary:** This decision relocates existing behavior and constants only. It introduces no
+  product term and changes no meaning in the North Star vocabulary.
+- **Proof:** Core declares no repository execution interface; the Sandbox contract contains no Git
+  operation; one repository implementation is exercised through a provider-neutral Sandbox fake;
+  coding execution lives outside `spine`; Incus, E2B, workflow, CLI, and PostgreSQL tests retain the
+  same observable behavior.
+- **Reconsider when:** Independently distributed workflow modules require dynamic loading, or a
+  non-workflow consumer proves a smaller reusable repository boundary.

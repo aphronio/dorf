@@ -229,7 +229,7 @@ func (e faultActionExternals) RepositoryClone(context.Context, spine.Job, spine.
 
 func repositoryCloneAction(actions []spine.Action) (spine.Action, bool) {
 	for _, action := range actions {
-		if action.Kind == spine.ActionRepositoryClone {
+		if action.Kind == repository.ActionRepositoryClone {
 			return action, true
 		}
 	}
@@ -255,7 +255,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), spine.ActionRepositoryClone)
+			action, err := store.GetOrCreateSandboxAction(workCtx, spine.MainSandboxName(params.JobID), repository.ActionRepositoryClone)
 			if err != nil {
 				return faultActionResultV1{}, err
 			}

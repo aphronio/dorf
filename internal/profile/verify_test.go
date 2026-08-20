@@ -92,9 +92,6 @@ func (s *verificationSandbox) DeleteOwned(context.Context, provider.Ownership) e
 func (*verificationSandbox) AttestReview(context.Context, provider.Ownership, provider.ReviewMetadata) error {
 	return nil
 }
-func (*verificationSandbox) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
-	return nil
-}
 func (s *verificationSandbox) PutFile(context.Context, provider.Ownership, string, []byte) error {
 	s.putCall++
 	return s.putErr

@@ -10,6 +10,8 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+const ActionRepositoryRestore spine.ActionKind = "repository-restore"
+
 type Store interface {
 	RecordSandboxActionSuccess(context.Context, string) error
 }
@@ -51,7 +53,7 @@ func (s Service) BlobStore() blob.Store { return s.blobs }
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.
 func (s Service) ExecuteRepositoryRestore(ctx context.Context, job spine.Job, sandbox spine.Sandbox, action spine.Action, source Source) error {
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != spine.ActionRepositoryRestore ||
+	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
 		source.JobID != job.ID || source.Kind != SourceGitBundle {
 		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
 	}

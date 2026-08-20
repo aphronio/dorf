@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/postgres"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -112,7 +114,7 @@ func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
 
 func publicationIntentAt(actions []spine.Action, revision string) time.Time {
 	for _, action := range actions {
-		if action.Kind == spine.ActionGitHubPullRequest && action.Scope == revision {
+		if action.Kind == coding.ActionGitHubPullRequest && action.Scope == revision {
 			return action.CreatedAt
 		}
 	}
@@ -218,7 +220,7 @@ func (s Snapshot) currentReviewRuns() ([]spine.ReviewRunView, error) {
 
 func codingPrerequisitesComplete(f Snapshot) bool {
 	return actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) &&
-		actionSucceeded(f.Actions, spine.ActionRepositoryClone, f.MainSandbox.ID) &&
+		actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) &&
 		f.SelectedSetup != nil && f.SelectedSetup.State == spine.ActionSucceeded &&
 		actionSucceeded(f.Actions, spine.ActionRouteCreate, f.MainSandbox.ID)
 }
@@ -257,11 +259,11 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	if !actionSucceeded(f.Actions, spine.ActionSandboxCreate, f.MainSandbox.ID) {
 		return actionWork(spine.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}
-	if !actionSucceeded(f.Actions, spine.ActionRepositoryClone, f.MainSandbox.ID) {
-		return actionWork(spine.ActionRepositoryClone, f.MainSandbox.ID, "")
+	if !actionSucceeded(f.Actions, repository.ActionRepositoryClone, f.MainSandbox.ID) {
+		return actionWork(repository.ActionRepositoryClone, f.MainSandbox.ID, "")
 	}
 	if f.SelectedSetup == nil {
-		return work(WorkSetupRepository, spine.ActionID(f.Job.ID, spine.ActionRepositorySetup), "")
+		return work(WorkSetupRepository, spine.ActionID(f.Job.ID, coding.ActionRepositorySetup), "")
 	}
 	if f.SelectedSetup.State == spine.ActionFailed {
 		return work(WorkAttention, f.SelectedSetup.ID, attentionDetail(f.Job, f.SelectedSetup.ID, "repository setup failed"))
@@ -304,8 +306,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 			if !actionSucceeded(f.Actions, spine.ActionSandboxCreate, run.Sandbox.ID) {
 				return actionWork(spine.ActionSandboxCreate, run.Sandbox.ID, string(role))
 			}
-			if !actionSucceeded(f.Actions, spine.ActionReviewCheckout, run.Sandbox.ID) {
-				return actionWork(spine.ActionReviewCheckout, run.Sandbox.ID, string(role))
+			if !actionSucceeded(f.Actions, coding.ActionReviewCheckout, run.Sandbox.ID) {
+				return actionWork(coding.ActionReviewCheckout, run.Sandbox.ID, string(role))
 			}
 			if !actionSucceeded(f.Actions, spine.ActionRouteCreate, run.Sandbox.ID) {
 				return actionWork(spine.ActionRouteCreate, run.Sandbox.ID, string(role))
@@ -417,7 +419,7 @@ func actionSucceeded(actions []spine.Action, kind spine.ActionKind, scope string
 func publicationPending(actions []spine.Action, revision string) bool {
 	for _, action := range actions {
 		if action.Scope == revision && action.State != spine.ActionSucceeded &&
-			(action.Kind == spine.ActionRepositoryPush || action.Kind == spine.ActionGitHubPullRequest) {
+			(action.Kind == coding.ActionRepositoryPush || action.Kind == coding.ActionGitHubPullRequest) {
 			return true
 		}
 	}
@@ -427,7 +429,7 @@ func publicationPending(actions []spine.Action, revision string) bool {
 func publicationDetail(f Snapshot, fallback string) string {
 	for _, action := range f.Actions {
 		if action.Scope == f.Job.Revision && action.ID == f.Job.WorkflowAttentionSource &&
-			(action.Kind == spine.ActionRepositoryPush || action.Kind == spine.ActionGitHubPullRequest) {
+			(action.Kind == coding.ActionRepositoryPush || action.Kind == coding.ActionGitHubPullRequest) {
 			return f.Job.WorkflowAttention
 		}
 	}

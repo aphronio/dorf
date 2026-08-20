@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/investigation"
+	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -76,17 +79,17 @@ func (d Definition) ActionLabel(kind spine.ActionKind) string {
 	switch kind {
 	case spine.ActionSandboxCreate:
 		return "Provisioning Sandbox"
-	case spine.ActionRepositoryClone:
+	case repository.ActionRepositoryClone:
 		return "Cloning repository"
-	case spine.ActionRepositoryRestore:
+	case investigation.ActionRepositoryRestore:
 		return "Restoring retained repository"
-	case spine.ActionRepositorySetup:
+	case coding.ActionRepositorySetup:
 		return "Setting up repository"
-	case spine.ActionRepositoryPush:
+	case coding.ActionRepositoryPush:
 		return "Publishing Revision"
-	case spine.ActionGitHubPullRequest:
+	case coding.ActionGitHubPullRequest:
 		return "Creating pull request"
-	case spine.ActionReviewCheckout:
+	case coding.ActionReviewCheckout:
 		return "Preparing reviewer checkout"
 	case spine.ActionRouteCreate:
 		return "Connecting model access"

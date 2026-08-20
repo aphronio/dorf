@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/incus"
@@ -167,7 +168,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		}},
 		Actions: []spine.Action{
 			{ID: "action-secret", Kind: spine.ActionSandboxCreate, Scope: mainSandbox, State: spine.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
-			{Kind: spine.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
+			{Kind: coding.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
 		},
 		Revisions: []spine.Revision{
 			{Generation: 0, OID: "revision-0", ObservedAt: base},

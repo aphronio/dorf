@@ -1,7 +1,6 @@
 package spine
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -77,21 +76,4 @@ type reviewObservationArtifact struct {
 type ReviewCheckoutObservation struct {
 	Revision string `json:"revision"`
 	Tree     string `json:"tree"`
-}
-
-type ReviewStore interface {
-	Actions(context.Context, string) ([]Action, error)
-	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
-	ReviewRun(context.Context, string) (ReviewRunView, error)
-	RecordReviewFeedback(context.Context, string, HarnessTurn, Evidence) (Message, bool, error)
-}
-
-type ReviewExternals interface {
-	RepositoryChangeFacts(context.Context, CodingJob) (policy.ChangeFacts, error)
-	PrepareReviewCheckout(context.Context, CodingJob, ReviewRunView) error
-	VerifyReviewCheckout(context.Context, CodingJob, ReviewRunView) (ReviewCheckoutObservation, error)
-	ReviewInitialTurn(context.Context, CodingJob, ReviewRunView) (HarnessBinding, error)
-	ReviewRecover(context.Context, CodingJob, ReviewRunView) (HarnessBinding, error)
-	ReviewTurns(context.Context, CodingJob, ReviewRunView) (HarnessHistory, error)
-	ReviewWait(context.Context, CodingJob, ReviewRunView, string) (HarnessBinding, error)
 }

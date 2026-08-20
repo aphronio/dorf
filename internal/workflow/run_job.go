@@ -7,6 +7,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/repository"
 	"github.com/aphronio/dorf/internal/spine"
@@ -237,13 +238,13 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 		return nil
 	}
 	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == spine.ActionReviewCheckout {
+		if work.ActionKind == coding.ActionReviewCheckout {
 			if reviewer == nil {
 				return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", action.ID)
 			}
 			return service.ExecuteReviewCheckout(workCtx, job, reviewer.ID, action)
 		}
-		if work.ActionKind == spine.ActionRepositoryClone {
+		if work.ActionKind == repository.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, job.Job, *sandbox, action, job.Repository, job.Revision, job.Branch)
 		}
 		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)

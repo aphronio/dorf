@@ -64,7 +64,6 @@ type Sandbox interface {
 	OwnedPresent(context.Context, Ownership) (bool, error)
 	DeleteOwned(context.Context, Ownership) error
 	AttestReview(context.Context, Ownership, ReviewMetadata) error
-	ReconcileClone(context.Context, Ownership, string, string, string) error
 	PutFile(context.Context, Ownership, string, []byte) error
 	Exec(context.Context, Ownership, []byte, ...string) (Result, error)
 	Endpoint(context.Context, Ownership, int) (Endpoint, error)

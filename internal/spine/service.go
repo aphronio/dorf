@@ -38,22 +38,6 @@ type Externals interface {
 	SandboxDelete(context.Context, Job, Sandbox) error
 }
 
-type CodingStore interface {
-	RecordSetup(context.Context, string, Evidence, CommandObservation, []DeclaredCheck) error
-	RecordRevisionObservation(context.Context, string, string, RevisionObservation, Evidence) error
-	RecordCheck(context.Context, Check, Evidence, CommandObservation) error
-	AdmitCheckMessage(context.Context, Check) (Message, bool, error)
-	SetWorkflowAttention(context.Context, string, string, string) error
-	DeclaredChecks(context.Context, string) ([]DeclaredCheck, error)
-	Checks(context.Context, string) ([]Check, error)
-	Evidence(context.Context, string) ([]Evidence, error)
-}
-
-type RepositoryExternals interface {
-	RepositorySetup(context.Context, CodingJob, Action) (CommandObservation, []DeclaredCheck, error)
-	RepositoryCheck(context.Context, CodingJob, Check) (CommandObservation, error)
-}
-
 type FaultBarrier interface {
 	Reach(context.Context, string, Delivery) error
 	ReachWorkflow(context.Context, string, string, string) error

@@ -38,7 +38,7 @@ func (e Externals) RepositoryClone(ctx context.Context, job spine.Job, sandbox s
 	if sandbox.JobID != job.ID || sandbox.ID != spine.MainSandboxName(job.ID) {
 		return fmt.Errorf("repository clone requires the exact main Sandbox")
 	}
-	return e.Sandbox.ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
+	return e.repository().ReconcileClone(ctx, ownershipMetadata(sandbox), repository, revision, branch)
 }
 
 func (e Externals) RepositoryRestore(ctx context.Context, job spine.Job, owned spine.Sandbox, source investigation.Source, contents []byte) error {
