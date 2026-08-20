@@ -13,8 +13,8 @@ must define scoped routing or injection.
 
 Dorf owns the control-plane guarantees around the Harness: accepted intent, AgentRun and Sandbox
 custody, external-effect reconciliation, recovery, Evidence, durable attachment of the
-workflow-defined Outcome, and cleanup. A Harness may provide its own durable sessions; Dorf does not
-compete by duplicating them.
+workflow-defined Outcome, and execution of requested cleanup. A Harness may provide its own durable
+sessions; Dorf does not compete by duplicating them.
 
 This is the product and experience direction. It is not an API inventory, schema, package plan, or
 issue backlog. The currently verified product is narrower: one coding-to-PR workflow using Codex or
@@ -28,10 +28,14 @@ implementations validate their seams.
 A client selects a verified Harness and Sandbox profile, then delegates a goal-backed Job.
 Dorf carries the profile's supported setup and owns controlled execution around it.
 The Job owns isolated resources, recovery, and external effects.
-Dorf returns an outcome with observed evidence and honest cleanup state.
+Dorf returns inspectable workflow results with observed evidence and honest cleanup state.
 ```
 
 ## Product boundary
+
+This section is the sole current authority for ownership between Core, workflows, and clients.
+Architecture documents its technical consequences; the Decision Log records why it changed; other
+documents should link here rather than redefine it.
 
 Dorf Core is the product. Its intended contract gives clients one controlled boundary for supported
 existing Harnesses on chosen compatible infrastructure. Portability is capability-based: admission
@@ -45,12 +49,24 @@ execution and durable attachment of that Outcome. Native Dorf workflows should d
 intended Core contract that ordinary clients and other products may later embed; they must not have
 a privileged hidden path.
 
+Core provides mechanisms, never workflow or interaction policy. It may admit input, run and recover
+AgentRuns, retain Artifacts and Evidence, and reconcile cleanup after a caller requests it. It does
+not decide that a draft is accepted, that a Job is semantically finished, that another Job should be
+started, or that resources should now be released. Those choices belong to a workflow or to a client
+such as Agent0, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in the same
+repository, process, or binary does not move its policy into Core.
+
+Apply this test before adding a Core concept: if the proposed fact or operation interprets
+acceptance, rejection, success, terminal meaning, human judgment, cross-Job composition, or when to
+clean up, first place it in the consuming workflow or client. Core should retain only the reusable
+custody or lifecycle mechanism that remains after that policy is removed.
+
 This gives each layer one job:
 
 ```text
 Client       chooses goals and composes Jobs
 Workflow     owns semantics, policy, evaluation, and Outcome meaning
-Dorf core    owns Job-wide run custody, Outcome attachment, recovery, evidence, and cleanup
+Dorf core    owns Job-wide run custody, result attachment, recovery, evidence, and requested cleanup execution
 Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 ```
 
@@ -58,7 +74,7 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 
 | Term | Meaning |
 | --- | --- |
-| **Job** | One durable bounded goal, its workflow version, lifecycle, and explicit outcome |
+| **Job** | One durable bounded goal, its workflow version, accepted inputs, and lifecycle |
 | **Workflow** | Ordinary versioned policy that composes deterministic operations and AgentRuns for one kind of Job |
 | **Sandbox** | An isolated mutable workstation owned for a Job's lifetime |
 | **Message** | Durable input from a human, agent, or workflow |
@@ -74,7 +90,7 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Outcome** | The workflow-specific terminal result, separate from resource cleanup |
 
 Coding adds workflow facts such as Revision, ReviewPlan, Proposal, and GitHub acceptance. Research
-may add a scoped request, captured sources, and a report outcome. Those facts do not become core
+may add a scoped request, captured sources, and draft Artifacts. Those facts do not become core
 vocabulary merely because one workflow needs them.
 
 `Role` is a field, not an executing object. There is no first-class Worker until personality,
@@ -91,18 +107,20 @@ flowchart TD
     Contract --> Sandbox["Create isolated Sandbox when needed"]
     Sandbox --> Work["Run deterministic operations and bounded AgentRuns"]
     Work --> Observe["Observe facts, Checks, Artifacts, and external effects"]
-    Observe --> Decide{"Workflow decision"}
+    Observe --> Decide{"Workflow or client policy"}
     Decide -->|"more work"| Work
-    Decide -->|"human judgment"| Attention["Ask one precise question"]
+    Decide -->|"human judgment"| Attention["Request input through a client"]
     Attention --> Work
     Decide -->|"terminal"| Outcome["Record workflow Outcome"]
-    Outcome --> Cleanup["Reconcile cleanup separately"]
+    Decide -->|"release resources"| RequestCleanup
+    Outcome --> RequestCleanup["Workflow or client requests cleanup"]
+    RequestCleanup --> Cleanup["Core reconciles cleanup"]
     Cleanup --> Receipt["Return result, Artifacts, Evidence, and cleanup state"]
 ```
 
-Each workflow keeps its decision small and explicit in ordinary code. Dorf is not a configurable DAG
-engine: Absurd owns generic task execution mechanics, while Dorf and the workflow retain the product
-facts needed to explain and recover the Job.
+Each workflow or client keeps its policy small and explicit in ordinary code. Dorf is not a
+configurable DAG engine: Absurd owns generic task execution mechanics, while Dorf and its consumers
+retain the product facts needed to explain and recover the Job.
 
 ## Two examples
 
@@ -111,21 +129,19 @@ facts needed to explain and recover the Job.
 A client delegates a complete coding goal. The coding workflow creates an isolated clone and branch,
 runs repository setup, lets an implementation AgentRun commit, observes an exact Revision, runs
 deterministic Checks, selects only useful review, and publishes an exact-Revision pull request.
-GitHub merge, close, or explicit abandonment supplies the workflow outcome; cleanup remains a
-separate observable fact.
+GitHub merge, close, or explicit abandonment supplies the workflow outcome; the workflow then
+requests cleanup, which remains a separate observable fact.
 
 ### Codebase investigation to a repository-grounded report
 
 A client delegates an exact reachable or locally committed repository Revision and an unstructured
 investigation brief. The workflow creates an isolated exact checkout, uses a bounded AgentRun for
-inspection and synthesis, checks its terminal result and unchanged checkout programmatically, and
+inspection and synthesis, checks its completed Turn and unchanged checkout programmatically, and
 retains a flexible Markdown draft. An honest draft may simply explain that no useful finding exists.
-The human can send a follow-up into the same Harness Thread or accept or reject the exact latest
-draft. Only that typed decision makes the workflow terminal and starts cleanup. It owns no
-publication or pull request.
-
-The implementation proves this shape through PostgreSQL, shared cleanup, and a real Incus/Codex
-dogfood terminal.
+The workflow accepts follow-up Messages in the same Harness Thread and retains each revised draft.
+A client decides whether to request another draft, publish or otherwise consume one, start another
+workflow, or ask Core to clean up. Investigation owns no accept/reject policy, publication, pull
+request, or cleanup timing.
 
 ## Deterministic and agentic boundary
 
@@ -171,14 +187,15 @@ proof.
 ```text
 L0  Existing tools       Harnesses, Sandbox providers, source hosts, APIs, provider SDKs
 L1  Deterministic edge   Actions, Checks, capability enforcement, adapters
-L2  Durable custody      Job identity, inbox, AgentRuns, Artifacts, Evidence, recovery, cleanup
+L2  Durable custody      Job identity, inbox, AgentRuns, Artifacts, Evidence, recovery, requested cleanup
 L3  Core consumers        clients, external products, and native workflows
 L4  Triggers and views    translate intent and render the same Job facts
 ```
 
-Clients translate intent or external events into idempotent Job admission; they do not become
-workflow authorities. Trigger breadth is not a core feature. A CLI, GitHub event, schedule, Slack
-command, or personal assistant should eventually invoke the same application boundary.
+Clients may own interaction and composition policy around Jobs, but they do not silently reinterpret
+a pinned workflow's internal facts or become authority for its semantics. Trigger breadth is not a
+Core feature. A CLI, GitHub event, schedule, Slack command, or personal assistant should eventually
+invoke the same application boundary.
 
 ## Native workflows as Core dogfood
 
@@ -203,14 +220,18 @@ real portability implementations and external-client use prove them. Dynamic age
 are a later UX layer, not the requirements driver for Core. Dorf does not become a generic
 automation canvas, graph framework, agent builder, or model/tool Harness.
 
+Native workflows remain Core consumers even when compiled into the Dorf binary. They may own rich
+domain policy, terminal conditions, and cleanup requests, but that policy must remain outside the
+Core contract and must not create a privileged execution path.
+
 ## Current verified slice
 
 The supported product today remains one Go application using PostgreSQL and Absurd, one coding
 workflow, named verified Sandbox profiles, local Incus on the supported host, Codex and Pi, and
 Git/GitHub as proposal and acceptance authorities. E2B has proved the same complete workflow seam
 but still requires a stable deployment-owned remote Gateway route. The implemented
-`codebase-investigation` workflow has a live Incus/Codex terminal; the same workflow through E2B
-remains an unproved portability follow-up.
+`codebase-investigation` workflow has produced and revised durable drafts on one Incus/Codex Thread;
+the corrected client-owned cleanup boundary and the same workflow through E2B remain proof follow-ups.
 This narrow support claim is evidence, not the permanent product boundary.
 
 The current coding implementation may contain repository, Revision, review, and GitHub fields in

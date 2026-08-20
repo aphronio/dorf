@@ -113,8 +113,9 @@ The follower shows current status and durable Job history until attention appear
 completes. `Ctrl-C` stops only the local view, not the Job.
 
 `worker` may be restarted after process loss. Use `dorf message` for later input and `--intent steer`
-to target active work. Dorf observes the exact pull request for acceptance or rejection. To stop
-without a GitHub decision:
+to target active work. The coding workflow observes the exact pull request for acceptance or
+rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub
+decision:
 
 ```bash
 dorf abandon JOB_ID
@@ -126,5 +127,6 @@ If `dorf inspect JOB_ID` reports that the workflow stopped, repair the displayed
 retains its checkpoints. The receipt reports scheduling identities but does not claim that a worker
 has resumed it yet; use `dorf inspect JOB_ID` to observe current work and progress.
 
-Cleanup remains separately observable. Use `dorf cleanup JOB_ID` only to explicitly start or retry
-it, then inspect again.
+Cleanup remains separately observable. `dorf cleanup JOB_ID` is an explicit client request to release
+the Job's resources; Core reconciles that request or retries an incomplete cleanup, then inspection
+reports the resulting facts.

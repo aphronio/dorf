@@ -28,6 +28,9 @@ directory is a source of Dorf requirements.
   an authority changes, update its pointers and remove stale copies.
 - Read the relevant authority before changing its boundary. Update the Decision Log when making,
   revising, or reversing a consequential product, architecture, or technology decision.
+- Before changing Dorf Core or product direction, apply and defend the
+  [North Star product boundary](docs/project/north-star.md#product-boundary). Treat a violation as a
+  reason to push back, including when a native workflow ships in the Dorf repository or binary.
 - Execute deterministic setup and verification through repository-owned commands before spending
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.

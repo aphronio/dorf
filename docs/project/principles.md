@@ -42,17 +42,18 @@ real product requirement.
 ## Deterministic before agentic
 
 Anything that can be derived or executed programmatically should be. Admission, identity,
-sequencing, policy facts, Checks, evidence hashing, external-effect reconciliation, retry, and
-cleanup are code-owned. Actions record code-owned external mutations; an agent invocation is instead
-owned and reconciled by its AgentRun. A workflow owns what those operations mean and which outcome
-is acceptable.
+sequencing, workflow policy, Checks, evidence hashing, external-effect reconciliation, retry, and
+cleanup execution are code-owned rather than agent judgment. Apply the
+[North Star product boundary](north-star.md#product-boundary): “code-owned” identifies automation,
+not which layer owns its meaning. Actions record code-owned external mutations; an agent invocation
+is instead owned and reconciled by its AgentRun.
 
 In the coding workflow, setup, publication, and Git observation are deterministic; implementation
 AgentRuns own code changes, including one or many Git commits. User input, failed Check output, and
 reviewer text all return through the same Message path. The implementation agent decides whether to
-act. Dorf then observes either a clean descendant commit as the next Revision or a clean unchanged
-checkout. Another workflow may have no repository or Revision, but it must preserve the same
-separation between observed facts and agent judgment.
+act. The coding workflow then asks Core to observe either a clean descendant commit as the next
+Revision or a clean unchanged checkout. Another workflow may have no repository or Revision, but it
+must preserve the same separation between observed facts and agent judgment.
 
 Review authority starts with deterministic mandatory policy. Known risks select bounded read-only
 review Roles; an unknown classification selects one general reviewer instead of a triage router.
@@ -85,8 +86,8 @@ retries to Absurd.
 A workflow begins with a bounded contract: typed intent, capability envelope, budget, expected
 outcomes, deterministic checks, and honest failure or no-result terminals. Its evaluation cases are
 part of the workflow, not a platform feature added after authoring. Runtime invariants protect
-recovery, idempotency, authority, and cleanup; workflow evaluations measure whether the result was
-useful.
+recovery, idempotency, authority, and requested cleanup execution; workflow evaluations measure
+whether the result was useful.
 
 Agents may author or revise ordinary versioned workflow code, manifests, tests, and evaluations.
 They may not silently activate a new workflow version, grant themselves credentials or capabilities,
@@ -96,7 +97,8 @@ machine-readable contracts, excellent diagnostics, fixtures, and short feedback 
 ## Disposable developer workstations
 
 Each coding Job should feel like a fresh developer workstation: isolated checkout, explicit branch,
-deterministic setup, checks, smoke tests, evidence, and a clear accept or discard path.
+deterministic setup, checks, smoke tests, evidence, and a clear workflow- or client-owned accept or
+discard path.
 
 The guiding question is:
 

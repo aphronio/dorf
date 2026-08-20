@@ -37,16 +37,16 @@ Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleep
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
 be understood.
 
-The workflow owns semantic ordering and terminal meaning. The durable custody layer owns stable Job
-identity, accepted input, resource ownership, AgentRun and external-effect facts, Artifact and
-Evidence custody, attention, outcome attachment, and cleanup state. Adapters translate existing
-authorities; they do not invent another workflow.
+Layer ownership follows the [North Star product boundary](north-star.md#product-boundary). Its
+technical consequence here is that the durable custody layer records stable Job and resource facts
+and reconciles requested effects, while workflow/client policy enters only through explicit calls.
+Adapters translate existing authorities; they do not invent another workflow.
 
 ## Authority model
 
 | Fact | Authority |
 | --- | --- |
-| Job identity, bounded goal, workflow identity/version, accepted input, durable lifecycle, and cleanup | Dorf-owned PostgreSQL facts |
+| Job identity, bounded goal, workflow identity/version, accepted input, durable lifecycle, and cleanup request/execution | Dorf-owned PostgreSQL facts |
 | Workflow-specific facts and outcome | Workflow-owned PostgreSQL tables or typed records |
 | Task claims, checkpoints, retry schedule, sleeps, waits, and cancellation | Absurd schema in the same PostgreSQL deployment |
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
@@ -62,7 +62,8 @@ or results; Evidence proves only what Dorf or an adapter actually observed.
 Resource ownership follows lifetime. A Job is the aggregate owner of every Sandbox allocated for
 it. A Sandbox owns or deterministically identifies its scoped provider route and injected authority.
 AgentRuns use a Sandbox but never own it. Cleanup begins at the Job and reconciles resources against
-their external authorities before declaring them removed.
+their external authorities before declaring them removed, but only after a workflow or client has
+requested resource release.
 
 ## Execution model
 
@@ -199,9 +200,9 @@ exact Revision through the provider-neutral file boundary when required, install
 Provider Route, and runs one bounded `investigate` AgentRun per accepted Message. Every completed
 Turn must leave the checkout exact and clean before its Markdown becomes an immutable numbered draft
 Artifact. The coordinator then waits durably: a follow-up Message creates another AgentRun in the
-same Harness Thread and Sandbox, while an exact accepted or rejected human decision over the latest
-draft closes admission and enters the shared Job cleanup path. Decisions are workflow authority, not
-prose delivered to an agent.
+same Harness Thread and Sandbox. A client decides whether to request another draft, consume or
+publish one, start another workflow, or request shared Job cleanup. Investigation does not assign
+accept/reject meaning or choose cleanup timing.
 
 Workflow capability requirements name only optional broad provider primitives beyond the baseline
 Sandbox and Harness contracts, such as browser workloads, nested containers, served endpoints,

@@ -1451,10 +1451,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   vendor-supported credential or subscription connection, host constraints, tools, isolation,
   recovery, interruption, and observation. Connection custody never implies copying raw user secrets
   into a Sandbox; scoped routing or injection remains adapter- and profile-specific.
-- **Authority:** Workflows own Job semantics, policy, evaluation, and what an Outcome means. Core owns
-  accepted intent, Messages, AgentRuns, Sandbox custody, external-effect reconciliation, recovery,
-  Evidence, durable attachment and recording of that workflow-defined Outcome, and cleanup. A
-  Harness remains authoritative for its native session, transcript, and tool protocol.
+- **Authority:** Current Core, workflow, and client ownership is defined only by the
+  [North Star product boundary](north-star.md#product-boundary) and corrected by D075. A Harness
+  remains authoritative for its native session, transcript, and tool protocol.
 - **Composition:** Native workflows are Core dogfood and should use the same intended Core contract
   that ordinary clients and other products may later embed. They receive no privileged hidden path.
   Transport, SDK, and public compatibility promises remain uncommitted until real portability
@@ -1729,7 +1728,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D069 — Codebase investigation is the second explicit native workflow
 
-- **Status:** Accepted initial implementation slice; one-shot terminal refined by D074 — 2026-08-17
+- **Status:** Accepted initial implementation slice; interaction boundary refined by D075 — 2026-08-17
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
   revision, repository Revision, unstructured brief, execution profile, Provider Connection, model,
@@ -1738,32 +1737,36 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   before a Sandbox call. Repository dependencies remain the responsibility of its setup script or
   custom image. The current investigation needs no optional provider capability.
 - **Workflow facts:** The workflow has one ordinary Go coordinator over its own dependency chain:
-  main Sandbox create, exact repository checkout, scoped Provider Route, one `investigate` AgentRun,
-  unchanged-checkout verification, typed Report recording, and shared Job cleanup. The Report points
-  to an immutable `text/markdown` Artifact and remains flexible Markdown grounded in repository paths
-  and lines. A report may plainly state that no useful finding exists; there is no synthetic Outcome
-  enum or machine-readable first-line marker. Agent prose remains a result, not proof of its claims.
+  main Sandbox create, exact repository checkout, scoped Provider Route, one `investigate` AgentRun
+  per accepted initial or follow-up Message, unchanged-checkout verification, and draft recording.
+  Each draft points to an immutable `text/markdown` Artifact and remains flexible Markdown grounded
+  in repository paths and lines. A draft may plainly state that no useful finding exists; there is
+  no synthetic Outcome enum or machine-readable first-line marker. Agent prose remains a result, not
+  proof of its claims.
 - **Shared seam:** Jobs now durably pin workflow name and revision. Investigation reuses Job custody,
   exact Sandbox Actions, runner-neutral AgentRun reconciliation, content-addressed blob storage,
   profile fencing, and route-before-delete cleanup. Coding and investigation retain separate
-  coordinators, snapshots, decisions, and terminal facts. There is no workflow registry, JSON result bag,
+  coordinators, snapshots, natural facts, and operation projections. There is no workflow registry, JSON result bag,
   DAG, provider matrix, or workflow DSL.
 - **Client boundary:** `dorf workflow run codebase-investigation` is the first CLI projection of the
   workflow-as-durable-function boundary. The workflow itself remains independent of whether a future
   caller is a CLI, schedule, GitHub event, Slack tag, assistant, or another product.
 - **Deliberate omissions:** This initial slice had no repository setup, coding Checks, branch mutation,
   review, GitHub authority, publication, external web sources, cron scheduling,
-  automatic Job chaining, or persistent researcher identity. Clients own approval and composition;
-  later use must earn each additional capability.
-- **Proof:** Unit coverage proves the independent decision order, flexible nonblank report edge, and
+  automatic Job chaining, or persistent researcher identity. Approval and composition remain outside
+  this workflow according to the North Star product boundary; later use must earn each additional
+  capability.
+- **Proof:** Unit coverage proves the independent operation order, flexible nonblank draft edge, and
   optional provider-capability diagnostics. PostgreSQL integration proves immutable workflow admission,
-  cross-workflow idempotency conflict, the investigator Role/capability binding, typed Report and
-  Artifact attachment, one full fake-Harness coordinator terminal, and shared route-before-Sandbox
-  cleanup. Live Codex dogfood produced a Markdown Report and completed route-before-Sandbox cleanup.
+  cross-workflow idempotency conflict, the investigator Role/capability binding, draft Artifact
+  attachment, one full fake-Harness draft loop, and explicit shared route-before-Sandbox cleanup.
+  Live Codex dogfood produced two same-Thread Markdown drafts and exposed the misplaced
+  decision-specific cleanup coupling. The corrected client-requested cleanup terminal remains a D075
+  proof follow-up.
 - **Why:** Dorf needs concrete workflows that improve its own development and demonstrate what Core
   enables. A repository-grounded investigation differs materially from coding-to-proposal because it
   owns no Revision mutation, Checks, review, Proposal, or GitHub Outcome. That difference is enough
-  to expose workflow identity, optional provider-capability admission, typed Report, and role-neutral AgentRun
+  to expose workflow identity, optional provider-capability admission, Artifact-backed drafts, and role-neutral AgentRun
   observation without generalizing the coding coordinator.
 - **Reconsider when:** Live dogfood shows useful investigations require captured external sources or
   deterministic reference validation, another workflow repeats
@@ -1859,9 +1862,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   exact bytes by Artifact ID. Artifact metadata lives in PostgreSQL and its bytes share one neutral
   deployment-owned content-addressed blob store with Evidence. Sandbox cleanup does not remove
   Artifacts.
-- **First slice, refined by D074:** `codebase-investigation` records numbered Markdown draft
-  Artifacts and its exact human terminal decision points to the accepted or rejected latest draft
-  instead of misclassifying agent prose as Evidence. `dorf artifact list JOB_ID` discovers
+- **First slice, refined by D075:** `codebase-investigation` records numbered Markdown draft
+  Artifacts instead of misclassifying agent prose as Evidence. A client decides how to consume a
+  draft and when to request cleanup. `dorf artifact list JOB_ID` discovers
   deliverables and `dorf artifact get ARTIFACT_ID` writes exact bytes. Inspection links to retrieval
   but does not inline potentially large or binary content.
 - **Boundary:** Artifacts are results or claims, not proof of their own correctness. Evidence remains
@@ -1907,33 +1910,35 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D074 — Investigation drafts wait for exact human disposition
 
-- **Status:** Accepted maintainer-radar interaction slice — 2026-08-20
-- **Decision:** A completed `codebase-investigation` AgentRun produces an immutable numbered Markdown
-  draft Artifact; it is not yet a terminal result. Dorf keeps admission, the Job-owned Sandbox,
-  Provider Route, and Harness Thread available while the workflow waits durably for human input.
-  An ordinary follow-up Message creates one new bounded `investigate` AgentRun on that same Thread.
-- **Human authority:** Accept and reject are typed workflow decisions, not ordinary Messages and not
-  prose interpreted by an agent. A decision must identify the exact latest draft Artifact, records
-  the human identity and optional reason, closes admission atomically, and wakes the waiting task.
-  Acceptance and rejection are both terminal; only then does the workflow schedule shared cleanup.
-  A stale decision loses to a concurrently admitted follow-up and is refused.
-- **Client boundary:** `dorf message` remains the unstructured revision path. `dorf workflow decide
-  --job JOB_ID --draft ARTIFACT_ID --decision accept|reject --by HUMAN_ID` is the first exact human
-  decision projection. Other interaction layers may translate buttons or events into the same facts;
-  Dorf does not become the interaction layer.
-- **Artifacts:** Each Turn retains `report-000N.md` so follow-up history is immutable and retrievable.
-  The terminal decision points to one exact draft. Agent prose remains a claim, not Evidence.
-- **Deliberate omission:** Dorf does not yet pause an idle Sandbox while awaiting the decision.
-  Managed-provider waiting cost may earn a provider-neutral pause/resume lifecycle later; it does not
-  justify speculative capability or state machinery in this slice.
-- **Proof:** PostgreSQL integration proves that follow-up is rejected before a draft, repeated
-  investigator AgentRuns reuse the original Harness Thread, each completed Turn produces a distinct
-  Artifact, stale acceptance is rejected, the exact decision is idempotent and closes admission,
-  cleanup starts only afterward, and retained draft bytes survive Sandbox deletion.
-- **Refines:** D069's one-shot investigation terminal and D072's first single-Artifact result shape.
-- **Why:** The proposed maintainer-radar dogfood requires challenging and refining a recommendation
-  before accepting it. Immediate cleanup preserved cost but destroyed the same-thread context before
-  the human decision, testing the wrong workflow lifecycle.
-- **Reconsider when:** Real dogfood shows one draft is sufficient, waiting cost materially dominates
-  use, a provider cannot preserve the Harness Thread across pause, or another workflow earns the same
-  exact draft-decision boundary.
+- **Status:** Superseded before release by D075 — 2026-08-20
+- **Retained finding:** Numbered draft Artifacts, follow-up AgentRuns, and the exact Harness Thread are
+  useful reusable mechanisms. Immediate cleanup after the first draft destroys valuable revision
+  context.
+- **Superseded finding:** Persisting accept/reject decisions and letting them choose cleanup moved
+  interaction policy into the wrong layer. D075 is the current authority; Git history retains the
+  discarded design details.
+
+## D075 — Core mechanisms do not own workflow or interaction policy
+
+- **Status:** Accepted product-boundary correction; implementation correction pending — 2026-08-20
+- **Decision:** Make the [North Star product boundary](north-star.md#product-boundary) the sole current
+  authority for Core, workflow, and client ownership. This entry records the correction and its
+  rationale rather than restating that contract.
+- **Investigation correction:** `codebase-investigation` produces immutable numbered draft Artifacts
+  and accepts follow-up Messages on the same Harness Thread. It does not persist accept/reject
+  decisions or infer cleanup timing. Agent0, n8n, a UI, another workflow, or a human-operated client
+  may consume a draft, create an Issue, chain work, request another draft, record its own disposition,
+  and finally request Dorf cleanup.
+- **Coding distinction:** `coding-to-proposal` may interpret GitHub Proposal observations and request
+  cleanup because that is workflow policy. Those facts and choices remain outside Core; compiling
+  the workflow into Dorf grants no privileged authority or hidden execution path.
+- **Refines:** D063's Core authority, D069's investigation terminal, D072's first Artifact consumer,
+  and D074's human disposition. It preserves D074's same-Thread revision loop while removing its
+  decision authority.
+- **Why:** Maintainer-radar dogfood initially encoded accept/reject as a typed investigation decision.
+  That made a useful client policy look like a Core requirement and contradicted the intended role of
+  workflows as ordinary Core consumers. The reusable primitives are drafts, Messages, AgentRuns,
+  retained Harness context, and requested cleanup—not the meaning a caller assigns to a draft.
+- **Reconsider when:** A reusable custody mechanism cannot support multiple real workflows without
+  knowing their terminal policy. A single workflow needing a typed decision is not sufficient; that
+  decision remains workflow-owned.
