@@ -37,19 +37,17 @@ type sandboxProfileStore interface {
 	SetWorkflowAttention(context.Context, string, string, string) error
 }
 
-// Runtime is the provider-neutral execution bundle for one durably selected
-// Sandbox profile. Provider and Harness selection remain in the composition
-// root; workflows only consume their established contracts.
+// Runtime records the exact profile identity common to one typed workflow
+// composition. Provider and Harness selection remain in the composition root;
+// each workflow receives only the capabilities in its typed runtime.
 type Runtime struct {
-	Execution spine.ExecutionService
-	Profile   RuntimeProfile
+	Profile RuntimeProfile
 }
 
 type CodingRuntime struct {
 	Runtime
-	Repository spine.RepositoryService
-	Coding     spine.CodingService
-	Proposal   ProposalRuntime
+	Coding   CodingExecution
+	Proposal ProposalRuntime
 }
 
 type InvestigationRuntime struct {

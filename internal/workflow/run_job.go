@@ -6,10 +6,25 @@ import (
 	"strings"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
+
+// CodingExecution is the coding workflow's explicit composition of reusable
+// Core execution with only its own setup, Revision, Check, and review policy.
+type CodingExecution interface {
+	controlplane.RepositoryExecution
+	BlobStore() blob.Store
+	ExecuteSetup(context.Context, spine.CodingJob, spine.Action) error
+	ObserveRevision(context.Context, spine.CodingJob, spine.AgentRun) error
+	ExecuteCheck(context.Context, spine.CodingJob, spine.Check) error
+	PlanReview(context.Context, spine.CodingJob) error
+	RunReview(context.Context, spine.CodingJob, string) error
+	ExecuteReviewCheckout(context.Context, spine.CodingJob, string, spine.Action) error
+}
 
 type FactStepResultV1 struct {
 	FactID string `json:"fact_id"`
@@ -30,7 +45,7 @@ func reviewPolicyStepName(job, revision string) string {
 // RunJob tells the coding story in dependency order. CurrentWork derives the
 // next operation from product facts; this loop executes it and asks again.
 // PostgreSQL never stores this disposable answer.
-func RunJob(ctx context.Context, service spine.CodingService, store postgres.Store, proposal ProposalRuntime, jobID string) (Work, error) {
+func RunJob(ctx context.Context, service CodingExecution, store postgres.Store, proposal ProposalRuntime, jobID string) (Work, error) {
 	for {
 		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -95,7 +110,7 @@ func RunJob(ctx context.Context, service spine.CodingService, store postgres.Sto
 	}
 }
 
-func observeAgentRun(ctx context.Context, service spine.CodingService, job spine.CodingJob, snapshot Snapshot, work Work) (bool, error) {
+func observeAgentRun(ctx context.Context, service CodingExecution, job spine.CodingJob, snapshot Snapshot, work Work) (bool, error) {
 	for i := range snapshot.Deliveries {
 		run := snapshot.Deliveries[i].AgentRun
 		if run.ID != work.FactID {
@@ -109,7 +124,7 @@ func observeAgentRun(ctx context.Context, service spine.CodingService, job spine
 	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
 }
 
-func runSetupStep(ctx context.Context, service spine.CodingService, store postgres.Store, job spine.CodingJob, work Work) error {
+func runSetupStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
 	setup, err := store.BeginSetup(ctx, job.ID)
 	if err != nil {
 		return err
@@ -125,7 +140,7 @@ func runSetupStep(ctx context.Context, service spine.CodingService, store postgr
 	})
 }
 
-func runDeliveryStep(ctx context.Context, service spine.CodingService, store postgres.Store, job spine.CodingJob, work Work) error {
+func runDeliveryStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
 	delivery, err := store.NextDelivery(ctx, job.ID)
 	if err != nil {
 		return err
@@ -148,7 +163,7 @@ func codingAgentInput(job spine.CodingJob, delivery spine.Delivery) string {
 	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", strings.TrimSpace(delivery.Message.Input), job.Branch, job.Revision)
 }
 
-func runRevisionStep(ctx context.Context, service spine.CodingService, job spine.CodingJob, snapshot Snapshot, work Work) error {
+func runRevisionStep(ctx context.Context, service CodingExecution, job spine.CodingJob, snapshot Snapshot, work Work) error {
 	var run *spine.AgentRun
 	for i := range snapshot.Deliveries {
 		if snapshot.Deliveries[i].AgentRun.ID == work.FactID {
@@ -182,7 +197,7 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, service spine.CodingService, store postgres.Store, job spine.CodingJob, snapshot Snapshot, work Work) error {
+func runSandboxAction(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, snapshot Snapshot, work Work) error {
 	var sandbox *spine.Sandbox
 	for i := range snapshot.Sandboxes {
 		if snapshot.Sandboxes[i].ID == work.Scope {
@@ -240,7 +255,7 @@ func runSandboxAction(ctx context.Context, service spine.CodingService, store po
 	})
 }
 
-func runCheckStep(ctx context.Context, service spine.CodingService, store postgres.Store, job spine.CodingJob, work Work) error {
+func runCheckStep(ctx context.Context, service CodingExecution, store postgres.Store, job spine.CodingJob, work Work) error {
 	declared, err := store.DeclaredChecks(ctx, job.ID)
 	if err != nil {
 		return err

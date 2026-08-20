@@ -8,7 +8,6 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -27,7 +26,7 @@ type TaskResultV1 struct {
 // ExecutionRuntime is the provider-neutral Core capability bundle resolved
 // from one Job's durably pinned Sandbox profile.
 type ExecutionRuntime struct {
-	Execution      spine.ExecutionService
+	Execution      CleanupExecution
 	SandboxProfile string
 }
 
@@ -35,8 +34,22 @@ type RuntimeResolver interface {
 	ResolveExecution(context.Context, string) (ExecutionRuntime, error)
 }
 
+// Store is the durable Core custody required by the application boundary.
+// PostgreSQL is the current implementation, not part of the consumer contract.
+type Store interface {
+	Job(context.Context, string) (spine.Job, error)
+	JobTasks(context.Context, string) ([]spine.JobTask, error)
+	WithJobFence(context.Context, string, func() error) error
+	AttachJobTask(context.Context, string, string, string, string) error
+	CloseAdmissionForCleanup(context.Context, string) error
+	AttachCleanupTask(context.Context, string, string, string, string) error
+	GetOrCreateSandboxAction(context.Context, string, spine.ActionKind) (spine.Action, error)
+	SetCleanupAttention(context.Context, string, string) error
+	CompleteCleanup(context.Context, string) error
+}
+
 type Application struct {
-	Store    postgres.Store
+	Store    Store
 	Tasks    *absurd.Client
 	Runtimes RuntimeResolver
 }

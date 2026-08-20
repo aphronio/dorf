@@ -77,7 +77,7 @@ func CurrentCleanupAction(sandboxes []spine.Sandbox, actions []spine.Action) (sp
 	return "", "", false
 }
 
-func (a Application) runCleanup(ctx context.Context, service spine.ExecutionService, jobID string) error {
+func (a Application) runCleanup(ctx context.Context, service CleanupExecution, jobID string) error {
 	job, sandboxes, err := service.PrepareCleanup(ctx, jobID)
 	if err != nil {
 		return err

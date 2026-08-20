@@ -2069,3 +2069,24 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A genuinely process-local consumer can preserve the same durable ownership,
   recovery, and operational truth with materially less machinery than a deployed control plane, or
   direct client use proves a different resource boundary.
+
+## D082 — Native workflows consume narrow Core capability interfaces
+
+- **Status:** Accepted in-process application boundary slice — 2026-08-20
+- **Decision:** Define provider-neutral Core interfaces for AgentRun delivery and observation,
+  stable Sandbox Actions, repository materialization, cleanup reconciliation, and durable Core
+  storage. Native workflows consume those interfaces through typed runtime compositions. The
+  composition root alone constructs the current `spine` and PostgreSQL implementations.
+- **Why:** Depending on concrete `ExecutionService`, `RepositoryService`, and `postgres.Store`
+  implementations made in-process workflow reuse look like a privileged path and prevented a
+  workflow-owned service from importing the Core contract without an import cycle. Interfaces must
+  describe capabilities actually consumed, not speculate about a public transport schema.
+- **Proof:** Coding accepts a workflow-owned interface composed over Core execution; investigation
+  embeds the repository execution interface; cleanup accepts only cleanup execution; compile-time
+  assertions prove the current implementations satisfy each contract. Common runtimes no longer
+  carry unused concrete execution or repository fields.
+- **Not included:** No network API, authentication model, direct-execution resource, or SDK is
+  claimed. A future external client may earn a transport contract over these capabilities without
+  exposing adapters, PostgreSQL, or Absurd.
+- **Reconsider when:** A real transport needs a materially different resource boundary, or another
+  workflow proves one of these capability groupings is too broad.

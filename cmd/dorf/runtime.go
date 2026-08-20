@@ -39,7 +39,7 @@ func (r profileRuntimeResolver) ResolveExecution(ctx context.Context, name strin
 		return controlplane.ExecutionRuntime{}, err
 	}
 	return controlplane.ExecutionRuntime{
-		Execution:      resolved.Runtime.Execution,
+		Execution:      resolved.Execution,
 		SandboxProfile: resolved.Runtime.Profile.SandboxProfile,
 	}, nil
 }
@@ -49,7 +49,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return workflow.CodingRuntime{}, err
 	}
-	repository := spine.NewRepositoryService(resolved.Runtime.Execution, resolved.Externals)
+	repository := spine.NewRepositoryService(resolved.Execution, resolved.Externals)
 	coding := spine.NewCodingService(repository, r.store, resolved.Externals)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
@@ -58,8 +58,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}
 	return workflow.CodingRuntime{
-		Runtime:    resolved.Runtime,
-		Repository: repository, Coding: coding,
+		Runtime: resolved.Runtime,
+		Coding:  coding,
 		Proposal: workflow.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},
@@ -73,13 +73,14 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	if err != nil {
 		return workflow.InvestigationRuntime{}, err
 	}
-	repository := spine.NewRepositoryService(resolved.Runtime.Execution, resolved.Externals)
+	repository := spine.NewRepositoryService(resolved.Execution, resolved.Externals)
 	service := investigation.NewService(repository, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	return workflow.InvestigationRuntime{Runtime: resolved.Runtime, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
 	Runtime   workflow.Runtime
+	Execution spine.ExecutionService
 	Externals terminal.Externals
 	Sandbox   provider.Sandbox
 	Ownership func(context.Context, string) (provider.Ownership, error)
@@ -120,9 +121,9 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	return resolvedBaseRuntime{
 		Runtime: workflow.Runtime{
-			Execution: execution,
-			Profile:   workflow.RuntimeProfile{SandboxProfile: profile.Name},
+			Profile: workflow.RuntimeProfile{SandboxProfile: profile.Name},
 		},
+		Execution: execution,
 		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil
 }

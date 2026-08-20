@@ -12,6 +12,8 @@ import (
 	"github.com/aphronio/dorf/internal/spine"
 )
 
+var _ CodingExecution = spine.CodingService{}
+
 type profileGuardStore struct {
 	job               spine.Job
 	jobCalls          int

@@ -32,6 +32,7 @@ type providerCheck struct {
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
 type integrationRuntimeResolver struct {
+	execution            controlplane.CleanupExecution
 	runtime              workflow.Runtime
 	codingRuntime        workflow.CodingRuntime
 	investigationRuntime workflow.InvestigationRuntime
@@ -41,7 +42,7 @@ func (r integrationRuntimeResolver) ResolveExecution(_ context.Context, name str
 	if name != r.runtime.Profile.SandboxProfile {
 		return controlplane.ExecutionRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return controlplane.ExecutionRuntime{Execution: r.runtime.Execution, SandboxProfile: r.runtime.Profile.SandboxProfile}, nil
+	return controlplane.ExecutionRuntime{Execution: r.execution, SandboxProfile: r.runtime.Profile.SandboxProfile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (workflow.CodingRuntime, error) {
@@ -104,13 +105,13 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	repository := spine.NewRepositoryService(execution, externals)
 	coding := spine.NewCodingService(repository, store, externals)
 	runtime := workflow.Runtime{
-		Execution: execution,
-		Profile:   workflow.RuntimeProfile{SandboxProfile: "incus"},
+		Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
 	}
 	investigationService := investigation.NewService(repository, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	resolver := integrationRuntimeResolver{
+		execution:            execution,
 		runtime:              runtime,
-		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Repository: repository, Coding: coding},
+		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Coding: coding},
 		investigationRuntime: workflow.InvestigationRuntime{Runtime: runtime, Investigation: investigationService},
 	}
 	core := controlplane.Application{Store: store, Tasks: client, Runtimes: resolver}
