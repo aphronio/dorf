@@ -131,11 +131,7 @@ create table dorf.job_messages (
 create table dorf.actions (
     id text primary key,
     job_id text not null references dorf.jobs(id),
-    kind text not null check (kind in (
-        'sandbox-create','repository-clone','repository-restore',
-        'repository-push','github-pull-request','review-checkout',
-        'provider-route-create','provider-route-revoke','sandbox-delete'
-    )),
+    kind text not null check (kind ~ '^[a-z][a-z0-9-]{0,62}$'),
     state text not null check (state in ('unsettled','succeeded','failed')),
     scope_key text not null default '',
     created_at timestamptz not null default clock_timestamp(),

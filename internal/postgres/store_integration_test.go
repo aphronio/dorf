@@ -1279,6 +1279,89 @@ func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestActionKindGrammar(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("action-kind-grammar-%d", time.Now().UnixNano()),
+		"prove the durable Action kind grammar",
+		strings.Repeat("a", 40),
+		"dorf/action-kind-grammar",
+	))
+	if err != nil || !created {
+		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
+	}
+
+	valid := []string{
+		"a",
+		"workflow-owned-sandbox-step",
+		"step-2",
+		strings.Repeat("a", 63),
+	}
+	for i, kind := range valid {
+		if _, err := db.ExecContext(ctx, `
+			insert into dorf.actions(id,job_id,kind,state,scope_key)
+			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("valid-action-kind-%d-%s", i, job.ID), job.ID, kind, fmt.Sprintf("valid-scope-%d", i)); err != nil {
+			t.Errorf("valid Action kind %q rejected: %v", kind, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"2-step",
+		"Uppercase",
+		"leading-Uppercase",
+		"-leading",
+		"under_score",
+		strings.Repeat("a", 64),
+	}
+	for i, kind := range invalid {
+		if _, err := db.ExecContext(ctx, `
+			insert into dorf.actions(id,job_id,kind,state,scope_key)
+			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("invalid-action-kind-%d-%s", i, job.ID), job.ID, kind, fmt.Sprintf("invalid-scope-%d", i)); err == nil {
+			t.Errorf("invalid Action kind %q was accepted", kind)
+		}
+	}
+}
+
+func TestWorkflowOwnedSandboxActionCreationAndSettlement(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("workflow-action-%d", time.Now().UnixNano()),
+		"prove workflow-owned Sandbox Action custody",
+		strings.Repeat("b", 40),
+		"dorf/workflow-action",
+	))
+	if err != nil || !created {
+		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
+	}
+	sandboxID := core.MainSandboxName(job.ID)
+	kind := core.ActionKind("workflow-owned-sandbox-step")
+	action, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantID := core.ScopedActionID(job.ID, kind, sandboxID)
+	if action.ID != wantID || action.JobID != job.ID || action.Kind != kind || action.Scope != sandboxID || action.State != core.ActionUnsettled {
+		t.Fatalf("created workflow Action=%#v, want exact ID=%s Job=%s kind=%s Sandbox=%s", action, wantID, job.ID, kind, sandboxID)
+	}
+	if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil || settled.State != core.ActionSucceeded || settled.SettledAt.IsZero() {
+		t.Fatalf("settled workflow Action=%#v err=%v", settled, err)
+	}
+	if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+		t.Fatalf("immutable settlement replay: %v", err)
+	}
+	replayed, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil || replayed != settled {
+		t.Fatalf("workflow Action replay=%#v, want immutable %#v, err=%v", replayed, settled, err)
+	}
+}
+
 func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run coding.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
