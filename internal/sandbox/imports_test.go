@@ -39,3 +39,36 @@ func TestCommonConsumersDoNotImportSandboxProviders(t *testing.T) {
 		}
 	}
 }
+
+func TestCoreAndSandboxProvidersDoNotImportWorkflowModules(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", ".."))
+	workflowModules := []string{"/internal/coding", "/internal/investigation", "/internal/outcome", "/internal/publication", "/internal/repository", "/internal/workflow"}
+	for _, directory := range []string{"controlplane", "spine", "sandbox", "incus", "e2b"} {
+		path := filepath.Join(root, "internal", directory)
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			filename := filepath.Join(path, entry.Name())
+			file, err := parser.ParseFile(token.NewFileSet(), filename, nil, parser.ImportsOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, imported := range file.Imports {
+				name, err := strconv.Unquote(imported.Path.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, module := range workflowModules {
+					if strings.HasSuffix(name, module) {
+						t.Errorf("%s imports workflow module %s", filename, name)
+					}
+				}
+			}
+		}
+	}
+}
