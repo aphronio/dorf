@@ -1237,13 +1237,25 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	return job, revision, message, implementationRun
 }
 
-func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
-	_, store, _ := testDatabase(t)
+func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store, core.Job) {
+	t.Helper()
+	db, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput("cleanup-order-"+fmt.Sprint(time.Now().UnixNano()), "prove exact cleanup order", strings.Repeat("a", 40), "dorf/cleanup-order"))
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("action-%s-%d", suffix, time.Now().UnixNano()),
+		"prove durable Action custody",
+		strings.Repeat("a", 40),
+		"dorf/action-integration",
+	))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
+	return db, store, job
+}
+
+func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
+	_, store, job := actionIntegrationJob(t, "cleanup-order")
+	ctx := context.Background()
 	sandboxID := core.MainSandboxName(job.ID)
 	remove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
 	if err != nil {
@@ -1264,18 +1276,62 @@ func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
-		t.Fatalf("idempotent Route revoke success: %v", err)
-	}
 	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
-		t.Fatalf("idempotent Sandbox delete success: %v", err)
+}
+
+func TestActionKindGrammar(t *testing.T) {
+	db, _, job := actionIntegrationJob(t, "kind-grammar")
+	ctx := context.Background()
+	for i, test := range []struct {
+		kind  string
+		valid bool
+	}{
+		{kind: "a", valid: true},
+		{kind: "step-2", valid: true},
+		{kind: strings.Repeat("a", 63), valid: true},
+		{kind: ""},
+		{kind: "2-step"},
+		{kind: "Uppercase"},
+		{kind: "under_score"},
+		{kind: strings.Repeat("a", 64)},
+	} {
+		_, err := db.ExecContext(ctx, `
+			insert into dorf.actions(id,job_id,kind,state,scope_key)
+			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("action-kind-%d-%s", i, job.ID), job.ID, test.kind, fmt.Sprintf("scope-%d", i))
+		if accepted := err == nil; accepted != test.valid {
+			t.Errorf("Action kind %q accepted=%t, want %t: %v", test.kind, accepted, test.valid, err)
+		}
 	}
-	retryRemove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
-	if err != nil || retryRemove.ID != remove.ID || retryRemove.State != core.ActionSucceeded {
-		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
+}
+
+func TestWorkflowOwnedSandboxActionCreationAndSettlement(t *testing.T) {
+	_, store, job := actionIntegrationJob(t, "workflow-owned")
+	ctx := context.Background()
+	sandboxID := core.MainSandboxName(job.ID)
+	kind := core.ActionKind("workflow-owned-sandbox-step")
+	action, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantID := core.ScopedActionID(job.ID, kind, sandboxID)
+	if action.ID != wantID || action.JobID != job.ID || action.Kind != kind || action.Scope != sandboxID || action.State != core.ActionUnsettled {
+		t.Fatalf("created workflow Action=%#v, want exact ID=%s Job=%s kind=%s Sandbox=%s", action, wantID, job.ID, kind, sandboxID)
+	}
+	if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil || settled.State != core.ActionSucceeded || settled.SettledAt.IsZero() {
+		t.Fatalf("settled workflow Action=%#v err=%v", settled, err)
+	}
+	if err := store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
+		t.Fatalf("immutable settlement replay: %v", err)
+	}
+	replayed, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil || replayed != settled {
+		t.Fatalf("workflow Action replay=%#v, want immutable %#v, err=%v", replayed, settled, err)
 	}
 }
 

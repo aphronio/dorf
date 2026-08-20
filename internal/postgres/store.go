@@ -769,11 +769,6 @@ func (s Store) GetOrCreateSandboxAction(ctx context.Context, sandboxID string, k
 	if err != nil {
 		return core.Action{}, err
 	}
-	switch kind {
-	case core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, investigation.ActionRepositoryRestore, core.ActionRouteCreate, coding.ActionReviewCheckout, core.ActionRouteRevoke, core.ActionSandboxDelete:
-	default:
-		return core.Action{}, fmt.Errorf("unsupported Sandbox Action %q", kind)
-	}
 	id := core.ScopedActionID(sandbox.JobID, kind, sandboxID)
 	q := dbsql.New(s.DB)
 	insertErr := expectOneRows(q.InsertScopedAction(ctx, dbsql.InsertScopedActionParams{ID: id, JobID: sandbox.JobID, Kind: kind, ScopeKey: sandboxID}))
@@ -1013,12 +1008,6 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 	kind, scope := completed.Kind, completed.ScopeKey
 	if scope == "" {
 		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
-	}
-	switch kind {
-	case core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, investigation.ActionRepositoryRestore, core.ActionRouteCreate,
-		core.ActionRouteRevoke, coding.ActionReviewCheckout, core.ActionSandboxDelete:
-	default:
-		return fmt.Errorf("unsupported Sandbox Action %q", kind)
 	}
 	sandbox, err := queries.GetSandbox(ctx, scope)
 	if err != nil {

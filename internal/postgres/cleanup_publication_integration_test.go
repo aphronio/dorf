@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aphronio/dorf/internal/coding"
+	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 )
@@ -62,4 +64,34 @@ func TestPostgresCleanupAndPublicationSerializeToOneWinner(t *testing.T) {
 	if cleanupWon == publicationWon || cleanupWon == stored.AdmissionOpen || publicationWon != (publicationActionsErr == nil) {
 		t.Fatalf("cleanupErr=%v publicationErr=%v publicationActionsErr=%v Job=%#v", errorsByKind["cleanup"], errorsByKind["publication"], publicationActionsErr, stored)
 	}
+}
+
+func TestSandboxScopedPullRequestActionIsNotPublicationIntent(t *testing.T) {
+	collisionJob := func(t *testing.T, suffix string) (postgres.Store, core.Job) {
+		t.Helper()
+		_, store, job := actionIntegrationJob(t, "pull-request-collision-"+suffix)
+		sandboxID := core.MainSandboxName(job.ID)
+		action, err := store.GetOrCreateSandboxAction(context.Background(), sandboxID, coding.ActionGitHubPullRequest)
+		if err != nil || action.Kind != coding.ActionGitHubPullRequest || action.Scope != sandboxID {
+			t.Fatalf("Sandbox-scoped pull-request Action=%#v err=%v", action, err)
+		}
+		return store, job
+	}
+
+	t.Run("abandonment", func(t *testing.T) {
+		store, job := collisionJob(t, "abandonment")
+		outcome, created, err := store.RecordOutcome(context.Background(), coding.Outcome{
+			JobID: job.ID, Kind: coding.OutcomeAbandoned, ObservedAt: time.Now().UTC(),
+		})
+		if err != nil || !created || outcome.Kind != coding.OutcomeAbandoned {
+			t.Fatalf("abandonment Outcome=%#v created=%t err=%v", outcome, created, err)
+		}
+	})
+
+	t.Run("cleanup", func(t *testing.T) {
+		store, job := collisionJob(t, "cleanup")
+		if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
+			t.Fatalf("close admission for cleanup: %v", err)
+		}
+	})
 }
