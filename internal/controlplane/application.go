@@ -23,15 +23,15 @@ type TaskResultV1 struct {
 	Outcome string `json:"outcome"`
 }
 
-// ExecutionRuntime is the provider-neutral Core capability bundle resolved
-// from one Job's durably pinned Sandbox profile.
-type ExecutionRuntime struct {
+// CleanupRuntime is the provider-neutral capability resolved from one Job's
+// durably pinned Sandbox profile after cleanup has been requested.
+type CleanupRuntime struct {
 	Execution      CleanupExecution
 	SandboxProfile string
 }
 
-type RuntimeResolver interface {
-	ResolveExecution(context.Context, string) (ExecutionRuntime, error)
+type CleanupRuntimeResolver interface {
+	ResolveCleanup(context.Context, string) (CleanupRuntime, error)
 }
 
 // Store is the durable Core custody required by the application boundary.
@@ -49,9 +49,9 @@ type Store interface {
 }
 
 type Application struct {
-	Store    Store
-	Tasks    *absurd.Client
-	Runtimes RuntimeResolver
+	Store           Store
+	Tasks           *absurd.Client
+	CleanupRuntimes CleanupRuntimeResolver
 }
 
 // RequestCleanup closes further admission, settles the currently attached

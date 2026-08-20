@@ -137,7 +137,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}
 	core := coreApplication(store, client)
-	core.Runtimes = runtimes
+	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
 	workflow.Register(client, store, runtimes, core)
 	return client, nil

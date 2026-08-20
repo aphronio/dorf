@@ -33,16 +33,16 @@ func (p providerCheck) Check(context.Context, string) error { return p.err }
 
 type integrationRuntimeResolver struct {
 	execution            controlplane.CleanupExecution
-	runtime              workflow.Runtime
+	profile              workflow.RuntimeProfile
 	codingRuntime        workflow.CodingRuntime
 	investigationRuntime workflow.InvestigationRuntime
 }
 
-func (r integrationRuntimeResolver) ResolveExecution(_ context.Context, name string) (controlplane.ExecutionRuntime, error) {
-	if name != r.runtime.Profile.SandboxProfile {
-		return controlplane.ExecutionRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (controlplane.CleanupRuntime, error) {
+	if name != r.profile.SandboxProfile {
+		return controlplane.CleanupRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return controlplane.ExecutionRuntime{Execution: r.execution, SandboxProfile: r.runtime.Profile.SandboxProfile}, nil
+	return controlplane.CleanupRuntime{Execution: r.execution, SandboxProfile: r.profile.SandboxProfile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCoding(_ context.Context, name string) (workflow.CodingRuntime, error) {
@@ -104,17 +104,15 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	execution := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	repository := spine.NewRepositoryService(execution, externals)
 	coding := spine.NewCodingService(repository, store, externals)
-	runtime := workflow.Runtime{
-		Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
-	}
+	runtimeProfile := workflow.RuntimeProfile{SandboxProfile: "incus"}
 	investigationService := investigation.NewService(repository, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
-		runtime:              runtime,
-		codingRuntime:        workflow.CodingRuntime{Runtime: runtime, Coding: coding},
-		investigationRuntime: workflow.InvestigationRuntime{Runtime: runtime, Investigation: investigationService},
+		profile:              runtimeProfile,
+		codingRuntime:        workflow.CodingRuntime{Profile: runtimeProfile, Coding: coding},
+		investigationRuntime: workflow.InvestigationRuntime{Profile: runtimeProfile, Investigation: investigationService},
 	}
-	core := controlplane.Application{Store: store, Tasks: client, Runtimes: resolver}
+	core := controlplane.Application{Store: store, Tasks: client, CleanupRuntimes: resolver}
 	core.RegisterCleanup()
 	workflow.Register(client, store, resolver, core)
 	t.Cleanup(func() {

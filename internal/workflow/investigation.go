@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
@@ -246,7 +247,7 @@ func runInvestigationAction(ctx context.Context, service investigation.Service, 
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
-	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
+	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
 		if work.ActionKind == spine.ActionRepositoryRestore {
 			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
 		}

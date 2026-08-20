@@ -30,11 +30,6 @@ type FactStepResultV1 struct {
 	FactID string `json:"fact_id"`
 }
 
-type ActionStepResultV1 struct {
-	ActionID string `json:"action_id"`
-}
-
-func actionStepName(id string) string   { return "dorf/action/v1/" + id }
 func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
 func checkStepName(id string) string    { return "dorf/check/v1/" + id }
@@ -135,7 +130,7 @@ func runSetupStep(ctx context.Context, service CodingExecution, store postgres.S
 	if setup.State == spine.ActionSucceeded || setup.State == spine.ActionFailed {
 		return nil
 	}
-	return runActionStep(ctx, setup.ID, func(workCtx context.Context) error {
+	return absurdruntime.RunActionStep(ctx, setup.ID, func(workCtx context.Context) error {
 		return service.ExecuteSetup(workCtx, job, setup)
 	})
 }
@@ -185,12 +180,12 @@ func runPublicationStep(ctx context.Context, store postgres.Store, proposal Prop
 		return err
 	}
 	if push.State != spine.ActionSucceeded {
-		return runActionStep(ctx, push.ID, func(workCtx context.Context) error {
+		return absurdruntime.RunActionStep(ctx, push.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Push(workCtx, job.ID, job.Revision)
 		})
 	}
 	if pull.State != spine.ActionSucceeded {
-		return runActionStep(ctx, pull.ID, func(workCtx context.Context) error {
+		return absurdruntime.RunActionStep(ctx, pull.ID, func(workCtx context.Context) error {
 			return proposal.Publication.Propose(workCtx, job.ID, job.Revision)
 		})
 	}
@@ -241,7 +236,7 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store postgr
 	if action.State == spine.ActionSucceeded {
 		return nil
 	}
-	return runActionStep(ctx, action.ID, func(workCtx context.Context) error {
+	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
 		if work.ActionKind == spine.ActionReviewCheckout {
 			if reviewer == nil {
 				return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", action.ID)
@@ -295,25 +290,6 @@ func runFactStep(ctx context.Context, name, factID string, work func(context.Con
 	}
 	if result.FactID != factID {
 		return fmt.Errorf("Step %s returned fact %q, want %q", name, result.FactID, factID)
-	}
-	return nil
-}
-
-func runActionStep(ctx context.Context, actionID string, work func(context.Context) error) error {
-	name := actionStepName(actionID)
-	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (ActionStepResultV1, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (ActionStepResultV1, error) {
-			if err := work(workCtx); err != nil {
-				return ActionStepResultV1{}, err
-			}
-			return ActionStepResultV1{ActionID: actionID}, nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-	if result.ActionID != actionID {
-		return fmt.Errorf("Step %s returned Action %q, want %q", name, result.ActionID, actionID)
 	}
 	return nil
 }

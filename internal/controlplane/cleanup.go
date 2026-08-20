@@ -16,10 +16,6 @@ type cleanupTarget struct {
 	Kind    spine.ActionKind
 }
 
-type cleanupStepResult struct {
-	ActionID string `json:"action_id"`
-}
-
 // RegisterCleanup installs the Core-owned resource cleanup task.
 func (a Application) RegisterCleanup() {
 	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params JobTaskParams) (TaskResultV1, error) {
@@ -30,10 +26,10 @@ func (a Application) RegisterCleanup() {
 		if err != nil {
 			return TaskResultV1{}, err
 		}
-		if a.Runtimes == nil {
+		if a.CleanupRuntimes == nil {
 			return TaskResultV1{}, fmt.Errorf("Sandbox runtime resolution is not configured")
 		}
-		runtime, err := a.Runtimes.ResolveExecution(ctx, job.SandboxProfile)
+		runtime, err := a.CleanupRuntimes.ResolveCleanup(ctx, job.SandboxProfile)
 		if err != nil {
 			return TaskResultV1{}, fmt.Errorf("resolve Sandbox profile %q: %w", job.SandboxProfile, err)
 		}
@@ -101,7 +97,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 		}
 
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
-		err = runCleanupActionStep(ctx, action.ID, func(workCtx context.Context) error {
+		err = absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
 			return service.ExecuteSandboxAction(workCtx, job, target.Sandbox, action)
 		})
 		if err != nil {
@@ -114,25 +110,6 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	if err := a.Store.CompleteCleanup(ctx, jobID); err != nil {
 		_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
-	}
-	return nil
-}
-
-func runCleanupActionStep(ctx context.Context, actionID string, work func(context.Context) error) error {
-	name := "dorf/action/v1/" + actionID
-	result, err := absurd.Step(ctx, name, func(stepCtx context.Context) (cleanupStepResult, error) {
-		return absurdruntime.WithHeartbeat(stepCtx, func(workCtx context.Context) (cleanupStepResult, error) {
-			if err := work(workCtx); err != nil {
-				return cleanupStepResult{}, err
-			}
-			return cleanupStepResult{ActionID: actionID}, nil
-		})
-	})
-	if err != nil {
-		return err
-	}
-	if result.ActionID != actionID {
-		return fmt.Errorf("Step %s returned Action %q, want %q", name, result.ActionID, actionID)
 	}
 	return nil
 }

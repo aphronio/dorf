@@ -50,7 +50,7 @@ func TestCodingRuntimeResolutionUsesOnlyCodingAuthority(t *testing.T) {
 		ID: "job-1", SandboxProfile: "managed", Workflow: definition.Name, WorkflowRevision: definition.Revision,
 	}}
 	resolver := &profileRuntimeResolverStub{codingRuntime: CodingRuntime{
-		Runtime: Runtime{Profile: RuntimeProfile{SandboxProfile: "managed"}},
+		Profile: RuntimeProfile{SandboxProfile: "managed"},
 	}}
 	runtime, err := codingRuntimeForJob(context.Background(), store, resolver, store.job.ID)
 	if err != nil {
@@ -97,7 +97,6 @@ func TestPersistedWorkflowContractsV1(t *testing.T) {
 		{"task result", controlplane.TaskResultV1{JobID: "job-1", Outcome: "accepted"}, `{"job_id":"job-1","outcome":"accepted"}`},
 		{"wake", WakeV1{JobID: "job-1", Sequence: 2}, `{"job_id":"job-1","sequence":2}`},
 		{"fact step result", FactStepResultV1{FactID: "action-1"}, `{"fact_id":"action-1"}`},
-		{"Action step result", ActionStepResultV1{ActionID: "action-1"}, `{"action_id":"action-1"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -137,8 +136,6 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"Action", actionStepName("action-1"), "dorf/action/v1/action-1"},
-		{"setup Action", actionStepName("setup-1"), "dorf/action/v1/setup-1"},
 		{"AgentRun", agentRunStepName("run-1"), "dorf/agent-run/v1/run-1"},
 		{"Revision", revisionStepName("run-1"), "dorf/revision/v1/run-1"},
 		{"Check", checkStepName("check-1"), "dorf/check/v1/check-1"},

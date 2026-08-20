@@ -37,21 +37,14 @@ type sandboxProfileStore interface {
 	SetWorkflowAttention(context.Context, string, string, string) error
 }
 
-// Runtime records the exact profile identity common to one typed workflow
-// composition. Provider and Harness selection remain in the composition root;
-// each workflow receives only the capabilities in its typed runtime.
-type Runtime struct {
-	Profile RuntimeProfile
-}
-
 type CodingRuntime struct {
-	Runtime
+	Profile  RuntimeProfile
 	Coding   CodingExecution
 	Proposal ProposalRuntime
 }
 
 type InvestigationRuntime struct {
-	Runtime
+	Profile       RuntimeProfile
 	Investigation investigation.Service
 }
 

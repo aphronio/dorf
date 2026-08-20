@@ -33,14 +33,14 @@ type profileRuntimeResolver struct {
 	barrier spine.FaultBarrier
 }
 
-func (r profileRuntimeResolver) ResolveExecution(ctx context.Context, name string) (controlplane.ExecutionRuntime, error) {
+func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (controlplane.CleanupRuntime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
-		return controlplane.ExecutionRuntime{}, err
+		return controlplane.CleanupRuntime{}, err
 	}
-	return controlplane.ExecutionRuntime{
+	return controlplane.CleanupRuntime{
 		Execution:      resolved.Execution,
-		SandboxProfile: resolved.Runtime.Profile.SandboxProfile,
+		SandboxProfile: resolved.Profile.SandboxProfile,
 	}, nil
 }
 
@@ -58,7 +58,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}
 	return workflow.CodingRuntime{
-		Runtime: resolved.Runtime,
+		Profile: resolved.Profile,
 		Coding:  coding,
 		Proposal: workflow.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
@@ -75,11 +75,11 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	}
 	repository := spine.NewRepositoryService(resolved.Execution, resolved.Externals)
 	service := investigation.NewService(repository, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
-	return workflow.InvestigationRuntime{Runtime: resolved.Runtime, Investigation: service}, nil
+	return workflow.InvestigationRuntime{Profile: resolved.Profile, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
-	Runtime   workflow.Runtime
+	Profile   workflow.RuntimeProfile
 	Execution spine.ExecutionService
 	Externals terminal.Externals
 	Sandbox   provider.Sandbox
@@ -120,9 +120,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}
 	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
 	return resolvedBaseRuntime{
-		Runtime: workflow.Runtime{
-			Profile: workflow.RuntimeProfile{SandboxProfile: profile.Name},
-		},
+		Profile:   workflow.RuntimeProfile{SandboxProfile: profile.Name},
 		Execution: execution,
 		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil

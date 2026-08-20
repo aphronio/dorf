@@ -150,22 +150,3 @@ func (p RuntimeProfile) Require(definition Definition) error {
 	sort.Strings(missing)
 	return fmt.Errorf("workflow %s revision %s requires missing provider capabilities: %s", definition.Name, definition.Revision, strings.Join(missing, ", "))
 }
-
-func definitionForJob(job spine.Job) (Definition, error) {
-	switch job.Workflow {
-	case spine.WorkflowCodingToProposal:
-		definition := CodingToProposalDefinition()
-		if job.WorkflowRevision != definition.Revision {
-			return Definition{}, fmt.Errorf("Job pins unsupported %s workflow revision %q", job.Workflow, job.WorkflowRevision)
-		}
-		return definition, nil
-	case spine.WorkflowCodebaseInvestigation:
-		definition := CodebaseInvestigationDefinition()
-		if job.WorkflowRevision != definition.Revision {
-			return Definition{}, fmt.Errorf("Job pins unsupported %s workflow revision %q", job.Workflow, job.WorkflowRevision)
-		}
-		return definition, nil
-	default:
-		return Definition{}, fmt.Errorf("Job pins unsupported workflow %q", job.Workflow)
-	}
-}
