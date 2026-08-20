@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -28,8 +29,8 @@ type GitHub interface {
 }
 
 type Repository interface {
-	Relation(context.Context, spine.CodingJob, string) (string, error)
-	Push(context.Context, spine.CodingJob, string) error
+	Relation(context.Context, coding.Job, string) (string, error)
+	Push(context.Context, coding.Job, string) error
 }
 
 type WorkflowBarrier interface {
@@ -57,13 +58,13 @@ type AttentionError struct{ Reason string }
 func (e *AttentionError) Error() string { return e.Reason }
 
 type readinessView struct {
-	Assessment spine.ReadinessAssessment
+	Assessment coding.ReadinessAssessment
 	Evidence   []spine.Evidence
-	Plan       *spine.ReviewPlanRecord
-	ReviewRuns []spine.ReviewRunView
+	Plan       *coding.ReviewPlanRecord
+	ReviewRuns []coding.ReviewRunView
 }
 
-func (s Service) readiness(ctx context.Context, job spine.CodingJob, intentAt time.Time) (readinessView, error) {
+func (s Service) readiness(ctx context.Context, job coding.Job, intentAt time.Time) (readinessView, error) {
 	var view readinessView
 	var err error
 	view.Evidence, err = s.Store.Evidence(ctx, job.ID)
@@ -82,19 +83,19 @@ func (s Service) readiness(ctx context.Context, job spine.CodingJob, intentAt ti
 	if err != nil {
 		return view, err
 	}
-	view.ReviewRuns, err = spine.ReviewRuns(deliveries, sandboxes)
+	view.ReviewRuns, err = coding.ReviewRuns(deliveries, sandboxes)
 	if err != nil {
 		return view, err
 	}
-	deliveries = spine.PublicationDeliveries(deliveries, intentAt)
-	var plan *spine.ReviewPlanRecord
+	deliveries = coding.PublicationDeliveries(deliveries, intentAt)
+	var plan *coding.ReviewPlanRecord
 	for i := range plans {
 		if plans[i].Revision == job.Revision {
 			plan = &plans[i]
 		}
 	}
 	view.Plan = plan
-	view.Assessment = spine.AssessReviewReadiness(job, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
+	view.Assessment = coding.AssessReviewReadiness(job, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
 	return view, nil
 }
 
@@ -228,7 +229,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 		mutated = err == nil
 	case "update":
 		if validationProposal == nil {
-			validationProposal = &spine.GitHubProposal{Number: pull.Number}
+			validationProposal = &coding.Proposal{Number: pull.Number}
 		}
 		pull, err = s.GitHub.UpdatePullRequest(ctx, authority, pull.Number, title, body, job.BaseBranch)
 		mutated = err == nil
@@ -248,7 +249,7 @@ func (s Service) proposeFenced(ctx context.Context, jobID, revision string) erro
 			return err
 		}
 	}
-	proposal := spine.GitHubProposal{JobID: job.ID, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, BodyDigest: bodyDigest}
+	proposal := coding.Proposal{JobID: job.ID, Number: pull.Number, URL: pull.URL, ProposedRevision: job.Revision, BodyDigest: bodyDigest}
 	return s.recordAfterClaim(ctx, func() error {
 		return s.Store.RecordProposal(ctx, pullAction.ID, proposal)
 	})
@@ -267,7 +268,7 @@ func planPush(present bool, remote, revision, relation string) (string, error) {
 	return "", &AttentionError{Reason: fmt.Sprintf("remote head %s is %s relative to exact Revision %s; refusing force or rewrite", remote, relation, revision)}
 }
 
-func planPull(job spine.CodingJob, pulls []githubapi.PullRequest, stored *spine.GitHubProposal, title, body string) (string, githubapi.PullRequest, error) {
+func planPull(job coding.Job, pulls []githubapi.PullRequest, stored *coding.Proposal, title, body string) (string, githubapi.PullRequest, error) {
 	if len(pulls) > 1 {
 		return "", githubapi.PullRequest{}, &AttentionError{Reason: fmt.Sprintf("GitHub has %d pull requests across states or bases for the exact Job head; refusing duplicate publication", len(pulls))}
 	}
@@ -287,7 +288,7 @@ func planPull(job spine.CodingJob, pulls []githubapi.PullRequest, stored *spine.
 	return "adopt", pull, nil
 }
 
-func (s Service) block(ctx context.Context, job spine.CodingJob, action spine.Action, reason string) error {
+func (s Service) block(ctx context.Context, job coding.Job, action spine.Action, reason string) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
@@ -322,7 +323,7 @@ func claimBeforeRecord(ctx context.Context, claimCheck func(context.Context) err
 	return record()
 }
 
-func validatePullIdentity(job spine.CodingJob, pull githubapi.PullRequest, stored *spine.GitHubProposal) error {
+func validatePullIdentity(job coding.Job, pull githubapi.PullRequest, stored *coding.Proposal) error {
 	if pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.Number < 1 || pull.URL == "" {
 		return &AttentionError{Reason: "GitHub pull request conflicts with exact repository + head + base identity"}
 	}
@@ -341,7 +342,7 @@ func validatePullIdentity(job spine.CodingJob, pull githubapi.PullRequest, store
 	return nil
 }
 
-func validatePull(job spine.CodingJob, pull githubapi.PullRequest, stored *spine.GitHubProposal, title string) error {
+func validatePull(job coding.Job, pull githubapi.PullRequest, stored *coding.Proposal, title string) error {
 	if err := validatePullIdentity(job, pull, stored); err != nil {
 		return err
 	}
@@ -365,14 +366,14 @@ func Title(goal string) string {
 
 func BodyDigest(body string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(body))) }
 
-func Body(job spine.CodingJob, readiness spine.ReadinessAssessment, evidence []spine.Evidence, plan *spine.ReviewPlanRecord, runs []spine.ReviewRunView) string {
+func Body(job coding.Job, readiness coding.ReadinessAssessment, evidence []spine.Evidence, plan *coding.ReviewPlanRecord, runs []coding.ReviewRunView) string {
 	digests := make(map[string]string, len(evidence))
 	for _, item := range evidence {
 		digests[item.ID] = item.Digest
 	}
 	var lines []string
 	lines = append(lines, "## Goal", "", projectGoal(job.Goal), "", "## Exact proposal", "", "- Base: `"+job.BaseBranch+"`", "- Head: `"+job.Branch+"`", "- Revision: `"+job.Revision+"`", "", "## Selected review", "")
-	runsByRole := make(map[string]spine.ReviewRunView, len(runs))
+	runsByRole := make(map[string]coding.ReviewRunView, len(runs))
 	for _, run := range runs {
 		if run.JobID == job.ID && run.InputRevision == job.Revision {
 			runsByRole[run.Role] = run
@@ -433,7 +434,7 @@ type GitRepository struct {
 	Run       func(context.Context, []string, []string) ([]byte, []byte, error)
 }
 
-func (r GitRepository) Relation(ctx context.Context, job spine.CodingJob, remote string) (string, error) {
+func (r GitRepository) Relation(ctx context.Context, job coding.Job, remote string) (string, error) {
 	if !postgres.ValidRevision(remote) {
 		return "", &AttentionError{Reason: "remote head is not an exact commit OID"}
 	}
@@ -480,7 +481,7 @@ func boundedStderr(stderr string) string {
 	return detail
 }
 
-func (r GitRepository) Push(ctx context.Context, job spine.CodingJob, token string) error {
+func (r GitRepository) Push(ctx context.Context, job coding.Job, token string) error {
 	if token == "" {
 		return fmt.Errorf("repository push requires one ephemeral GitHub App token")
 	}

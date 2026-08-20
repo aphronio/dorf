@@ -12,6 +12,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/gitworkspace"
@@ -28,7 +29,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	key := fmt.Sprintf("codebase-investigation-%d", time.Now().UnixNano())
 	input := postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{
-			AdmissionKey: key, Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			AdmissionKey: key, Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Find one unnecessary coding-workflow dependency.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
@@ -55,8 +56,8 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
 	changed := input
-	changed.Workflow = spine.WorkflowCodingToProposal
-	changed.WorkflowRevision = spine.CodingToProposalRevision
+	changed.Workflow = coding.Workflow
+	changed.WorkflowRevision = coding.WorkflowRevision
 	if _, _, err := store.AdmitInvestigation(ctx, changed); err == nil {
 		t.Fatal("same admission key changed workflow identity")
 	}
@@ -167,7 +168,7 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{
 			AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
-			Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Inspect an unpublished commit.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
@@ -248,9 +249,9 @@ func (e *investigationExternals) AgentTurns(_ context.Context, job spine.Job, th
 	defer e.mu.Unlock()
 	return spine.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: []spine.HarnessTurn{e.turn}}, nil
 }
-func (*investigationExternals) RepositoryRevision(_ context.Context, _ spine.Job, _ string, revision string) (spine.RevisionObservation, error) {
+func (*investigationExternals) RepositoryRevision(_ context.Context, _ spine.Job, _ string, revision string) (gitworkspace.Observation, error) {
 	now := time.Now().UTC()
-	return spine.RevisionObservation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
+	return gitworkspace.Observation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
 }
 
 func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *testing.T) {
@@ -269,7 +270,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{
 			AdmissionKey: "investigation-terminal-" + suffix,
-			Workflow:     spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision,
+			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
 			Goal: "Find one concrete simplification.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},

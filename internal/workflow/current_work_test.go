@@ -13,7 +13,7 @@ import (
 )
 
 func readyFacts() Snapshot {
-	job := spine.CodingJob{Job: spine.Job{ID: "job-1", AdmissionOpen: true}, Revision: "rev-1"}
+	job := coding.Job{Job: spine.Job{ID: "job-1", AdmissionOpen: true}, Revision: "rev-1"}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	action := func(kind spine.ActionKind) spine.Action {
 		return spine.Action{ID: spine.ScopedActionID(job.ID, kind, sandbox.ID), Kind: kind, State: spine.ActionSucceeded, Scope: sandbox.ID}
@@ -27,7 +27,7 @@ func readyFacts() Snapshot {
 			action(gitworkspace.ActionRepositoryClone),
 			action(spine.ActionRouteCreate),
 		},
-		ReviewPlans: []spine.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
+		ReviewPlans: []coding.ReviewPlanRecord{{JobID: job.ID, Revision: job.Revision}},
 	}
 }
 
@@ -36,7 +36,7 @@ func factDelivery(message spine.Message, run spine.AgentRun) spine.Delivery {
 }
 
 func TestCodingAgentInputKeepsReviewFeedbackOpaque(t *testing.T) {
-	job := spine.CodingJob{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
+	job := coding.Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
 	message := spine.Message{FromKind: spine.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
 	reviewer := codingAgentInput(job, spine.Delivery{Message: message, AgentRun: spine.AgentRun{Role: "critical-boundary"}})
 	if reviewer != message.Input {
@@ -52,7 +52,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("selected reviewer Actions precede its AgentRun and implementation feedback", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		reviewer := spine.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunPending, Capability: spine.ReviewReadOnlyCapability, SandboxID: spine.ReviewSandboxName("review-1")}}
+		reviewer := coding.ReviewRunView{AgentRun: spine.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunPending, Capability: coding.ReviewReadOnlyCapability, SandboxID: coding.ReviewSandboxName("review-1")}}
 		reviewer.Sandbox = spine.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID}
 		facts.Deliveries = []spine.Delivery{factDelivery(spine.Message{ID: reviewer.MessageID, JobID: facts.Job.ID}, reviewer.AgentRun)}
 		facts.Sandboxes = append(facts.Sandboxes, reviewer.Sandbox)
@@ -81,9 +81,9 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("review feedback Message enters the ordinary implementation lane", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		requestID := spine.ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
+		requestID := coding.ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
 		reviewerID := spine.AgentRunID(requestID)
-		reviewer := spine.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunCompleted, Capability: spine.ReviewReadOnlyCapability, SandboxID: spine.ReviewSandboxName(reviewerID)}
+		reviewer := spine.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: spine.AgentRunCompleted, Capability: coding.ReviewReadOnlyCapability, SandboxID: coding.ReviewSandboxName(reviewerID)}
 		feedback := spine.Message{ID: spine.MessageID(facts.Job.ID, spine.MessageFromAgent, reviewerID), JobID: facts.Job.ID, FromKind: spine.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: spine.MessageFollow}
 		facts.Deliveries = []spine.Delivery{factDelivery(spine.Message{ID: requestID, JobID: facts.Job.ID}, reviewer), factDelivery(feedback, spine.AgentRun{MessageID: feedback.ID, Role: "implement"})}
 		facts.Sandboxes = append(facts.Sandboxes, spine.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID})
@@ -128,7 +128,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 
 	t.Run("ready exact Revision observes its Proposal", func(t *testing.T) {
 		facts := readyFacts()
-		facts.Proposal = &spine.GitHubProposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
+		facts.Proposal = &coding.Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 		if got := decideCurrentWork(facts); got.Kind != WorkObserveProposal {
 			t.Fatalf("CurrentWork = %#v, want Proposal observation", got)
 		}
@@ -167,7 +167,7 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 			facts.Deliveries = []spine.Delivery{factDelivery(message, run)}
 			facts.Evidence = []spine.Evidence{{ID: "e-git", Kind: "git-revision", AgentRunID: run.ID, Revision: facts.Job.Revision}}
 			if test.proposal {
-				facts.Proposal = &spine.GitHubProposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
+				facts.Proposal = &coding.Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
 			}
 			id, _ := unchangedAttention(facts)
 			if (id != "") != test.attention {
@@ -181,7 +181,7 @@ func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
 	facts := readyFacts()
 	facts.Deliveries = []spine.Delivery{
 		factDelivery(spine.Message{ID: "initial", Sequence: 1, FromKind: spine.MessageFromHuman, Intent: spine.MessageFollow}, spine.AgentRun{ID: "initial-run", MessageID: "initial", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "rev-0"}),
-		factDelivery(spine.Message{ID: "review-request", JobID: facts.Job.ID, Sequence: 2, FromKind: spine.MessageFromWorkflow, Intent: spine.MessageFollow}, spine.AgentRun{ID: "review-run", JobID: facts.Job.ID, MessageID: "review-request", Role: "general", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, Capability: spine.ReviewReadOnlyCapability, SandboxID: "review-sandbox"}),
+		factDelivery(spine.Message{ID: "review-request", JobID: facts.Job.ID, Sequence: 2, FromKind: spine.MessageFromWorkflow, Intent: spine.MessageFollow}, spine.AgentRun{ID: "review-run", JobID: facts.Job.ID, MessageID: "review-request", Role: "general", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision, Capability: coding.ReviewReadOnlyCapability, SandboxID: "review-sandbox"}),
 		factDelivery(spine.Message{ID: "review-feedback", Sequence: 3, FromKind: spine.MessageFromAgent, Intent: spine.MessageFollow}, spine.AgentRun{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: spine.AgentRunCompleted, InputRevision: facts.Job.Revision}),
 	}
 	facts.Sandboxes = append(facts.Sandboxes, spine.Sandbox{ID: "review-sandbox", JobID: facts.Job.ID})

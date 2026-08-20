@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
@@ -189,7 +190,7 @@ func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
 	job := spine.Job{ID: "job-123"}
 	main := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	reviewRun := spine.AgentRun{ID: "review-run"}
-	review := spine.Sandbox{ID: spine.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
+	review := spine.Sandbox{ID: coding.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
 	reviewRun.SandboxID = review.ID
 	now := time.Now()
 	actions := []spine.Action{
@@ -208,7 +209,7 @@ func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
 
 func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
-	job := spine.Job{ID: "job-123", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
+	job := spine.Job{ID: "job-123", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
 		Job: job, Profile: spine.SandboxProfile{Name: "local-codex", Provider: spine.SandboxProviderIncus}, Definition: workflow.CodebaseInvestigationDefinition(), Operation: "Investigator running",

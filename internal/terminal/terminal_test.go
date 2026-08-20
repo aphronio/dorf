@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -145,7 +146,7 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 }
 
 func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
-	run := spine.ReviewRunView{
+	run := coding.ReviewRunView{
 		AgentRun: spine.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
 		Request:  spine.Message{ID: "message-review", JobID: "job-review", FromKind: spine.MessageFromWorkflow, Input: "review this exact Revision"},
 	}
@@ -261,8 +262,8 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		t.Fatal(err)
 	}
 
-	job := spine.CodingJob{Job: spine.Job{ID: "job-real-boundary"}, Revision: revision}
-	run := spine.ReviewRunView{
+	job := coding.Job{Job: spine.Job{ID: "job-real-boundary"}, Revision: revision}
+	run := coding.ReviewRunView{
 		AgentRun: spine.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
 		Sandbox:  spine.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
 	}
@@ -291,7 +292,7 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 		t.Fatal(err)
 	}
 	checkout, err := externals.VerifyReviewCheckout(context.Background(), job, run)
-	wantCheckout := spine.ReviewCheckoutObservation{Revision: revision, Tree: tree}
+	wantCheckout := coding.ReviewCheckoutObservation{Revision: revision, Tree: tree}
 	if err != nil || checkout != wantCheckout {
 		t.Fatalf("review checkout=%#v err=%v", checkout, err)
 	}

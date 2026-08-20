@@ -120,7 +120,7 @@ func addAgentRunHistory(entries *[]historyEntry, definition workflow.Definition,
 
 func agentRunHumanRole(definition workflow.Definition, run spine.AgentRun) string {
 	role := definition.AgentRoleLabel(run.Role)
-	if run.Capability == spine.ReviewReadOnlyCapability && !strings.Contains(strings.ToLower(role), "reviewer") {
+	if run.Capability == coding.ReviewReadOnlyCapability && !strings.Contains(strings.ToLower(role), "reviewer") {
 		role += " reviewer"
 	}
 	return role
@@ -223,7 +223,7 @@ func sandboxHumanRole(job spine.Job, runs []spine.AgentRun, sandboxID string) st
 		return "primary"
 	}
 	for _, run := range runs {
-		if run.SandboxID == sandboxID && sandboxID == spine.ReviewSandboxName(run.ID) {
+		if run.SandboxID == sandboxID && sandboxID == coding.ReviewSandboxName(run.ID) {
 			return "reviewer"
 		}
 	}

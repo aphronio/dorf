@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/publication"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -38,11 +39,11 @@ func (g *forbiddenPublicationGitHub) UpdatePullRequest(context.Context, githubap
 
 type forbiddenPublicationRepository struct{ calls int }
 
-func (r *forbiddenPublicationRepository) Relation(context.Context, spine.CodingJob, string) (string, error) {
+func (r *forbiddenPublicationRepository) Relation(context.Context, coding.Job, string) (string, error) {
 	r.calls++
 	return "", errors.New("repository must not be called before readiness")
 }
-func (r *forbiddenPublicationRepository) Push(context.Context, spine.CodingJob, string) error {
+func (r *forbiddenPublicationRepository) Push(context.Context, coding.Job, string) error {
 	r.calls++
 	return errors.New("repository must not be called before readiness")
 }
@@ -54,7 +55,7 @@ func TestPostgresInvalidEvidenceNeverReachesPushExternals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordReviewPolicy(context.Background(), spine.ReviewPlanRecord{
+	if err := store.RecordReviewPolicy(context.Background(), coding.ReviewPlanRecord{
 		JobID: job.ID, Revision: revision, Facts: facts,
 		Plan: policy.ReviewPlan{Decision: "no-review"},
 	}); err != nil {

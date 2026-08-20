@@ -11,7 +11,7 @@ import (
 
 func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := spine.Job{ID: "job-1", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true}
+	job := spine.Job{ID: "job-1", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, AdmissionOpen: true}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	run := spine.AgentRun{ID: "run-1", JobID: job.ID, Role: "investigate", State: spine.AgentRunPending, SandboxID: sandbox.ID}
 	delivery := spine.Delivery{Message: spine.Message{Sequence: 1}, AgentRun: run}
@@ -52,7 +52,7 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 
 func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	revision := strings.Repeat("b", 40)
-	job := spine.Job{ID: "job-local", Workflow: spine.WorkflowCodebaseInvestigation, WorkflowRevision: spine.CodebaseInvestigationRevision, AdmissionOpen: true}
+	job := spine.Job{ID: "job-local", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, AdmissionOpen: true}
 	sandbox := spine.Sandbox{ID: spine.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := InvestigationSnapshot{
 		Job: job, MainSandbox: sandbox,

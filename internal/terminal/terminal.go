@@ -102,15 +102,15 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
+func (e Externals) RepositoryRevision(ctx context.Context, job spine.Job, branch, revision string) (gitworkspace.Observation, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
-		return spine.RevisionObservation{}, err
+		return gitworkspace.Observation{}, err
 	}
 	return e.gitWorkspace().ObserveRevision(ctx, owner, branch, revision)
 }
 
-func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJob) (policy.ChangeFacts, error) {
+func (e Externals) RepositoryChangeFacts(ctx context.Context, job coding.Job) (policy.ChangeFacts, error) {
 	owner, err := e.owner(ctx, spine.MainSandboxName(job.ID))
 	if err != nil {
 		return policy.ChangeFacts{}, err
@@ -118,7 +118,7 @@ func (e Externals) RepositoryChangeFacts(ctx context.Context, job spine.CodingJo
 	return e.gitWorkspace().ChangeFacts(ctx, owner, job.StartingRevision, job.Revision)
 }
 
-func (e Externals) PrepareReviewCheckout(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) error {
+func (e Externals) PrepareReviewCheckout(ctx context.Context, job coding.Job, run coding.ReviewRunView) error {
 	if run.SandboxID == "" {
 		return fmt.Errorf("preparing a review checkout requires a dedicated reviewer Sandbox")
 	}
@@ -177,12 +177,12 @@ rm -f -- "$bundle"`
 	return nil
 }
 
-func (e Externals) VerifyReviewCheckout(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.ReviewCheckoutObservation, error) {
+func (e Externals) VerifyReviewCheckout(ctx context.Context, job coding.Job, run coding.ReviewRunView) (coding.ReviewCheckoutObservation, error) {
 	if run.SandboxID == "" {
-		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
+		return coding.ReviewCheckoutObservation{}, fmt.Errorf("review AgentRun has no isolated Sandbox")
 	}
 	if err := e.Sandbox.AttestReview(ctx, ownershipMetadata(run.Sandbox), reviewMetadata(job, run)); err != nil {
-		return spine.ReviewCheckoutObservation{}, err
+		return coding.ReviewCheckoutObservation{}, err
 	}
 	script := `set -eu
 workspace=$1; revision=$2
@@ -194,16 +194,16 @@ printf '%s %s clean\n' "$head" "$tree"`
 	workspace := e.Sandbox.Workspace()
 	result, err := e.Sandbox.Exec(ctx, ownershipMetadata(run.Sandbox), nil, "bash", "-c", script, "dorf-review-verify", workspace, run.InputRevision)
 	if err != nil || result.ExitCode != 0 {
-		return spine.ReviewCheckoutObservation{}, fmt.Errorf("verify exact review checkout after turn: %s", strings.TrimSpace(result.Stderr))
+		return coding.ReviewCheckoutObservation{}, fmt.Errorf("verify exact review checkout after turn: %s", strings.TrimSpace(result.Stderr))
 	}
 	fields := strings.Fields(result.Stdout)
 	if len(fields) != 3 || fields[0] != run.InputRevision || fields[2] != "clean" {
-		return spine.ReviewCheckoutObservation{}, fmt.Errorf("review checkout returned malformed verification")
+		return coding.ReviewCheckoutObservation{}, fmt.Errorf("review checkout returned malformed verification")
 	}
-	return spine.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
+	return coding.ReviewCheckoutObservation{Revision: fields[0], Tree: fields[1]}, nil
 }
 
-func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewInitialTurn(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -213,7 +213,7 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job spine.CodingJob, r
 	return binding, err
 }
 
-func (e Externals) ReviewTurns(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessHistory, error) {
+func (e Externals) ReviewTurns(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessHistory, error) {
 	binding, err := e.ReviewWait(ctx, job, run, run.TurnID)
 	return spine.HarnessHistory{
 		Harness: binding.Harness, ThreadID: binding.ThreadID,
@@ -221,7 +221,7 @@ func (e Externals) ReviewTurns(ctx context.Context, job spine.CodingJob, run spi
 	}, err
 }
 
-func (e Externals) ReviewRecover(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView) (spine.HarnessBinding, error) {
+func (e Externals) ReviewRecover(ctx context.Context, job coding.Job, run coding.ReviewRunView) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -231,7 +231,7 @@ func (e Externals) ReviewRecover(ctx context.Context, job spine.CodingJob, run s
 	return binding, err
 }
 
-func (e Externals) ReviewWait(ctx context.Context, job spine.CodingJob, run spine.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
+func (e Externals) ReviewWait(ctx context.Context, job coding.Job, run coding.ReviewRunView, turnID string) (spine.HarnessBinding, error) {
 	input, err := reviewInput(run)
 	if err != nil {
 		return spine.HarnessBinding{}, err
@@ -241,8 +241,8 @@ func (e Externals) ReviewWait(ctx context.Context, job spine.CodingJob, run spin
 	return binding, err
 }
 
-func reviewControllerID(run spine.ReviewRunView) string {
-	return spine.ReviewControllerID(run.ID, run.SandboxID, run.Sandbox.OwnershipNonce)
+func reviewControllerID(run coding.ReviewRunView) string {
+	return coding.ReviewControllerID(run.ID, run.SandboxID, run.Sandbox.OwnershipNonce)
 }
 
 type reviewInputError string
@@ -250,14 +250,14 @@ type reviewInputError string
 func (e reviewInputError) Error() string         { return string(e) }
 func (e reviewInputError) AttentionNeeded() bool { return true }
 
-func reviewInput(run spine.ReviewRunView) (string, error) {
+func reviewInput(run coding.ReviewRunView) (string, error) {
 	if run.MessageID == "" || run.Request.ID != run.MessageID || run.Request.JobID != run.JobID || run.Request.FromKind != spine.MessageFromWorkflow || strings.TrimSpace(run.Request.Input) == "" {
 		return "", reviewInputError("review AgentRun request Message is missing or conflicts with its workflow input")
 	}
 	return run.Request.Input, nil
 }
 
-func reviewMetadata(job spine.CodingJob, run spine.ReviewRunView) provider.ReviewMetadata {
+func reviewMetadata(job coding.Job, run coding.ReviewRunView) provider.ReviewMetadata {
 	return provider.ReviewMetadata{JobID: job.ID, AgentRunID: run.ID, Revision: run.InputRevision, OwnershipNonce: run.Sandbox.OwnershipNonce}
 }
 

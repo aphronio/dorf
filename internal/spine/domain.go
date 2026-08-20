@@ -56,13 +56,6 @@ const (
 
 type WorkflowName string
 
-const (
-	WorkflowCodingToProposal      WorkflowName = "coding-to-proposal"
-	WorkflowCodebaseInvestigation WorkflowName = "codebase-investigation"
-	CodingToProposalRevision                   = "3"
-	CodebaseInvestigationRevision              = "2"
-)
-
 type SandboxProvider string
 
 const (
@@ -126,19 +119,6 @@ type Job struct {
 	CleanupAttention        string       `json:"cleanup_attention,omitempty"`
 	AdmittedAt              time.Time    `json:"admitted_at,omitempty"`
 	CleanedAt               time.Time    `json:"cleaned_at,omitempty"`
-}
-
-// CodingJob is the coding-to-proposal workflow's complete typed state. Its
-// embedded Job carries only shared custody and lifecycle facts.
-type CodingJob struct {
-	Job
-	Repository         string `json:"repository"`
-	StartingRevision   string `json:"starting_revision"`
-	Revision           string `json:"revision"`
-	Branch             string `json:"branch"`
-	GitHubRepository   string `json:"github_repository"`
-	GitHubInstallation string `json:"github_installation_id"`
-	BaseBranch         string `json:"base_branch"`
 }
 
 // Sandbox is infrastructure owned for the lifetime of a Job. AgentRuns use a
@@ -224,26 +204,6 @@ type Action struct {
 	SettledAt time.Time   `json:"settled_at,omitempty"`
 }
 
-type RevisionObservation struct {
-	ComparisonBase string    `json:"comparison_base"`
-	Revision       string    `json:"revision"`
-	Tree           string    `json:"tree"`
-	Branch         string    `json:"branch"`
-	StartedAt      time.Time `json:"started_at"`
-	FinishedAt     time.Time `json:"finished_at"`
-}
-
-type Revision struct {
-	JobID          string    `json:"job_id"`
-	OID            string    `json:"oid"`
-	ComparisonBase string    `json:"comparison_base,omitempty"`
-	Tree           string    `json:"tree,omitempty"`
-	Branch         string    `json:"branch"`
-	Generation     int       `json:"generation"`
-	EvidenceID     string    `json:"evidence_id,omitempty"`
-	ObservedAt     time.Time `json:"observed_at"`
-}
-
 type Evidence struct {
 	ID         string    `json:"id"`
 	Digest     string    `json:"digest"`
@@ -271,31 +231,6 @@ type Artifact struct {
 	Producer   string    `json:"producer"`
 	AgentRunID string    `json:"agent_run_id"`
 	CreatedAt  time.Time `json:"created_at"`
-}
-
-type GitHubProposal struct {
-	JobID            string `json:"job_id"`
-	Number           int64  `json:"pr_number"`
-	URL              string `json:"pr_url"`
-	ProposedRevision string `json:"proposed_revision"`
-	BodyDigest       string `json:"body_digest"`
-}
-
-type JobOutcomeKind string
-
-const (
-	OutcomeAccepted  JobOutcomeKind = "accepted"
-	OutcomeRejected  JobOutcomeKind = "rejected"
-	OutcomeAbandoned JobOutcomeKind = "abandoned"
-)
-
-type JobOutcome struct {
-	JobID          string         `json:"job_id"`
-	Kind           JobOutcomeKind `json:"outcome"`
-	ObservedState  string         `json:"observed_state"`
-	ObservedMerged bool           `json:"observed_merged"`
-	MergeCommitOID string         `json:"merge_commit_oid,omitempty"`
-	ObservedAt     time.Time      `json:"observed_at"`
 }
 
 type HarnessTurn struct {
@@ -343,22 +278,6 @@ func ArtifactID(jobID, name string) string {
 	return "artifact-" + digest(jobID+"\x00"+name, 24)
 }
 
-func ReviewRequestFromID(revision, role string) string {
-	return "review:" + revision + ":" + role
-}
-
-func ReviewRequestMessageID(jobID, revision, role string) string {
-	return MessageID(jobID, MessageFromWorkflow, ReviewRequestFromID(revision, role))
-}
-
-func ReviewPolicyAttentionSource(revision string) string {
-	return "review-policy:" + revision
-}
-
-func ReviewSandboxName(runID string) string {
-	return "dorf-review-" + digest(runID, 20)
-}
-
 // MainSandboxName and ProviderRouteID are exact resource identities derived
 // before their external create effects.
 func MainSandboxName(jobID string) string {
@@ -374,10 +293,6 @@ func RouteForSandbox(sandbox Sandbox) Route {
 		ID:        ProviderRouteID(ScopedActionID(sandbox.JobID, ActionRouteCreate, sandbox.ID)),
 		SandboxID: sandbox.ID,
 	}
-}
-
-func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
-	return "review-controller-" + digest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
 }
 
 func ActionID(jobID string, kind ActionKind) string {

@@ -3,11 +3,16 @@ package investigation
 import (
 	"fmt"
 	"time"
+
+	"github.com/aphronio/dorf/internal/spine"
 )
 
 type SourceKind string
 
 const (
+	Workflow         spine.WorkflowName = "codebase-investigation"
+	WorkflowRevision                    = "2"
+
 	SourceRemote    SourceKind = "remote"
 	SourceGitBundle SourceKind = "git-bundle"
 )

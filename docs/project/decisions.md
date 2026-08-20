@@ -2094,14 +2094,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D083 — Git and coding behavior are workflow modules, not Core
 
-- **Status:** Refined by D084 — 2026-08-20
+- **Status:** Refined by D084 and D085 — 2026-08-20
 - **Decision:** Keep Core limited to the existing Job, Message, Sandbox, AgentRun, Action,
   Artifact, Evidence, recovery, and requested-cleanup custody described by the North Star. Place
   exact Git checkout and Revision observation in `internal/gitworkspace`. Place review execution and
   proposal-facing Action kinds in the coding workflow module.
   Sandbox providers expose only their provider-neutral Sandbox contract; they do not implement Git
   clone policy. Shared use by multiple workflows does not make a behavior Core.
-- **Composition:** Native coding and investigation workflows statically compose the repository
+- **Composition:** Native coding and investigation workflows statically compose the Git workspace
   module over Core execution. `coding-to-proposal` additionally composes its coding service and
   GitHub authorities. Incus and E2B remain interchangeable Sandbox adapters beneath the same
   provider-neutral boundary.
@@ -2115,8 +2115,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   product term and changes no meaning in the North Star vocabulary.
 - **Proof:** Core declares no Git workspace interface; the Sandbox contract contains no Git
   operation; one Git workspace implementation is exercised through a provider-neutral Sandbox fake;
-  coding execution lives outside `spine`; Incus, E2B, workflow, CLI, and PostgreSQL tests retain the
-  same observable behavior.
+  coding execution lives outside the shared custody package; Incus, E2B, workflow, CLI, and
+  PostgreSQL tests retain the same observable behavior.
 - **Reconsider when:** Independently distributed workflow modules require dynamic loading, or a
   non-workflow consumer proves a smaller reusable repository boundary.
 
@@ -2139,3 +2139,24 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A concrete workflow needs deterministic evaluation as an explicit accepted
   input with its own result and recovery semantics. Add that workflow-owned contract from the real
   use case; do not restore an ambient repository file or a generic Core Check primitive.
+
+## D085 — Workflow records live with the workflow that defines them
+
+- **Status:** Accepted package-ownership correction — 2026-08-20
+- **Decision:** Keep shared custody types limited to Job, Message, AgentRun, Sandbox, Action,
+  Artifact, Evidence, Harness bindings, and cleanup. `internal/coding` owns its typed Job input,
+  Revision, ReviewPlan and reviewer projections, Proposal, Outcome, readiness policy, workflow
+  identity, and review-scoped identities. `internal/investigation` owns its workflow identity and
+  existing source/draft records. `internal/gitworkspace` owns bounded Git observations.
+- **Durability:** This is Go package ownership, not a storage or sequencing change. PostgreSQL keeps
+  the same typed workflow tables and transactions; Absurd keeps the same task, step, retry, wait,
+  and claim authority. Moving a record out of the shared package does not move it out of durable
+  custody.
+- **Why:** A shared package containing coding records made physical persistence look like Core
+  semantics. Workflow-owned records can still be persisted transactionally through PostgreSQL
+  without granting their meaning to Core or making the workflow less recoverable.
+- **Proof:** The shared custody package declares no coding or investigation workflow identity,
+  Revision, review, Proposal, or Outcome type. Existing SQL integration, readiness, publication,
+  outcome, CLI, and workflow tests compile against the owning modules and pass unchanged behavior.
+- **Reconsider when:** Two independent consumers prove identical semantics for one of these records;
+  extract only that earned shared contract rather than moving a whole workflow model back into Core.

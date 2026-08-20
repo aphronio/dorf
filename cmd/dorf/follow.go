@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/controlplane"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/aphronio/dorf/internal/spine"
 	"github.com/aphronio/dorf/internal/workflow"
@@ -96,7 +98,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		return followSnapshot{}, err
 	}
 	switch job.Workflow {
-	case spine.WorkflowCodingToProposal:
+	case coding.Workflow:
 		snapshot, err := workflow.LoadSnapshot(ctx, store, jobID)
 		if err != nil {
 			return followSnapshot{}, err
@@ -114,7 +116,7 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == workflow.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
-	case spine.WorkflowCodebaseInvestigation:
+	case investigation.Workflow:
 		snapshot, err := workflow.LoadCodebaseInvestigation(ctx, store, jobID)
 		if err != nil {
 			return followSnapshot{}, err

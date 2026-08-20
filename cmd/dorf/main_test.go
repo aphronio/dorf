@@ -161,7 +161,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	job := spine.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
 	mainSandbox := spine.MainSandboxName(job.ID)
 	entries := workflowHistory(workflow.Snapshot{
-		Job: spine.CodingJob{Job: job},
+		Job: coding.Job{Job: job},
 		Deliveries: []spine.Delivery{{
 			Message:  spine.Message{ID: "message-1", Sequence: 1, FromKind: spine.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
 			AgentRun: spine.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: spine.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
@@ -170,12 +170,12 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 			{ID: "action-secret", Kind: spine.ActionSandboxCreate, Scope: mainSandbox, State: spine.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
 			{Kind: coding.ActionGitHubPullRequest, State: spine.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
 		},
-		Revisions: []spine.Revision{
+		Revisions: []coding.Revision{
 			{Generation: 0, OID: "revision-0", ObservedAt: base},
 			{Generation: 1, OID: "revision-1", ComparisonBase: "revision-0", ObservedAt: base.Add(6 * time.Second)},
 		},
 		Evidence: []spine.Evidence{{ID: "evidence-secret", Kind: "git-revision", Revision: "revision-1", FinishedAt: base.Add(6500 * time.Millisecond)}},
-		Proposal: &spine.GitHubProposal{Number: 42, ProposedRevision: "revision-1"},
+		Proposal: &coding.Proposal{Number: 42, ProposedRevision: "revision-1"},
 	})
 	for i := 1; i < len(entries); i++ {
 		if entries[i].At.Before(entries[i-1].At) {
@@ -213,8 +213,8 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		}
 	}
 	abandoned := workflowHistory(workflow.Snapshot{
-		Job:     spine.CodingJob{Job: spine.Job{AdmittedAt: base}},
-		Outcome: &spine.JobOutcome{Kind: spine.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
+		Job:     coding.Job{Job: spine.Job{AdmittedAt: base}},
+		Outcome: &coding.Outcome{Kind: coding.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
 	})
 	last := abandoned[len(abandoned)-1]
 	if !strings.Contains(last.Text, "Outcome Abandoned") || strings.Contains(last.Text, "GitHub") {

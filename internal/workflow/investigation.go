@@ -67,8 +67,8 @@ func LoadCodebaseInvestigation(ctx context.Context, store postgres.Store, jobID 
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.Job.Workflow != spine.WorkflowCodebaseInvestigation || snapshot.Job.WorkflowRevision != spine.CodebaseInvestigationRevision {
-		return snapshot, fmt.Errorf("Job %s is not codebase-investigation revision %s", jobID, spine.CodebaseInvestigationRevision)
+	if snapshot.Job.Workflow != investigation.Workflow || snapshot.Job.WorkflowRevision != investigation.WorkflowRevision {
+		return snapshot, fmt.Errorf("Job %s is not codebase-investigation revision %s", jobID, investigation.WorkflowRevision)
 	}
 	snapshot.Source, err = store.CodebaseInvestigationSource(ctx, jobID)
 	if err != nil {

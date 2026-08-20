@@ -233,10 +233,10 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 	input.Workflow = spine.WorkflowName(strings.TrimSpace(string(input.Workflow)))
 	input.WorkflowRevision = strings.TrimSpace(input.WorkflowRevision)
 	if input.Workflow == "" {
-		input.Workflow = spine.WorkflowCodingToProposal
+		input.Workflow = coding.Workflow
 	}
-	if input.WorkflowRevision == "" && input.Workflow == spine.WorkflowCodingToProposal {
-		input.WorkflowRevision = spine.CodingToProposalRevision
+	if input.WorkflowRevision == "" && input.Workflow == coding.Workflow {
+		input.WorkflowRevision = coding.WorkflowRevision
 	}
 	input.Repository = strings.TrimSpace(input.Repository)
 	input.Revision = strings.TrimSpace(input.Revision)
@@ -253,16 +253,16 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 		return spine.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, Provider Connection, and model")
 	}
 	switch input.Workflow {
-	case spine.WorkflowCodingToProposal:
-		if input.WorkflowRevision != spine.CodingToProposalRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (investigation.Source{}) {
-			return spine.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", spine.CodingToProposalRevision)
+	case coding.Workflow:
+		if input.WorkflowRevision != coding.WorkflowRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (investigation.Source{}) {
+			return spine.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", coding.WorkflowRevision)
 		}
 		if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
 			return spine.Job{}, false, err
 		}
-	case spine.WorkflowCodebaseInvestigation:
-		if input.WorkflowRevision != spine.CodebaseInvestigationRevision {
-			return spine.Job{}, false, fmt.Errorf("codebase-investigation admission requires workflow revision %s", spine.CodebaseInvestigationRevision)
+	case investigation.Workflow:
+		if input.WorkflowRevision != investigation.WorkflowRevision {
+			return spine.Job{}, false, fmt.Errorf("codebase-investigation admission requires workflow revision %s", investigation.WorkflowRevision)
 		}
 		if input.GitHubRepository != "" || input.GitHubInstallation != "" || input.BaseBranch != "" {
 			return spine.Job{}, false, fmt.Errorf("codebase-investigation does not accept GitHub publication authority")
@@ -274,7 +274,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 		return spine.Job{}, false, fmt.Errorf("unsupported workflow %q", input.Workflow)
 	}
 	revision := input.Revision
-	if input.Workflow == spine.WorkflowCodebaseInvestigation {
+	if input.Workflow == investigation.Workflow {
 		revision = input.InvestigationSource.Revision
 	}
 	if !ValidRevision(revision) {
@@ -325,7 +325,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 	if storedRow.ID != id || stored != expectedCore {
 		return spine.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
 	}
-	if input.Workflow == spine.WorkflowCodingToProposal {
+	if input.Workflow == coding.Workflow {
 		if _, err := queries.InsertCodingToProposalInput(ctx, dbsql.InsertCodingToProposalInputParams{
 			JobID: id, Repository: input.Repository, StartingRevision: input.Revision, Revision: input.Revision,
 			Branch: input.Branch, GithubRepository: input.GitHubRepository,
@@ -379,7 +379,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 			return spine.Job{}, false, err
 		}
 	}
-	if input.Workflow == spine.WorkflowCodebaseInvestigation {
+	if input.Workflow == investigation.Workflow {
 		if _, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, InputRevision: nullableString(revision), SandboxID: sandboxID}); err != nil {
 			return spine.Job{}, false, err
 		}
@@ -388,7 +388,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (spine.Job, bool
 			return spine.Job{}, false, err
 		}
 	}
-	if input.Workflow == spine.WorkflowCodingToProposal {
+	if input.Workflow == coding.Workflow {
 		if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
 			return spine.Job{}, false, err
 		}
@@ -453,11 +453,11 @@ type admittedAgentRun struct {
 type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, NewMessage) (admittedAgentRun, error)
 
 func (s Store) AdmitCodingMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
-	return s.admitMessage(ctx, input, spine.WorkflowCodingToProposal, spine.CodingToProposalRevision, authorizeCodingMessage)
+	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
 }
 
 func (s Store) AdmitInvestigationMessage(ctx context.Context, input NewMessage) (spine.Message, bool, error) {
-	return s.admitMessage(ctx, input, spine.WorkflowCodebaseInvestigation, spine.CodebaseInvestigationRevision, authorizeInvestigationMessage)
+	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
 }
 
 func (s Store) admitMessage(ctx context.Context, input NewMessage, workflow spine.WorkflowName, revision string, authorize messageAuthorizer) (spine.Message, bool, error) {
@@ -610,15 +610,15 @@ func (s Store) Job(ctx context.Context, id string) (spine.Job, error) {
 	}, nil
 }
 
-func (s Store) CodingJob(ctx context.Context, id string) (spine.CodingJob, error) {
+func (s Store) CodingJob(ctx context.Context, id string) (coding.Job, error) {
 	row, err := dbsql.New(s.DB).GetCodingJob(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return spine.CodingJob{}, ErrNotFound
+		return coding.Job{}, ErrNotFound
 	}
 	if err != nil {
-		return spine.CodingJob{}, err
+		return coding.Job{}, err
 	}
-	return spine.CodingJob{
+	return coding.Job{
 		Job: spine.Job{
 			ID: row.ID, AdmissionKey: row.AdmissionKey, Workflow: spine.WorkflowName(row.WorkflowName), WorkflowRevision: row.WorkflowRevision,
 			Goal: row.Goal, SandboxProfile: row.SandboxProfile, ProviderConnection: row.ProviderConnection,
@@ -647,14 +647,14 @@ func (s Store) JobTasks(ctx context.Context, jobID string) ([]spine.JobTask, err
 	return tasks, nil
 }
 
-func (s Store) Revisions(ctx context.Context, jobID string) ([]spine.Revision, error) {
+func (s Store) Revisions(ctx context.Context, jobID string) ([]coding.Revision, error) {
 	rows, err := dbsql.New(s.DB).ListRevisions(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	revisions := make([]spine.Revision, 0, len(rows))
+	revisions := make([]coding.Revision, 0, len(rows))
 	for _, row := range rows {
-		revisions = append(revisions, spine.Revision{
+		revisions = append(revisions, coding.Revision{
 			JobID: row.JobID, OID: row.OID, ComparisonBase: row.ComparisonBaseOID,
 			Tree: row.TreeOID, Branch: row.Branch, Generation: int(row.Generation),
 			EvidenceID: row.EvidenceID, ObservedAt: row.ObservedAt,
@@ -952,7 +952,7 @@ func (s Store) SetWorkflowAttention(ctx context.Context, jobID, source, detail s
 	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{JobID: jobID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
 }
 
-func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID string, observation spine.RevisionObservation, evidence spine.Evidence) error {
+func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID string, observation gitworkspace.Observation, evidence spine.Evidence) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

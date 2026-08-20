@@ -53,5 +53,5 @@ sql:
               type: "AgentRunState"
           - column: "dorf.job_outcomes.outcome"
             go_type:
-              import: "github.com/aphronio/dorf/internal/spine"
-              type: "JobOutcomeKind"
+              import: "github.com/aphronio/dorf/internal/coding"
+              type: "OutcomeKind"

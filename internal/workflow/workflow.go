@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -254,16 +255,16 @@ func observeProposal(ctx context.Context, proposal ProposalRuntime, jobID, revis
 }
 
 func Admit(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewCodingJob) (spine.Job, bool, error) {
-	input.NewJob.Workflow = spine.WorkflowCodingToProposal
-	input.NewJob.WorkflowRevision = spine.CodingToProposalRevision
+	input.NewJob.Workflow = coding.Workflow
+	input.NewJob.WorkflowRevision = coding.WorkflowRevision
 	return admit(ctx, store, client, providers, profile, CodingToProposalDefinition(), RunTaskName, postgres.MessageTaskKey(spine.JobID(strings.TrimSpace(input.AdmissionKey))), input.NewJob, func() (spine.Job, bool, error) {
 		return store.AdmitCoding(ctx, input)
 	})
 }
 
 func AdmitCodebaseInvestigation(ctx context.Context, store postgres.Store, client *absurd.Client, providers ProviderChecker, profile RuntimeProfile, input postgres.NewInvestigationJob) (spine.Job, bool, error) {
-	input.NewJob.Workflow = spine.WorkflowCodebaseInvestigation
-	input.NewJob.WorkflowRevision = spine.CodebaseInvestigationRevision
+	input.NewJob.Workflow = investigation.Workflow
+	input.NewJob.WorkflowRevision = investigation.WorkflowRevision
 	return admit(ctx, store, client, providers, profile, CodebaseInvestigationDefinition(), InvestigationTaskName, "codebase-investigation:v2:"+spine.JobID(strings.TrimSpace(input.AdmissionKey)), input.NewJob, func() (spine.Job, bool, error) {
 		return store.AdmitInvestigation(ctx, input)
 	})
@@ -323,9 +324,9 @@ func AdmitMessage(ctx context.Context, store postgres.Store, client *absurd.Clie
 	var message spine.Message
 	var created bool
 	switch {
-	case job.Workflow == spine.WorkflowCodingToProposal && job.WorkflowRevision == spine.CodingToProposalRevision:
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
 		message, created, err = store.AdmitCodingMessage(ctx, input)
-	case job.Workflow == spine.WorkflowCodebaseInvestigation && job.WorkflowRevision == spine.CodebaseInvestigationRevision:
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
 		message, created, err = store.AdmitInvestigationMessage(ctx, input)
 	default:
 		return spine.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)

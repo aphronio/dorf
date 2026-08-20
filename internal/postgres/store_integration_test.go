@@ -157,7 +157,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	if job.SandboxProfile != "incus" || job.Workflow != spine.WorkflowCodingToProposal || job.WorkflowRevision != spine.CodingToProposalRevision {
+	if job.SandboxProfile != "incus" || job.Workflow != coding.Workflow || job.WorkflowRevision != coding.WorkflowRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
 	repeatedJob, created, err := workflow.Admit(ctx, store, client, providerCheck{err: errors.New("Gateway unavailable during retry")}, workflow.RuntimeProfile{SandboxProfile: input.SandboxProfile}, input)
@@ -823,7 +823,7 @@ func TestTerminalTargetSteerFallbackOwnsRevisionObservation(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	evidence := integrationEvidence(fallback.AgentRun.ID, "git-revision", "", "", job.Revision, "9")
 	evidence.AgentRunID = fallback.AgentRun.ID
-	observation := spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("9", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+	observation := gitworkspace.Observation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("9", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
 	if err := store.RecordRevisionObservation(ctx, job.ID, fallback.AgentRun.ID, observation, evidence); err != nil {
 		t.Fatalf("terminal-target fallback Revision observation: %v", err)
 	}
@@ -845,7 +845,7 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	observation := spine.RevisionObservation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("8", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
+	observation := gitworkspace.Observation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("8", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
 	failedEvidence := integrationEvidence(first.AgentRun.ID, "git-revision", "", "", job.Revision, "8")
 	failedEvidence.AgentRunID = first.AgentRun.ID
 	if err := store.RecordRevisionObservation(ctx, job.ID, first.AgentRun.ID, observation, failedEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
@@ -863,7 +863,7 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 	}
 }
 
-func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label string) (spine.CodingJob, string) {
+func prepareTransportIntegrationJob(t *testing.T, store postgres.Store, label string) (coding.Job, string) {
 	t.Helper()
 	ctx := context.Background()
 	revision := strings.Repeat("a", 40)
@@ -898,7 +898,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	changedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-changed-"+job.ID)
 	changedEvidence := integrationEvidence(changedRun.ID, "git-revision", "", "", changed, "b")
 	changedEvidence.AgentRunID = changedRun.ID
-	changedObservation := spine.RevisionObservation{ComparisonBase: start, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
+	changedObservation := gitworkspace.Observation{ComparisonBase: start, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
 	if err := store.RecordRevisionObservation(ctx, job.ID, changedRun.ID, changedObservation, changedEvidence); err != nil {
 		t.Fatalf("changed Revision observation: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	unchangedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-unchanged-"+job.ID)
 	unchangedEvidence := integrationEvidence(unchangedRun.ID, "git-revision", "", "", changed, "d")
 	unchangedEvidence.AgentRunID = unchangedRun.ID
-	unchangedObservation := spine.RevisionObservation{ComparisonBase: changed, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
+	unchangedObservation := gitworkspace.Observation{ComparisonBase: changed, Revision: changed, Tree: strings.Repeat("4", 40), Branch: input.Branch, StartedAt: now, FinishedAt: now}
 	if err := store.RecordRevisionObservation(ctx, job.ID, unchangedRun.ID, unchangedObservation, unchangedEvidence); err != nil {
 		t.Fatalf("unchanged Revision observation: %v", err)
 	}
@@ -932,7 +932,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 	}
 }
 
-func reviewRunsForRevision(ctx context.Context, store postgres.Store, jobID, revision string) ([]spine.ReviewRunView, error) {
+func reviewRunsForRevision(ctx context.Context, store postgres.Store, jobID, revision string) ([]coding.ReviewRunView, error) {
 	deliveries, err := store.Deliveries(ctx, jobID)
 	if err != nil {
 		return nil, err
@@ -941,26 +941,26 @@ func reviewRunsForRevision(ctx context.Context, store postgres.Store, jobID, rev
 	if err != nil {
 		return nil, err
 	}
-	runs, err := spine.ReviewRuns(deliveries, sandboxes)
+	runs, err := coding.ReviewRuns(deliveries, sandboxes)
 	if err != nil {
 		return nil, err
 	}
-	return slices.DeleteFunc(runs, func(run spine.ReviewRunView) bool {
+	return slices.DeleteFunc(runs, func(run coding.ReviewRunView) bool {
 		return run.InputRevision != revision
 	}), nil
 }
 
-func reviewPlanForRevision(ctx context.Context, store postgres.Store, jobID, revision string) (spine.ReviewPlanRecord, error) {
+func reviewPlanForRevision(ctx context.Context, store postgres.Store, jobID, revision string) (coding.ReviewPlanRecord, error) {
 	plans, err := store.ReviewPlans(ctx, jobID)
 	if err != nil {
-		return spine.ReviewPlanRecord{}, err
+		return coding.ReviewPlanRecord{}, err
 	}
 	for _, plan := range plans {
 		if plan.Revision == revision {
 			return plan, nil
 		}
 	}
-	return spine.ReviewPlanRecord{}, sql.ErrNoRows
+	return coding.ReviewPlanRecord{}, sql.ErrNoRows
 }
 
 func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
@@ -985,7 +985,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			record := spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
+			record := coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
 			if err := store.RecordReviewPolicy(ctx, record); err != nil {
 				t.Fatal(err)
 			}
@@ -1008,7 +1008,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				for i, role := range test.roles {
 					request := runs[i].Request
 					wantInput := policy.RolePrompt(role, facts)
-					if runs[i].Role != string(role) || runs[i].ID != spine.AgentRunID(request.ID) || runs[i].MessageID != request.ID || runs[i].Capability != spine.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != spine.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != spine.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != spine.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 {
+					if runs[i].Role != string(role) || runs[i].ID != spine.AgentRunID(request.ID) || runs[i].MessageID != request.ID || runs[i].Capability != coding.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != coding.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != spine.MessageFromWorkflow || request.FromID != coding.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != spine.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != coding.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
 					}
 					for prior := 0; prior < i; prior++ {
@@ -1030,7 +1030,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
-	prepare := func(t *testing.T, suffix string) (spine.CodingJob, spine.ReviewPlanRecord) {
+	prepare := func(t *testing.T, suffix string) (coding.Job, coding.ReviewPlanRecord) {
 		t.Helper()
 		job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
 		facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"docs/review.md"})
@@ -1041,7 +1041,7 @@ func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		return job, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
+		return job, coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
 	}
 
 	t.Run("closed Job rejects only a new policy", func(t *testing.T) {
@@ -1104,7 +1104,7 @@ func TestReviewerFeedbackBecomesIdempotentObservedImplementationMessage(t *testi
 	job, revision, _, implementationRun := prepareReviewFeedbackIntegration(t, store, "review-feedback-message")
 	evidence := integrationEvidence(implementationRun.ID, "git-revision", "", "", revision, "9")
 	evidence.AgentRunID = implementationRun.ID
-	observation := spine.RevisionObservation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}
+	observation := gitworkspace.Observation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch}
 	if err := store.RecordRevisionObservation(ctx, job.ID, implementationRun.ID, observation, evidence); err != nil {
 		t.Fatalf("unchanged review feedback observation: %v", err)
 	}
@@ -1126,14 +1126,14 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordReviewPolicy(ctx, spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
+	if err := store.RecordReviewPolicy(ctx, coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	runs, err := reviewRunsForRevision(ctx, store, job.ID, revision)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("review runs=%#v err=%v", runs, err)
 	}
-	feedback := func(run spine.ReviewRunView, digestByte string) (spine.HarnessTurn, spine.Evidence) {
+	feedback := func(run coding.ReviewRunView, digestByte string) (spine.HarnessTurn, spine.Evidence) {
 		prepareReviewBoundaryIntegration(t, store, run)
 		refreshed, err := store.ReviewRun(ctx, run.ID)
 		if err != nil {
@@ -1162,7 +1162,7 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 	}
 }
 
-func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (spine.CodingJob, string, spine.Message, spine.AgentRun) {
+func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix string) (coding.Job, string, spine.Message, spine.AgentRun) {
 	t.Helper()
 	ctx := context.Background()
 	job, revision, _ := prepareReviewIntegrationJob(t, store, suffix)
@@ -1174,7 +1174,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
+	record := coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}
 	if err := store.RecordReviewPolicy(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -1184,7 +1184,7 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	}
 	reviewerRun := runs[0]
 	request := reviewerRun.Request
-	if reviewerRun.MessageID != request.ID || request.ID != spine.ReviewRequestMessageID(job.ID, revision, reviewerRun.Role) || request.FromID != spine.ReviewRequestFromID(revision, reviewerRun.Role) || request.Input == "" {
+	if reviewerRun.MessageID != request.ID || request.ID != coding.ReviewRequestMessageID(job.ID, revision, reviewerRun.Role) || request.FromID != coding.ReviewRequestFromID(revision, reviewerRun.Role) || request.Input == "" {
 		t.Fatalf("review request Message -> AgentRun chain run=%#v request=%#v", reviewerRun.AgentRun, request)
 	}
 	prepareReviewBoundaryIntegration(t, store, reviewerRun)
@@ -1279,7 +1279,7 @@ func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	}
 }
 
-func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
+func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run coding.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
 	prepareReviewBoundaryResourcesIntegration(t, store, run)
@@ -1292,7 +1292,7 @@ func prepareReviewBoundaryIntegration(t *testing.T, store postgres.Store, run sp
 	}
 }
 
-func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Store, run spine.ReviewRunView) {
+func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Store, run coding.ReviewRunView) {
 	t.Helper()
 	ctx := context.Background()
 	sandbox, err := store.GetOrCreateSandboxAction(ctx, run.Sandbox.ID, spine.ActionSandboxCreate)
@@ -1324,7 +1324,7 @@ func prepareReviewBoundaryResourcesIntegration(t *testing.T, store postgres.Stor
 	}
 }
 
-func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (spine.CodingJob, string, string) {
+func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix string) (coding.Job, string, string) {
 	t.Helper()
 	ctx := context.Background()
 	start, revision := strings.Repeat("a", 40), strings.Repeat("b", 40)
@@ -1340,7 +1340,7 @@ func prepareReviewIntegrationJob(t *testing.T, store postgres.Store, suffix stri
 	implementationRun := completeNextIntegrationRun(t, store, job.ID, "thread-"+job.ID, "turn-"+job.ID)
 	evidence := integrationEvidence(implementationRun.ID, "git-revision", "", "", revision, "2")
 	evidence.AgentRunID = implementationRun.ID
-	if err := store.RecordRevisionObservation(ctx, job.ID, implementationRun.ID, spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, evidence); err != nil {
+	if err := store.RecordRevisionObservation(ctx, job.ID, implementationRun.ID, gitworkspace.Observation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("c", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}, evidence); err != nil {
 		t.Fatalf("Revision observation: %v", err)
 	}
 	job, err = store.CodingJob(ctx, job.ID)
@@ -1372,7 +1372,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
-	observation := spine.RevisionObservation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: branch, StartedAt: now, FinishedAt: now}
+	observation := gitworkspace.Observation{ComparisonBase: start, Revision: revision, Tree: strings.Repeat("8", 40), Branch: branch, StartedAt: now, FinishedAt: now}
 	initialEvidence := integrationEvidence(initialRun.ID, "git-revision", "", "", revision, "9")
 	initialEvidence.AgentRunID = initialRun.ID
 	if err := store.RecordRevisionObservation(ctx, job.ID, initialRun.ID, observation, initialEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
@@ -1701,7 +1701,7 @@ func TestClosedAdmissionRejectsLateRevisionObservation(t *testing.T) {
 
 	observedJob, threadID := prepareTransportIntegrationJob(t, store, "closed-revision-observation")
 	run := completeNextIntegrationRun(t, store, observedJob.ID, threadID, "turn-closed-observation")
-	observation := spine.RevisionObservation{
+	observation := gitworkspace.Observation{
 		ComparisonBase: observedJob.Revision, Revision: strings.Repeat("9", 40), Tree: strings.Repeat("8", 40),
 		Branch: observedJob.Branch, StartedAt: now, FinishedAt: now,
 	}

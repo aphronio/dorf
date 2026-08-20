@@ -17,6 +17,7 @@ import (
 
 	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlplane"
 	"github.com/aphronio/dorf/internal/doctor"
@@ -614,7 +615,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if len(args) < 2 || args[0] != "run" {
 		return fmt.Errorf("workflow requires: run codebase-investigation")
 	}
-	if args[1] != string(spine.WorkflowCodebaseInvestigation) {
+	if args[1] != string(investigation.Workflow) {
 		return fmt.Errorf("unsupported workflow %q", args[1])
 	}
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
@@ -736,10 +737,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		defer stop()
 		return followJob(followCtx, store, client, evidenceStore, job.ID, stdout)
 	}
-	if job.Workflow == spine.WorkflowCodebaseInvestigation {
+	if job.Workflow == investigation.Workflow {
 		return inspectCodebaseInvestigation(ctx, store, client, job, profile, *jsonOutput, stdout)
 	}
-	if job.Workflow != spine.WorkflowCodingToProposal {
+	if job.Workflow != coding.Workflow {
 		return fmt.Errorf("inspect does not support workflow %q", job.Workflow)
 	}
 	snapshot, err := workflow.LoadSnapshot(ctx, store, set.Arg(0))
@@ -981,7 +982,7 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	// This interactive command is the outcome authority; unlike a workflow
 	// executor, it has no Absurd claim to revalidate before the write.
 	direct := (outcomeapp.Service{Store: store, GitHub: githubClient}).WithClaimCheck(func(context.Context) error { return nil })
-	receipt, created, err := direct.Record(ctx, strings.TrimSpace(args[0]), spine.OutcomeAbandoned)
+	receipt, created, err := direct.Record(ctx, strings.TrimSpace(args[0]), coding.OutcomeAbandoned)
 	if err != nil {
 		return err
 	}

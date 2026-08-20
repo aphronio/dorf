@@ -38,7 +38,7 @@ type RuntimeProfile struct {
 
 func CodingToProposalDefinition() Definition {
 	return Definition{
-		Name: spine.WorkflowCodingToProposal, Revision: spine.CodingToProposalRevision,
+		Name: coding.Workflow, Revision: coding.WorkflowRevision,
 		Presentation: Presentation{
 			Operations: map[string]string{
 				string(WorkComplete):        "Complete",
@@ -55,7 +55,7 @@ func CodingToProposalDefinition() Definition {
 
 func CodebaseInvestigationDefinition() Definition {
 	return Definition{
-		Name: spine.WorkflowCodebaseInvestigation, Revision: spine.CodebaseInvestigationRevision,
+		Name: investigation.Workflow, Revision: investigation.WorkflowRevision,
 		Presentation: Presentation{
 			Operations: map[string]string{
 				string(InvestigationWorkComplete):  "Complete",

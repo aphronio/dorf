@@ -22,13 +22,13 @@ func TestLostClaimCannotRecordReviewFeedback(t *testing.T) {
 func TestLostClaimCannotRecordReviewPolicy(t *testing.T) {
 	claimLost := errors.New("claim lost")
 	service := Service{claimCheck: func(context.Context) error { return claimLost }}
-	if err := service.recordReviewPolicy(context.Background(), spine.ReviewPlanRecord{}); !errors.Is(err, claimLost) {
+	if err := service.recordReviewPolicy(context.Background(), ReviewPlanRecord{}); !errors.Is(err, claimLost) {
 		t.Fatalf("record review policy error = %v", err)
 	}
 }
 
 func TestReviewHarnessControllerMustMatchDerivedOwner(t *testing.T) {
-	expected := spine.ReviewControllerID("run-1", "sandbox-1", "owner-nonce")
+	expected := ReviewControllerID("run-1", "sandbox-1", "owner-nonce")
 	if err := validateReviewController(expected, spine.HarnessBinding{ControllerID: expected}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +46,10 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	blobs := blob.Store{Root: t.TempDir()}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	post := spine.ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-	run := spine.ReviewRunView{AgentRun: spine.AgentRun{
+	post := ReviewCheckoutObservation{Revision: revision, Tree: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	run := ReviewRunView{AgentRun: spine.AgentRun{
 		ID: "agent-run-review", JobID: "job-1", InputRevision: revision, Role: "critical-boundary",
-		Capability: spine.ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
+		Capability: ReviewReadOnlyCapability, Harness: "codex", ThreadID: "thread-1", TurnID: "turn-1",
 		TurnOutcome: "completed", State: spine.AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
 

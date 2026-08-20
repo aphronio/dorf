@@ -75,7 +75,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact sp
 		}
 		return investigation.Draft{}, false, err
 	}
-	if run.WorkflowName != spine.WorkflowCodebaseInvestigation || run.WorkflowRevision != spine.CodebaseInvestigationRevision || run.Role != "investigate" ||
+	if run.WorkflowName != investigation.Workflow || run.WorkflowRevision != investigation.WorkflowRevision || run.Role != "investigate" ||
 		run.State != spine.AgentRunCompleted || run.TurnID == "" || run.TurnOutcome != "completed" || run.InputRevision != run.Revision ||
 		!run.StartedAt.Valid || !run.FinishedAt.Valid {
 		return investigation.Draft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")

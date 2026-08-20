@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
-func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, spine.CodingJob, string) {
+func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, coding.Job, string) {
 	t.Helper()
 	_, store, _ := testDatabase(t)
 	job, revision, _ := prepareReviewIntegrationJob(t, store, "cleanup-publication-"+label)
@@ -22,7 +22,7 @@ func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, spin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordReviewPolicy(context.Background(), spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
+	if err := store.RecordReviewPolicy(context.Background(), coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	return store, job, revision

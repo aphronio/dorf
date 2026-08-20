@@ -18,7 +18,7 @@ type Store interface {
 
 type Externals interface {
 	RepositoryRestore(context.Context, spine.Job, spine.Sandbox, Source, []byte) error
-	RepositoryRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
+	RepositoryRevision(context.Context, spine.Job, string, string) (gitworkspace.Observation, error)
 }
 
 // VerifyRepositoryUnchanged proves the investigation left the admitted exact

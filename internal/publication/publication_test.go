@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/incus"
 	policy "github.com/aphronio/dorf/internal/review"
@@ -36,7 +37,7 @@ func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T
 		{Message: spine.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, AgentRun: spine.AgentRun{ID: "run-after", MessageID: "after"}},
 	}
 
-	retained := spine.PublicationDeliveries(deliveries, cutoff)
+	retained := coding.PublicationDeliveries(deliveries, cutoff)
 	if len(retained) != 1 || retained[0].Message.ID != "before" || retained[0].AgentRun.ID != "run-before" {
 		t.Fatalf("retained Deliveries=%#v", retained)
 	}
@@ -62,7 +63,7 @@ func TestGitRepositoryPushUsesRecordedOIDAndRefWithoutCredentialInArgvOrSandbox(
 		},
 	}
 	revision := strings.Repeat("a", 40)
-	job := spine.CodingJob{Job: spine.Job{ID: "job-exact"}, Revision: revision, Branch: "dorf/issue-43", GitHubRepository: "aphronio/dorf"}
+	job := coding.Job{Job: spine.Job{ID: "job-exact"}, Revision: revision, Branch: "dorf/issue-43", GitHubRepository: "aphronio/dorf"}
 	if err := repository.Push(context.Background(), job, token); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +91,7 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 				index++
 				return result, nil
 			}))}
-			job := spine.CodingJob{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}
+			job := coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}
 			got, err := repository.Relation(context.Background(), job, strings.Repeat("a", 40))
 			if err != nil || got != name {
 				t.Fatalf("relation=%s err=%v", got, err)
@@ -100,7 +101,7 @@ func TestGitRepositoryRelationAllowsOnlyBehindAndClassifiesAheadDivergent(t *tes
 	repository := GitRepository{Workspace: "/workspace/job", Ownership: publicationOwner, Sandbox: publicationSandbox(sandboxRunner(func(context.Context, string, []byte, ...string) (incus.Result, error) {
 		return incus.Result{ExitCode: 1}, nil
 	}))}
-	if _, err := repository.Relation(context.Background(), spine.CodingJob{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40)); err == nil {
+	if _, err := repository.Relation(context.Background(), coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40)); err == nil {
 		t.Fatal("unknown remote object did not fail closed")
 	}
 }
@@ -114,7 +115,7 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 		}
 		return incus.Result{ExitCode: 128, Stderr: strings.Repeat("fatal ancestry failure ", 80)}, nil
 	}))}
-	_, err := repository.Relation(context.Background(), spine.CodingJob{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
+	_, err := repository.Relation(context.Background(), coding.Job{Job: spine.Job{ID: "job"}, Revision: strings.Repeat("b", 40)}, strings.Repeat("a", 40))
 	if err == nil || !strings.Contains(err.Error(), "exited 128") || !strings.Contains(err.Error(), "[truncated]") || len(err.Error()) > 620 {
 		t.Fatalf("merge-base operational error=%q", err)
 	}
@@ -122,8 +123,8 @@ func TestGitRepositoryRelationTreatsMergeBaseOperationalFailureAsError(t *testin
 
 func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := spine.CodingJob{Job: spine.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
-	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact revision and selected review settled"}
+	job := coding.Job{Job: spine.Job{ID: "job-1", Goal: "Implement durable publication"}, Revision: revision, Branch: "dorf/head", BaseBranch: "greenfield"}
+	assessment := coding.ReadinessAssessment{Ready: true, Revision: revision, Reason: "exact revision and selected review settled"}
 	evidence := []spine.Evidence{{ID: "e-git", Digest: strings.Repeat("1", 64)}}
 	first := Body(job, assessment, evidence, nil, nil)
 	second := Body(job, assessment, evidence, nil, nil)
@@ -134,13 +135,13 @@ func TestBodyIsDeterministicExactRevisionProjection(t *testing.T) {
 
 func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := spine.CodingJob{Job: spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
+	job := coding.Job{Job: spine.Job{ID: "job-review", Goal: "Preserve opaque review feedback"}, Revision: revision, Branch: "dorf/review", BaseBranch: "main"}
 	role := "critical-boundary"
-	requestID := spine.ReviewRequestMessageID(job.ID, revision, role)
+	requestID := coding.ReviewRequestMessageID(job.ID, revision, role)
 	runID := spine.AgentRunID(requestID)
 	feedbackMessageID := spine.MessageID(job.ID, spine.MessageFromAgent, runID)
 	observedID := spine.EvidenceID(runID, "review-observation")
-	runs := []spine.ReviewRunView{{
+	runs := []coding.ReviewRunView{{
 		AgentRun: spine.AgentRun{
 			ID:            runID,
 			JobID:         job.ID,
@@ -148,7 +149,7 @@ func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 			Role:          role,
 			InputRevision: revision,
 		},
-		Request: spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: spine.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
+		Request: spine.Message{ID: requestID, JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: coding.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: spine.MessageFollow},
 	}, {
 		AgentRun: spine.AgentRun{ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
 		Request:  spine.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: spine.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: spine.MessageFollow},
@@ -157,8 +158,8 @@ func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 		{ID: observedID, Digest: strings.Repeat("2", 64)},
 		{ID: "e-unselected", Digest: strings.Repeat("3", 64)},
 	}
-	assessment := spine.ReadinessAssessment{Ready: true, Revision: revision, Reason: "review feedback handled"}
-	plan := &spine.ReviewPlanRecord{JobID: job.ID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
+	assessment := coding.ReadinessAssessment{Ready: true, Revision: revision, Reason: "review feedback handled"}
+	plan := &coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 
 	body := Body(job, assessment, evidence, plan, runs)
 	for _, want := range []string{role, runID, feedbackMessageID, observedID, strings.Repeat("2", 64)} {
@@ -176,19 +177,19 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	currentRevision := strings.Repeat("a", 40)
 	oldRevision := strings.Repeat("f", 40)
 	role := "critical-boundary"
-	currentRunID := spine.AgentRunID(spine.ReviewRequestMessageID(jobID, currentRevision, role))
-	oldRunID := spine.AgentRunID(spine.ReviewRequestMessageID(jobID, oldRevision, role))
-	runs := []spine.ReviewRunView{
+	currentRunID := spine.AgentRunID(coding.ReviewRequestMessageID(jobID, currentRevision, role))
+	oldRunID := spine.AgentRunID(coding.ReviewRequestMessageID(jobID, oldRevision, role))
+	runs := []coding.ReviewRunView{
 		{AgentRun: spine.AgentRun{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, State: spine.AgentRunCompleted}},
 		// The stale same-Role run deliberately follows the current run.
 		{AgentRun: spine.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: spine.AgentRunFailed}},
 	}
 
 	observedID := spine.EvidenceID(currentRunID, "review-observation")
-	plan := &spine.ReviewPlanRecord{JobID: jobID, Revision: currentRevision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
+	plan := &coding.ReviewPlanRecord{JobID: jobID, Revision: currentRevision, Plan: policy.ReviewPlan{Decision: "selected", Roles: []policy.Role{policy.Role(role)}}}
 	body := Body(
-		spine.CodingJob{Job: spine.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
-		spine.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
+		coding.Job{Job: spine.Job{ID: jobID, Goal: "keep publication exact"}, Revision: currentRevision, Branch: "dorf/exact", BaseBranch: "main"},
+		coding.ReadinessAssessment{Ready: true, Revision: currentRevision, Reason: "exact review settled"},
 		[]spine.Evidence{{ID: observedID, Digest: strings.Repeat("1", 64)}},
 		plan,
 		runs,
@@ -212,12 +213,12 @@ func TestPublicationTextProjectionRemainsValidUTF8AtLimits(t *testing.T) {
 
 func TestPullRequestExactIdentityAllowsOneAndRejectsConflicts(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	job := spine.CodingJob{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
+	job := coding.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: revision}
 	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: "title", State: "open", Repository: "aphronio/dorf", Head: "dorf/head", HeadSHA: revision, Base: "greenfield", Body: "body"}
 	if err := validatePull(job, exact, nil, exact.Title); err != nil {
 		t.Fatal(err)
 	}
-	stored := &spine.GitHubProposal{Number: 43}
+	stored := &coding.Proposal{Number: 43}
 	if err := validatePull(job, exact, stored, exact.Title); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +272,7 @@ func TestPushRecoveryAdoptsEqualPushesMissingOrBehindAndBlocksUnsafeHistory(t *t
 }
 
 func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testing.T) {
-	job := spine.CodingJob{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
+	job := coding.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
 	title := "exact title"
 	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
 	if decision, _, err := planPull(job, nil, nil, title, exact.Body); err != nil || decision != "create" {
@@ -282,7 +283,7 @@ func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testin
 	}
 	stale := exact
 	stale.Body = "old body"
-	stored := &spine.GitHubProposal{Number: 43}
+	stored := &coding.Proposal{Number: 43}
 	if decision, pull, err := planPull(job, []githubapi.PullRequest{stale}, stored, title, exact.Body); err != nil || decision != "update" || pull.Number != 43 {
 		t.Fatalf("same-PR refresh=%s pull=%#v err=%v", decision, pull, err)
 	}
@@ -295,7 +296,7 @@ func TestPullRecoveryPlansZeroCreateOneAdoptOrUpdateAndDuplicatesBlock(t *testin
 }
 
 func TestPullRecoveryBlocksClosedWrongBaseAndDraftButRefreshesTitle(t *testing.T) {
-	job := spine.CodingJob{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
+	job := coding.Job{GitHubRepository: "aphronio/dorf", Branch: "dorf/head", BaseBranch: "greenfield", Revision: strings.Repeat("a", 40)}
 	title := "exact title"
 	exact := githubapi.PullRequest{Number: 43, URL: "https://github.com/aphronio/dorf/pull/43", Title: title, State: "open", Repository: job.GitHubRepository, Head: job.Branch, HeadSHA: job.Revision, Base: job.BaseBranch, Body: "exact body"}
 	for name, mutate := range map[string]func(*githubapi.PullRequest){
@@ -341,7 +342,7 @@ func TestPublicationRefusesDurableRecordWithoutClaimCheck(t *testing.T) {
 func TestPublicationLostClaimDoesNotRecordAttention(t *testing.T) {
 	claimLost := errors.New("claim lost")
 	service := (Service{}).WithClaimCheck(func(context.Context) error { return claimLost })
-	err := service.block(context.Background(), spine.CodingJob{Job: spine.Job{ID: "job-1"}, Revision: "revision-1"}, spine.Action{ID: "action-1"}, "stale attention")
+	err := service.block(context.Background(), coding.Job{Job: spine.Job{ID: "job-1"}, Revision: "revision-1"}, spine.Action{ID: "action-1"}, "stale attention")
 	if !errors.Is(err, claimLost) {
 		t.Fatalf("block error = %v", err)
 	}

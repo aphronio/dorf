@@ -66,36 +66,36 @@ func (w Work) Description() string {
 // database read. The reads are not a database transaction; every operation
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
-	Job         spine.CodingJob
+	Job         coding.Job
 	Sandboxes   []spine.Sandbox
 	MainSandbox spine.Sandbox
 	Actions     []spine.Action
 	Delivery    *spine.Delivery
 	Deliveries  []spine.Delivery
-	Revisions   []spine.Revision
+	Revisions   []coding.Revision
 	Evidence    []spine.Evidence
-	ReviewPlans []spine.ReviewPlanRecord
-	Proposal    *spine.GitHubProposal
-	Outcome     *spine.JobOutcome
+	ReviewPlans []coding.ReviewPlanRecord
+	Proposal    *coding.Proposal
+	Outcome     *coding.Outcome
 }
 
 // Projection is a disposable explanation derived from one Snapshot. It is
 // shared by execution and inspection and is never persisted.
 type Projection struct {
-	CurrentWork Work                      `json:"current_work"`
-	Readiness   spine.ReadinessAssessment `json:"readiness"`
+	CurrentWork Work                       `json:"current_work"`
+	Readiness   coding.ReadinessAssessment `json:"readiness"`
 }
 
 // Project derives readiness and the one next coding operation once. Once
 // publication starts, its admitted input boundary is retained so a later
 // accepted Message cannot strand reconciliation.
 func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
-	deliveries := spine.PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
+	deliveries := coding.PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
 	reviewRuns, err := s.currentReviewRuns()
 	if err != nil {
 		return Projection{}, err
 	}
-	readiness := spine.AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
+	readiness := coding.AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
 	work := decideCurrentWorkWithReviewRuns(s, reviewRuns)
 	if work.Kind == WorkPublishProposal && !readiness.Ready {
 		work.Kind = WorkAttention
@@ -171,7 +171,7 @@ func LoadSnapshot(ctx context.Context, store postgres.Store, jobID string) (Snap
 	return snapshot, nil
 }
 
-func (s Snapshot) currentReviewPlan() *spine.ReviewPlanRecord {
+func (s Snapshot) currentReviewPlan() *coding.ReviewPlanRecord {
 	for i := range s.ReviewPlans {
 		if s.ReviewPlans[i].Revision == s.Job.Revision {
 			return &s.ReviewPlans[i]
@@ -180,12 +180,12 @@ func (s Snapshot) currentReviewPlan() *spine.ReviewPlanRecord {
 	return nil
 }
 
-func (s Snapshot) currentReviewRuns() ([]spine.ReviewRunView, error) {
-	all, err := spine.ReviewRuns(s.Deliveries, s.Sandboxes)
+func (s Snapshot) currentReviewRuns() ([]coding.ReviewRunView, error) {
+	all, err := coding.ReviewRuns(s.Deliveries, s.Sandboxes)
 	if err != nil {
 		return nil, err
 	}
-	runs := make([]spine.ReviewRunView, 0, len(all))
+	runs := make([]coding.ReviewRunView, 0, len(all))
 	for _, run := range all {
 		if run.InputRevision == s.Job.Revision {
 			runs = append(runs, run)
@@ -211,7 +211,7 @@ func decideCurrentWork(f Snapshot) Work {
 	return decideCurrentWorkWithReviewRuns(f, reviewRuns)
 }
 
-func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunView) Work {
+func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []coding.ReviewRunView) Work {
 	work := func(kind WorkKind, factID, detail string) Work {
 		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
 	}
@@ -251,7 +251,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	// AgentRuns before consuming the feedback Messages they produce.
 	plan := f.currentReviewPlan()
 	if plan != nil {
-		byRole := make(map[string]spine.ReviewRunView, len(reviewRuns))
+		byRole := make(map[string]coding.ReviewRunView, len(reviewRuns))
 		for _, run := range reviewRuns {
 			byRole[run.Role] = run
 		}
@@ -328,7 +328,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []spine.ReviewRunVie
 	// The ReviewPlan is the final deterministic decision. There is no pending
 	// plan or a separate handoff fact.
 	if plan == nil {
-		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, spine.ReviewPolicyAttentionSource(f.Job.Revision), ""))
+		return work(WorkChooseReview, f.Job.Revision, attentionDetail(f.Job, coding.ReviewPolicyAttentionSource(f.Job.Revision), ""))
 	}
 
 	if f.Proposal != nil && f.Proposal.ProposedRevision == f.Job.Revision {
@@ -377,7 +377,7 @@ func publicationDetail(f Snapshot, fallback string) string {
 	return fallback
 }
 
-func attentionDetail(job spine.CodingJob, source, fallback string) string {
+func attentionDetail(job coding.Job, source, fallback string) string {
 	if job.WorkflowAttentionSource == source && job.WorkflowAttention != "" {
 		return job.WorkflowAttention
 	}
@@ -417,7 +417,7 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *spine.A
 		if latestInput == nil || message.Sequence >= latestInputSequence {
 			latestInput, latestInputSequence = run, message.Sequence
 		}
-		if spine.StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
+		if coding.StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
 			latestTurnStart, latestTurnStartSequence = run, message.Sequence
 		}
 	}

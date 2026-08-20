@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Store interface {
-	CodingJob(context.Context, string) (spine.CodingJob, error)
-	Proposal(context.Context, string) (*spine.GitHubProposal, error)
-	Outcome(context.Context, string) (*spine.JobOutcome, error)
-	RecordOutcome(context.Context, spine.JobOutcome) (spine.JobOutcome, bool, error)
+	CodingJob(context.Context, string) (coding.Job, error)
+	Proposal(context.Context, string) (*coding.Proposal, error)
+	Outcome(context.Context, string) (*coding.Outcome, error)
+	RecordOutcome(context.Context, coding.Outcome) (coding.Outcome, bool, error)
 	WithJobFence(context.Context, string, func() error) error
 }
 
@@ -35,8 +35,8 @@ func (s Service) WithClaimCheck(check func(context.Context) error) Service {
 	return s
 }
 
-func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
-	var receipt spine.JobOutcome
+func (s Service) Record(ctx context.Context, jobID string, requested coding.OutcomeKind) (coding.Outcome, bool, error) {
+	var receipt coding.Outcome
 	var created bool
 	err := s.Store.WithJobFence(ctx, jobID, func() error {
 		var err error
@@ -46,57 +46,57 @@ func (s Service) Record(ctx context.Context, jobID string, requested spine.JobOu
 	return receipt, created, err
 }
 
-func (s Service) recordFenced(ctx context.Context, jobID string, requested spine.JobOutcomeKind) (spine.JobOutcome, bool, error) {
-	if requested != spine.OutcomeAccepted && requested != spine.OutcomeRejected && requested != spine.OutcomeAbandoned {
-		return spine.JobOutcome{}, false, fmt.Errorf("outcome must be accepted, rejected, or abandoned")
+func (s Service) recordFenced(ctx context.Context, jobID string, requested coding.OutcomeKind) (coding.Outcome, bool, error) {
+	if requested != coding.OutcomeAccepted && requested != coding.OutcomeRejected && requested != coding.OutcomeAbandoned {
+		return coding.Outcome{}, false, fmt.Errorf("outcome must be accepted, rejected, or abandoned")
 	}
 	existing, err := s.Store.Outcome(ctx, jobID)
 	if err != nil {
-		return spine.JobOutcome{}, false, err
+		return coding.Outcome{}, false, err
 	}
 	if existing != nil {
 		if existing.Kind != requested {
-			return spine.JobOutcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", jobID, existing.Kind, requested)
+			return coding.Outcome{}, false, fmt.Errorf("Job %s already has immutable %s outcome; refusing conflicting %s outcome", jobID, existing.Kind, requested)
 		}
 		return *existing, false, nil
 	}
 	job, err := s.Store.CodingJob(ctx, jobID)
 	if err != nil {
-		return spine.JobOutcome{}, false, err
+		return coding.Outcome{}, false, err
 	}
 	proposal, err := s.Store.Proposal(ctx, jobID)
 	if err != nil {
-		return spine.JobOutcome{}, false, err
+		return coding.Outcome{}, false, err
 	}
-	receipt := spine.JobOutcome{JobID: job.ID, Kind: requested}
+	receipt := coding.Outcome{JobID: job.ID, Kind: requested}
 	if proposal == nil {
-		if requested != spine.OutcomeAbandoned {
-			return spine.JobOutcome{}, false, fmt.Errorf("accepted and rejected outcomes require one exact current GitHub proposal")
+		if requested != coding.OutcomeAbandoned {
+			return coding.Outcome{}, false, fmt.Errorf("accepted and rejected outcomes require one exact current GitHub proposal")
 		}
 	} else {
 		if proposal.ProposedRevision != job.Revision {
-			return spine.JobOutcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
+			return coding.Outcome{}, false, fmt.Errorf("Job outcome requires one exact current GitHub proposal")
 		}
 		authority := githubapi.Authority{Repository: job.GitHubRepository, InstallationID: job.GitHubInstallation}
 		pull, err := s.GitHub.PullRequest(ctx, authority, proposal.Number)
 		if err != nil {
-			return spine.JobOutcome{}, false, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
+			return coding.Outcome{}, false, fmt.Errorf("observe exact GitHub pull request #%d: %w", proposal.Number, err)
 		}
 		if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository || pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
-			return spine.JobOutcome{}, false, fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
+			return coding.Outcome{}, false, fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")
 		}
 		switch requested {
-		case spine.OutcomeAccepted:
+		case coding.OutcomeAccepted:
 			if pull.State != "closed" || !pull.Merged || pull.MergeCommitOID == "" {
-				return spine.JobOutcome{}, false, fmt.Errorf("accepted outcome requires exact pull request #%d to report merged", pull.Number)
+				return coding.Outcome{}, false, fmt.Errorf("accepted outcome requires exact pull request #%d to report merged", pull.Number)
 			}
-		case spine.OutcomeRejected:
+		case coding.OutcomeRejected:
 			if pull.State != "closed" || pull.Merged {
-				return spine.JobOutcome{}, false, fmt.Errorf("rejected outcome requires exact pull request #%d to report closed and unmerged", pull.Number)
+				return coding.Outcome{}, false, fmt.Errorf("rejected outcome requires exact pull request #%d to report closed and unmerged", pull.Number)
 			}
-		case spine.OutcomeAbandoned:
+		case coding.OutcomeAbandoned:
 			if pull.Merged {
-				return spine.JobOutcome{}, false, fmt.Errorf("abandoned outcome refuses exact pull request #%d because it is already merged", pull.Number)
+				return coding.Outcome{}, false, fmt.Errorf("abandoned outcome refuses exact pull request #%d because it is already merged", pull.Number)
 			}
 		}
 		receipt.ObservedState = pull.State
@@ -109,10 +109,10 @@ func (s Service) recordFenced(ctx context.Context, jobID string, requested spine
 	}
 	receipt.ObservedAt = now().UTC()
 	if s.claimCheck == nil {
-		return spine.JobOutcome{}, false, fmt.Errorf("outcome authority check is not configured")
+		return coding.Outcome{}, false, fmt.Errorf("outcome authority check is not configured")
 	}
 	if err := s.claimCheck(ctx); err != nil {
-		return spine.JobOutcome{}, false, err
+		return coding.Outcome{}, false, err
 	}
 	return s.Store.RecordOutcome(ctx, receipt)
 }

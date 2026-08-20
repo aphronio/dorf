@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/coding"
 	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -34,9 +35,9 @@ type ProposalRuntime struct {
 }
 
 type ProposalObservationResultV1 struct {
-	Revision    string               `json:"revision"`
-	Outcome     spine.JobOutcomeKind `json:"outcome,omitempty"`
-	NewMessages int                  `json:"new_messages"`
+	Revision    string             `json:"revision"`
+	Outcome     coding.OutcomeKind `json:"outcome,omitempty"`
+	NewMessages int                `json:"new_messages"`
 }
 
 func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (ProposalObservationResultV1, error) {
@@ -64,9 +65,9 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	}
 	result := ProposalObservationResultV1{Revision: job.Revision}
 	if pull.State == "closed" {
-		result.Outcome = spine.OutcomeRejected
+		result.Outcome = coding.OutcomeRejected
 		if pull.Merged {
-			result.Outcome = spine.OutcomeAccepted
+			result.Outcome = coding.OutcomeAccepted
 		}
 		if _, _, err := r.Outcome.Record(ctx, jobID, result.Outcome); err != nil {
 			return ProposalObservationResultV1{}, err
@@ -157,7 +158,7 @@ func hasFeedbackReply(comments []githubapi.Comment, jobID string, commentID int6
 	return false
 }
 
-func validateExactProposal(job spine.CodingJob, proposal spine.GitHubProposal, pull githubapi.PullRequest) error {
+func validateExactProposal(job coding.Job, proposal coding.Proposal, pull githubapi.PullRequest) error {
 	if pull.Number != proposal.Number || pull.URL != proposal.URL || pull.Repository != job.GitHubRepository ||
 		pull.Head != job.Branch || pull.Base != job.BaseBranch || pull.HeadSHA != proposal.ProposedRevision {
 		return fmt.Errorf("GitHub pull request conflicts with the exact stored proposal identity or proposed Revision")

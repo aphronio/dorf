@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/spine"
 )
 
@@ -35,7 +36,7 @@ where job_id=$1
 
 type GetOutcomeRow struct {
 	JobID          string
-	Outcome        spine.JobOutcomeKind
+	Outcome        coding.OutcomeKind
 	ObservedState  string
 	ObservedMerged bool
 	MergeCommitOID string
@@ -90,7 +91,7 @@ returning job_id,outcome,coalesce(observed_state,'') as observed_state,observed_
 
 type InsertOutcomeParams struct {
 	JobID          string
-	Outcome        spine.JobOutcomeKind
+	Outcome        coding.OutcomeKind
 	ObservedState  string
 	ObservedMerged bool
 	MergeCommitOID string
@@ -99,7 +100,7 @@ type InsertOutcomeParams struct {
 
 type InsertOutcomeRow struct {
 	JobID          string
-	Outcome        spine.JobOutcomeKind
+	Outcome        coding.OutcomeKind
 	ObservedState  string
 	ObservedMerged bool
 	MergeCommitOID string

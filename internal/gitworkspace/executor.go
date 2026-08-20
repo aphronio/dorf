@@ -14,7 +14,7 @@ type ActionStore interface {
 
 type GitExternals interface {
 	RepositoryClone(context.Context, spine.Job, spine.Sandbox, string, string, string) error
-	RepositoryRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
+	RepositoryRevision(context.Context, spine.Job, string, string) (Observation, error)
 }
 
 // Executor composes Core execution with deterministic Git workspace operations
@@ -30,7 +30,7 @@ func NewExecutor(execution controlplane.Execution, store ActionStore, externals 
 	return Executor{Execution: execution, store: store, externals: externals, claimCheck: claimCheck}
 }
 
-func (s Executor) ObserveRevision(ctx context.Context, job spine.Job, branch, revision string) (spine.RevisionObservation, error) {
+func (s Executor) ObserveRevision(ctx context.Context, job spine.Job, branch, revision string) (Observation, error) {
 	return s.externals.RepositoryRevision(ctx, job, branch, revision)
 }
 

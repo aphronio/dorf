@@ -10,7 +10,6 @@ import (
 
 	policy "github.com/aphronio/dorf/internal/review"
 	provider "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/spine"
 )
 
 type Workspace struct {
@@ -119,29 +118,29 @@ func (m Workspace) ChangeFacts(ctx context.Context, owner provider.Ownership, ba
 	return policy.FactsFromPaths(baseRevision, revision, parts)
 }
 
-func (m Workspace) ObserveRevision(ctx context.Context, owner provider.Ownership, branch, comparisonBase string) (spine.RevisionObservation, error) {
+func (m Workspace) ObserveRevision(ctx context.Context, owner provider.Ownership, branch, comparisonBase string) (Observation, error) {
 	if !fullOID(comparisonBase) {
-		return spine.RevisionObservation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
+		return Observation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
 	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
 	if err != nil {
-		return spine.RevisionObservation{}, err
+		return Observation{}, err
 	}
 	if result.ExitCode != 0 {
-		return spine.RevisionObservation{}, &AttentionError{Reason: fmt.Sprintf("observe Git Revision needs attention: %s", strings.TrimSpace(result.Stderr))}
+		return Observation{}, &AttentionError{Reason: fmt.Sprintf("observe Git Revision needs attention: %s", strings.TrimSpace(result.Stderr))}
 	}
 	lines := strings.Split(strings.TrimSpace(result.Stdout), "\n")
 	if len(lines) != 6 {
-		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation is incomplete"}
+		return Observation{}, &AttentionError{Reason: "Git Revision observation is incomplete"}
 	}
 	startedNS, startErr := strconv.ParseInt(lines[4], 10, 64)
 	finishedNS, finishErr := strconv.ParseInt(lines[5], 10, 64)
 	if startErr != nil || finishErr != nil || finishedNS < startedNS {
-		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation has invalid bounded timing"}
+		return Observation{}, &AttentionError{Reason: "Git Revision observation has invalid bounded timing"}
 	}
-	observation := spine.RevisionObservation{ComparisonBase: lines[0], Revision: lines[1], Tree: lines[2], Branch: lines[3], StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC()}
+	observation := Observation{ComparisonBase: lines[0], Revision: lines[1], Tree: lines[2], Branch: lines[3], StartedAt: time.Unix(0, startedNS).UTC(), FinishedAt: time.Unix(0, finishedNS).UTC()}
 	if observation.ComparisonBase != comparisonBase || observation.Branch != branch || !fullOID(observation.Revision) || !fullOID(observation.Tree) {
-		return spine.RevisionObservation{}, &AttentionError{Reason: "Git Revision observation conflicts with admitted branch or comparison base"}
+		return Observation{}, &AttentionError{Reason: "Git Revision observation conflicts with admitted branch or comparison base"}
 	}
 	return observation, nil
 }

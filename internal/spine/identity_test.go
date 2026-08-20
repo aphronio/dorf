@@ -1,7 +1,6 @@
 package spine
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -30,11 +29,5 @@ func TestStableIdentitiesDoNotContainGoalOrSecrets(t *testing.T) {
 	}
 	if ArtifactID(jobA, "report.md") != ArtifactID(jobA, "report.md") || ArtifactID(jobA, "report.md") == ArtifactID(jobA, "trace.json") || ArtifactID(jobA, "report.md") == ArtifactID(jobB+"-other", "report.md") {
 		t.Fatal("Artifact identity is not stable and Job/name-scoped")
-	}
-	revisionA := strings.Repeat("a", 40)
-	revisionB := strings.Repeat("b", 40)
-	role := "critical-boundary"
-	if ReviewRequestMessageID(jobA, revisionA, role) != MessageID(jobA, MessageFromWorkflow, ReviewRequestFromID(revisionA, role)) || ReviewRequestMessageID(jobA, revisionA, role) == ReviewRequestMessageID(jobA, revisionB, role) {
-		t.Fatal("review request Message identity is not stable and Revision-scoped")
 	}
 }

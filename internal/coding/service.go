@@ -21,12 +21,12 @@ const (
 )
 
 type Store interface {
-	RecordRevisionObservation(context.Context, string, string, spine.RevisionObservation, spine.Evidence) error
+	RecordRevisionObservation(context.Context, string, string, gitworkspace.Observation, spine.Evidence) error
 	SetWorkflowAttention(context.Context, string, string, string) error
 	Evidence(context.Context, string) ([]spine.Evidence, error)
 	Actions(context.Context, string) ([]spine.Action, error)
-	RecordReviewPolicy(context.Context, spine.ReviewPlanRecord) error
-	ReviewRun(context.Context, string) (spine.ReviewRunView, error)
+	RecordReviewPolicy(context.Context, ReviewPlanRecord) error
+	ReviewRun(context.Context, string) (ReviewRunView, error)
 	RecordReviewFeedback(context.Context, string, spine.HarnessTurn, spine.Evidence) (spine.Message, bool, error)
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
@@ -38,18 +38,18 @@ type Store interface {
 
 type Externals interface {
 	Harness() string
-	RepositoryChangeFacts(context.Context, spine.CodingJob) (policy.ChangeFacts, error)
-	PrepareReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) error
-	VerifyReviewCheckout(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.ReviewCheckoutObservation, error)
-	ReviewInitialTurn(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessBinding, error)
-	ReviewRecover(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessBinding, error)
-	ReviewTurns(context.Context, spine.CodingJob, spine.ReviewRunView) (spine.HarnessHistory, error)
-	ReviewWait(context.Context, spine.CodingJob, spine.ReviewRunView, string) (spine.HarnessBinding, error)
+	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
+	PrepareReviewCheckout(context.Context, Job, ReviewRunView) error
+	VerifyReviewCheckout(context.Context, Job, ReviewRunView) (ReviewCheckoutObservation, error)
+	ReviewInitialTurn(context.Context, Job, ReviewRunView) (spine.HarnessBinding, error)
+	ReviewRecover(context.Context, Job, ReviewRunView) (spine.HarnessBinding, error)
+	ReviewTurns(context.Context, Job, ReviewRunView) (spine.HarnessHistory, error)
+	ReviewWait(context.Context, Job, ReviewRunView, string) (spine.HarnessBinding, error)
 }
 
 type GitWorkspace interface {
 	gitworkspace.Execution
-	ObserveRevision(context.Context, spine.Job, string, string) (spine.RevisionObservation, error)
+	ObserveRevision(context.Context, spine.Job, string, string) (gitworkspace.Observation, error)
 }
 
 // Service owns Revision and review execution for the
@@ -69,7 +69,7 @@ func NewService(workspace GitWorkspace, store Store, externals Externals, blobs 
 
 func (s Service) BlobStore() blob.Store { return s.blobs }
 
-func (s Service) ObserveRevision(ctx context.Context, job spine.CodingJob, run spine.AgentRun) error {
+func (s Service) ObserveRevision(ctx context.Context, job Job, run spine.AgentRun) error {
 	observation, err := s.GitWorkspace.ObserveRevision(ctx, job.Job, job.Branch, job.Revision)
 	if err != nil {
 		if attentionNeeded(err) {
