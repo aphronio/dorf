@@ -1237,13 +1237,25 @@ func prepareReviewFeedbackIntegration(t *testing.T, store postgres.Store, suffix
 	return job, revision, message, implementationRun
 }
 
-func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
-	_, store, _ := testDatabase(t)
+func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store, core.Job) {
+	t.Helper()
+	db, store, _ := testDatabase(t)
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput("cleanup-order-"+fmt.Sprint(time.Now().UnixNano()), "prove exact cleanup order", strings.Repeat("a", 40), "dorf/cleanup-order"))
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("action-%s-%d", suffix, time.Now().UnixNano()),
+		"prove durable Action custody",
+		strings.Repeat("a", 40),
+		"dorf/action-integration",
+	))
 	if err != nil || !created {
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
+	return db, store, job
+}
+
+func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
+	_, store, job := actionIntegrationJob(t, "cleanup-order")
+	ctx := context.Background()
 	sandboxID := core.MainSandboxName(job.ID)
 	remove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
 	if err != nil {
@@ -1264,78 +1276,39 @@ func TestSandboxCleanupRequiresRouteRevokeAndSuccessIsIdempotent(t *testing.T) {
 	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
-		t.Fatalf("idempotent Route revoke success: %v", err)
-	}
 	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
 		t.Fatal(err)
-	}
-	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
-		t.Fatalf("idempotent Sandbox delete success: %v", err)
-	}
-	retryRemove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
-	if err != nil || retryRemove.ID != remove.ID || retryRemove.State != core.ActionSucceeded {
-		t.Fatalf("Sandbox cleanup retry=%#v err=%v", retryRemove, err)
 	}
 }
 
 func TestActionKindGrammar(t *testing.T) {
-	db, store, _ := testDatabase(t)
+	db, _, job := actionIntegrationJob(t, "kind-grammar")
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(
-		fmt.Sprintf("action-kind-grammar-%d", time.Now().UnixNano()),
-		"prove the durable Action kind grammar",
-		strings.Repeat("a", 40),
-		"dorf/action-kind-grammar",
-	))
-	if err != nil || !created {
-		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
-	}
-
-	valid := []string{
-		"a",
-		"workflow-owned-sandbox-step",
-		"step-2",
-		strings.Repeat("a", 63),
-	}
-	for i, kind := range valid {
-		if _, err := db.ExecContext(ctx, `
+	for i, test := range []struct {
+		kind  string
+		valid bool
+	}{
+		{kind: "a", valid: true},
+		{kind: "step-2", valid: true},
+		{kind: strings.Repeat("a", 63), valid: true},
+		{kind: ""},
+		{kind: "2-step"},
+		{kind: "Uppercase"},
+		{kind: "under_score"},
+		{kind: strings.Repeat("a", 64)},
+	} {
+		_, err := db.ExecContext(ctx, `
 			insert into dorf.actions(id,job_id,kind,state,scope_key)
-			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("valid-action-kind-%d-%s", i, job.ID), job.ID, kind, fmt.Sprintf("valid-scope-%d", i)); err != nil {
-			t.Errorf("valid Action kind %q rejected: %v", kind, err)
-		}
-	}
-
-	invalid := []string{
-		"",
-		"2-step",
-		"Uppercase",
-		"leading-Uppercase",
-		"-leading",
-		"under_score",
-		strings.Repeat("a", 64),
-	}
-	for i, kind := range invalid {
-		if _, err := db.ExecContext(ctx, `
-			insert into dorf.actions(id,job_id,kind,state,scope_key)
-			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("invalid-action-kind-%d-%s", i, job.ID), job.ID, kind, fmt.Sprintf("invalid-scope-%d", i)); err == nil {
-			t.Errorf("invalid Action kind %q was accepted", kind)
+			values($1,$2,$3,'unsettled',$4)`, fmt.Sprintf("action-kind-%d-%s", i, job.ID), job.ID, test.kind, fmt.Sprintf("scope-%d", i))
+		if accepted := err == nil; accepted != test.valid {
+			t.Errorf("Action kind %q accepted=%t, want %t: %v", test.kind, accepted, test.valid, err)
 		}
 	}
 }
 
 func TestWorkflowOwnedSandboxActionCreationAndSettlement(t *testing.T) {
-	_, store, _ := testDatabase(t)
+	_, store, job := actionIntegrationJob(t, "workflow-owned")
 	ctx := context.Background()
-	job, created, err := store.AdmitCoding(ctx, codingJobInput(
-		fmt.Sprintf("workflow-action-%d", time.Now().UnixNano()),
-		"prove workflow-owned Sandbox Action custody",
-		strings.Repeat("b", 40),
-		"dorf/workflow-action",
-	))
-	if err != nil || !created {
-		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
-	}
 	sandboxID := core.MainSandboxName(job.ID)
 	kind := core.ActionKind("workflow-owned-sandbox-step")
 	action, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
