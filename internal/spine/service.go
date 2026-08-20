@@ -29,8 +29,6 @@ type Store interface {
 type Externals interface {
 	Harness() string
 	SandboxCreate(context.Context, Job, Sandbox) error
-	RepositoryClone(context.Context, Job, Sandbox, string, string, string) error
-	RepositoryRestore(context.Context, Job, Sandbox, CodebaseInvestigationSource, []byte) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
 	AgentInitialTurn(context.Context, Job, Delivery, string) (HarnessBinding, error)
 	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
@@ -40,6 +38,12 @@ type Externals interface {
 	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
+}
+
+type RepositoryServiceExternals interface {
+	RepositoryClone(context.Context, Job, Sandbox, string, string, string) error
+	RepositoryRestore(context.Context, Job, Sandbox, CodebaseInvestigationSource, []byte) error
+	RepositoryRevision(context.Context, Job, string, string) (RevisionObservation, error)
 }
 
 type CodingStore interface {
@@ -55,20 +59,18 @@ type CodingStore interface {
 
 type RepositoryExternals interface {
 	RepositorySetup(context.Context, CodingJob, Action) (CommandObservation, []DeclaredCheck, error)
-	RepositoryRevision(context.Context, Job, string, string) (RevisionObservation, error)
 	RepositoryCheck(context.Context, CodingJob, Check) (CommandObservation, error)
 }
 
-// ServiceStore and ServiceExternals are the one complete construction
-// boundary for the coding service. Their embedded leaf interfaces stay small
-// so focused logic and tests can depend on only the capability they use.
-type ServiceStore interface {
+// CodingServiceStore and CodingServiceExternals add only the repository,
+// Check, and review capabilities owned by coding-to-proposal.
+type CodingServiceStore interface {
 	Store
 	CodingStore
 	ReviewStore
 }
 
-type ServiceExternals interface {
+type CodingServiceExternals interface {
 	Externals
 	RepositoryExternals
 	ReviewExternals
@@ -93,16 +95,16 @@ const (
 	BarrierSandboxDeleted        = "sandbox-deleted-before-record"
 )
 
-type Service struct {
-	store      ServiceStore
-	externals  ServiceExternals
+type ExecutionService struct {
+	store      Store
+	externals  Externals
 	barrier    FaultBarrier
 	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewService(store ServiceStore, externals ServiceExternals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) Service {
-	return Service{
+func NewExecutionService(store Store, externals Externals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
+	return ExecutionService{
 		store:      store,
 		externals:  externals,
 		barrier:    barrier,
@@ -111,16 +113,37 @@ func NewService(store ServiceStore, externals ServiceExternals, records blob.Sto
 	}
 }
 
-func (s Service) BlobStore() blob.Store { return s.blobs }
+// CodingService composes shared execution custody with the extra facts and
+// adapters required only by coding-to-proposal.
+type CodingService struct {
+	RepositoryService
+	store     CodingServiceStore
+	externals CodingServiceExternals
+}
 
-func (s Service) requireClaim(ctx context.Context) error {
+type RepositoryService struct {
+	ExecutionService
+	repository RepositoryServiceExternals
+}
+
+func NewRepositoryService(service ExecutionService, externals RepositoryServiceExternals) RepositoryService {
+	return RepositoryService{ExecutionService: service, repository: externals}
+}
+
+func NewCodingService(repository RepositoryService, store CodingServiceStore, externals CodingServiceExternals) CodingService {
+	return CodingService{RepositoryService: repository, store: store, externals: externals}
+}
+
+func (s ExecutionService) BlobStore() blob.Store { return s.blobs }
+
+func (s ExecutionService) requireClaim(ctx context.Context) error {
 	if s.claimCheck == nil {
 		return errors.New("durable executor claim check is not configured")
 	}
 	return s.claimCheck(ctx)
 }
 
-func (s Service) recordAgentRun(ctx context.Context, record func() error) error {
+func (s ExecutionService) recordAgentRun(ctx context.Context, record func() error) error {
 	return claimBeforeAgentRunRecord(ctx, s.requireClaim, record)
 }
 
@@ -131,31 +154,31 @@ func claimBeforeAgentRunRecord(ctx context.Context, claimCheck func(context.Cont
 	return record()
 }
 
-func (s Service) agentRunAttention(ctx context.Context, runID, detail string) error {
+func (s ExecutionService) agentRunAttention(ctx context.Context, runID, detail string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.AgentRunAttention(ctx, runID, detail) })
 }
 
-func (s Service) prepareAgentRun(ctx context.Context, runID, harness, baseline string) error {
+func (s ExecutionService) prepareAgentRun(ctx context.Context, runID, harness, baseline string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.PrepareAgentRun(ctx, runID, harness, baseline) })
 }
 
-func (s Service) bindAgentRun(ctx context.Context, runID, harness, threadID, turnID, outcome string) error {
+func (s ExecutionService) bindAgentRun(ctx context.Context, runID, harness, threadID, turnID, outcome string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.BindAgentRun(ctx, runID, harness, threadID, turnID, outcome) })
 }
 
-func (s Service) bindSteer(ctx context.Context, runID, turnID, outcome string) error {
+func (s ExecutionService) bindSteer(ctx context.Context, runID, turnID, outcome string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.BindSteer(ctx, runID, turnID, outcome) })
 }
 
-func (s Service) failAgentRun(ctx context.Context, runID, reason string) error {
+func (s ExecutionService) failAgentRun(ctx context.Context, runID, reason string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.FailAgentRun(ctx, runID, reason) })
 }
 
-func (s Service) uncertainAgentRun(ctx context.Context, runID, reason string) error {
+func (s ExecutionService) uncertainAgentRun(ctx context.Context, runID, reason string) error {
 	return s.recordAgentRun(ctx, func() error { return s.store.UncertainAgentRun(ctx, runID, reason) })
 }
 
-func (s Service) ExecuteSetup(ctx context.Context, job CodingJob, action Action) error {
+func (s CodingService) ExecuteSetup(ctx context.Context, job CodingJob, action Action) error {
 	observation, declared, err := s.externals.RepositorySetup(ctx, job, action)
 	if err != nil {
 		if attentionNeeded(err) {
@@ -184,8 +207,8 @@ func (s Service) ExecuteSetup(ctx context.Context, job CodingJob, action Action)
 	return nil
 }
 
-func (s Service) ObserveRevision(ctx context.Context, job CodingJob, run AgentRun) error {
-	observation, err := s.externals.RepositoryRevision(ctx, job.Job, job.Branch, job.Revision)
+func (s CodingService) ObserveRevision(ctx context.Context, job CodingJob, run AgentRun) error {
+	observation, err := s.repository.RepositoryRevision(ctx, job.Job, job.Branch, job.Revision)
 	if err != nil {
 		if attentionNeeded(err) {
 			return s.setWorkflowAttention(ctx, job.ID, run.ID, err)
@@ -208,7 +231,7 @@ func (s Service) ObserveRevision(ctx context.Context, job CodingJob, run AgentRu
 	return s.store.RecordRevisionObservation(ctx, job.ID, run.ID, observation, evidenceRecord)
 }
 
-func (s Service) ExecuteCheck(ctx context.Context, job CodingJob, check Check) error {
+func (s CodingService) ExecuteCheck(ctx context.Context, job CodingJob, check Check) error {
 	if check.State == "passed" {
 		return nil
 	}
@@ -248,7 +271,7 @@ func (s Service) ExecuteCheck(ctx context.Context, job CodingJob, check Check) e
 	return nil
 }
 
-func (s Service) setWorkflowAttention(ctx context.Context, jobID, source string, cause error) error {
+func (s CodingService) setWorkflowAttention(ctx context.Context, jobID, source string, cause error) error {
 	if err := s.requireClaim(ctx); err != nil {
 		return errors.Join(cause, err)
 	}
@@ -263,7 +286,7 @@ func attentionNeeded(err error) bool {
 	return errors.As(err, &attention) && attention.AttentionNeeded()
 }
 
-func (s Service) handleFailedCheck(ctx context.Context, check Check) error {
+func (s CodingService) handleFailedCheck(ctx context.Context, check Check) error {
 	if _, _, err := s.store.AdmitCheckMessage(ctx, check); err != nil {
 		return err
 	}
@@ -293,7 +316,7 @@ func commandArtifact(identity, revision string, observation CommandObservation) 
 	}{identity, revision, commandEvidenceProducer, observation.Command, observation.ExitCode, observation.StartedAt, observation.FinishedAt, string(observation.Stdout), string(observation.Stderr), observation.StdoutCut, observation.StderrCut, observation.Redactions})
 }
 
-func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
+func (s ExecutionService) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, revision string, startedAt, finishedAt time.Time, contents []byte) (Evidence, error) {
 	blob, err := s.blobs.Put(contents)
 	if err != nil {
 		return Evidence{}, err
@@ -301,21 +324,21 @@ func (s Service) retainEvidence(ownerID, kind, actionID, agentRunID, checkID, re
 	return Evidence{ID: EvidenceID(ownerID, kind), Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "application/vnd.dorf.observation+json", Producer: commandEvidenceProducer, Kind: kind, ActionID: actionID, AgentRunID: agentRunID, CheckID: checkID, Revision: revision, StartedAt: startedAt.UTC().Truncate(time.Microsecond), FinishedAt: finishedAt.UTC().Truncate(time.Microsecond)}, nil
 }
 
-func (s Service) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
+func (s ExecutionService) reachWorkflow(ctx context.Context, point, jobID, identity string) error {
 	if s.barrier == nil {
 		return nil
 	}
 	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func (s Service) Deliver(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) Deliver(ctx context.Context, job Job, delivery Delivery, input string) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
 		return s.deliverSteer(ctx, job, delivery, input)
 	}
 	return s.deliverAgentRun(ctx, job, delivery, input)
 }
 
-func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
 	contract := agentRunContract{
 		store:               s.store,
@@ -369,7 +392,7 @@ func (s Service) deliverAgentRun(ctx context.Context, job Job, delivery Delivery
 // ObserveAgentRun reconciles one already-bound implementation Turn without
 // submitting or waiting. The workflow can therefore alternate exact harness
 // inspection with durable message wakes while the Turn remains active.
-func (s Service) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bool, error) {
+func (s ExecutionService) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bool, error) {
 	turn, err := s.ObserveAgentRunTurn(ctx, job, run, "implement")
 	if err != nil {
 		return false, err
@@ -379,7 +402,7 @@ func (s Service) ObserveAgentRun(ctx context.Context, job Job, run AgentRun) (bo
 
 // ObserveAgentRunTurn reconciles one bound ordinary Harness Turn for the
 // workflow-owned role and returns its current or terminal native result.
-func (s Service) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
+func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
 	if run.JobID != job.ID || run.Role != role || run.ThreadID == "" || run.TurnID == "" {
 		return HarnessTurn{}, fmt.Errorf("AgentRun %s is not an exact bound %s Turn for Job %s", run.ID, role, job.ID)
 	}
@@ -405,8 +428,8 @@ func (s Service) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun,
 
 // VerifyRepositoryUnchanged proves the investigation left the admitted exact
 // checkout clean before its report becomes a terminal workflow fact.
-func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job Job, revision string) error {
-	observation, err := s.externals.RepositoryRevision(ctx, job, "", revision)
+func (s RepositoryService) VerifyRepositoryUnchanged(ctx context.Context, job Job, revision string) error {
+	observation, err := s.repository.RepositoryRevision(ctx, job, "", revision)
 	if err != nil {
 		return err
 	}
@@ -416,7 +439,7 @@ func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job Job, revisio
 	return nil
 }
 
-func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
 	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
 	if err != nil {
@@ -479,7 +502,7 @@ func (s Service) deliverSteer(ctx context.Context, job Job, delivery Delivery, i
 	return s.bindSteer(ctx, run.ID, acceptedTurnID, reconciliation.Turn.Status)
 }
 
-func (s Service) reach(ctx context.Context, point string, delivery Delivery) error {
+func (s ExecutionService) reach(ctx context.Context, point string, delivery Delivery) error {
 	if s.barrier == nil {
 		return nil
 	}
@@ -499,7 +522,7 @@ func activeHarness(status string) bool {
 // PrepareCleanup reconciles harness ownership and returns the exact Sandboxes
 // whose cleanup Actions the workflow must execute under their own stable
 // Action Steps.
-func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
+func (s ExecutionService) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
 	job, err := s.store.Job(ctx, jobID)
 	if err != nil {
 		return Job{}, nil, err
@@ -535,7 +558,7 @@ func (s Service) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandb
 	return job, sandboxes, nil
 }
 
-func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
+func (s ExecutionService) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
 	if err := s.store.SetCleanupAttention(ctx, jobID, detail); err != nil {
 		return err
 	}
@@ -546,7 +569,7 @@ func (s Service) cleanupStep(ctx context.Context, jobID, detail string, fn func(
 	return nil
 }
 
-func (s Service) reconcileHarnessMutation(ctx context.Context, job Job) error {
+func (s ExecutionService) reconcileHarnessMutation(ctx context.Context, job Job) error {
 	delivery, err := s.store.HarnessMutationDelivery(ctx, job.ID)
 	if err != nil || delivery == nil {
 		return err
@@ -651,7 +674,7 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 
 // ExecuteSandboxAction reconciles one external mutation against its exact
 // Sandbox. The caller uses the Action ID as the durable Absurd Step identity.
-func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) error {
+func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) error {
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
 		return fmt.Errorf("Sandbox Action does not belong to the exact Job and Sandbox")
 	}
@@ -698,14 +721,14 @@ func (s Service) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sand
 
 // ExecuteRepositoryClone reconciles one workflow-owned remote Git input
 // without placing repository facts on Core Job.
-func (s Service) ExecuteRepositoryClone(ctx context.Context, job Job, sandbox Sandbox, action Action, repository, revision, branch string) error {
+func (s RepositoryService) ExecuteRepositoryClone(ctx context.Context, job Job, sandbox Sandbox, action Action, repository, revision, branch string) error {
 	if action.Kind != ActionRepositoryClone {
 		return fmt.Errorf("repository clone requires the exact repository-clone Action")
 	}
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
 		return fmt.Errorf("repository clone does not belong to the exact Job and Sandbox")
 	}
-	if err := s.externals.RepositoryClone(ctx, job, sandbox, repository, revision, branch); err != nil {
+	if err := s.repository.RepositoryClone(ctx, job, sandbox, repository, revision, branch); err != nil {
 		return err
 	}
 	if err := s.requireClaim(ctx); err != nil {
@@ -716,7 +739,7 @@ func (s Service) ExecuteRepositoryClone(ctx context.Context, job Job, sandbox Sa
 
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.
-func (s Service) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox Sandbox, action Action, source CodebaseInvestigationSource) error {
+func (s RepositoryService) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox Sandbox, action Action, source CodebaseInvestigationSource) error {
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
 		source.JobID != job.ID || source.Kind != InvestigationSourceGitBundle {
 		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
@@ -725,7 +748,7 @@ func (s Service) ExecuteRepositoryRestore(ctx context.Context, job Job, sandbox 
 	if err != nil {
 		return fmt.Errorf("read retained repository bundle: %w", err)
 	}
-	if err := s.externals.RepositoryRestore(ctx, job, sandbox, source, contents); err != nil {
+	if err := s.repository.RepositoryRestore(ctx, job, sandbox, source, contents); err != nil {
 		return err
 	}
 	if err := s.requireClaim(ctx); err != nil {

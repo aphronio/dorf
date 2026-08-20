@@ -215,7 +215,8 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // this fault story. The nil embedded interface makes any unexpected external
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
-	spine.ServiceExternals
+	spine.CodingServiceExternals
+	spine.RepositoryServiceExternals
 	effect *reconcilingFaultEffect
 	runID  string
 }
@@ -258,7 +259,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 				return faultActionResultV1{}, err
 			}
 			runID := task.RunID()
-			service := spine.NewService(
+			execution := spine.NewExecutionService(
 				store,
 				faultActionExternals{effect: effect, runID: runID},
 				blob.Store{},
@@ -269,6 +270,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
+			service := spine.NewRepositoryService(execution, faultActionExternals{effect: effect, runID: runID})
 			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, action, job.Repository, job.Revision, job.Branch); err != nil {
 				return faultActionResultV1{}, err
 			}

@@ -63,7 +63,9 @@ func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workf
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	service := spine.NewService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	execution := spine.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	repository := spine.NewRepositoryService(execution, externals)
+	coding := spine.NewCodingService(repository, r.store, externals)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -71,7 +73,9 @@ func (r profileRuntimeResolver) Resolve(ctx context.Context, name string) (workf
 		Evidence:   blob.Store{Root: r.cfg.BlobRoot}, Barrier: r.barrier,
 	}
 	return workflow.Runtime{
-		Service: service,
+		Execution:  execution,
+		Repository: repository,
+		Coding:     coding,
 		Proposal: workflow.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeapp.Service{Store: r.store, GitHub: githubClient},

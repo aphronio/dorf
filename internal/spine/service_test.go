@@ -315,7 +315,7 @@ func requireContains(t *testing.T, value, substring string) {
 }
 
 func TestServiceRefusesDurableRecordWithoutClaimCheck(t *testing.T) {
-	if err := (Service{}).requireClaim(context.Background()); err == nil {
+	if err := (ExecutionService{}).requireClaim(context.Background()); err == nil {
 		t.Fatal("missing durable executor claim check was accepted")
 	}
 }

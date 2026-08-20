@@ -55,9 +55,11 @@ type sandboxProfileStore interface {
 // Sandbox profile. Provider and Harness selection remain in the composition
 // root; workflows only consume their established contracts.
 type Runtime struct {
-	Service  spine.Service
-	Proposal ProposalRuntime
-	Profile  RuntimeProfile
+	Execution  spine.ExecutionService
+	Repository spine.RepositoryService
+	Coding     spine.CodingService
+	Proposal   ProposalRuntime
+	Profile    RuntimeProfile
 }
 
 type RuntimeResolver interface {
@@ -101,7 +103,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 		// Sequence 1 is present before this task is spawned. Every later FIFO
 		// position owns one immutable Absurd event identity, starting at 2.
 		for {
-			work, err := RunJob(ctx, runtime.Service, store, proposal, params.JobID)
+			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				return TaskResultV1{}, err
 			}
@@ -146,7 +148,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			return TaskResultV1{}, err
 		}
 		for {
-			work, err := RunCodebaseInvestigation(ctx, runtime.Service, store, params.JobID)
+			work, err := RunCodebaseInvestigation(ctx, runtime.Repository, store, params.JobID)
 			if err != nil {
 				return TaskResultV1{}, err
 			}
@@ -192,7 +194,7 @@ func Register(client *absurd.Client, store postgres.Store, runtimes RuntimeResol
 			return TaskResultV1{}, err
 		}
 		return absurdruntime.WithHeartbeat(ctx, func(workCtx context.Context) (TaskResultV1, error) {
-			if err := runCleanup(workCtx, runtime.Service, store, params.JobID); err != nil {
+			if err := runCleanup(workCtx, runtime.Execution, store, params.JobID); err != nil {
 				return TaskResultV1{}, err
 			}
 			return TaskResultV1{JobID: params.JobID, Outcome: "cleanup-complete"}, nil

@@ -38,7 +38,7 @@ func CurrentCleanupAction(sandboxes []spine.Sandbox, actions []spine.Action) (sp
 	return "", "", false
 }
 
-func runCleanup(ctx context.Context, service spine.Service, store postgres.Store, jobID string) error {
+func runCleanup(ctx context.Context, service spine.ExecutionService, store postgres.Store, jobID string) error {
 	job, sandboxes, err := service.PrepareCleanup(ctx, jobID)
 	if err != nil {
 		return err

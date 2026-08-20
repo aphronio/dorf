@@ -175,7 +175,7 @@ func (s InvestigationSnapshot) Project() InvestigationWork {
 	}
 }
 
-func RunCodebaseInvestigation(ctx context.Context, service spine.Service, store postgres.Store, jobID string) (InvestigationWork, error) {
+func RunCodebaseInvestigation(ctx context.Context, service spine.RepositoryService, store postgres.Store, jobID string) (InvestigationWork, error) {
 	for {
 		snapshot, err := LoadCodebaseInvestigation(ctx, store, jobID)
 		if err != nil {
@@ -231,7 +231,7 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
 }
 
-func runInvestigationAction(ctx context.Context, service spine.Service, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
+func runInvestigationAction(ctx context.Context, service spine.RepositoryService, store postgres.Store, snapshot InvestigationSnapshot, work InvestigationWork) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != spine.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}
@@ -260,7 +260,7 @@ type investigationContractError string
 
 func (e investigationContractError) Error() string { return string(e) }
 
-func recordInvestigationDraft(ctx context.Context, service spine.Service, store postgres.Store, snapshot InvestigationSnapshot) error {
+func recordInvestigationDraft(ctx context.Context, service spine.RepositoryService, store postgres.Store, snapshot InvestigationSnapshot) error {
 	run := snapshot.Delivery.AgentRun
 	turn, err := service.ObserveAgentRunTurn(ctx, snapshot.Job, run, "investigate")
 	if err != nil {

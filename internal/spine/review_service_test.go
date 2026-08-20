@@ -13,7 +13,7 @@ import (
 
 func TestLostClaimCannotRecordReviewFeedback(t *testing.T) {
 	claimLost := errors.New("claim lost")
-	service := Service{claimCheck: func(context.Context) error { return claimLost }}
+	service := CodingService{RepositoryService: RepositoryService{ExecutionService: ExecutionService{claimCheck: func(context.Context) error { return claimLost }}}}
 	if _, _, err := service.recordReviewFeedback(context.Background(), "run-1", HarnessTurn{}, Evidence{}); !errors.Is(err, claimLost) {
 		t.Fatalf("record review feedback error = %v", err)
 	}
@@ -41,7 +41,7 @@ func TestReviewRunsRejectsBrokenFactRelationships(t *testing.T) {
 
 func TestLostClaimCannotRecordReviewPolicy(t *testing.T) {
 	claimLost := errors.New("claim lost")
-	service := Service{claimCheck: func(context.Context) error { return claimLost }}
+	service := CodingService{RepositoryService: RepositoryService{ExecutionService: ExecutionService{claimCheck: func(context.Context) error { return claimLost }}}}
 	if err := service.recordReviewPolicy(context.Background(), ReviewPlanRecord{}); !errors.Is(err, claimLost) {
 		t.Fatalf("record review policy error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 		TurnOutcome: "completed", State: AgentRunCompleted, StartedAt: now, FinishedAt: now.Add(time.Second),
 	}}
 
-	record, err := (Service{blobs: blobs}).reviewEvidence(run, post)
+	record, err := (CodingService{RepositoryService: RepositoryService{ExecutionService: ExecutionService{blobs: blobs}}}).reviewEvidence(run, post)
 	if err != nil {
 		t.Fatal(err)
 	}

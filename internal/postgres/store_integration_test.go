@@ -79,9 +79,13 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	service := spine.NewService(store, &integrationExternals{}, blob.Store{}, nil, func(context.Context) error { return nil })
+	externals := &integrationExternals{}
+	execution := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
+	repository := spine.NewRepositoryService(execution, externals)
+	coding := spine.NewCodingService(repository, store, externals)
 	workflow.Register(client, store, integrationRuntimeResolver{runtime: workflow.Runtime{
-		Service: service, Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
+		Execution: execution, Repository: repository, Coding: coding,
+		Profile: workflow.RuntimeProfile{SandboxProfile: "incus"},
 	}})
 	t.Cleanup(func() {
 		client.Close()
@@ -1609,7 +1613,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 		t.Fatalf("cleanup did not close admission: %#v", cleaning)
 	}
 	claimLost := errors.New("cleanup claim lost")
-	stale := spine.NewService(store, externals, blob.Store{}, nil, func(context.Context) error { return claimLost })
+	stale := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return claimLost })
 	if _, _, err := stale.PrepareCleanup(ctx, job.ID); !errors.Is(err, claimLost) {
 		t.Fatalf("stale cleanup error = %v", err)
 	}
@@ -1630,7 +1634,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if !found {
 		t.Fatalf("active AgentRun %s disappeared", delivery.AgentRun.ID)
 	}
-	service := spine.NewService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
+	service := spine.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	cleanupOnce := func() error {
 		cleaning, sandboxes, err := service.PrepareCleanup(ctx, job.ID)
 		if err != nil || cleaning.CleanupState == spine.CleanupComplete {
@@ -1684,7 +1688,8 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 }
 
 type integrationExternals struct {
-	spine.ServiceExternals
+	spine.CodingServiceExternals
+	spine.RepositoryServiceExternals
 	mu        sync.Mutex
 	turns     []spine.HarnessTurn
 	submitted []int64

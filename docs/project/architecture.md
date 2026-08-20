@@ -157,6 +157,13 @@ Workflow facts remain specific:
 Do not introduce a polymorphic fact owner, generic JSON result, arbitrary Action registry, or common
 workflow phase to make unlike facts look similar.
 
+Runtime composition mirrors that durable boundary. `ExecutionService` owns shared Sandbox, Route,
+AgentRun, Artifact-byte, attention, and cleanup custody. `RepositoryService` adds exact checkout
+materialization and observation for workflows that use Git. `CodingService` adds setup, mutable
+Revision observation, Checks, and review. Coding receives the composed coding service;
+codebase-investigation receives only repository plus execution capabilities; cleanup receives only
+execution custody. Provider and Harness selection still happens once at the composition root.
+
 ## Client boundary
 
 Clients submit bounded intent, inspect, send Messages, receive results, and request explicit terminal

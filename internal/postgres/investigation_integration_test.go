@@ -181,7 +181,7 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 }
 
 type investigationExternals struct {
-	spine.ServiceExternals
+	spine.CodingServiceExternals
 	mu      sync.Mutex
 	job     spine.Job
 	turn    spine.HarnessTurn
@@ -256,7 +256,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatal(err)
 	}
 	externals := &investigationExternals{}
-	service := spine.NewService(store, externals, records, nil, absurdruntime.RequireClaim)
+	execution := spine.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
+	service := spine.NewRepositoryService(execution, externals)
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.AdmitInvestigation(ctx, postgres.NewInvestigationJob{
 		NewJob: postgres.NewJob{
@@ -362,7 +363,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatalf("explicit cleanup did not close admission and schedule release: %#v", cleaning)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CurrentTaskID) })
-	cleanupService := spine.NewService(store, externals, records, nil, func(context.Context) error { return nil })
+	cleanupService := spine.NewExecutionService(store, externals, records, nil, func(context.Context) error { return nil })
 	cleaning, sandboxes, err := cleanupService.PrepareCleanup(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)

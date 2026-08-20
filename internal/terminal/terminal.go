@@ -407,4 +407,8 @@ func (e Externals) owner(ctx context.Context, sandboxID string) (provider.Owners
 	return e.Ownership(ctx, sandboxID)
 }
 
-var _ spine.ServiceExternals = Externals{}
+var (
+	_ spine.Externals                  = Externals{}
+	_ spine.RepositoryServiceExternals = Externals{}
+	_ spine.CodingServiceExternals     = Externals{}
+)
