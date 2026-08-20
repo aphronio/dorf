@@ -13,7 +13,12 @@ where j.id=sqlc.arg(job_id)
   and (
     exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)
     or (
-      not exists(select 1 from dorf.actions a where a.job_id=j.id and a.kind='github-pull-request')
+      not exists(
+        select 1
+        from dorf.actions a
+        join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
+        where a.job_id=j.id and a.kind='github-pull-request' and a.scope_key=c.revision
+      )
       and not exists(select 1 from dorf.github_proposals p where p.job_id=j.id)
     )
   );

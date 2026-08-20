@@ -45,8 +45,10 @@ select (
 
 -- name: OutcomePublicationIntentExists :one
 select exists(
-  select 1 from dorf.actions
-  where job_id=sqlc.arg(job_id) and kind='github-pull-request'
+  select 1
+  from dorf.actions a
+  join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
+  where a.job_id=sqlc.arg(job_id) and a.kind='github-pull-request' and a.scope_key=c.revision
 )::boolean;
 
 -- name: CloseAdmissionForOutcome :execrows

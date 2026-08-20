@@ -170,8 +170,10 @@ func (q *Queries) OutcomeImplementationSettled(ctx context.Context, jobID string
 
 const outcomePublicationIntentExists = `-- name: OutcomePublicationIntentExists :one
 select exists(
-  select 1 from dorf.actions
-  where job_id=$1 and kind='github-pull-request'
+  select 1
+  from dorf.actions a
+  join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
+  where a.job_id=$1 and a.kind='github-pull-request' and a.scope_key=c.revision
 )::boolean
 `
 
