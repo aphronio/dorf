@@ -13,7 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -297,7 +296,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), spawned.TaskID) })
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-terminal", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +366,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if cleaning.AdmissionOpen || cleaning.CleanupState != core.CleanupScheduled {
 		t.Fatalf("explicit cleanup did not close admission and schedule release: %#v", cleaning)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, cleaning.CurrentTaskID) })
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), cleaning.CurrentTaskID) })
 	cleanupService := core.NewExecutionService(store, externals, records, nil, func(context.Context) error { return nil })
 	cleaning, sandboxes, err := cleanupService.PrepareCleanup(ctx, job.ID)
 	if err != nil {

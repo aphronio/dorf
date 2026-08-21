@@ -97,8 +97,14 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 			t.Fatal(err)
 		}
 	}
-	client, err := absurd.New(absurd.Options{DB: db, QueueName: config.QueueName})
+	queueName := fmt.Sprintf("%s_test_%d", config.QueueName, time.Now().UnixNano())
+	client, err := absurd.New(absurd.Options{DB: db, QueueName: queueName})
 	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := client.CreateQueue(context.Background(), queueName); err != nil {
+		client.Close()
 		db.Close()
 		t.Fatal(err)
 	}
@@ -119,6 +125,9 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	coding.Register(application, store, resolver)
 	investigation.Register(application, store, resolver)
 	t.Cleanup(func() {
+		if err := client.DropQueue(context.Background(), queueName); err != nil {
+			t.Errorf("drop test queue %q: %v", queueName, err)
+		}
 		client.Close()
 		db.Close()
 	})
@@ -178,7 +187,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	taskIDs := []string{job.CurrentTaskID}
 	t.Cleanup(func() {
 		for _, id := range taskIDs {
-			_ = client.CancelTask(context.Background(), config.QueueName, id)
+			_ = client.CancelTask(context.Background(), client.QueueName(), id)
 		}
 	})
 
@@ -1578,7 +1587,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	taskIDs := []string{job.CurrentTaskID}
 	t.Cleanup(func() {
 		for _, id := range taskIDs {
-			_ = client.CancelTask(context.Background(), config.QueueName, id)
+			_ = client.CancelTask(context.Background(), client.QueueName(), id)
 		}
 	})
 	threadID := "cleanup-thread-" + suffix
@@ -1675,7 +1684,7 @@ func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T)
 	if got := externals.effectKinds(); fmt.Sprint(got) != "[provider-route-revoke sandbox-delete]" {
 		t.Fatalf("cleanup effects=%v", got)
 	}
-	snapshot, err := client.FetchTaskResult(ctx, config.QueueName, job.CurrentTaskID)
+	snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
 	if err != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled {
 		t.Fatalf("cancelled public run result=%#v err=%v", snapshot, err)
 	}
@@ -1781,11 +1790,11 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	unrelated, err := client.Spawn(ctx, "unrelated-task", core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{QueueName: config.QueueName, IdempotencyKey: "unrelated:" + job.ID})
+	unrelated, err := client.Spawn(ctx, "unrelated-task", core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{QueueName: client.QueueName(), IdempotencyKey: "unrelated:" + job.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, unrelated.TaskID) })
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), unrelated.TaskID) })
 	if err := store.AttachJobTask(ctx, job.ID, "", unrelated.TaskID, "unrelated-task"); err != nil {
 		t.Fatal(err)
 	}
@@ -1793,7 +1802,7 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), config.QueueName, spawned.TaskID) })
+	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), spawned.TaskID) })
 	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, coding.TaskName); err == nil {
 		t.Fatal("a second public Spawn result replaced the stored task binding")
 	}
