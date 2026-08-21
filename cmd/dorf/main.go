@@ -467,8 +467,9 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 		(profile.Provider != core.SandboxProviderE2B || view.SandboxPath.Status == "ready")
 	switch {
 	case !view.ProfileVerified:
-		view.Impact = "new Jobs cannot use this Sandbox profile"
-		view.Next = "run dorf profile verify " + profile.Name
+		detail, next := sandboxProfileNotReady(profile)
+		view.Impact = "new Jobs cannot use this Sandbox profile; " + detail
+		view.Next = next
 	case view.Authority.Status != "ready":
 		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
 		view.Next = "restore the named AI connection and private broker, then rerun provider status"

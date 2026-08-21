@@ -348,8 +348,15 @@ func appendProfileVerificationCheck(checks []doctor.Check, profile core.SandboxP
 }
 
 func sandboxProfileNotReadyDetail(profile core.SandboxProfile) string {
+	detail, next := sandboxProfileNotReady(profile)
+	return detail + "; " + next
+}
+
+func sandboxProfileNotReady(profile core.SandboxProfile) (string, string) {
 	if profile.Verification != nil && strings.TrimSpace(profile.Verification.LastError) != "" {
-		return fmt.Sprintf("Sandbox profile %q is unavailable: %s; repair or update it, then run dorf profile verify %s", profile.Name, strings.TrimSpace(profile.Verification.LastError), profile.Name)
+		return fmt.Sprintf("Sandbox profile %q is unavailable: %s", profile.Name, strings.TrimSpace(profile.Verification.LastError)),
+			fmt.Sprintf("repair or update it, then run dorf profile verify %s", profile.Name)
 	}
-	return fmt.Sprintf("Sandbox profile %q has not completed Dorf %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
+	return fmt.Sprintf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, core.BaseProfileContract),
+		fmt.Sprintf("run dorf profile verify %s", profile.Name)
 }

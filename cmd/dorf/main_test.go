@@ -131,6 +131,11 @@ func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReac
 	if unverified.Ready || !strings.Contains(unverified.Next, "profile verify managed") {
 		t.Fatalf("unverified status=%#v", unverified)
 	}
+	profile.Verification = &core.ProfileVerification{LastError: "E2B template not found"}
+	unavailable := newProviderGatewayStatusView(profile, "personal-chatgpt", nil, nil)
+	if unavailable.Ready || !strings.Contains(unavailable.Impact, "E2B template not found") || !strings.Contains(unavailable.Next, "repair or update") {
+		t.Fatalf("unavailable status=%#v", unavailable)
+	}
 	local := newProviderGatewayStatusView(core.SandboxProfile{
 		Name: "local", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0",
 		Verification: &core.ProfileVerification{
