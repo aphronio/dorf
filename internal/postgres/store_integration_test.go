@@ -22,6 +22,7 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	policy "github.com/aphronio/dorf/internal/review"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -445,6 +446,54 @@ func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
 	stored, err := store.SandboxProfile(ctx, name)
 	if err != nil || stored.Artifact != updatedArtifact || stored.Verification != nil || stored.BaseVerified() {
 		t.Fatalf("updated profile=%#v err=%v", stored, err)
+	}
+}
+
+func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	name := fmt.Sprintf("unavailable-%d", time.Now().UnixNano())
+	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderE2B, Harness: "codex", Artifact: "dorf/missing:exact-build",
+		E2BGatewayURL: "https://gateway.example/v1", E2BSandboxTimeout: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err == nil {
+		err = store.RecordSandboxProfileProbe(ctx, verification, "codex 0.147.0")
+	}
+	if err == nil {
+		err = store.RecordSandboxProfileVerificationCleanup(ctx, verification)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := codingJobInput("profile-unavailable-"+name, "bounded implementation", strings.Repeat("a", 40), "dorf/profile-unavailable")
+	input.SandboxProfile = name
+	input.BaseBranch = "main"
+	job, created, err := store.AdmitCoding(ctx, input)
+	if err != nil || !created {
+		t.Fatalf("admit created=%v err=%v", created, err)
+	}
+	source := core.ScopedActionID(job.ID, core.ActionSandboxCreate, core.MainSandboxName(job.ID))
+	failure := provider.ArtifactUnavailableErrorf("E2B template %q is unavailable", "dorf/missing:exact-build")
+	if err := store.RecordSandboxProfileUnavailable(ctx, job.ID, name, source, failure); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.SandboxProfile(ctx, name)
+	if err != nil || stored.BaseVerified() || stored.Verification == nil || stored.Verification.LastError != failure.Error() {
+		t.Fatalf("unavailable profile=%#v err=%v", stored, err)
+	}
+	stopped, err := store.Job(ctx, job.ID)
+	if err != nil || stopped.WorkflowAttentionSource != source || stopped.WorkflowAttention != failure.Error() {
+		t.Fatalf("stopped Job=%#v err=%v", stopped, err)
+	}
+	newInput := input
+	newInput.AdmissionKey += "-new"
+	newInput.Branch += "-new"
+	if _, _, err := store.AdmitCoding(ctx, newInput); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+		t.Fatalf("new Job admitted through unavailable profile: %v", err)
 	}
 }
 

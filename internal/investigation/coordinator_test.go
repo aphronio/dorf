@@ -77,6 +77,23 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	}
 }
 
+func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
+	job := core.Job{ID: "job-attention", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
+	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
+	source := core.ScopedActionID(job.ID, core.ActionSandboxCreate, sandbox.ID)
+	job.WorkflowAttentionSource = source
+	job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
+	snapshot := Snapshot{
+		Job: job, MainSandbox: sandbox,
+		Source:   Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
+		Delivery: core.Delivery{AgentRun: core.AgentRun{ID: "run-attention", JobID: job.ID, Role: "investigate", State: core.AgentRunPending, SandboxID: sandbox.ID}},
+	}
+	work := snapshot.Project()
+	if work.Kind != WorkAttention || work.FactID != source || work.Detail != job.WorkflowAttention {
+		t.Fatalf("work = %#v", work)
+	}
+}
+
 func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
 	tests := []string{
 		"# Finding\n\nSee `internal/investigation/coordinator.go:54`.\n",

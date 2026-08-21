@@ -152,6 +152,10 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 	}
 	var response createResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes", nil, body, http.StatusCreated, &response); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return Sandbox{}, provider.ArtifactUnavailableErrorf("E2B template %q is unavailable: %v", request.Template, err)
+		}
 		return Sandbox{}, err
 	}
 	if response.SandboxID == "" {

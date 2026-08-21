@@ -560,3 +560,12 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 		t.Fatalf("running task rendered failure attention: %q", output.String())
 	}
 }
+
+func TestSandboxProfileNotReadyDetailSurfacesUnavailableArtifact(t *testing.T) {
+	profile := core.SandboxProfile{Name: "cloud-codex", Verification: &core.ProfileVerification{LastError: "E2B template is unavailable"}}
+	detail := sandboxProfileNotReadyDetail(profile)
+	if !strings.Contains(detail, `Sandbox profile "cloud-codex" is unavailable: E2B template is unavailable`) ||
+		!strings.Contains(detail, "repair or update it, then run dorf profile verify cloud-codex") {
+		t.Fatalf("detail = %q", detail)
+	}
+}

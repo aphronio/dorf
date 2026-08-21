@@ -317,6 +317,20 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 	return i, err
 }
 
+const getJobSandboxProfileForUpdate = `-- name: GetJobSandboxProfileForUpdate :one
+select sandbox_profile
+from dorf.jobs
+where id=$1
+for update
+`
+
+func (q *Queries) GetJobSandboxProfileForUpdate(ctx context.Context, jobID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getJobSandboxProfileForUpdate, jobID)
+	var sandbox_profile string
+	err := row.Scan(&sandbox_profile)
+	return sandbox_profile, err
+}
+
 const getRevisionJobForUpdate = `-- name: GetRevisionJobForUpdate :one
 select c.revision,c.branch,j.admission_open,
        exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists

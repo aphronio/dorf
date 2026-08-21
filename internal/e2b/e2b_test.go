@@ -174,6 +174,22 @@ func TestCreateCanExplicitlyUseProfileInternetAccess(t *testing.T) {
 	}
 }
 
+func TestCreateClassifiesMissingTemplateAsUnavailableProfileArtifact(t *testing.T) {
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/sandboxes" {
+			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		}
+		response.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(response, `{"code":404,"message":"template not found"}`)
+	})
+	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
+	owner := Ownership{JobID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
+	_, err := client.Create(context.Background(), CreateRequest{Template: "dorf/missing:build", Timeout: time.Minute, Owner: owner})
+	if !provider.IsArtifactUnavailable(err) || !strings.Contains(err.Error(), `E2B template "dorf/missing:build" is unavailable`) {
+		t.Fatalf("missing template error = %v", err)
+	}
+}
+
 func TestCredentialCheckIsReadOnlyAndAuthenticated(t *testing.T) {
 	requests := 0
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

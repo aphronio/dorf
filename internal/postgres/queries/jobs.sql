@@ -108,6 +108,12 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
+-- name: GetJobSandboxProfileForUpdate :one
+select sandbox_profile
+from dorf.jobs
+where id=sqlc.arg(job_id)
+for update;
+
 -- name: GetCurrentJobTaskForUpdate :one
 select coalesce(current_task.task_id,'') as task_id,
        coalesce(current_task.task_name,'') as task_name,

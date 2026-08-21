@@ -321,6 +321,60 @@ func (s Store) RecordSandboxProfileVerificationError(ctx context.Context, verifi
 	return expectOneRows(rows, err)
 }
 
+// RecordSandboxProfileUnavailable atomically fences new admission through an
+// exact verified profile and leaves the affected Job at its current fact.
+// Existing resources remain recoverable by cleanup through the pinned profile.
+func (s Store) RecordSandboxProfileUnavailable(ctx context.Context, jobID, profileName, source string, failure error) error {
+	jobID, profileName, source = strings.TrimSpace(jobID), strings.TrimSpace(profileName), strings.TrimSpace(source)
+	if jobID == "" || profileName == "" || source == "" || failure == nil {
+		return fmt.Errorf("unavailable Sandbox profile requires Job ID, profile, exact source, and failure")
+	}
+	detail := strings.TrimSpace(failure.Error())
+	if detail == "" {
+		return fmt.Errorf("unavailable Sandbox profile requires failure detail")
+	}
+	if len(detail) > 2048 {
+		detail = detail[:2048]
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	if _, err := queries.LockSandboxProfile(ctx, profileName); errors.Is(err, sql.ErrNoRows) {
+		return ErrProfileNotFound
+	} else if err != nil {
+		return err
+	}
+	jobProfile, err := queries.GetJobSandboxProfileForUpdate(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if jobProfile != profileName {
+		return fmt.Errorf("Job %s pins Sandbox profile %q, not %q", jobID, jobProfile, profileName)
+	}
+	rows, err := queries.MarkSandboxProfileUnavailable(ctx, dbsql.MarkSandboxProfileUnavailableParams{
+		LastError: nullableString(detail), ProfileName: profileName, ContractVersion: core.BaseProfileContract,
+	})
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("Sandbox profile %q has no settled Dorf %s verification to invalidate", profileName, core.BaseProfileContract)
+	}
+	rows, err = queries.SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{
+		JobID: jobID, Source: nullableString(source), Detail: nullableString(detail),
+	})
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("Job %s already has attention owned by a different fact", jobID)
+	}
+	return tx.Commit()
+}
+
 func normalizeSandboxProfile(profile core.SandboxProfile) (core.SandboxProfile, error) {
 	profile.Name = strings.TrimSpace(profile.Name)
 	profile.Harness = strings.TrimSpace(profile.Harness)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -316,7 +317,7 @@ func selectedSandboxProfile(ctx context.Context, store postgres.Store, name stri
 		return core.SandboxProfile{}, err
 	}
 	if !profile.BaseVerified() {
-		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
+		return core.SandboxProfile{}, errors.New(sandboxProfileNotReadyDetail(profile))
 	}
 	return profile, nil
 }
@@ -341,7 +342,14 @@ func appendProfileVerificationCheck(checks []doctor.Check, profile core.SandboxP
 		check.Status = "ready"
 		check.Detail = fmt.Sprintf("%s verified; Harness %s", core.BaseProfileContract, profile.Verification.HarnessVersion)
 	} else {
-		check.Detail = fmt.Sprintf("profile %s has not completed %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
+		check.Detail = sandboxProfileNotReadyDetail(profile)
 	}
 	return append(checks, check)
+}
+
+func sandboxProfileNotReadyDetail(profile core.SandboxProfile) string {
+	if profile.Verification != nil && strings.TrimSpace(profile.Verification.LastError) != "" {
+		return fmt.Sprintf("Sandbox profile %q is unavailable: %s; repair or update it, then run dorf profile verify %s", profile.Name, strings.TrimSpace(profile.Verification.LastError), profile.Name)
+	}
+	return fmt.Sprintf("Sandbox profile %q has not completed Dorf %s verification and cleanup; run dorf profile verify %s", profile.Name, core.BaseProfileContract, profile.Name)
 }

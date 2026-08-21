@@ -87,7 +87,7 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 			return Work{}, fmt.Errorf("unsupported current coding work %q", work.Kind)
 		}
 		if err != nil {
-			return Work{}, err
+			return work, err
 		}
 	}
 }

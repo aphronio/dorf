@@ -134,6 +134,18 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	})
 }
 
+func TestCurrentWorkSurfacesSandboxActionAttention(t *testing.T) {
+	facts := readyFacts()
+	facts.Actions = nil
+	source := core.ScopedActionID(facts.Job.ID, core.ActionSandboxCreate, facts.MainSandbox.ID)
+	facts.Job.WorkflowAttentionSource = source
+	facts.Job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
+	work := decideCurrentWork(facts)
+	if work.Kind != WorkAttention || work.FactID != source || work.Detail != facts.Job.WorkflowAttention {
+		t.Fatalf("CurrentWork = %#v", work)
+	}
+}
+
 func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
 	facts := readyFacts()
 	if !codingPrerequisitesComplete(facts) {

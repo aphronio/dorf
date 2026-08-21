@@ -354,6 +354,28 @@ func (q *Queries) LockVerifiedSandboxProfileForAdmission(ctx context.Context, ar
 	return name, err
 }
 
+const markSandboxProfileUnavailable = `-- name: MarkSandboxProfileUnavailable :execrows
+update dorf.sandbox_profile_verifications
+set last_error=$1
+where profile_name=$2
+  and contract_version=$3
+  and probe_completed_at is not null and cleaned_at is not null
+`
+
+type MarkSandboxProfileUnavailableParams struct {
+	LastError       sql.NullString
+	ProfileName     string
+	ContractVersion string
+}
+
+func (q *Queries) MarkSandboxProfileUnavailable(ctx context.Context, arg MarkSandboxProfileUnavailableParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markSandboxProfileUnavailable, arg.LastError, arg.ProfileName, arg.ContractVersion)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const profileHasIncompleteJobs = `-- name: ProfileHasIncompleteJobs :one
 select exists(
     select 1 from dorf.jobs where sandbox_profile=$1 and cleanup_state<>'complete'

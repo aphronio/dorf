@@ -50,6 +50,9 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 		for {
 			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
+				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
+					return result, stopErr
+				}
 				return core.TaskResultV1{}, err
 			}
 			if work.Kind == WorkComplete {

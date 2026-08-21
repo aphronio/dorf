@@ -137,7 +137,12 @@ func (s Snapshot) Project() Work {
 		return Work{Kind: WorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
 	}
 	action := func(kind core.ActionKind) Work {
-		return Work{Kind: WorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
+		work := Work{Kind: WorkAction, FactID: core.ScopedActionID(s.Job.ID, kind, s.MainSandbox.ID), ActionKind: kind, Scope: s.MainSandbox.ID}
+		if s.Job.WorkflowAttentionSource == work.FactID && s.Job.WorkflowAttention != "" {
+			work.Kind = WorkAttention
+			work.Detail = s.Job.WorkflowAttention
+		}
+		return work
 	}
 	if !investigationActionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(core.ActionSandboxCreate)
@@ -218,7 +223,7 @@ func Run(ctx context.Context, service Service, store Store, jobID string) (Work,
 				}
 				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: contractErr.Error()}, nil
 			}
-			return Work{}, err
+			return work, err
 		}
 	}
 }

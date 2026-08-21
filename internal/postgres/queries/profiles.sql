@@ -125,3 +125,10 @@ update dorf.sandbox_profile_verifications
 set last_error=sqlc.arg(last_error)
 where profile_name=sqlc.arg(profile_name) and contract_version=sqlc.arg(contract_version)
   and sandbox_id=sqlc.arg(sandbox_id) and ownership_nonce=sqlc.arg(ownership_nonce);
+
+-- name: MarkSandboxProfileUnavailable :execrows
+update dorf.sandbox_profile_verifications
+set last_error=sqlc.arg(last_error)
+where profile_name=sqlc.arg(profile_name)
+  and contract_version=sqlc.arg(contract_version)
+  and probe_completed_at is not null and cleaned_at is not null;

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -40,8 +41,26 @@ type ApplicationStore interface {
 	CloseAdmissionForCleanup(context.Context, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
 	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
+	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
 	CompleteCleanup(context.Context, string) error
+}
+
+// StopForUnavailableSandboxProfile turns one definitive provider artifact
+// failure into durable attention instead of asking Absurd to retry an input
+// that cannot succeed. The workflow supplies the exact current fact identity.
+func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID, source string, cause error) (TaskResultV1, bool, error) {
+	if !sandbox.IsArtifactUnavailable(cause) {
+		return TaskResultV1{}, false, nil
+	}
+	job, err := a.Store.Job(ctx, jobID)
+	if err != nil {
+		return TaskResultV1{}, true, err
+	}
+	if err := a.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, source, cause); err != nil {
+		return TaskResultV1{}, true, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, err)
+	}
+	return TaskResultV1{JobID: job.ID, Outcome: "sandbox-profile-unavailable"}, true, nil
 }
 
 type Application struct {

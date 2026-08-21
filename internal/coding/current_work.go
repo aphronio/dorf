@@ -214,11 +214,16 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		return Work{Kind: kind, Revision: f.Job.Revision, FactID: factID, Detail: detail}
 	}
 	actionWork := func(kind core.ActionKind, scope, detail string) Work {
-		return Work{
+		work := Work{
 			Kind: WorkAction, Revision: f.Job.Revision,
 			FactID:     core.ScopedActionID(f.Job.ID, kind, scope),
 			ActionKind: kind, Scope: scope, Detail: detail,
 		}
+		if f.Job.WorkflowAttentionSource == work.FactID && f.Job.WorkflowAttention != "" {
+			work.Kind = WorkAttention
+			work.Detail = f.Job.WorkflowAttention
+		}
+		return work
 	}
 	if f.Outcome != nil {
 		return work(WorkComplete, f.Outcome.JobID, string(f.Outcome.Kind))

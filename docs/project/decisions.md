@@ -1810,7 +1810,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   a fresh functional attempt after any prior settled receipt; an interrupted attempt resumes its
   exact cleanup. Ordinary Job admission uses the latest successful receipt without making a
   billable provider call, and a fresh attempt is refused while a Job using that profile has
-  incomplete cleanup. Repository-specific dependencies remain the repository setup or custom
+  incomplete cleanup. If a provider definitively reports that the pinned artifact no longer
+  exists, Core invalidates the receipt for new admission, leaves the affected Job at its exact
+  current fact with actionable attention, and completes that task attempt without retrying the
+  unchanged create. Cleanup may still resolve the pinned profile so owned resources remain
+  releasable. Repository-specific dependencies remain the repository setup or custom
   artifact's responsibility. Optional capabilities stay broad and are added only when an actual
   workflow requires them.
 - **Mutation rule:** `profile update` applies only explicitly supplied fields to the latest locked

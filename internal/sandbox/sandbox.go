@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -86,3 +87,20 @@ func (e *UnsupportedError) Error() string {
 }
 
 func (e *UnsupportedError) AttentionNeeded() bool { return true }
+
+// ArtifactUnavailableError means the exact artifact pinned by a Sandbox
+// profile no longer exists at the provider. Retrying the same create cannot
+// converge until an operator updates and re-verifies the profile.
+type ArtifactUnavailableError struct{ Reason string }
+
+func (e *ArtifactUnavailableError) Error() string         { return e.Reason }
+func (e *ArtifactUnavailableError) AttentionNeeded() bool { return true }
+
+func ArtifactUnavailableErrorf(format string, args ...any) error {
+	return &ArtifactUnavailableError{Reason: fmt.Sprintf(format, args...)}
+}
+
+func IsArtifactUnavailable(err error) bool {
+	var unavailable *ArtifactUnavailableError
+	return errors.As(err, &unavailable)
+}
