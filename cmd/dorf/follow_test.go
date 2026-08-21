@@ -111,6 +111,19 @@ func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAtt
 	}
 }
 
+func TestFollowCompletedWorkflowAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
+	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
+	snapshot := followSnapshot{
+		Job:       core.Job{ID: "job-123", AdmissionOpen: true, CleanupState: core.CleanupPending, WorkflowAttention: "E2B template is unavailable"},
+		Execution: taskResultView{State: absurd.TaskCompleted}, NeedsAttention: true,
+	}
+	var output bytes.Buffer
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	if got := output.String(); !strings.Contains(got, "Needs attention · E2B template is unavailable") || !strings.Contains(got, "next: run dorf cleanup job-123 to release resources") || strings.Contains(got, "dorf retry") {
+		t.Fatalf("completed attention output:\n%s", got)
+	}
+}
+
 func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 	now := time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
 	job := core.Job{ID: "job-cleanup", CleanupState: core.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}

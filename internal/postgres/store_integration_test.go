@@ -450,7 +450,7 @@ func TestSandboxProfileUpdateInvalidatesActiveVerification(t *testing.T) {
 }
 
 func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *testing.T) {
-	_, store, _ := testDatabase(t)
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
 	name := fmt.Sprintf("unavailable-%d", time.Now().UnixNano())
 	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
@@ -504,6 +504,10 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	newInput.Branch += "-new"
 	if _, _, err := store.AdmitCoding(ctx, newInput); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through unavailable profile: %v", err)
+	}
+	cleaning, err := (core.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
+	if err != nil || cleaning.CleanupState != core.CleanupScheduled {
+		t.Fatalf("cleanup from unavailable profile state=%q err=%v", cleaning.CleanupState, err)
 	}
 }
 

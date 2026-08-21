@@ -237,6 +237,8 @@ func (r *followRenderer) renderAttention(observedAt time.Time, snapshot followSn
 			fmt.Fprintf(r.output, "         reason: %s\n", snapshot.Execution.LastError)
 		}
 		fmt.Fprintf(r.output, "         next: repair the cause, then run dorf retry %s\n", snapshot.Job.ID)
+	} else if snapshot.Execution.State == absurd.TaskCompleted && snapshot.Job.CleanupState == core.CleanupPending {
+		fmt.Fprintf(r.output, "         next: run dorf cleanup %s to release resources\n", snapshot.Job.ID)
 	}
 }
 

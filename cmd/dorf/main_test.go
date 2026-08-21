@@ -562,6 +562,16 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 }
 
+func TestCompletedWorkflowAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
+	job := core.Job{ID: "job-123", AdmissionOpen: true, CleanupState: core.CleanupPending, WorkflowAttention: "E2B template is unavailable"}
+	execution := taskResultView{TaskID: "task-1", State: absurd.TaskCompleted}
+	var output strings.Builder
+	renderWorkflowAttentionRecovery(&output, job, execution)
+	if got := output.String(); got != "  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
+		t.Fatalf("recovery output=%q", got)
+	}
+}
+
 func TestSandboxProfileNotReadyDetailSurfacesUnavailableArtifact(t *testing.T) {
 	profile := core.SandboxProfile{Name: "cloud-codex", Verification: &core.ProfileVerification{LastError: "E2B template is unavailable"}}
 	detail := sandboxProfileNotReadyDetail(profile)

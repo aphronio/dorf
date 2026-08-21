@@ -1097,6 +1097,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	renderWorkflow(stdout, currentWork)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+		renderWorkflowAttentionRecovery(stdout, job, currentExecution)
 	}
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
@@ -1168,6 +1169,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	fmt.Fprintln(stdout)
 	if job.WorkflowAttention != "" {
 		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
+		renderWorkflowAttentionRecovery(stdout, job, currentExecution)
 	}
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
@@ -1451,6 +1453,12 @@ func renderWorkflowExecutionAttention(output io.Writer, job core.Job, execution 
 		fmt.Fprintf(output, "  reason: %s\n", execution.LastError)
 	}
 	fmt.Fprintf(output, "  next: repair the cause, then run dorf retry %s\n", job.ID)
+}
+
+func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution taskResultView) {
+	if execution.State == absurd.TaskCompleted && job.CleanupState == core.CleanupPending {
+		fmt.Fprintf(output, "  next: run dorf cleanup %s to release resources\n", job.ID)
+	}
 }
 
 func usage(output io.Writer) error {
