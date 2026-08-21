@@ -17,4 +17,8 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if options.StepName != "dorf/proposal-wake/v2/rev-1/00000000000000000003" || options.Timeout != 30*time.Second {
 		t.Fatalf("proposal wake=%#v", options)
 	}
+	options = wakeOptions(Work{Kind: WorkAttention}, 4, 30*time.Second)
+	if options.StepName != "dorf/message-wake/v1/00000000000000000004" || options.Timeout != idleMessagePollInterval {
+		t.Fatalf("idle Message wake=%#v", options)
+	}
 }

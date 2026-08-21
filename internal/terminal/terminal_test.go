@@ -160,6 +160,37 @@ func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 	}
 }
 
+func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
+	requested := make([]string, 0, 3)
+	externals := Externals{Ownership: func(_ context.Context, sandboxID string) (provider.Ownership, error) {
+		requested = append(requested, sandboxID)
+		return provider.Ownership{}, fmt.Errorf("stop after ownership resolution")
+	}}
+	job := core.Job{ID: "job-exact-sandbox"}
+	for _, observe := range []func() error{
+		func() error {
+			_, err := externals.AgentInitialTurns(context.Background(), job, "sandbox-initial")
+			return err
+		},
+		func() error {
+			_, err := externals.AgentTurns(context.Background(), job, "sandbox-history", "thread-1")
+			return err
+		},
+		func() error {
+			_, err := externals.AgentWait(context.Background(), job, "sandbox-wait", "thread-1", "turn-1")
+			return err
+		},
+	} {
+		if err := observe(); err == nil {
+			t.Fatal("observation continued after ownership resolution failure")
+		}
+	}
+	want := []string{"sandbox-initial", "sandbox-history", "sandbox-wait"}
+	if fmt.Sprint(requested) != fmt.Sprint(want) {
+		t.Fatalf("ownership lookups=%v want=%v", requested, want)
+	}
+}
+
 func TestSandboxRoutesRequireExactConfiguredBridgeAddress(t *testing.T) {
 	adapter := incus.Adapter{Sandbox: incus.Sandbox{Config: incus.Config{Network: "dorf0"}, Runner: bridgeAddressRunner{}}}
 	if _, err := adapter.ProviderRouteURL(context.Background(), "http://10.42.0.1:8317/v1"); err != nil {

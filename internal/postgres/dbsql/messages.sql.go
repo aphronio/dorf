@@ -33,10 +33,15 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,role
 from dorf.agent_runs
 where job_id=$1 and state='active' and turn_id is not null
-  and role='implement'
+  and role='implement' and sandbox_id=$2
 order by started_at,id
 limit 1
 `
+
+type GetActiveImplementationTurnParams struct {
+	JobID     string
+	SandboxID string
+}
 
 type GetActiveImplementationTurnRow struct {
 	TurnID   string
@@ -45,8 +50,8 @@ type GetActiveImplementationTurnRow struct {
 	Role     string
 }
 
-func (q *Queries) GetActiveImplementationTurn(ctx context.Context, jobID string) (GetActiveImplementationTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, jobID)
+func (q *Queries) GetActiveImplementationTurn(ctx context.Context, arg GetActiveImplementationTurnParams) (GetActiveImplementationTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, arg.JobID, arg.SandboxID)
 	var i GetActiveImplementationTurnRow
 	err := row.Scan(
 		&i.TurnID,

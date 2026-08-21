@@ -59,6 +59,10 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if options.StepName != "dorf/investigation-agent-wake/v2/run-1/00000000000000000002" || options.Timeout != time.Second {
 		t.Fatalf("active investigator wake=%#v", options)
 	}
+	options = wakeOptions(Work{Kind: WorkWaitInput}, 3)
+	if options.StepName != "dorf/investigation-wake/v2/00000000000000000003" || options.Timeout != idleMessagePollInterval {
+		t.Fatalf("idle Message wake=%#v", options)
+	}
 }
 
 func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {

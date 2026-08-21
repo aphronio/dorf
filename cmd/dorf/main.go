@@ -162,7 +162,26 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 }
 
 func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
-	return core.Application{Store: store, Tasks: client}
+	return core.Application{Store: store, Tasks: client, AgentMessages: workflowMessageAdmissions{store: store}}
+}
+
+// workflowMessageAdmissions is closed-world deployment composition, not a
+// Core workflow registry. Each known module retains its policy transaction.
+type workflowMessageAdmissions struct{ store postgres.Store }
+
+func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
+	job, err := a.store.Job(ctx, input.JobID)
+	if err != nil {
+		return core.Message{}, false, err
+	}
+	switch {
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		return a.store.AdmitCodingMessage(ctx, input)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		return a.store.AdmitInvestigationMessage(ctx, input)
+	default:
+		return core.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
+	}
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -997,25 +1016,28 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	job, err := store.Job(ctx, *jobID)
+	application := coreApplication(store, client)
+	jobHandle, err := application.OpenJob(ctx, *jobID)
 	if err != nil {
 		return err
 	}
-	messageInput := core.MessageAdmission{JobID: *jobID, FromKind: core.MessageFromHuman, FromID: *requestID, Input: input, Intent: core.MessageDeliveryIntent(*intent)}
-	var accepted core.Message
-	var created bool
-	switch {
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		accepted, created, err = coding.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		accepted, created, err = investigation.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
+	sandbox, err := jobHandle.DefaultSandbox(ctx)
+	if err != nil {
+		return err
+	}
+	options := []core.MessageOption(nil)
+	switch core.MessageDeliveryIntent(*intent) {
+	case core.MessageFollow:
+	case core.MessageSteer:
+		options = append(options, core.Steer())
 	default:
-		return fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
+		return fmt.Errorf("message intent must be follow or steer")
 	}
+	accepted, err := sandbox.Agent().Message(ctx, *requestID, input, options...)
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": "queued"})
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.MessageID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": accepted.Created, "accepted": true, "delivery": "queued"})
 }
 
 func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {

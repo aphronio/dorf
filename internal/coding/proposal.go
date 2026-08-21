@@ -27,7 +27,7 @@ type ProposalOutcome interface {
 	Record(context.Context, string, OutcomeKind) (Outcome, bool, error)
 }
 
-type ProposalMessageAdmitter func(context.Context, string, string, string) (core.Message, bool, error)
+type ProposalMessageAdmitter func(context.Context, string, string, string) (core.MessageReceipt, error)
 
 // ProposalRuntime holds the coding proposal workflow's concrete dependencies.
 // The durable Job remains authoritative; GitHub only supplies observations.
@@ -135,11 +135,11 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 		if r.AdmitMessage == nil {
 			return ProposalObservationResultV1{}, fmt.Errorf("coding Message admission is not configured")
 		}
-		_, created, err := r.AdmitMessage(ctx, jobID, fromID, comment.Body)
+		receipt, err := r.AdmitMessage(ctx, jobID, fromID, comment.Body)
 		if err != nil {
 			return ProposalObservationResultV1{}, err
 		}
-		if created {
+		if receipt.Created {
 			result.NewMessages++
 		}
 	}

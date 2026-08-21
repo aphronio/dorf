@@ -15,6 +15,7 @@ import (
 const (
 	TaskName                = "dorf-codebase-investigation-v2"
 	activeAgentPollInterval = time.Second
+	idleMessagePollInterval = 30 * time.Second
 )
 
 func TaskKey(jobID string) string { return "codebase-investigation:v2:" + jobID }
@@ -65,7 +66,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if work.Kind == WorkObserveAgent && errors.As(err, &timeout) {
+				if errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err
@@ -78,7 +79,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 }
 
 func wakeOptions(work Work, sequence int64) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
+	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), Timeout: idleMessagePollInterval}
 	if work.Kind == WorkObserveAgent {
 		options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
@@ -151,15 +152,4 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err
-}
-
-func AdmitMessage(ctx context.Context, store Store, application core.Application, input core.MessageAdmission) (core.Message, bool, error) {
-	message, created, err := store.AdmitInvestigationMessage(ctx, input)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	if err := application.EmitMessageWake(ctx, message); err != nil {
-		return message, created, err
-	}
-	return message, created, nil
 }

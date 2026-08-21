@@ -29,6 +29,9 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 	if input.Intent != core.MessageFollow {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
 	}
+	if input.SandboxID != core.MainSandboxName(input.JobID) {
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation Message requires the workflow-authorized default Sandbox")
+	}
 	latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
 	if err != nil {
 		return admittedAgentRun{}, err
@@ -42,7 +45,7 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 	}
 	return admittedAgentRun{
 		Role: "investigate", Capability: "repository-read-report", InputRevision: source.Revision,
-		SandboxID: core.MainSandboxName(input.JobID), Harness: latest.Harness, ThreadID: latest.ThreadID,
+		SandboxID: input.SandboxID, Harness: latest.Harness, ThreadID: latest.ThreadID,
 	}, nil
 }
 

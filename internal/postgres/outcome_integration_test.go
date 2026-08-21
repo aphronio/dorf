@@ -82,7 +82,7 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	if err != nil || created || got != stored {
 		t.Fatalf("idempotent Outcome=%#v created=%v err=%v", got, created, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
+	if _, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
 		t.Fatalf("post-abandon Message created=%v err=%v", created, err)
 	}
 	if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
@@ -128,7 +128,7 @@ func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "active-abandon")
 	message, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
-		JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "active-before-abandon",
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "active-before-abandon",
 		Input: "continue working before the explicit stop",
 	})
 	if err != nil || !created {
@@ -189,7 +189,7 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	go func() {
 		defer wg.Done()
 		_, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
-			JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "github-comment-race",
+			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "github-comment-race",
 			Input: "Please explain the tradeoff without changing code.", Intent: core.MessageFollow,
 		})
 		results <- result{kind: "message", created: created, err: err}
@@ -230,7 +230,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	threadID := "thread-" + job.ID
 	priorTurnID := "turn-" + job.ID
 
-	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
+	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
@@ -245,7 +245,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}

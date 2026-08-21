@@ -15,7 +15,7 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,role
 from dorf.agent_runs
 where job_id=sqlc.arg(job_id) and state='active' and turn_id is not null
-  and role='implement'
+  and role='implement' and sandbox_id=sqlc.arg(sandbox_id)
 order by started_at,id
 limit 1;
 

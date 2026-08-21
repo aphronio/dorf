@@ -32,11 +32,11 @@ type Externals interface {
 	SandboxCreate(context.Context, Job, Sandbox) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
 	AgentInitialTurn(context.Context, Job, Delivery, string) (HarnessBinding, error)
-	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
-	AgentTurns(context.Context, Job, string) (HarnessHistory, error)
+	AgentInitialTurns(context.Context, Job, string) (HarnessHistory, error)
+	AgentTurns(context.Context, Job, string, string) (HarnessHistory, error)
 	AgentSubmit(context.Context, Job, Delivery, string) (HarnessBinding, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
-	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
+	AgentWait(context.Context, Job, string, string, string) (HarnessBinding, error)
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
 }
@@ -153,7 +153,7 @@ func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery
 			return s.externals.AgentInitialTurn(ctx, job, delivery, input)
 		},
 		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
-			history, err := s.externals.AgentInitialTurns(ctx, job)
+			history, err := s.externals.AgentInitialTurns(ctx, job, run.SandboxID)
 			if err != nil || history.ThreadID == "" || len(history.Turns) == 0 {
 				return HarnessBinding{}, err
 			}
@@ -164,7 +164,7 @@ func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery
 			return s.externals.AgentSubmit(ctx, job, delivery, input)
 		},
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.ThreadID)
+			return s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
 		},
 		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
@@ -201,7 +201,7 @@ func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run 
 		harness: s.externals.Harness(),
 		label:   "harness",
 		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.ThreadID)
+			return s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
 		},
 		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
@@ -217,7 +217,7 @@ func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run 
 
 func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
 	run := delivery.AgentRun
-	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
+	history, err := s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
 	if err != nil {
 		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
 		return err
@@ -248,7 +248,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 	}
 	acceptedTurnID, err := s.externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observedHistory, inspectErr := s.externals.AgentTurns(ctx, job, run.ThreadID)
+		observedHistory, inspectErr := s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
 		if inspectErr != nil {
 			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
 			return s.uncertainAgentRun(ctx, run.ID, reason)
@@ -360,7 +360,7 @@ func (s ExecutionService) reconcileHarnessMutation(ctx context.Context, job Job)
 	threadID := run.ThreadID
 	var history HarnessHistory
 	if threadID == "" {
-		history, err = s.externals.AgentInitialTurns(ctx, job)
+		history, err = s.externals.AgentInitialTurns(ctx, job, run.SandboxID)
 		if err == nil && history.ThreadID == "" && len(history.Turns) > 0 {
 			err = fmt.Errorf("cleanup initial history returned turns without a harness thread")
 		}
@@ -370,7 +370,7 @@ func (s ExecutionService) reconcileHarnessMutation(ctx context.Context, job Job)
 			delivery.AgentRun = run
 		}
 	} else {
-		history, err = s.externals.AgentTurns(ctx, job, threadID)
+		history, err = s.externals.AgentTurns(ctx, job, run.SandboxID, threadID)
 	}
 	if err != nil {
 		var attention interface{ AttentionNeeded() bool }
@@ -427,7 +427,7 @@ func (s ExecutionService) reconcileHarnessMutation(ctx context.Context, job Job)
 	if reconciliation.Classification != "active" {
 		return nil
 	}
-	outcome, err := s.externals.AgentWait(ctx, job, threadID, reconciliation.Turn.ID)
+	outcome, err := s.externals.AgentWait(ctx, job, run.SandboxID, threadID, reconciliation.Turn.ID)
 	if err != nil {
 		reason := "cleanup is waiting for the exact harness turn outcome: " + err.Error()
 		_ = s.agentRunAttention(ctx, run.ID, reason)

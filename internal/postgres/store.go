@@ -352,7 +352,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool,
 			return core.Job{}, false, err
 		}
 	} else {
-		if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, SandboxID: sandboxID}); err != nil {
+		if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, InputRevision: nullableString(revision), SandboxID: sandboxID}); err != nil {
 			return core.Job{}, false, err
 		}
 	}
@@ -450,6 +450,7 @@ func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, wo
 
 func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
 	input.JobID = strings.TrimSpace(input.JobID)
+	input.SandboxID = strings.TrimSpace(input.SandboxID)
 	input.FromKind = core.MessageFromKind(strings.TrimSpace(string(input.FromKind)))
 	input.FromID = strings.TrimSpace(input.FromID)
 	if input.FromKind == "" {
@@ -458,8 +459,8 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent == "" {
 		input.Intent = core.MessageFollow
 	}
-	if input.JobID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
-		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, from ID, and complete input")
+	if input.JobID == "" || input.SandboxID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
+		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, exact Sandbox ID, from ID, and complete input")
 	}
 	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
 		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
@@ -494,6 +495,13 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		message.AdmittedAt = row.AdmittedAt
 		if message.Input != input.Input || message.Intent != input.Intent {
 			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to different complete message input or delivery intent", input.FromKind, input.FromID)
+		}
+		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
+		if runErr != nil {
+			return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", runErr)
+		}
+		if run.JobID != input.JobID || run.MessageID != message.ID || run.SandboxID != input.SandboxID {
+			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to a different complete Sandbox delivery request", input.FromKind, input.FromID)
 		}
 		return message, false, nil
 	}
@@ -1201,28 +1209,19 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
 		Sequence: row.Sequence, Input: row.Input, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
-	runID := core.AgentRunID(message.ID)
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, SandboxID: core.MainSandboxName(jobID)}); err != nil {
-		return nil, err
-	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("delivery Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
 	if run.Role != "implement" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has unsupported role %s", run.ID, run.Role)
 	}
-	if run.InputRevision == "" {
-		if err := expectOneRows(queries.BindImplementationInputRevision(ctx, dbsql.BindImplementationInputRevisionParams{InputRevision: sql.NullString{String: job.Revision, Valid: true}, RunID: run.ID})); err != nil {
-			return nil, err
-		}
-		run.InputRevision = job.Revision
-	} else if run.InputRevision != job.Revision && run.State == core.AgentRunPending {
+	if run.InputRevision != job.Revision && run.State == core.AgentRunPending {
 		return nil, fmt.Errorf("AgentRun %s input Revision %s conflicts with current Revision %s", run.ID, run.InputRevision, job.Revision)
 	}
-	bindings, err := queries.ListImplementationThreadBindings(ctx, jobID)
+	bindings, err := queries.ListImplementationThreadBindings(ctx, dbsql.ListImplementationThreadBindingsParams{JobID: jobID, SandboxID: run.SandboxID})
 	if err != nil {
 		return nil, err
 	}
@@ -1324,7 +1323,7 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 		return fmt.Errorf("AgentRun %s must be prepared before binding a harness Turn", runID)
 	}
 	if run.Role == "implement" {
-		bindings, err := queries.ListImplementationThreadBindings(ctx, run.JobID)
+		bindings, err := queries.ListImplementationThreadBindings(ctx, dbsql.ListImplementationThreadBindingsParams{JobID: run.JobID, SandboxID: run.SandboxID})
 		if err != nil {
 			return err
 		}
@@ -1332,14 +1331,6 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 			if binding.Harness.String != harness || binding.ThreadID.String != threadID {
 				return fmt.Errorf("AgentRun %s conflicts with Job %s implementation Thread", runID, run.JobID)
 			}
-		}
-	} else {
-		inherited, err := queries.ImplementationThreadExists(ctx, dbsql.ImplementationThreadExistsParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}})
-		if err != nil {
-			return err
-		}
-		if inherited {
-			return fmt.Errorf("review AgentRun %s cannot inherit an implementation Thread", runID)
 		}
 	}
 	if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
@@ -1401,6 +1392,7 @@ func (s Store) HarnessMutationDelivery(ctx context.Context, jobID string) (*core
 		Message:  messageFromValues(row.MessageID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
 		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.State, row.Harness, row.ThreadID, row.BaselineRecorded, row.BaselineTurnID, row.TurnID, row.TurnOutcome, row.Attention, row.Role, row.InputRevision),
 	}
+	delivery.AgentRun.SandboxID = row.SandboxID
 	delivery.Message.AdmittedAt = row.AdmittedAt
 	return &delivery, nil
 }

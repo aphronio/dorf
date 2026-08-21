@@ -423,28 +423,31 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		}
 	})
 
-	first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
+	first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || !created || first.Sequence != 2 || first.FromKind != "human" || first.FromID != "client-retry" || first.ID != core.MessageID(job.ID, "human", "client-retry") {
 		t.Fatalf("first message=%#v created=%v err=%v", first, created, err)
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not codebase-investigation") {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not codebase-investigation") {
 		t.Fatalf("investigation admission crossed into coding: created=%v err=%v", created, err)
 	}
-	repeated, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"})
+	repeated, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"})
 	if err != nil || created || repeated != first {
 		t.Fatalf("idempotent message=%#v created=%v err=%v", repeated, created, err)
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); err == nil || created || !strings.Contains(err.Error(), "different complete Sandbox delivery request") {
+		t.Fatalf("same send key replayed through another Sandbox: created=%v err=%v", created, err)
+	}
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
 		t.Fatal("changed input under the same source identity did not conflict")
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
 		t.Fatal("byte-distinct complete input under the same source identity did not conflict")
 	}
-	distinct, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-distinct", Input: "same text"})
+	distinct, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-distinct", Input: "same text"})
 	if err != nil || !created || distinct.ID == first.ID || distinct.Sequence != 3 {
 		t.Fatalf("distinct identical message=%#v created=%v err=%v", distinct, created, err)
 	}
-	crossKind, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "workflow", FromID: distinct.FromID, Input: "same source identity from the workflow"})
+	crossKind, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "workflow", FromID: distinct.FromID, Input: "same source identity from the workflow"})
 	if err != nil || !created || crossKind.Sequence != 4 || crossKind.ID == distinct.ID || crossKind.ID != core.MessageID(job.ID, "workflow", distinct.FromID) || crossKind.FromKind != "workflow" || crossKind.FromID != distinct.FromID {
 		t.Fatalf("cross-kind source identity=%#v created=%v err=%v", crossKind, created, err)
 	}
@@ -457,7 +460,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			message, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
+			message, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: fmt.Sprintf("concurrent-%02d", i), Input: "same concurrent text"})
 			if err == nil {
 				sequences <- message.Sequence
 			}
@@ -508,7 +511,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		t.Fatal(err)
 	}
 	blocker, err := store.HarnessMutationDelivery(ctx, job.ID)
-	if err != nil || blocker == nil || blocker.AgentRun.State != core.AgentRunActive {
+	if err != nil || blocker == nil || blocker.AgentRun.State != core.AgentRunActive || blocker.AgentRun.SandboxID != core.MainSandboxName(job.ID) {
 		t.Fatalf("active harness mutation=%#v err=%v", blocker, err)
 	}
 	stillOpen, err := store.Job(ctx, job.ID)
@@ -565,10 +568,10 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if cleaning.AdmissionOpen {
 		t.Fatal("cleanup did not durably close admission")
 	}
-	if retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
+	if retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || created || retry != first {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v %v", retry, created, err)
 	}
-	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
 		t.Fatal("cleanup allowed a new message")
 	}
 }
@@ -801,7 +804,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("active Turn delivery candidate=%#v err=%v, want observation outside delivery lane", candidate, err)
 	}
 
-	steerInput := core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: core.MessageSteer}
+	steerInput := core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "operator-steer", Input: "correct the active work", Intent: core.MessageSteer}
 	steer, created, err := store.AdmitCodingMessage(ctx, steerInput)
 	if err != nil || !created || steer.Intent != core.MessageSteer || steer.TargetTurnID != activeTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
@@ -829,12 +832,22 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	if err != nil || len(deliveries) != 2 || deliveries[1].AgentRun.TurnID != activeTurnID || deliveries[1].Message.Intent != core.MessageSteer {
 		t.Fatalf("steer deliveries=%#v err=%v", deliveries, err)
 	}
+	if err := store.BindAgentRun(ctx, active.AgentRun.ID, "codex", threadID, activeTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindSteer(ctx, delivery.AgentRun.ID, activeTurnID, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	repeated, created, err = store.AdmitCodingMessage(ctx, steerInput)
+	if err != nil || created || repeated != steer {
+		t.Fatalf("terminal-target replay retargeted or reauthorized: Message=%#v created=%v err=%v", repeated, created, err)
+	}
 	next, err := store.NextDelivery(ctx, job.ID)
 	if err != nil || next != nil {
 		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
+	if _, _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -871,11 +884,11 @@ func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
 			if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "first-shared-steer", Input: "first accepted shared input", Intent: core.MessageSteer})
+			first, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "first-shared-steer", Input: "first accepted shared input", Intent: core.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("first steer=%#v created=%v err=%v", first, created, err)
 			}
-			second, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "second-shared-steer", Input: "second accepted shared input", Intent: core.MessageSteer})
+			second, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "second-shared-steer", Input: "second accepted shared input", Intent: core.MessageSteer})
 			if err != nil || !created {
 				t.Fatalf("second steer=%#v created=%v err=%v", second, created, err)
 			}
@@ -936,7 +949,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "terminal-race-steer", Input: "preserve exact durable input", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "terminal-race-steer", Input: "preserve exact durable input", Intent: core.MessageSteer})
 	if err != nil || !created || steer.TargetTurnID != targetTurnID {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -954,7 +967,7 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, actualTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
+	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
 	if err != nil || !created {
 		t.Fatalf("later=%#v created=%v err=%v", later, created, err)
 	}
@@ -999,7 +1012,7 @@ func TestTerminalHarnessTurnAllowsSameThreadFollowFIFO(t *testing.T) {
 			if err := store.BindAgentRun(ctx, first.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
 				t.Fatal(err)
 			}
-			follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "queued-follow", Input: "continue after the accepted outcome"})
+			follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "queued-follow", Input: "continue after the accepted outcome"})
 			if err != nil || !created || follow.Intent != core.MessageFollow {
 				t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 			}
@@ -1045,7 +1058,7 @@ func TestSubmittingFollowRemainsDeliveryCandidateUntilReconciled(t *testing.T) {
 	}) {
 		t.Fatalf("prepared Delivery baseline=%#v err=%v", deliveries, err)
 	}
-	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
+	later, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "later-follow", Input: "must wait for recovery"})
 	if err != nil || !created {
 		t.Fatalf("later Follow=%#v created=%v err=%v", later, created, err)
 	}
@@ -1081,7 +1094,7 @@ func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "recover-submitting-steer", Input: "adjust the active Turn", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "recover-submitting-steer", Input: "adjust the active Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -1092,7 +1105,7 @@ func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
 	if err := store.PrepareAgentRun(ctx, selected.AgentRun.ID, "codex", targetTurnID); err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "queued-after-steer", Input: "run after the active Turn"}); err != nil || !created {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "queued-after-steer", Input: "run after the active Turn"}); err != nil || !created {
 		t.Fatalf("queued Follow created=%v err=%v", created, err)
 	}
 
@@ -1125,7 +1138,7 @@ func TestTerminalTargetSteerFallbackOwnsRevisionObservation(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: core.MessageSteer})
+	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: core.MessageSteer})
 	if err != nil || !created {
 		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
 	}
@@ -1173,7 +1186,7 @@ func TestFailedAcceptedTurnRequiresLaterSuccessfulFollowBeforeRevisionObservatio
 	if err := store.RecordRevisionObservation(ctx, job.ID, first.AgentRun.ID, observation, failedEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
 		t.Fatalf("failed accepted turn crossed Revision observation gate: %v", err)
 	}
-	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "successful-follow", Input: "finish the coding workflow"})
+	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "successful-follow", Input: "finish the coding workflow"})
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
@@ -1232,7 +1245,7 @@ func TestChangedAndUnchangedRevisionObservationsLinkExactImplementationAgentRuns
 		t.Fatalf("replay exact changed Revision observation: %v", err)
 	}
 
-	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "verify-unchanged", Input: "verify the current implementation"})
+	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "verify-unchanged", Input: "verify the current implementation"})
 	if err != nil || !created || follow.JobID != job.ID {
 		t.Fatalf("follow Message=%#v created=%v err=%v", follow, created, err)
 	}
@@ -1916,7 +1929,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 		t.Fatalf("pre-boundary delivery=%#v err=%v", delivery, err)
 	}
 
-	late, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "late-before-observation", Input: "include this bounded steering"})
+	late, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "late-before-observation", Input: "include this bounded steering"})
 	if err != nil || !created {
 		t.Fatalf("late admission=%#v created=%v err=%v", late, created, err)
 	}
@@ -1929,7 +1942,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	includedRun := completeNextIntegrationRun(t, store, job.ID, threadID, "turn-late-"+job.ID)
 	evidence := integrationEvidence(includedRun.ID, "git-revision", "", "", revision, "a")
 	evidence.AgentRunID = includedRun.ID
-	afterCandidate, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
+	afterCandidate, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "late-after-candidate", Input: "include the message admitted during Git inspection"})
 	if err != nil || !created {
 		t.Fatalf("late post-candidate admission=%#v created=%v err=%v", afterCandidate, created, err)
 	}
@@ -1942,7 +1955,7 @@ func TestRevisionObservationBoundaryIncludesLateSteeringAtomically(t *testing.T)
 	if err := store.RecordRevisionObservation(ctx, job.ID, finalRun.ID, observation, finalEvidence); err != nil {
 		t.Fatalf("final Revision observation: %v", err)
 	}
-	retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
+	retry, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: late.FromKind, FromID: late.FromID, Input: late.Input})
 	if err != nil || created || retry != late {
 		t.Fatalf("idempotent admitted retry=%#v created=%v err=%v", retry, created, err)
 	}
@@ -2007,12 +2020,12 @@ func (e *integrationExternals) AgentInitialTurn(_ context.Context, job core.Job,
 	}
 	return core.HarnessBinding{Harness: "codex", ThreadID: "integration-thread-" + job.ID, Turn: e.turns[0]}, nil
 }
-func (e *integrationExternals) AgentInitialTurns(_ context.Context, job core.Job) (core.HarnessHistory, error) {
+func (e *integrationExternals) AgentInitialTurns(_ context.Context, job core.Job, _ string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: "integration-thread-" + job.ID, Turns: append([]core.HarnessTurn(nil), e.turns...)}, nil
 }
-func (e *integrationExternals) AgentTurns(_ context.Context, _ core.Job, threadID string) (core.HarnessHistory, error) {
+func (e *integrationExternals) AgentTurns(_ context.Context, _ core.Job, _ string, threadID string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: append([]core.HarnessTurn(nil), e.turns...)}, nil
@@ -2031,7 +2044,7 @@ func (e *integrationExternals) AgentSteer(_ context.Context, _ core.Job, deliver
 	e.submitted = append(e.submitted, delivery.Message.Sequence)
 	return delivery.Message.TargetTurnID, nil
 }
-func (e *integrationExternals) AgentWait(_ context.Context, _ core.Job, threadID, turnID string) (core.HarnessBinding, error) {
+func (e *integrationExternals) AgentWait(_ context.Context, _ core.Job, _ string, threadID, turnID string) (core.HarnessBinding, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for index := range e.turns {

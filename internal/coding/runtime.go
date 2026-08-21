@@ -15,6 +15,7 @@ import (
 const (
 	TaskName                = "dorf-coding-job-v3"
 	activeAgentPollInterval = time.Second
+	idleMessagePollInterval = 30 * time.Second
 )
 
 func TaskKey(jobID string) string { return "coding-job:v3:" + jobID }
@@ -79,7 +80,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), wakeOptions(work, sequence, proposal.PollInterval))
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
+				if errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err
@@ -126,7 +127,7 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 }
 
 func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
+	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence), Timeout: idleMessagePollInterval}
 	switch work.Kind {
 	case WorkObserveProposal:
 		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
@@ -169,15 +170,4 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err
-}
-
-func AdmitMessage(ctx context.Context, store Store, application core.Application, input core.MessageAdmission) (core.Message, bool, error) {
-	message, created, err := store.AdmitCodingMessage(ctx, input)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	if err := application.EmitMessageWake(ctx, message); err != nil {
-		return message, created, err
-	}
-	return message, created, nil
 }

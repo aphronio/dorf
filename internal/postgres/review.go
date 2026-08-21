@@ -253,7 +253,8 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		}
 		implementationRunID := core.AgentRunID(expectedMessage.ID)
 		if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{
-			ID: implementationRunID, JobID: run.JobID, MessageID: expectedMessage.ID, SandboxID: core.MainSandboxName(run.JobID),
+			ID: implementationRunID, JobID: run.JobID, MessageID: expectedMessage.ID,
+			InputRevision: nullableString(run.CurrentRevision), SandboxID: core.MainSandboxName(run.JobID),
 		})); err != nil {
 			return core.Message{}, false, err
 		}

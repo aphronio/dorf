@@ -44,7 +44,7 @@ func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, tas
 // Message. Re-emission is safe because the event identity is deterministic.
 func (a Application) EmitMessageWake(ctx context.Context, message Message) error {
 	if err := a.Tasks.EmitEvent(ctx, a.Tasks.QueueName(), MessageWakeEvent(message.JobID, message.Sequence), MessageWakeV1{JobID: message.JobID, Sequence: message.Sequence}); err != nil {
-		return fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same from ID and input: %w", message.ID, message.Sequence, err)
+		return fmt.Errorf("message %s sequence %d was accepted, but its wake hint failed; retry the same send key and text: %w", message.ID, message.Sequence, err)
 	}
 	return nil
 }

@@ -59,10 +59,10 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
 		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
+	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
 		t.Fatalf("coding admission crossed into investigation: created=%v err=%v", created, err)
 	}
 
@@ -120,7 +120,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
 		t.Fatalf("changed Artifact replay error=%v", err)
 	}
-	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
+	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
 	if err != nil || !created || follow.Sequence != 2 {
 		t.Fatalf("follow-up=%#v created=%v err=%v", follow, created, err)
 	}
@@ -224,7 +224,7 @@ func (e *investigationExternals) AgentInitialTurn(_ context.Context, job core.Jo
 	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n"}
 	return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + job.ID, Turn: e.turn}, nil
 }
-func (e *investigationExternals) AgentInitialTurns(context.Context, core.Job) (core.HarnessHistory, error) {
+func (e *investigationExternals) AgentInitialTurns(context.Context, core.Job, string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: "thread-" + e.job.ID, Turns: []core.HarnessTurn{e.turn}}, nil
@@ -238,7 +238,7 @@ func (e *investigationExternals) AgentSubmit(_ context.Context, job core.Job, de
 	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n"}
 	return core.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: e.turn}, nil
 }
-func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, threadID string) (core.HarnessHistory, error) {
+func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, _ string, threadID string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: []core.HarnessTurn{e.turn}}, nil
@@ -337,7 +337,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
 		t.Fatalf("Job did not remain open for follow-up or cleanup: %#v err=%v", job, err)
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
+	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
 		t.Fatalf("follow-up created=%v err=%v", created, err)
 	}
 	revisionTaskName := taskName + "-follow-up"

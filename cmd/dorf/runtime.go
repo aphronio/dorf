@@ -76,10 +76,16 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeService, Store: r.store,
-			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.Message, bool, error) {
-				return coding.AdmitMessage(ctx, r.store, coreApplication(r.store, r.client), core.MessageAdmission{
-					JobID: jobID, FromKind: core.MessageFromHuman, FromID: fromID, Input: input, Intent: core.MessageFollow,
-				})
+			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.MessageReceipt, error) {
+				job, err := coreApplication(r.store, r.client).OpenJob(ctx, jobID)
+				if err != nil {
+					return core.MessageReceipt{}, err
+				}
+				sandbox, err := job.DefaultSandbox(ctx)
+				if err != nil {
+					return core.MessageReceipt{}, err
+				}
+				return sandbox.Agent().Message(ctx, fromID, input)
 			},
 		},
 	}, nil

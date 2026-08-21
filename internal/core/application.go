@@ -82,6 +82,7 @@ func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID
 type Application struct {
 	Store           ApplicationStore
 	Tasks           *absurd.Client
+	AgentMessages   AgentMessageAdmission
 	SandboxRuntimes SandboxRuntimeResolver
 	CleanupRuntimes CleanupRuntimeResolver
 }

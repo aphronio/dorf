@@ -16,7 +16,6 @@ type Store interface {
 	Job(context.Context, string) (core.Job, error)
 	JobExists(context.Context, string) (bool, error)
 	AdmitInvestigation(context.Context, Admission) (core.Job, bool, error)
-	AdmitInvestigationMessage(context.Context, core.MessageAdmission) (core.Message, bool, error)
 	NextWakeSequence(context.Context, string) (int64, error)
 	CodebaseInvestigationSource(context.Context, string) (Source, error)
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)

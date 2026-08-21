@@ -308,16 +308,16 @@ func (e Externals) AgentInitialTurn(ctx context.Context, job core.Job, delivery 
 	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
-func (e Externals) AgentInitialTurns(ctx context.Context, job core.Job) (core.HarnessHistory, error) {
-	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
+func (e Externals) AgentInitialTurns(ctx context.Context, _ core.Job, sandboxID string) (core.HarnessHistory, error) {
+	owner, err := e.owner(ctx, sandboxID)
 	if err != nil {
 		return core.HarnessHistory{}, err
 	}
 	return e.Agent.ReadInitialTurns(ctx, owner, e.Sandbox.Workspace())
 }
 
-func (e Externals) AgentTurns(ctx context.Context, job core.Job, threadID string) (core.HarnessHistory, error) {
-	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
+func (e Externals) AgentTurns(ctx context.Context, _ core.Job, sandboxID, threadID string) (core.HarnessHistory, error) {
+	owner, err := e.owner(ctx, sandboxID)
 	if err != nil {
 		return core.HarnessHistory{}, err
 	}
@@ -340,8 +340,8 @@ func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.D
 	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
 }
 
-func (e Externals) AgentWait(ctx context.Context, job core.Job, threadID, turnID string) (core.HarnessBinding, error) {
-	owner, err := e.owner(ctx, core.MainSandboxName(job.ID))
+func (e Externals) AgentWait(ctx context.Context, _ core.Job, sandboxID, threadID, turnID string) (core.HarnessBinding, error) {
+	owner, err := e.owner(ctx, sandboxID)
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}

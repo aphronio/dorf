@@ -16,9 +16,19 @@ func authorizeCodingMessage(ctx context.Context, queries *dbsql.Queries, job dbs
 	if job.OutcomeExists {
 		return admittedAgentRun{}, fmt.Errorf("Job %s outcome is already recorded", input.JobID)
 	}
-	run := admittedAgentRun{Role: "implement", SandboxID: core.MainSandboxName(input.JobID)}
+	if input.SandboxID != core.MainSandboxName(input.JobID) {
+		return admittedAgentRun{}, fmt.Errorf("coding Message requires the workflow-authorized default Sandbox")
+	}
+	codingInput, err := queries.GetCodingToProposalInput(ctx, input.JobID)
+	if err != nil {
+		return admittedAgentRun{}, err
+	}
+	if !ValidRevision(codingInput.Revision) {
+		return admittedAgentRun{}, fmt.Errorf("coding Message requires the locked current Revision")
+	}
+	run := admittedAgentRun{Role: "implement", InputRevision: codingInput.Revision, SandboxID: input.SandboxID}
 	if input.Intent == core.MessageSteer {
-		active, err := queries.GetActiveImplementationTurn(ctx, input.JobID)
+		active, err := queries.GetActiveImplementationTurn(ctx, dbsql.GetActiveImplementationTurnParams{JobID: input.JobID, SandboxID: input.SandboxID})
 		if errors.Is(err, sql.ErrNoRows) {
 			return admittedAgentRun{}, fmt.Errorf("steer delivery requires an exact active regular harness Turn")
 		}
@@ -28,7 +38,7 @@ func authorizeCodingMessage(ctx context.Context, queries *dbsql.Queries, job dbs
 		run.TargetTurnID, run.Harness, run.ThreadID, run.Role = active.TurnID, active.Harness, active.ThreadID, active.Role
 		return run, nil
 	}
-	prior, err := queries.GetLatestImplementationThreadBinding(ctx, input.JobID)
+	prior, err := queries.GetLatestImplementationThreadBinding(ctx, dbsql.GetLatestImplementationThreadBindingParams{JobID: input.JobID, SandboxID: input.SandboxID})
 	if err == nil {
 		run.Harness, run.ThreadID = prior.Harness, prior.ThreadID
 	} else if !errors.Is(err, sql.ErrNoRows) {
