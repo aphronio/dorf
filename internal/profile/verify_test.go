@@ -30,6 +30,12 @@ func newVerificationStore() *verificationStore {
 }
 
 func (s *verificationStore) BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error) {
+	if !s.verification.ProbeCompletedAt.IsZero() && !s.verification.CleanedAt.IsZero() {
+		s.verification = core.ProfileVerification{
+			ProfileName: s.profile.Name, ContractVersion: core.BaseProfileContract,
+			SandboxID: "dorf-profile-local", OwnershipNonce: "fresh-nonce", AttemptedAt: time.Now(),
+		}
+	}
 	s.profile.Verification = &s.verification
 	return s.profile, s.verification, nil
 }
@@ -118,6 +124,25 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	}
 	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 || runtime.present {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
+	}
+}
+
+func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
+	store := newVerificationStore()
+	previous := time.Now().Add(-time.Hour)
+	store.verification.ProbeCompletedAt = previous
+	store.verification.CleanedAt = previous.Add(time.Second)
+	store.verification.HarnessVersion = "codex old"
+	runtime := &verificationSandbox{execResult: provider.Result{Stdout: "codex fresh\n"}}
+	profile, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !profile.BaseVerified() || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 {
+		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
+	}
+	if !store.verification.AttemptedAt.After(previous) || store.verification.HarnessVersion != "codex fresh" || store.verification.OwnershipNonce != "fresh-nonce" {
+		t.Fatalf("verification was not refreshed: %#v", store.verification)
 	}
 }
 

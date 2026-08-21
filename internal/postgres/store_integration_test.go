@@ -356,6 +356,17 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err != nil || !defaulted.Default || !defaulted.BaseVerified() {
 		t.Fatalf("default profile=%#v err=%v", defaulted, err)
 	}
+	previousVerification := *defaulted.Verification
+	refreshing, refreshedVerification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil || refreshing.BaseVerified() || refreshedVerification.OwnershipNonce == previousVerification.OwnershipNonce || !refreshedVerification.AttemptedAt.After(previousVerification.AttemptedAt) {
+		t.Fatalf("fresh verification profile=%#v receipt=%#v error=%v", refreshing, refreshedVerification, err)
+	}
+	if err := store.RecordSandboxProfileProbe(ctx, refreshedVerification, "pi 0.52.4"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, refreshedVerification); err != nil {
+		t.Fatal(err)
+	}
 
 	input := codingJobInput("profile-immutability-"+name, "bounded implementation", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/profile-immutability")
 	input.SandboxProfile = name
@@ -363,6 +374,9 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	job, created, err := store.AdmitCoding(ctx, input)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
+	}
+	if _, _, err := store.BeginSandboxProfileVerification(ctx, name); err == nil || !strings.Contains(err.Error(), "incomplete cleanup") {
+		t.Fatalf("in-use profile started fresh verification: %v", err)
 	}
 	sameGateway := profile.E2BGatewayURL
 	unchanged, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &sameGateway})

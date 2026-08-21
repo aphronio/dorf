@@ -622,17 +622,15 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 				return nil, err
 			}
 		}
-		if !profile.BaseVerified() {
-			err := presenter.Run(ctx, "Verifying "+profile.Name, func(ctx context.Context) error {
-				var verifyErr error
-				profile, verifyErr = profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (providerapi.Sandbox, error) {
-					return sandboxForProfile(cfg, profile)
-				}, profile.Name)
-				return verifyErr
-			})
-			if err != nil {
-				return nil, err
-			}
+		err = presenter.Run(ctx, "Verifying "+profile.Name, func(ctx context.Context) error {
+			var verifyErr error
+			profile, verifyErr = profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (providerapi.Sandbox, error) {
+				return sandboxForProfile(cfg, profile)
+			}, profile.Name)
+			return verifyErr
+		})
+		if err != nil {
+			return nil, err
 		}
 		profiles = append(profiles, profile)
 		presenter.Ready("Sandbox profile", profile.Name+" · "+string(profile.Provider)+" · verified")

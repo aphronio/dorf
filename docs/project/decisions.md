@@ -1806,7 +1806,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   operation, `bash`, `git`, `rg`, and the selected Harness/version, then ownership-deletes the
   Sandbox and confirms absence. Its stable
   ownership tuple and typed receipt make process-loss recovery converge through cleanup rather than
-  leak a proof resource. Repository-specific dependencies remain the repository setup or custom
+  leak a proof resource. Each explicit `profile verify` and each selected-profile setup run starts
+  a fresh functional attempt after any prior settled receipt; an interrupted attempt resumes its
+  exact cleanup. Ordinary Job admission uses the latest successful receipt without making a
+  billable provider call, and a fresh attempt is refused while a Job using that profile has
+  incomplete cleanup. Repository-specific dependencies remain the repository setup or custom
   artifact's responsibility. Optional capabilities stay broad and are added only when an actual
   workflow requires them.
 - **Mutation rule:** `profile update` applies only explicitly supplied fields to the latest locked
@@ -1862,6 +1866,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   therefore means the selected profile can admit Agent work; selecting no provider deliberately
   stops after the common foundation. Explicit profile and provider commands remain composable
   operator surfaces, not required follow-up chores for the ordinary path.
+  Rerunning setup freshly verifies every selected profile rather than treating a historical receipt
+  as current provider availability.
   Guided E2B setup defaults to the exact public Dorf Standard template build compiled into that
   Dorf release; `--e2b-template` remains the explicit bring-your-own exact-build path.
 - **Deliberate omission:** `DORF_DATABASE_URL` remains the existing advanced and test override, but

@@ -251,11 +251,24 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 		return core.SandboxProfile{}, core.ProfileVerification{}, err
 	}
 	profile := profileFromGetRow(row)
-	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() {
+	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() && profile.Verification.CleanedAt.IsZero() {
 		if err := tx.Commit(); err != nil {
 			return core.SandboxProfile{}, core.ProfileVerification{}, err
 		}
 		return profile, *profile.Verification, nil
+	}
+	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() {
+		inUse, err := queries.ProfileHasIncompleteJobs(ctx, name)
+		if err != nil {
+			return core.SandboxProfile{}, core.ProfileVerification{}, err
+		}
+		if inUse {
+			return core.SandboxProfile{}, core.ProfileVerification{}, fmt.Errorf("Sandbox profile %q cannot be freshly verified while a Job using it has incomplete cleanup", name)
+		}
+		if err := queries.DeleteProfileVerification(ctx, name); err != nil {
+			return core.SandboxProfile{}, core.ProfileVerification{}, err
+		}
+		profile.Verification = nil
 	}
 	digest := sha256.Sum256([]byte(name))
 	sandboxID := fmt.Sprintf("dorf-profile-%x", digest[:10])

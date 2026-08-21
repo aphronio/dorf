@@ -23,14 +23,13 @@ type RuntimeFactory func(core.SandboxProfile) (provider.Sandbox, error)
 
 // VerifyBase reconciles one disposable provider resource, executes Dorf's
 // base-1 functional probe, and confirms exact deletion before the profile may
-// admit Jobs. A retry reuses the durable ownership identity.
+// admit Jobs. Each explicit invocation starts a fresh attempt after any prior
+// settled verification; a retry of an interrupted attempt reuses its durable
+// ownership identity.
 func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
 	profile, verification, err := store.BeginSandboxProfileVerification(ctx, name)
 	if err != nil {
 		return core.SandboxProfile{}, err
-	}
-	if profile.BaseVerified() {
-		return profile, nil
 	}
 	if runtimeForProfile == nil {
 		return core.SandboxProfile{}, fmt.Errorf("Sandbox profile runtime construction is not configured")
