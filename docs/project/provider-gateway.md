@@ -28,7 +28,12 @@ to the selected private Incus bridge when local and cloud profiles coexist; it n
 listener. The Tunnel exposes only `/v1`, retains one exact Tunnel credential and a Dorf-owned host
 service, and receives no upstream Provider credential. Browser authorization creates a broad
 Cloudflare account certificate only for Tunnel and DNS reconciliation; setup removes it after those
-account-level mutations settle, then verifies anonymous-401 reachability separately.
+account-level mutations settle. The managed ingress also serves one random, nonsecret deployment
+probe path directly from `cloudflared`; setup and status require that exact path to return HTTP 204
+and separately require anonymous `/v1/models` access to return the Gateway's HTTP 401. This proves
+the configured hostname reaches this Dorf-owned Tunnel rather than merely some protected service.
+Operator-owned HTTPS ingress retains only the universal protected-API check because Dorf does not
+own its routing configuration.
 
 The E2B adapter defaults to restricting Sandbox egress to the configured Gateway hostname, and the
 Gateway's revocable consumer key remains the request capability. A repository profile may
@@ -53,7 +58,8 @@ Gateway reachability separately and exits unsuccessfully when either authority i
 - Route keys are broker-local capabilities, never upstream credentials.
 - The broker binds to loopback or one exact private Incus bridge IPv4, never wildcard.
 - The guided Cloudflare route forwards only the exact `/v1` API path and runs as
-  `dorf-cloudflared.service`; other public paths terminate at the Tunnel with HTTP 404.
+  `dorf-cloudflared.service`; its one nonsecret deployment-probe path terminates with HTTP 204 and
+  every other public path terminates with HTTP 404.
 - A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
   rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
 - Route creation and revocation use stable Action identities and authenticated management calls.

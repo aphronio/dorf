@@ -689,7 +689,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   consumer route key authenticates Gateway requests. Any exact stable HTTPS `/v1` ingress remains
   valid deployment input. Guided setup owns one narrower convenience: a named outbound-only
   Cloudflare Tunnel for an operator-authorized hostname, an exact retained Tunnel credential, and a
-  dedicated `dorf-cloudflared.service`. Only `/v1` reaches the private broker. The broad Cloudflare
+  dedicated `dorf-cloudflared.service`. Only `/v1` reaches the private broker. One random nonsecret
+  probe path terminates inside the exact managed Tunnel configuration; readiness requires its HTTP
+  204 plus the private Gateway's anonymous HTTP 401. Operator-owned HTTPS ingress retains only the
+  latter universal contract because Dorf cannot attest routing it does not own. The broad Cloudflare
   account certificate used to create the Tunnel and DNS route is removed after readiness. Disposable
   Quick Tunnels remain proof-only. Workload identity beyond the scoped route and multi-user authority
   remain unimplemented until a concrete deployment requires them.

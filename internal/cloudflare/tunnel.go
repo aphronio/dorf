@@ -30,6 +30,7 @@ const (
 )
 
 var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+var probeIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 type CommandRunner interface {
 	Run(context.Context, []string, io.Writer, io.Writer, string, ...string) error
@@ -96,9 +97,21 @@ type State struct {
 	Origin           string `json:"origin"`
 	CredentialPath   string `json:"credential_path,omitempty"`
 	ConfigPath       string `json:"config_path,omitempty"`
+	ProbeID          string `json:"probe_id,omitempty"`
 	DNSConfigured    bool   `json:"dns_configured"`
 	ServiceInstalled bool   `json:"service_installed"`
 	Complete         bool   `json:"complete"`
+}
+
+func (s State) ProbeURL() (string, error) {
+	baseURL, err := GatewayURL(s.Hostname)
+	if err != nil {
+		return "", err
+	}
+	if !probeIDPattern.MatchString(s.ProbeID) {
+		return "", fmt.Errorf("Cloudflare Tunnel deployment probe identity is invalid; rerun dorf setup")
+	}
+	return strings.TrimSuffix(baseURL, "/v1") + "/.dorf/probe/" + s.ProbeID, nil
 }
 
 type listedTunnel struct {
@@ -189,13 +202,26 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 		state.Origin = origin
 	}
 	if !found {
-		nonce := make([]byte, 4)
-		if _, err := rand.Read(nonce); err != nil {
+		nonce, err := randomHex(4)
+		if err != nil {
 			return State{}, err
 		}
-		state = State{SchemaVersion: 1, TunnelName: "dorf-" + hex.EncodeToString(nonce), Hostname: hostname, Origin: origin}
+		probeID, err := randomHex(16)
+		if err != nil {
+			return State{}, err
+		}
+		state = State{SchemaVersion: 1, TunnelName: "dorf-" + nonce, Hostname: hostname, Origin: origin, ProbeID: probeID}
 		if err := t.save(state); err != nil {
 			return State{}, err
+		}
+	}
+	if state.ProbeID == "" {
+		state.ProbeID, err = randomHex(16)
+		if err != nil {
+			return state, err
+		}
+		if err := t.save(state); err != nil {
+			return state, err
 		}
 	}
 	binary, err := t.ensureBinary(ctx)
@@ -385,7 +411,15 @@ func (t Tunnel) runRoot(ctx context.Context, stdout, stderr io.Writer, name stri
 }
 
 func (t Tunnel) config(state State) string {
-	return fmt.Sprintf("tunnel: %q\ncredentials-file: %q\nno-autoupdate: true\ningress:\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - service: http_status:404\n", state.TunnelID, state.CredentialPath, state.Hostname, state.Origin)
+	return fmt.Sprintf("tunnel: %q\ncredentials-file: %q\nno-autoupdate: true\ningress:\n  - hostname: %q\n    path: ^/\\.dorf/probe/%s$\n    service: http_status:204\n  - hostname: %q\n    path: ^/v1(/.*)?$\n    service: %q\n  - service: http_status:404\n", state.TunnelID, state.CredentialPath, state.Hostname, state.ProbeID, state.Hostname, state.Origin)
+}
+
+func randomHex(bytes int) (string, error) {
+	raw := make([]byte, bytes)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw), nil
 }
 
 func (t Tunnel) service(binary, config string) string {

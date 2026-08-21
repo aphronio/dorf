@@ -239,8 +239,13 @@ func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 
 func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRoutes(t *testing.T) {
 	requests := 0
+	probeID := strings.Repeat("a", 32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
+		if r.Method == http.MethodGet && r.URL.Path == "/.dorf/probe/"+probeID {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
 			http.NotFound(w, r)
 			return
@@ -252,13 +257,13 @@ func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRou
 	}))
 	defer server.Close()
 	state := gatewayState(t, server.URL)
-	gateway := Gateway{StatePath: state, Client: server.Client()}
+	gateway := Gateway{StatePath: state, Client: server.Client(), DeploymentProbeURL: server.URL + "/.dorf/probe/" + probeID}
 
 	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 1 {
-		t.Fatalf("remote requests=%d, want 1", requests)
+	if requests != 2 {
+		t.Fatalf("remote requests=%d, want 2", requests)
 	}
 	var routes []Route
 	if err := readJSON(filepath.Join(state, "routes.json"), &routes); err != nil {
@@ -266,6 +271,12 @@ func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRou
 	}
 	if len(routes) != 0 {
 		t.Fatalf("remote status probe mutated routes: %#v", routes)
+	}
+
+	wrongDeployment := gateway
+	wrongDeployment.DeploymentProbeURL = server.URL + "/.dorf/probe/" + strings.Repeat("b", 32)
+	if err := wrongDeployment.CheckRemote(context.Background(), server.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "deployment identity returned HTTP 404") {
+		t.Fatalf("wrong deployment error=%v", err)
 	}
 
 	openServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -284,7 +295,7 @@ func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRou
 	}
 
 	server.Close()
-	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "remote provider gateway route is unavailable") {
+	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "managed Gateway deployment identity is unavailable") {
 		t.Fatalf("unreachable remote route error=%v", err)
 	}
 }

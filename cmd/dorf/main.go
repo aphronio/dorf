@@ -425,7 +425,13 @@ func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfi
 		return g, err
 	}
 	if ownedURL == profile.E2BGatewayURL {
-		g.Client = freshDNSHTTPClient()
+		client := freshDNSHTTPClient()
+		probeURL, err := state.ProbeURL()
+		if err != nil {
+			return g, err
+		}
+		g.Client = client
+		g.DeploymentProbeURL = probeURL
 	}
 	return g, nil
 }

@@ -40,10 +40,11 @@ type authority struct {
 }
 
 type Gateway struct {
-	StatePath      string
-	PrivateBridge  string
-	Client         *http.Client
-	UpstreamClient *http.Client
+	StatePath          string
+	PrivateBridge      string
+	DeploymentProbeURL string
+	Client             *http.Client
+	UpstreamClient     *http.Client
 }
 
 func (g Gateway) BaseURL() (string, error) {
@@ -243,14 +244,19 @@ func (g Gateway) SetDefaultConnection(name string) error {
 	})
 }
 
-// CheckRemote observes whether the exact deployment-owned HTTPS route reaches
-// a protected Gateway API. It deliberately sends no credential and succeeds
-// only when anonymous access is rejected. It does not create a consumer route,
-// restart the broker, or otherwise mutate Gateway state.
+// CheckRemote observes whether an HTTPS route reaches a protected Gateway API.
+// A configured deployment probe first attests exact managed ingress identity.
+// It deliberately sends no credential and succeeds only when anonymous API
+// access is rejected. It does not mutate Gateway or ingress state.
 func (g Gateway) CheckRemote(ctx context.Context, baseURL string) error {
 	baseURL = strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("remote provider gateway route URL is empty")
+	}
+	if strings.TrimSpace(g.DeploymentProbeURL) != "" {
+		if err := g.checkDeploymentProbe(ctx); err != nil {
+			return err
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
@@ -270,6 +276,25 @@ func (g Gateway) CheckRemote(ctx context.Context, baseURL string) error {
 	default:
 		return fmt.Errorf("remote provider gateway route returned HTTP %d, want the Gateway's unauthenticated HTTP 401", response.StatusCode)
 	}
+}
+
+func (g Gateway) checkDeploymentProbe(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(g.DeploymentProbeURL), nil)
+	if err != nil {
+		return err
+	}
+	client := *g.client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("managed Gateway deployment identity is unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("managed Gateway deployment identity returned HTTP %d, want 204", response.StatusCode)
+	}
+	return nil
 }
 
 func (g Gateway) checkModels(ctx context.Context, baseURL, apiKey, noun string) error {

@@ -89,7 +89,7 @@ func TestGuidedTunnelReconciliationRetainsOnlyExactRunAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !state.Complete || !state.DNSConfigured || !state.ServiceInstalled || state.TunnelID != runner.id {
+	if !state.Complete || !state.DNSConfigured || !state.ServiceInstalled || state.TunnelID != runner.id || !probeIDPattern.MatchString(state.ProbeID) {
 		t.Fatalf("state=%#v", state)
 	}
 	if _, err := os.Stat(filepath.Join(tunnel.StatePath, "management")); !os.IsNotExist(err) {
@@ -103,7 +103,7 @@ func TestGuidedTunnelReconciliationRetainsOnlyExactRunAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, wanted := range []string{`hostname: "dorf.example.com"`, "path: ^/v1(/.*)?$", `service: "http://127.0.0.1:8317"`, "service: http_status:404"} {
+	for _, wanted := range []string{`hostname: "dorf.example.com"`, "path: ^/\\.dorf/probe/" + state.ProbeID + "$", "service: http_status:204", "path: ^/v1(/.*)?$", `service: "http://127.0.0.1:8317"`, "service: http_status:404"} {
 		if !strings.Contains(string(config), wanted) {
 			t.Fatalf("config omitted %q:\n%s", wanted, config)
 		}
@@ -181,6 +181,17 @@ func TestCloudflareHostnameContract(t *testing.T) {
 	got, err := GatewayURL("dorf.example.com")
 	if err != nil || got != "https://dorf.example.com/v1" {
 		t.Fatalf("url=%q err=%v", got, err)
+	}
+}
+
+func TestCloudflareDeploymentProbeURLRequiresExactStateIdentity(t *testing.T) {
+	state := State{Hostname: "dorf.example.com", ProbeID: strings.Repeat("a", 32)}
+	if got, err := state.ProbeURL(); err != nil || got != "https://dorf.example.com/.dorf/probe/"+state.ProbeID {
+		t.Fatalf("probe URL=%q err=%v", got, err)
+	}
+	state.ProbeID = ""
+	if _, err := state.ProbeURL(); err == nil || !strings.Contains(err.Error(), "rerun dorf setup") {
+		t.Fatalf("missing identity error=%v", err)
 	}
 }
 

@@ -152,18 +152,19 @@ func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
   "schema_version": 1,
   "tunnel_name": "dorf-proof",
   "hostname": "dorf.example.com",
-  "origin": "http://127.0.0.1:8317"
+  "origin": "http://127.0.0.1:8317",
+  "probe_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	profile := core.SandboxProfile{Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://dorf.example.com/v1"}
 	g, err := remoteGatewayForProviderStatus(config.Config{GatewayStatePath: statePath}, profile)
-	if err != nil || g.Client == nil {
+	if err != nil || g.Client == nil || g.DeploymentProbeURL != "https://dorf.example.com/.dorf/probe/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("gateway=%#v err=%v", g, err)
 	}
 	profile.E2BGatewayURL = "https://operator.example/v1"
 	g, err = remoteGatewayForProviderStatus(config.Config{GatewayStatePath: statePath}, profile)
-	if err != nil || g.Client != nil {
+	if err != nil || g.Client != nil || g.DeploymentProbeURL != "" {
 		t.Fatalf("foreign gateway=%#v err=%v", g, err)
 	}
 }

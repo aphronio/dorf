@@ -521,12 +521,17 @@ func setupRemoteGateway(ctx context.Context, g gateway.Gateway, bind, gatewaySta
 			}
 			if ownedURL == plan.URL {
 				presenter.Note("Cloud Gateway", "Reconciling the existing Cloudflare Tunnel and host service")
-				if _, err := tunnel.Reconcile(ctx, state.Hostname, stdout, stderr); err != nil {
+				state, err = tunnel.Reconcile(ctx, state.Hostname, stdout, stderr)
+				if err != nil {
 					return "", err
 				}
 				presenter.Ready("Cloudflare Tunnel", state.Hostname+" · service active")
 				if err := presenter.Run(ctx, "Checking the public Gateway route", func(ctx context.Context) error {
-					return waitForRemoteGateway(ctx, g, plan.URL)
+					managed, err := managedRemoteGateway(g, state)
+					if err != nil {
+						return err
+					}
+					return waitForRemoteGateway(ctx, managed, plan.URL)
 				}); err != nil {
 					return "", err
 				}
@@ -551,12 +556,17 @@ func setupRemoteGateway(ctx context.Context, g gateway.Gateway, bind, gatewaySta
 		}
 		tunnel := cloudflareapp.Tunnel{StatePath: filepath.Join(gatewayStatePath, "cloudflare"), Origin: origin}
 		presenter.Note("Cloud Gateway", "Reconciling the Cloudflare Tunnel, DNS, and host service")
-		if _, err := tunnel.Reconcile(ctx, plan.Hostname, stdout, stderr); err != nil {
+		state, err := tunnel.Reconcile(ctx, plan.Hostname, stdout, stderr)
+		if err != nil {
 			return "", err
 		}
 		presenter.Ready("Cloudflare Tunnel", plan.Hostname+" · service active")
 		if err := presenter.Run(ctx, "Checking the public Gateway route", func(ctx context.Context) error {
-			return waitForRemoteGateway(ctx, g, plan.URL)
+			managed, err := managedRemoteGateway(g, state)
+			if err != nil {
+				return err
+			}
+			return waitForRemoteGateway(ctx, managed, plan.URL)
 		}); err != nil {
 			return "", err
 		}
@@ -564,6 +574,15 @@ func setupRemoteGateway(ctx context.Context, g gateway.Gateway, bind, gatewaySta
 	default:
 		return "", fmt.Errorf("Gateway setup plan is incomplete")
 	}
+}
+
+func managedRemoteGateway(g gateway.Gateway, state cloudflareapp.State) (gateway.Gateway, error) {
+	probeURL, err := state.ProbeURL()
+	if err != nil {
+		return gateway.Gateway{}, err
+	}
+	g.DeploymentProbeURL = probeURL
+	return g, nil
 }
 
 func waitForRemoteGateway(ctx context.Context, g gateway.Gateway, gatewayURL string) error {
