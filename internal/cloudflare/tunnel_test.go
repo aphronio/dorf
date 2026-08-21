@@ -19,6 +19,15 @@ type fakeRunner struct {
 	calls          []string
 }
 
+type fakeDNSResolver struct {
+	addresses []string
+	err       error
+}
+
+func (r *fakeDNSResolver) LookupHost(_ context.Context, _ string) ([]string, error) {
+	return append([]string(nil), r.addresses...), r.err
+}
+
 func (f *fakeRunner) Run(_ context.Context, env []string, _, _ io.Writer, name string, args ...string) error {
 	call := strings.Join(append([]string{name}, args...), " ")
 	f.calls = append(f.calls, call)
@@ -84,7 +93,8 @@ func TestGuidedTunnelReconciliationRetainsOnlyExactRunAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, RootPrefix: []string{}}
+	resolver := &fakeDNSResolver{addresses: []string{"192.0.2.1"}}
+	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, Resolver: resolver, RootPrefix: []string{}}
 	state, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +159,31 @@ func TestGuidedTunnelReconciliationRetainsOnlyExactRunAuthority(t *testing.T) {
 	}
 	if countCall(runner.calls, "systemctl restart dorf-cloudflared.service") != 4 {
 		t.Fatalf("each reconciliation must reload exact config: %v", runner.calls)
+	}
+}
+
+func TestGuidedTunnelRepairsDeletedDNSRouteWithFreshAuthorization(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "cloudflared")
+	if err := os.WriteFile(binary, []byte("fake"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
+	resolver := &fakeDNSResolver{addresses: []string{"192.0.2.1"}}
+	tunnel := Tunnel{StatePath: filepath.Join(root, "state"), Binary: binary, Origin: "http://127.0.0.1:8317", Runner: runner, Resolver: resolver, RootPrefix: []string{}}
+	if _, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	resolver.addresses = nil
+	state, err := tunnel.Reconcile(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.DNSConfigured || !state.Complete {
+		t.Fatalf("repaired state=%#v", state)
+	}
+	if countCall(runner.calls, "tunnel login") != 2 || countCall(runner.calls, " route dns ") != 2 || countCall(runner.calls, " create ") != 1 {
+		t.Fatalf("DNS repair did not reuse the exact Tunnel: %v", runner.calls)
 	}
 }
 

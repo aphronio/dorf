@@ -37,6 +37,10 @@ type CommandRunner interface {
 	Output(context.Context, []string, string, ...string) (string, error)
 }
 
+type DNSResolver interface {
+	LookupHost(context.Context, string) ([]string, error)
+}
+
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, env []string, stdout, stderr io.Writer, name string, args ...string) error {
@@ -86,6 +90,7 @@ type Tunnel struct {
 	Origin     string
 	Runner     CommandRunner
 	HTTPClient *http.Client
+	Resolver   DNSResolver
 	RootPrefix []string
 }
 
@@ -224,6 +229,18 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 			return state, err
 		}
 	}
+	if state.DNSConfigured {
+		present, err := t.dnsRoutePresent(ctx, state.Hostname)
+		if err != nil {
+			return state, err
+		}
+		if !present {
+			state.DNSConfigured, state.Complete = false, false
+			if err := t.save(state); err != nil {
+				return state, err
+			}
+		}
+	}
 	binary, err := t.ensureBinary(ctx)
 	if err != nil {
 		return state, err
@@ -232,7 +249,7 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 	cloudflaredHome := filepath.Join(managementHome, ".cloudflared")
 	certificate := filepath.Join(cloudflaredHome, "cert.pem")
 	env := []string{"HOME=" + managementHome}
-	if state.TunnelID == "" {
+	if state.TunnelID == "" || !state.DNSConfigured {
 		if _, err := os.Stat(certificate); errors.Is(err, os.ErrNotExist) {
 			if err := os.MkdirAll(cloudflaredHome, 0o700); err != nil {
 				return state, err
@@ -247,6 +264,8 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 		} else if err != nil {
 			return state, err
 		}
+	}
+	if state.TunnelID == "" {
 		matches, err := t.listByName(ctx, binary, env, certificate, state.TunnelName)
 		if err != nil {
 			return state, err
@@ -311,9 +330,6 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 		return state, fmt.Errorf("validate Cloudflare Tunnel ingress: %w", err)
 	}
 	if !state.DNSConfigured {
-		if _, err := os.Stat(certificate); err != nil {
-			return state, fmt.Errorf("repair Cloudflare DNS requires authorization again: %w", err)
-		}
 		if err := t.Runner.Run(ctx, env, stdout, stderr, binary, "tunnel", "--origincert", certificate, "route", "dns", "--overwrite-dns", state.TunnelID, state.Hostname); err != nil {
 			return state, fmt.Errorf("route Cloudflare hostname: %w", err)
 		}
@@ -355,6 +371,22 @@ func (t Tunnel) Reconcile(ctx context.Context, hostname string, stdout, stderr i
 		return state, fmt.Errorf("remove temporary Cloudflare account authority: %w", err)
 	}
 	return state, nil
+}
+
+func (t Tunnel) dnsRoutePresent(ctx context.Context, hostname string) (bool, error) {
+	resolver := t.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	addresses, err := resolver.LookupHost(ctx, hostname)
+	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect managed Cloudflare hostname %s: %w", hostname, err)
+	}
+	return len(addresses) > 0, nil
 }
 
 func (t Tunnel) listByName(ctx context.Context, binary string, env []string, certificate, name string) ([]listedTunnel, error) {

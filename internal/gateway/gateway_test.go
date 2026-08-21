@@ -293,6 +293,24 @@ func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRou
 	if err := gateway.CheckRemote(context.Background(), blockedServer.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "want the Gateway's unauthenticated HTTP 401") {
 		t.Fatalf("intermediary rejection error=%v", err)
 	}
+	foreignServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "foreign unauthorized", http.StatusUnauthorized)
+	}))
+	defer foreignServer.Close()
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.dorf/probe/"+probeID {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(w, r, foreignServer.URL, http.StatusFound)
+	}))
+	defer redirectServer.Close()
+	redirected := gateway
+	redirected.Client = redirectServer.Client()
+	redirected.DeploymentProbeURL = redirectServer.URL + "/.dorf/probe/" + probeID
+	if err := redirected.CheckRemote(context.Background(), redirectServer.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "returned HTTP 302") {
+		t.Fatalf("redirected API route error=%v", err)
+	}
 
 	server.Close()
 	if err := gateway.CheckRemote(context.Background(), server.URL+"/v1"); err == nil || !strings.Contains(err.Error(), "managed Gateway deployment identity is unavailable") {

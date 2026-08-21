@@ -262,7 +262,7 @@ func (g Gateway) CheckRemote(ctx context.Context, baseURL string) error {
 	if err != nil {
 		return err
 	}
-	response, err := g.client().Do(request)
+	response, err := clientWithoutRedirects(g.client()).Do(request)
 	if err != nil {
 		return fmt.Errorf("remote provider gateway route is unavailable: %w", err)
 	}
@@ -283,9 +283,7 @@ func (g Gateway) checkDeploymentProbe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := *g.client()
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(request)
+	response, err := clientWithoutRedirects(g.client()).Do(request)
 	if err != nil {
 		return fmt.Errorf("managed Gateway deployment identity is unavailable: %w", err)
 	}
@@ -295,6 +293,12 @@ func (g Gateway) checkDeploymentProbe(ctx context.Context) error {
 		return fmt.Errorf("managed Gateway deployment identity returned HTTP %d, want 204", response.StatusCode)
 	}
 	return nil
+}
+
+func clientWithoutRedirects(client *http.Client) *http.Client {
+	copy := *client
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &copy
 }
 
 func (g Gateway) checkModels(ctx context.Context, baseURL, apiKey, noun string) error {
