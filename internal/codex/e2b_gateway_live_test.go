@@ -32,7 +32,7 @@ func TestLiveE2BScopedGatewayCompletesCodexTurn(t *testing.T) {
 	if statePath == "" {
 		statePath = filepath.Join(home, ".local", "share", "dorf", "provider-gateway")
 	}
-	connectionName := os.Getenv("DORF_PROVIDER_CONNECTION")
+	connectionName := os.Getenv("DORF_AI_CONNECTION")
 	if connectionName == "" {
 		connectionName = "personal-chatgpt"
 	}

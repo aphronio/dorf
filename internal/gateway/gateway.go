@@ -325,7 +325,7 @@ func (g Gateway) checkModels(ctx context.Context, baseURL, apiKey, noun string) 
 func (g Gateway) requireConnection(name string) (connection, error) {
 	var records []connection
 	if err := readJSON(filepath.Join(g.StatePath, "connections.json"), &records); err != nil {
-		return connection{}, fmt.Errorf("provider connections are unreadable: %w", err)
+		return connection{}, fmt.Errorf("AI connections are unreadable: %w", err)
 	}
 	selectedCategory := ""
 	for _, record := range records {
@@ -337,7 +337,7 @@ func (g Gateway) requireConnection(name string) (connection, error) {
 		}
 	}
 	if selectedCategory == "" {
-		return connection{}, fmt.Errorf("provider connection %q was not found", name)
+		return connection{}, fmt.Errorf("AI connection %q was not found", name)
 	}
 	categoryCount := 0
 	for _, record := range records {
@@ -363,15 +363,15 @@ func (g Gateway) requireConnection(name string) (connection, error) {
 			validCredential = regexp.MustCompile(`^(openai|deepseek)-[0-9a-f]{16}\.key$`).MatchString(record.CredentialRef) && (record.Provider == "openai" || record.Provider == "deepseek")
 		}
 		if !validCredential || filepath.Base(record.CredentialRef) != record.CredentialRef {
-			return connection{}, fmt.Errorf("provider connection %q has invalid credential metadata", name)
+			return connection{}, fmt.Errorf("AI connection %q has invalid credential metadata", name)
 		}
 		info, err := os.Lstat(filepath.Join(g.StatePath, root, record.CredentialRef))
 		if err != nil || !info.Mode().IsRegular() {
-			return connection{}, fmt.Errorf("provider connection %q needs authentication", name)
+			return connection{}, fmt.Errorf("AI connection %q needs authentication", name)
 		}
 		return record, nil
 	}
-	return connection{}, fmt.Errorf("provider connection %q needs authentication", name)
+	return connection{}, fmt.Errorf("AI connection %q needs authentication", name)
 }
 
 func (g Gateway) validateTransport(ctx context.Context, record connection) error {
@@ -382,7 +382,7 @@ func (g Gateway) validateTransport(ctx context.Context, record connection) error
 			return err
 		}
 		if !enabled {
-			return fmt.Errorf("provider connection %q does not support required Responses WebSockets", record.Name)
+			return fmt.Errorf("AI connection %q does not support required Responses WebSockets", record.Name)
 		}
 		return nil
 	case record.Provider == "openai" && record.AuthMode == "api_key":
@@ -410,12 +410,12 @@ func (g Gateway) chatGPTWebSocketsEnabled(ctx context.Context, record connection
 	request.Header.Set("Authorization", "Bearer "+auth.ManagementKey)
 	response, err := g.client().Do(request)
 	if err != nil {
-		return false, fmt.Errorf("provider connection capability is unavailable: %w", err)
+		return false, fmt.Errorf("AI connection capability is unavailable: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, response.Body)
-		return false, fmt.Errorf("provider connection capability returned HTTP %d", response.StatusCode)
+		return false, fmt.Errorf("AI connection capability returned HTTP %d", response.StatusCode)
 	}
 	var payload struct {
 		Files []struct {
@@ -425,14 +425,14 @@ func (g Gateway) chatGPTWebSocketsEnabled(ctx context.Context, record connection
 		} `json:"files"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
-		return false, fmt.Errorf("provider connection capability is unreadable")
+		return false, fmt.Errorf("AI connection capability is unreadable")
 	}
 	for _, entry := range payload.Files {
 		if entry.Name == record.CredentialRef && entry.Provider == "codex" {
 			return entry.WebSockets, nil
 		}
 	}
-	return false, fmt.Errorf("provider connection capability was not found")
+	return false, fmt.Errorf("AI connection capability was not found")
 }
 
 func (g Gateway) activate(ctx context.Context, routes []Route) error {

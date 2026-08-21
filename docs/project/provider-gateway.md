@@ -1,10 +1,10 @@
 # Shared Provider Gateway
 
 The Provider Gateway is a sibling application subsystem. It owns durable upstream Provider
-Connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
+AI connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
 Sandbox lifecycle, transcripts, review, or repository policy.
 
-The supported Connection is either a ChatGPT subscription or one OpenAI API key through the pinned
+The supported AI connection is either a ChatGPT subscription or one OpenAI API key through the pinned
 broker. Codex consumes its scoped route through Responses WebSockets; Pi consumes the same scoped
 route as an OpenAI Responses provider. `dorf setup` offers subscription device confirmation or a
 masked API-key input. The standalone `provider connect` command accepts the same choices and reads
@@ -13,7 +13,7 @@ credential; a deployment currently admits one unprefixed OpenAI authentication m
 Executable code owns the exact broker version and artifact integrity. Each Sandbox receives only a
 scoped route and its selected Harness configuration.
 
-The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
+The Go Job path creates, observes, and revokes routes directly. AI connection data, broker
 route configuration and keys, and the broker executable live under the configured
 `DORF_PROVIDER_GATEWAY_STATE`; they never enter a Sandbox image. Dorf retains only the exact route
 identity derivation and Action settlement state needed for reconciliation.

@@ -10,8 +10,8 @@ if [[ $# -ne 0 ]]; then
   echo "usage: $0 [--publish]" >&2
   exit 2
 fi
-if [[ -z "${PROVIDER_CONNECTION:-}" ]]; then
-  echo "Set PROVIDER_CONNECTION to one connected Provider Gateway name." >&2
+if [[ -z "${AI_CONNECTION:-}" ]]; then
+  echo "Set AI_CONNECTION to one ready AI connection name." >&2
   exit 2
 fi
 if [[ -z "${GITHUB_INSTALLATION_ID:-}" ]]; then
@@ -150,7 +150,7 @@ prove_harness() {
       --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
   fi
   "$BINARY" profile verify "$profile_name"
-  "$BINARY" doctor --ai-connection "$PROVIDER_CONNECTION" --profile "$profile_name"
+  "$BINARY" doctor --ai-connection "$AI_CONNECTION" --profile "$profile_name"
   printf '%s\n' \
     'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
     >"$goal_file"
@@ -163,7 +163,7 @@ prove_harness() {
     --github-repo aphronio/dorf \
     --github-installation "$GITHUB_INSTALLATION_ID" \
     --base "${BASE_BRANCH:-main}" \
-    --ai-connection "$PROVIDER_CONNECTION" \
+    --ai-connection "$AI_CONNECTION" \
     --profile "$profile_name" \
     --model gpt-5.6-sol \
     --reasoning low)"
@@ -195,7 +195,7 @@ prove_harness() {
     --arg image "$CANDIDATE_ALIAS" \
     --arg fingerprint "$CANDIDATE_FINGERPRINT" \
     --arg source "$SOURCE_COMMIT" \
-    --arg provider "$PROVIDER_CONNECTION" \
+    --arg provider "$AI_CONNECTION" \
     --arg job "$JOB_ID" \
     '{schema_version:4,harness:$harness,image:{alias:$image,fingerprint:$fingerprint},source_commit:$source,provider_connection:$provider,job_id:$job,proof_scope:"one real no-change implementation AgentRun",observed:{implementation_agent_run:"completed",revision_history:"one initial Revision at generation 0",git_revision_evidence:"exact unchanged source Revision owned by the AgentRun",repository_commit_action:"absent; the AgentRun owns commits",workflow_result:"Message handled without a committed change; derived from Evidence",review:"not run or claimed",publication:"not run or claimed"},execution:"Go durable Core",cleanup_state:"complete"}' \
     >"$EVIDENCE_DIR/$harness-image-proof.json"

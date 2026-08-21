@@ -670,7 +670,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   pending — 2026-08-21
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
-  Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
+  AI connections and revocable consumer-specific Inference Routes over a supervised broker backend.
   Dorf composes it for Sandbox routes; trusted host applications may use the same authority for their
   own model routes. Connecting through either surface reaches one backing authority, so upstream
   subscription or API credentials are never copied into clients or Sandboxes. CLIProxyAPI is the first
@@ -708,7 +708,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   connection. Sharing a typed facade and broker authority gives them login-once behavior without
   coupling provider state to Job semantics, duplicating credentials, or forcing model streams
   through the durable Job worker.
-- **Default selection:** Guided setup and an explicit successful provider connection select one
+- **Default selection:** Guided setup and an explicit successful AI connection select one
   deployment-default AI connection. New Jobs use that name unless `--ai-connection` overrides it,
   then durably pin the resolved name. This default is deployment-wide rather than part of a Sandbox
   profile, so one authenticated model route can serve multiple Incus, E2B, Codex, and Pi profiles.
@@ -1535,7 +1535,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   host-side Worker loss and exposes explicit prompt acceptance, settlement, follow-up, and steering
   operations. Profile selection is a startup choice; common workflow and consumer code remain
   Harness-independent.
-- **Connection custody:** Existing named Provider Connections, including the owner's ChatGPT
+- **Connection custody:** Existing named AI connections, including the owner's ChatGPT
   subscription connection, remain under Dorf's Provider Gateway. The Pi Sandbox receives only the
   same Job- and Sandbox-scoped route credential used by Codex profiles and addresses that route as an
   OpenAI Responses provider. Dorf does not copy Pi or ChatGPT OAuth bundles into the image or
@@ -1746,7 +1746,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted initial implementation slice; interaction boundary refined by D075 — 2026-08-17
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
-  revision, repository Revision, unstructured brief, execution profile, Provider Connection, model,
+  revision, repository Revision, unstructured brief, execution profile, AI connection, model,
   and reasoning envelope. A workflow may declare optional broad provider primitives beyond Dorf's
   baseline Sandbox and Harness contracts; admission and Worker claim reject missing primitives
   before a Sandbox call. Repository dependencies remain the responsibility of its setup script or

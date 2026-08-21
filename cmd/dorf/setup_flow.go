@@ -61,7 +61,7 @@ func completeGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.
 	}
 
 	g := gateway.Gateway{StatePath: cfg.GatewayStatePath, PrivateBridge: privateBridge}
-	connection, err := setupProviderConnection(ctx, g, bind, options, presenter)
+	connection, err := setupAIConnection(ctx, g, bind, options, presenter)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func completeGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.
 		return err
 	}
 	if err := g.Check(ctx, connection); err != nil {
-		return fmt.Errorf("verify Provider Connection %q: %w", connection, err)
+		return fmt.Errorf("verify AI connection %q: %w", connection, err)
 	}
 	presenter.Ready("Default profile", defaultProfile.Name+" · "+string(defaultProfile.Provider)+" · "+defaultProfile.Harness)
 	presenter.Section("Ready")
@@ -212,7 +212,7 @@ func gatewayIncusNetwork(profiles []core.SandboxProfile, selected []guidedProfil
 	return network, nil
 }
 
-func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string, options setupOptions, presenter setupPresenter) (string, error) {
+func setupAIConnection(ctx context.Context, g gateway.Gateway, bind string, options setupOptions, presenter setupPresenter) (string, error) {
 	if err := g.Provision(ctx, bind); err != nil {
 		return "", fmt.Errorf("start the Provider Gateway: %w", err)
 	}

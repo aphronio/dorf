@@ -34,7 +34,7 @@ requirements.
 - Execute deterministic setup and verification through repository-owned commands before spending
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.
-- When installation, setup prompts, profile or Provider Connection readiness, Job operation,
+- When installation, setup prompts, profile or AI connection readiness, Job operation,
   Messages, retry, Artifacts, or cleanup UX changes, update its existing operator authority and the
   [Agent Guide](docs/agent-guide.md) in the same slice. Keep the guide concise and link to authority
   instead of copying detailed contracts into it.

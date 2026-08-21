@@ -134,7 +134,7 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 				return core.Job{}, false, fmt.Errorf("provider readiness is not configured")
 			}
 			if err := providers.Check(ctx, strings.TrimSpace(input.ProviderConnection)); err != nil {
-				return core.Job{}, false, fmt.Errorf("Provider Connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
+				return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
 			}
 		}
 	}

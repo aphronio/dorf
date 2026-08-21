@@ -217,7 +217,7 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 	if authMode == "openai" {
 		defaultName = "openai-api"
 	}
-	name := set.String("name", defaultName, "stable Provider Connection name")
+	name := set.String("name", defaultName, "stable AI connection name")
 	bind := set.String("bind", "", "exact broker bind IP; a non-loopback address requires its matching Incus --profile")
 	profileName := set.String("profile", "", "Incus profile used to resolve its private bridge")
 	apiKeyFile := set.String("api-key-file", "", "OpenAI API key file; use - to read standard input")
@@ -446,7 +446,7 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 	view := providerGatewayStatusView{
 		Profile: profile.Name, SandboxProvider: profile.Provider, ProfileVerified: profile.BaseVerified(),
 		Connection: connection, Lifecycle: "persistent host process started by provider connect",
-		Authority: check("private broker and named Provider Connection", authorityErr),
+		Authority: check("private broker and named AI connection", authorityErr),
 	}
 	if profile.BaseVerified() {
 		verifiedAt := profile.Verification.ProbeCompletedAt
@@ -471,7 +471,7 @@ func newProviderGatewayStatusView(profile core.SandboxProfile, connection string
 		view.Next = "run dorf profile verify " + profile.Name
 	case view.Authority.Status != "ready":
 		view.Impact = "new AgentRuns cannot obtain authenticated inference routes"
-		view.Next = "restore the named Provider Connection and private broker, then rerun provider status"
+		view.Next = "restore the named AI connection and private broker, then rerun provider status"
 	case profile.Provider == core.SandboxProviderE2B && view.SandboxPath.Status != "ready":
 		view.Impact = "remote Sandboxes using this profile cannot reach inference"
 		view.Next = "restore the configured HTTPS route, or update and reverify the profile"
@@ -574,7 +574,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	providers := sandboxProviderFlags{}
 	set.Var(&providers, "sandbox-provider", "prepare host requirements for incus or e2b; repeat to select both")
 	harness := set.String("harness", "", "Harness for guided profiles: codex or pi")
-	connectionMode := set.String("connection-auth", "", "create a Provider Connection with chatgpt or openai")
+	connectionMode := set.String("connection-auth", "", "create an AI connection with chatgpt or openai")
 	openAIKeyFile := set.String("openai-api-key-file", "", "OpenAI API key file for guided setup")
 	e2bKeyFile := set.String("e2b-api-key-file", "", "E2B API key file for guided setup")
 	e2bTemplate := set.String("e2b-template", "", "exact E2B template build reference")

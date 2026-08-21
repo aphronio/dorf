@@ -7,7 +7,7 @@ authority:
 scripts/dev/setup.sh
 .dorf/bin/mise run check
 
-PROVIDER_CONNECTION=personal-chatgpt \
+AI_CONNECTION=personal-chatgpt \
 GITHUB_INSTALLATION_ID=INSTALLATION_ID \
   scripts/incus/release-dorf-image.sh --publish
 ```

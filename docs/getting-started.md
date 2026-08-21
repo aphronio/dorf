@@ -25,9 +25,10 @@ guided Tunnel only when it finds Cloudflare nameservers and no existing address 
 other domain stays on the existing-HTTPS-ingress path.
 
 When supported Ubuntu 24.04 host changes are needed, setup previews and applies only those exact
-changes after approval. `--yes` approves the same host and Cloudflare plans for automation; every
-credential and provider choice must still be explicit in flags. `dorf setup --yes` alone prepares
-only the common foundation.
+changes after approval. `--yes` approves the same host and Cloudflare plans for automation. Setup
+reuses one unambiguous ready AI connection when it already exists; otherwise automation must name
+one with `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices
+remain explicit. `dorf setup --yes` alone prepares only the common foundation.
 
 Sign out and back in if setup adds Docker or Incus group access, then run the same command again.
 Setup initializes a pristine Incus daemon only when Incus was selected and preserves operator-owned

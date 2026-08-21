@@ -37,7 +37,7 @@ Artifact or Proposal, attention, and cleanup facts.
 
    ```bash
    dorf profile list
-   dorf provider status --profile PROFILE --json
+   dorf provider status --profile PROFILE --ai-connection AI_CONNECTION --json
    dorf doctor --profile PROFILE
    ```
 
@@ -70,7 +70,7 @@ the human has not granted.
 
 At handback, report:
 
-- installed Dorf version and selected profile/Provider Connection;
+- installed Dorf version and selected Sandbox profile and AI connection;
 - readiness checks that are actually `ready`;
 - Job ID and current work or attention, if a Job was admitted;
 - retained Artifact ID or Proposal URL, when present; and

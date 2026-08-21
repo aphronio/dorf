@@ -142,7 +142,7 @@ func validateProviderBind(bind string, bridgeAddresses []net.Addr) (string, bool
 func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authorize func(string, string)) error {
 	name = strings.TrimSpace(name)
 	if !connectionName.MatchString(name) {
-		return fmt.Errorf("provider connection name must be 1-64 safe characters")
+		return fmt.Errorf("AI connection name must be 1-64 safe characters")
 	}
 	if err := g.Provision(ctx, bind); err != nil {
 		return err
@@ -153,13 +153,13 @@ func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authoriz
 	}
 	for _, existing := range connections {
 		if existing.Name != name && existing.Provider != "deepseek" {
-			return fmt.Errorf("provider connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
+			return fmt.Errorf("AI connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
 		}
 		if existing.Name != name {
 			continue
 		}
 		if existing.Provider != "chatgpt" || existing.AuthMode != "subscription" {
-			return fmt.Errorf("provider connection %q already has another authentication mode", name)
+			return fmt.Errorf("AI connection %q already has another authentication mode", name)
 		}
 		if err := g.enableWebSockets(ctx, existing.CredentialRef); err != nil {
 			return err
@@ -228,7 +228,7 @@ func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authoriz
 		}
 		for _, existing := range current {
 			if existing.Name == name {
-				return fmt.Errorf("provider connection %q was created concurrently", name)
+				return fmt.Errorf("AI connection %q was created concurrently", name)
 			}
 		}
 		current = append(current, connection{Name: name, Provider: "chatgpt", AuthMode: "subscription", CredentialRef: changed[0]})
@@ -251,7 +251,7 @@ func (g Gateway) ConnectOpenAIAPIKey(ctx context.Context, name, bind, apiKey str
 	name = strings.TrimSpace(name)
 	apiKey = strings.TrimSpace(apiKey)
 	if !connectionName.MatchString(name) {
-		return fmt.Errorf("provider connection name must be 1-64 safe characters")
+		return fmt.Errorf("AI connection name must be 1-64 safe characters")
 	}
 	if apiKey == "" || len(apiKey) > 16<<10 {
 		return fmt.Errorf("OpenAI API key must be nonempty and at most 16 KiB")
@@ -306,18 +306,18 @@ func (g Gateway) recordOpenAIAPIKey(name, apiKey string) (bool, error) {
 	}
 	for _, existing := range connections {
 		if existing.Name != name && existing.Provider != "deepseek" {
-			return false, fmt.Errorf("provider connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
+			return false, fmt.Errorf("AI connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
 		}
 		if existing.Name != name {
 			continue
 		}
 		if existing.Provider != "openai" || existing.AuthMode != "api_key" {
-			return false, fmt.Errorf("provider connection %q already has another authentication mode", name)
+			return false, fmt.Errorf("AI connection %q already has another authentication mode", name)
 		}
 		credentialPath := filepath.Join(g.StatePath, "credentials", existing.CredentialRef)
 		secret, err := os.ReadFile(credentialPath)
 		if err != nil {
-			return false, fmt.Errorf("read Provider Connection %q credential: %w", name, err)
+			return false, fmt.Errorf("read AI connection %q credential: %w", name, err)
 		}
 		if strings.TrimSpace(string(secret)) == apiKey {
 			return false, nil

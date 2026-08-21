@@ -22,7 +22,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestOpenAIProviderConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
+func TestOpenAIConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "openai.key")
 	if err := os.WriteFile(path, []byte("  sk-file-secret\n"), 0o600); err != nil {
@@ -195,6 +195,11 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	}
 	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {
 		t.Fatal("removed database selection was accepted")
+	}
+	for _, removed := range []string{"--provider", "--connection"} {
+		if _, err := parseSetupOptions([]string{removed, "legacy"}, &stderr); err == nil {
+			t.Fatalf("removed setup flag %s was accepted", removed)
+		}
 	}
 	if _, err := parseSetupOptions([]string{"--sandbox-provider", "unknown"}, &stderr); err == nil {
 		t.Fatal("unknown Sandbox provider was accepted")

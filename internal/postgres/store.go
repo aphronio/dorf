@@ -213,7 +213,7 @@ func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool,
 	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
 	input.InvestigationSource = normalizeInvestigationSource(input.InvestigationSource)
 	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return core.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, Provider Connection, and model")
+		return core.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, AI connection, and model")
 	}
 	switch input.Workflow {
 	case coding.Workflow:
