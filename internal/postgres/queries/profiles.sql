@@ -112,11 +112,12 @@ returning profile_name,contract_version,sandbox_id,ownership_nonce,
 update dorf.sandbox_profile_verifications
 set harness_version=sqlc.arg(harness_version),probe_completed_at=coalesce(probe_completed_at,clock_timestamp()),last_error=null
 where profile_name=sqlc.arg(profile_name) and contract_version=sqlc.arg(contract_version)
-  and sandbox_id=sqlc.arg(sandbox_id) and ownership_nonce=sqlc.arg(ownership_nonce);
+  and sandbox_id=sqlc.arg(sandbox_id) and ownership_nonce=sqlc.arg(ownership_nonce)
+  and cleaned_at is null;
 
 -- name: RecordSandboxProfileVerificationCleanup :execrows
 update dorf.sandbox_profile_verifications
-set cleaned_at=coalesce(cleaned_at,clock_timestamp()),last_error=null
+set cleaned_at=coalesce(cleaned_at,clock_timestamp())
 where profile_name=sqlc.arg(profile_name) and contract_version=sqlc.arg(contract_version)
   and sandbox_id=sqlc.arg(sandbox_id) and ownership_nonce=sqlc.arg(ownership_nonce);
 

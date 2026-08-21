@@ -408,6 +408,7 @@ update dorf.sandbox_profile_verifications
 set harness_version=$1,probe_completed_at=coalesce(probe_completed_at,clock_timestamp()),last_error=null
 where profile_name=$2 and contract_version=$3
   and sandbox_id=$4 and ownership_nonce=$5
+  and cleaned_at is null
 `
 
 type RecordSandboxProfileProbeParams struct {
@@ -434,7 +435,7 @@ func (q *Queries) RecordSandboxProfileProbe(ctx context.Context, arg RecordSandb
 
 const recordSandboxProfileVerificationCleanup = `-- name: RecordSandboxProfileVerificationCleanup :execrows
 update dorf.sandbox_profile_verifications
-set cleaned_at=coalesce(cleaned_at,clock_timestamp()),last_error=null
+set cleaned_at=coalesce(cleaned_at,clock_timestamp())
 where profile_name=$1 and contract_version=$2
   and sandbox_id=$3 and ownership_nonce=$4
 `

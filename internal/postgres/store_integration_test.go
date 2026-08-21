@@ -485,6 +485,16 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	if err != nil || stored.BaseVerified() || stored.Verification == nil || stored.Verification.LastError != failure.Error() {
 		t.Fatalf("unavailable profile=%#v err=%v", stored, err)
 	}
+	if err := store.RecordSandboxProfileProbe(ctx, verification, "codex stale"); err == nil {
+		t.Fatal("stale probe cleared the unavailable profile fence")
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, verification); err != nil {
+		t.Fatalf("idempotent stale cleanup: %v", err)
+	}
+	stored, err = store.SandboxProfile(ctx, name)
+	if err != nil || stored.BaseVerified() || stored.Verification == nil || stored.Verification.LastError != failure.Error() {
+		t.Fatalf("stale receipt write reopened unavailable profile=%#v err=%v", stored, err)
+	}
 	stopped, err := store.Job(ctx, job.ID)
 	if err != nil || stopped.WorkflowAttentionSource != source || stopped.WorkflowAttention != failure.Error() {
 		t.Fatalf("stopped Job=%#v err=%v", stopped, err)
