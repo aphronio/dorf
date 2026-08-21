@@ -1466,7 +1466,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D063 — Dorf Core portability precedes general workflow authoring
 
-- **Status:** Accepted product direction — 2026-08-13; client composition refined by D081 — 2026-08-20
+- **Status:** Accepted product direction — 2026-08-13; client composition refined by D088 — 2026-08-21
 - **Positioning:** Dorf is the open-source control plane for running agent Harnesses on infrastructure
   its owner controls: your agents, your infrastructure, one API. Core is the product. Whole-setup
   portability is direction; Codex and Pi with local Incus coding-to-PR on the supported host are the
@@ -1479,11 +1479,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Authority:** Current Core, workflow, and client ownership is defined only by the
   [North Star product boundary](north-star.md#product-boundary) and corrected by D075. A Harness
   remains authoritative for its native session, transcript, and tool protocol.
-- **Composition:** Native workflows are Core dogfood and use the same application contract that
-  external clients invoke. They receive no privileged hidden path. D081 defines the deployed
-  control-plane and thin-client-SDK direction. Dynamic agent-authored recipes remain a later UX
-  layer; Dorf is not a generic automation canvas, graph framework, agent builder, or model/tool
-  Harness.
+- **Composition:** Native workflows and trusted client adapters are Core dogfood and compose the
+  same small application contract in-process. They receive no privileged hidden path. D088 defines
+  the current Job/Sandbox/Agent composition and leaves public transport and SDK direction uncommitted.
+  Dynamic agent-authored recipes remain a later UX layer; Dorf is not a generic automation canvas,
+  graph framework, agent builder, or model/tool Harness.
 - **Proof order:** Starting from Codex on Incus, D065 proves Pi as the second supported Harness on
   Incus. Next prove Codex on a second Sandbox provider, then cross Pi and that provider. The
   mechanical oracle is
@@ -1492,8 +1492,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Supersedes and refines:** Supersedes D062's research-workflow-first proof order. It also refines
   older second-workflow extraction gates, including D009, D047, and D061: a later workflow still adds
   its natural facts before common authoring seams are extracted, but workflow generality is not the
-  next product proof. D081 permits a direct Core client boundary earned through a real external
-  client; this does not authorize a generic workflow API, provider matrix, plugin system, or
+  next product proof. D088 permits direct trusted-client composition in-process; this does not
+  authorize a public transport, SDK, generic workflow API, provider matrix, plugin system, or
   marketplace.
 - **Reconsider when:** A supported Harness cannot fit the AgentRun boundary, a second Sandbox cannot
   preserve the Job authority model, or real external-client use shows that profile selection and
@@ -1902,7 +1902,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D072 — Workflow deliverables are first-class Artifacts
 
-- **Status:** Accepted investigation-result retrieval slice — 2026-08-19
+- **Status:** Refined by D088 — 2026-08-21
 - **Decision:** Add Artifact as the durable, immutable, named workflow-deliverable primitive. A
   workflow-specific typed result points to Artifact IDs; clients list Artifacts by Job and retrieve
   exact bytes by Artifact ID. Artifact metadata lives in PostgreSQL and its bytes share one neutral
@@ -1999,7 +1999,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D076 — Core Jobs and workflow inputs have separate durable types
 
-- **Status:** Accepted first Core/workflow separation slice — 2026-08-20
+- **Status:** Refined by D088 — 2026-08-21
 - **Decision:** Keep `dorf.jobs` limited to shared custody: identity, bounded goal, pinned workflow
   and Sandbox profile, execution attachment, attention, and cleanup lifecycle. Store coding
   repository, starting/current Revision, branch, GitHub authority, and selected setup in
@@ -2075,7 +2075,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D080 — Workflows authorize Messages; PostgreSQL atomically records them
 
-- **Status:** Accepted after live investigation dogfood; package boundary refined by D087 — 2026-08-20
+- **Status:** Superseded by D088 — 2026-08-21
 - **Decision:** Remove the generic PostgreSQL `AdmitMessage` workflow switch. The workflow layer
   exposes `AdmitCodingMessage` and `AdmitInvestigationMessage`; the client adapter dispatches by the
   Job's immutable workflow identity. Each typed path authorizes its delivery intent, AgentRun role and
@@ -2096,7 +2096,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D081 — Dorf is a deployed control plane; workflows are optional Core consumers
 
-- **Status:** Accepted product direction; public Core API not yet implemented — 2026-08-20
+- **Status:** Superseded by D088 — 2026-08-21
 - **Decision:** The [North Star product boundary](north-star.md#product-boundary) is the authority.
   A self-hosted Dorf deployment exposes one application contract. Native workflows consume it
   in-process and add policy; external clients consume it through supported transports and may drive
@@ -2118,7 +2118,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D082 — Native workflows consume narrow Core capability interfaces
 
-- **Status:** Refined by D083 — 2026-08-20
+- **Status:** Superseded by D088 — 2026-08-21
 - **Decision:** Define provider-neutral Core interfaces for AgentRun delivery and observation,
   stable Sandbox Actions, cleanup reconciliation, and durable Core storage. Native workflows
   consume those interfaces through typed runtime compositions. Repository materialization is a
@@ -2193,7 +2193,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D085 — Workflow records live with the workflow that defines them
 
-- **Status:** Accepted package-ownership correction — 2026-08-20
+- **Status:** Refined by D088 — 2026-08-21
 - **Decision:** Keep shared custody types limited to Job, Message, AgentRun, Sandbox, Action,
   Artifact, Evidence, Harness bindings, and cleanup. `internal/coding` owns its typed Job input,
   Revision, ReviewPlan and reviewer projections, Proposal, Outcome, readiness policy, workflow
@@ -2214,7 +2214,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D086 — One package owns the in-process Core boundary
 
-- **Status:** Accepted package simplification — 2026-08-20
+- **Status:** Refined by D088 — 2026-08-21
 - **Decision:** Merge the former shared-record `spine` package and application-facing `controlplane`
   package into `internal/core`. Core owns its provider-neutral records, narrow execution interfaces,
   recovery implementation, Absurd task attachment, and requested cleanup in one package. Workflows
@@ -2237,7 +2237,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D087 — Each native workflow owns its complete in-process module
 
-- **Status:** Accepted package-ownership completion — 2026-08-20
+- **Status:** Refined by D088 — 2026-08-21
 - **Decision:** `internal/coding` and `internal/investigation` each own their typed admission input,
   definition and presentation, coordinator, runtime composition, Absurd task registration, Message
   policy, and durable wait loop. Delete the horizontal `internal/workflow` package. Core retains only
@@ -2253,3 +2253,49 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Independently distributed workflows earn a loading and compatibility contract,
   or three workflow modules prove a smaller shared registration contract that removes more policy
   than it hides.
+
+## D088 — Core is a small in-process custody contract organized by Job ownership
+
+- **Status:** Accepted application-boundary correction — 2026-08-21
+- **Decision:** The [North Star product boundary](north-star.md#product-boundary) remains the sole
+  authority for product ownership, and [Architecture](architecture.md#execution-model) owns the
+  current technical contract. Workflows, workflow modules, and trusted client adapters compose one
+  small Core application contract in-process. Core owns generic durable custody and recovery; it
+  owns no workflow, Git, coding, GitHub, publication, or human-in-the-loop policy.
+- **Ownership-shaped contract:** Admitting complete Core intent returns a Job handle, and Job remains
+  the durable aggregate owner. `EnsureSandbox` returns its exact Job-owned Sandbox handle, and that
+  Sandbox exposes an Agent convenience handle bound to it. Core backs the convenience internally
+  with the selected Harness plus durable Message and AgentRun facts. A caller-retained per-send
+  idempotency key binds the complete admitted delivery request; follow is the default and steer is a
+  distinct explicit mode. AgentRun remains an internal recovery fact rather than a resource
+  consumers coordinate.
+- **Artifacts and cleanup:** Each AgentRun receives a dedicated run-owned artifact directory in the
+  Sandbox working area, isolated from any workflow-managed source checkout. Core automatically
+  retains files placed there as immutable Job-owned Artifacts with producing-run provenance.
+  A durable collection obligation exists no later than terminal Harness observation becomes visible
+  to cleanup. Core may neither revoke the route nor delete the Sandbox until every collection has a
+  durable settled receipt. Only a workflow, composed module, or client may request cleanup; Core
+  reconciles that request but never derives it from execution outcome or interaction state.
+- **No public extension surface:** This decision introduces no public transport, authentication
+  contract, SDK, plugin system, workflow DSL, or embeddable-runtime promise. Provider and Harness
+  interfaces remain internal adapter seams. The CLI and compiled native workflows are current
+  in-process consumers.
+- **Reconciliation:** D076's separate Core and workflow facts remain, but workflow identity and
+  workflow input apply only to workflow-driven Jobs. D080's workflow-specific Message admission as
+  the only route is superseded by the generic Agent handle; consumers may still apply their own
+  delivery policy before calling it, while Core retains atomic identity, FIFO, and recovery. D081's
+  current transport framing is superseded; the stateful deployment remains, but its only current
+  application contract is in-process. D082's consumer-facing capability-interface inventory is
+  superseded by the Job/Sandbox/Agent handle shape; provider-neutral interfaces remain internal.
+  D085 still assigns domain records to their defining workflow and now treats AgentRun as internal
+  custody and Artifact as Job-owned. D086 still keeps the implementation in one Core package without
+  making that package a public API. D087 still gives each native workflow its complete module, but
+  task attachment, wake/wait details, Message creation, and AgentRun recovery remain behind Core's
+  application contract rather than becoming workflow-facing orchestration primitives.
+- **Why:** The prior boundaries exposed storage and recovery vocabulary as a composition surface and
+  described a future transport before one existed. Following durable ownership produces a smaller
+  contract for both direct clients and workflows, preserves recovery truth, and prevents shared Git
+  or interaction needs from being mistaken for Core policy.
+- **Reconsider when:** A real external consumer proves a transport and authentication contract, an
+  independently distributed workflow proves loading and compatibility requirements, or automatic
+  artifact retention cannot preserve a real workflow's required deliverables and provenance.

@@ -35,19 +35,19 @@ Architecture documents its technical consequences; the Decision Log records why 
 documents should link here rather than redefine it.
 
 Dorf Core is the product: a stateful, self-hostable control plane with one application boundary for
-supported existing Harnesses on chosen compatible infrastructure. It is deployed with its durable
-dependencies rather than embedded as a runtime library. Portability is capability-based: admission
-selects a verified profile and rejects combinations whose configuration, dependencies, credentials,
-host constraints, tools, isolation, recovery, or observation contract has not been proved.
+supported existing Harnesses on chosen compatible infrastructure. Workflows and trusted client
+adapters compose that boundary in-process inside a deployment backed by its durable dependencies;
+this is not yet a public transport, SDK, or embeddable-runtime promise. Portability is
+capability-based: admission selects a verified profile and rejects combinations whose configuration,
+dependencies, credentials, host constraints, tools, isolation, recovery, or observation contract
+has not been proved.
 
 Dorf does not own the user's memory, priorities, or cross-Job life. A personal assistant such as
 Agent0, a CLI, CI, or another trusted client decides what to delegate and how separate Jobs compose.
 A workflow owns Job semantics, policy, evaluation, and what its Outcome means. Dorf owns custody of
 execution and durable attachment of that Outcome. A client may instead drive Core mechanisms
-directly and retain that policy itself. Native Dorf workflows call the same application contract
-in-process; external clients use a supported transport. Neither receives a privileged hidden path.
-Language SDKs, when earned, are thin clients for a running Dorf deployment rather than embedded Dorf
-runtimes.
+directly and retain that policy itself. Native Dorf workflows and trusted client adapters compose
+the same small application contract in-process. Neither receives a privileged hidden path.
 
 Core provides mechanisms, never workflow or interaction policy. It may admit input, run and recover
 AgentRuns, retain Artifacts and Evidence, and reconcile cleanup after a caller requests it. It does
@@ -55,6 +55,10 @@ not decide that a draft is accepted, that a Job is semantically finished, that a
 started, or that resources should now be released. Those choices belong to a workflow or to a client
 such as Agent0, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in the same
 repository, process, or binary does not move its policy into Core.
+
+Core likewise owns no Git, coding, GitHub, publication, or human-in-the-loop policy. Those may be
+composed by a workflow, module, or client without becoming Core merely because several consumers use
+them.
 
 Apply this test before adding a Core concept: if the proposed fact or operation interprets
 acceptance, rejection, success, terminal meaning, human judgment, cross-Job composition, or when to
@@ -75,16 +79,16 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | Term | Meaning |
 | --- | --- |
 | **Job** | One durable bounded goal, its accepted execution contract, owned resources, and lifecycle; workflow-driven Jobs also pin a workflow version |
-| **Workflow** | Ordinary versioned policy that composes deterministic operations and AgentRuns for one kind of Job |
+| **Workflow** | Ordinary versioned policy that composes deterministic operations and bounded agent work for one kind of Job |
 | **Sandbox** | An isolated mutable workstation owned for a Job's lifetime |
 | **Message** | Durable input from a human, agent, or workflow |
-| **AgentRun** | One bounded delivery of a Message to an agent, with exact Harness binding and outcome |
+| **AgentRun** | Core's internal durable recovery fact for one bounded delivery of a Message to an agent |
 | **Harness** | Software hosting an agent, such as Codex app-server |
 | **Thread** | Continuing conversation context owned by a Harness |
 | **Turn** | One request/response cycle in a Harness Thread |
 | **Role** | The bounded responsibility and capability envelope of an AgentRun |
 | **Action** | Code-owned work that changes external state and must be reconciled safely |
-| **Artifact** | An immutable named deliverable retained for a Job and retrievable by clients |
+| **Artifact** | An immutable named deliverable owned and retained by a Job |
 | **Evidence** | Immutable observed proof tied to the fact it supports |
 | **Outcome** | A typed consumer-defined terminal result, when used, separate from resource cleanup |
 
@@ -104,7 +108,7 @@ flowchart TD
     Intent["Bounded intent"] --> Admit["Validate and admit controlled execution"]
     Admit --> Contract["Pin caller contract, capabilities, and budget"]
     Contract --> Sandbox["Create isolated Sandbox when needed"]
-    Sandbox --> Work["Run deterministic operations and bounded AgentRuns"]
+    Sandbox --> Work["Run deterministic operations and bounded agent work"]
     Work --> Observe["Observe facts, Artifacts, Evidence, and external effects"]
     Observe --> Decide{"Workflow or client policy"}
     Decide -->|"more work"| Work
@@ -112,7 +116,7 @@ flowchart TD
     Attention --> Work
     Decide -->|"typed terminal"| Outcome["Record Outcome when used"]
     Decide -->|"release resources"| RequestCleanup
-    Outcome --> RequestCleanup["Workflow or client requests cleanup"]
+    Outcome -.->|"later explicit request"| RequestCleanup["Workflow or client requests cleanup"]
     RequestCleanup --> Cleanup["Core reconciles cleanup"]
     Cleanup --> Receipt["Return result, Artifacts, Evidence, and cleanup state"]
 ```
@@ -126,7 +130,7 @@ retain the product facts needed to explain and recover the Job.
 ### Coding to a verified proposal
 
 A client delegates a complete coding goal. The coding workflow creates an isolated clone and branch,
-lets an implementation AgentRun commit, observes an exact Revision, selects only useful review, and
+lets an implementation agent commit, observes an exact Revision, selects only useful review, and
 publishes an exact-Revision pull request.
 GitHub merge, close, or explicit abandonment supplies the workflow outcome; the workflow then
 requests cleanup, which remains a separate observable fact.
@@ -134,7 +138,7 @@ requests cleanup, which remains a separate observable fact.
 ### Codebase investigation to a repository-grounded report
 
 A client delegates an exact reachable or locally committed repository Revision and an unstructured
-investigation brief. The workflow creates an isolated exact checkout, uses a bounded AgentRun for
+investigation brief. The workflow creates an isolated exact checkout, uses a bounded agent for
 inspection and synthesis, checks its completed Turn and unchanged checkout programmatically, and
 retains a flexible Markdown draft. An honest draft may simply explain that no useful finding exists.
 The workflow accepts follow-up Messages in the same Harness Thread and retains each revised draft.
@@ -203,7 +207,7 @@ The intended authoring unit is a versioned, inspectable workflow contract:
 - typed input and workflow-specific outcomes;
 - required Harness, Sandbox, connections, credentials, and capabilities;
 - deterministic operations and external effects;
-- bounded AgentRun judgment points;
+- bounded agent judgment points;
 - budgets and human-attention boundaries;
 - evaluation cases and honest terminal conditions; and
 - source, version, provenance, and upgrade policy.
@@ -213,8 +217,8 @@ contracts, fixtures, local evaluation, and diagnostics. An agent may propose wor
 new version must pass its checks and evaluations and receive any required capability approval before
 activation. Humans must be able to inspect, edit, fork, pin, and roll back what the agent built.
 
-Native workflows should compose the same intended Core contract that external clients invoke.
-Transport, client SDK, and public compatibility promises remain uncommitted until real
+Native workflows and trusted client adapters should compose the same intended Core contract
+in-process. Transport, client SDK, and public compatibility promises remain uncommitted until real
 external-client use proves them. Dynamic agent-authored recipes are a later UX layer, not the
 requirements driver for Core. Dorf does not become a generic automation canvas, graph framework,
 agent builder, or model/tool Harness.
