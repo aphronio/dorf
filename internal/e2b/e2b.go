@@ -153,7 +153,7 @@ func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, err
 	var response createResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/sandboxes", nil, body, http.StatusCreated, &response); err != nil {
 		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		if errors.As(err, &apiErr) && missingTemplate(apiErr) {
 			return Sandbox{}, provider.ArtifactUnavailableErrorf("E2B template %q is unavailable: %v", request.Template, err)
 		}
 		return Sandbox{}, err
@@ -362,7 +362,7 @@ func (c Client) doJSONStatuses(ctx context.Context, method, path string, query u
 	}
 	defer response.Body.Close()
 	if !containsStatus(wantStatuses, response.StatusCode) {
-		return nil, decodeAPIError(response)
+		return nil, decodeAPIError(response, c.APIKey)
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {
 		_, err := io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
@@ -384,13 +384,25 @@ func containsStatus(statuses []int, status int) bool {
 	return false
 }
 
-func decodeAPIError(response *http.Response) error {
+func decodeAPIError(response *http.Response, apiKey string) error {
 	var payload struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
 	_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload)
+	if apiKey = strings.TrimSpace(apiKey); apiKey != "" {
+		payload.Message = strings.ReplaceAll(payload.Message, apiKey, "[redacted]")
+	}
 	return &APIError{StatusCode: response.StatusCode, Code: payload.Code, Message: payload.Message}
+}
+
+func missingTemplate(apiErr *APIError) bool {
+	if apiErr == nil || apiErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	return strings.Contains(message, "template") &&
+		(strings.Contains(message, "not found") || strings.Contains(message, "does not exist"))
 }
 
 func validateOwnership(owner Ownership) error {

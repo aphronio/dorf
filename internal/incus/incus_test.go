@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
 type scriptedRunner struct {
@@ -26,6 +28,18 @@ type inventoryRunner struct {
 
 type imageInfoRunner struct{ result Result }
 
+type missingImageRunner struct{ create Result }
+
+func (r missingImageRunner) Run(_ context.Context, _ string, _ []byte, args ...string) (Result, error) {
+	if len(args) > 0 && args[0] == "info" {
+		return Result{ExitCode: 1, Stderr: "not found"}, nil
+	}
+	if len(args) > 0 && args[0] == "init" {
+		return r.create, nil
+	}
+	return Result{}, nil
+}
+
 func (r imageInfoRunner) Run(_ context.Context, command string, _ []byte, args ...string) (Result, error) {
 	if command != "incus" || strings.Join(args, " ") != "image info custom" {
 		return Result{ExitCode: 1, Stderr: "unexpected command"}, nil
@@ -41,6 +55,26 @@ func TestResolveImageFingerprintTurnsAliasIntoExactIdentity(t *testing.T) {
 	}
 	if _, err := ResolveImageFingerprint(context.Background(), "custom", imageInfoRunner{result: Result{Stdout: "Aliases:\n- custom\n"}}); err == nil {
 		t.Fatal("missing exact fingerprint was accepted")
+	}
+}
+
+func TestCreateClassifiesOnlyMissingImageAsUnavailableProfileArtifact(t *testing.T) {
+	owner := OwnershipMetadata{JobID: "job-1", SandboxID: "dorf-owned", OwnershipNonce: strings.Repeat("b", 64)}
+	for _, test := range []struct {
+		name        string
+		create      Result
+		unavailable bool
+	}{
+		{name: "missing image", create: Result{ExitCode: 1, Stderr: `Error: Image "missing" not found`}, unavailable: true},
+		{name: "other create failure", create: Result{ExitCode: 1, Stderr: "network unavailable"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sandbox := Sandbox{Config: Config{Image: "missing", Network: "incusbr0", DiskSize: "40GiB"}, Runner: missingImageRunner{create: test.create}}
+			err := sandbox.ReconcileOwnedCreate(context.Background(), owner)
+			if provider.IsArtifactUnavailable(err) != test.unavailable {
+				t.Fatalf("unavailable=%v error=%v", provider.IsArtifactUnavailable(err), err)
+			}
+		})
 	}
 }
 

@@ -128,6 +128,9 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 			return createErr
 		}
 		if created.ExitCode != 0 {
+			if missingImage(created) {
+				return provider.ArtifactUnavailableErrorf("Incus image %q is unavailable: %v", s.Config.Image, failure("create Sandbox", created))
+			}
 			return failure("create Sandbox", created)
 		}
 	}
@@ -167,6 +170,11 @@ func (s Sandbox) ReconcileOwnedCreate(ctx context.Context, metadata OwnershipMet
 		return failure("prepare Sandbox workspace", workspace)
 	}
 	return nil
+}
+
+func missingImage(result Result) bool {
+	detail := strings.ToLower(result.Stdout + "\n" + result.Stderr)
+	return strings.Contains(detail, "image") && strings.Contains(detail, "not found")
 }
 
 func (s Sandbox) AttestOwnership(ctx context.Context, metadata OwnershipMetadata) error {

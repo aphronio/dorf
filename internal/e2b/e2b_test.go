@@ -190,6 +190,32 @@ func TestCreateClassifiesMissingTemplateAsUnavailableProfileArtifact(t *testing.
 	}
 }
 
+func TestCreateDoesNotClassifyUnrelated404AsMissingTemplate(t *testing.T) {
+	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(response, `{"code":404,"message":"route not found"}`)
+	})
+	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
+	owner := Ownership{JobID: "job-missing", SandboxID: "sandbox-missing", OwnershipNonce: strings.Repeat("f", 64)}
+	_, err := client.Create(context.Background(), CreateRequest{Template: "dorf/standard:build", Timeout: time.Minute, Owner: owner})
+	if err == nil || provider.IsArtifactUnavailable(err) {
+		t.Fatalf("unrelated 404 error = %v", err)
+	}
+}
+
+func TestAPIErrorRedactsConfiguredCredential(t *testing.T) {
+	const key = "e2b_secret_test_key"
+	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(response, `{"code":401,"message":"rejected `+key+`"}`)
+	})
+	client := Client{APIURL: "https://e2b.test", APIKey: key, HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
+	err := client.Check(context.Background())
+	if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("redacted API error = %v", err)
+	}
+}
+
 func TestCredentialCheckIsReadOnlyAndAuthenticated(t *testing.T) {
 	requests := 0
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
