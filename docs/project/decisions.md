@@ -750,7 +750,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   an Incus archive/compatibility manifest is attached only to the product release that promotes a
   changed image. Later application releases pin and reuse that exact earlier immutable image rather
   than rebuilding or republishing unchanged bytes. The installer selects the exact release's Go
-  archive, verifies it against that release's checksum, and installs only the verified binary. One
+  archive, verifies it against that release's checksum, and installs only the verified binary. The
+  native `dorf update` command verifies the latest immutable installer asset and delegates to this
+  same path rather than owning a second replacement implementation. One
   repo-owned local command builds a promoted image from an immutable base fingerprint, records its exact Harness packages,
   proves the credential boundary, and completes a real coding tracer for every declared Harness from clone and
   repo-owned preparation through an implementation turn, checks, scoped routing,

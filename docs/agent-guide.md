@@ -22,6 +22,7 @@ Artifact or Proposal, attention, and cleanup facts.
    in Getting started. In a contributor checkout, use the repository-owned build commands in
    [CONTRIBUTING.md](../CONTRIBUTING.md) only when the human explicitly wants a source build. Follow
    any printed `PATH` handoff and run `dorf version` before setup. The installer must not run setup.
+   Use `dorf update` for later upgrades through the same verified installer path.
 3. Run `dorf setup`. Let its interactive flow select local Incus, cloud E2B, both, or neither. Do not
    add `--yes` until the human has approved the exact displayed host or Cloudflare changes.
 4. Pause and let the human perform these boundaries personally:

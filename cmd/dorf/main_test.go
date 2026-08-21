@@ -71,6 +71,14 @@ func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
 	}
 }
 
+func TestApplicationUpdateRejectsArgumentsBeforeHostConfiguration(t *testing.T) {
+	var stdout, stderr strings.Builder
+	err := run(context.Background(), []string{"update", "v9.9.9"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "does not accept arguments") {
+		t.Fatalf("update argument error=%v", err)
+	}
+}
+
 func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	var stderr strings.Builder
 	patch, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{

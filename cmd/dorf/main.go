@@ -52,6 +52,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stdout, "dorf %s\n", version.Version)
 		return nil
 	}
+	if args[0] == "update" {
+		if len(args) != 1 {
+			return fmt.Errorf("update does not accept arguments")
+		}
+		result, err := releaseapp.UpdateApplication(ctx, stdout, stderr)
+		if err != nil {
+			return err
+		}
+		if result.Updated {
+			fmt.Fprintf(stdout, "Dorf update complete: %s -> %s\n", result.From, result.Latest)
+		} else if result.From == result.Latest {
+			fmt.Fprintf(stdout, "Dorf is already up to date: %s\n", result.From)
+		} else {
+			fmt.Fprintf(stdout, "No update available: running %s; latest published release is %s\n", result.From, result.Latest)
+		}
+		return nil
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -1478,6 +1495,6 @@ func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution t
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|worker|inspect|retry|evidence|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
