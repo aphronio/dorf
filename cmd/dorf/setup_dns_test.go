@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -117,12 +118,25 @@ func TestHostnameHasAddressesTreatsMissingRecordsAsAvailable(t *testing.T) {
 
 func TestResolvedHTTPClientBypassesAStaleSystemResolver(t *testing.T) {
 	dialed := make(chan string, 1)
+	served := make(chan error, 1)
 	dial := func(_ context.Context, _, address string) (net.Conn, error) {
 		client, server := net.Pipe()
 		dialed <- address
 		go func() {
 			defer server.Close()
-			_, _ = io.WriteString(server, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+			reader := bufio.NewReader(server)
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					served <- err
+					return
+				}
+				if line == "\r\n" {
+					break
+				}
+			}
+			_, err := io.WriteString(server, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+			served <- err
 		}()
 		return client, nil
 	}
@@ -142,6 +156,9 @@ func TestResolvedHTTPClientBypassesAStaleSystemResolver(t *testing.T) {
 	}
 	if got := <-dialed; got != "192.0.2.10:8317" {
 		t.Fatalf("dialed=%q", got)
+	}
+	if err := <-served; err != nil {
+		t.Fatal(err)
 	}
 }
 
