@@ -44,12 +44,12 @@ if [[ "$PUBLISH" == true ]]; then
     echo "Required publication command is unavailable: gh" >&2
     exit 1
   fi
-  if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" != "public" ]]; then
+  if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility | tail -n 1)" != "public" ]]; then
     echo "Official Dorf releases require a public GitHub repository." >&2
     exit 1
   fi
   if [[ "$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
-    --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null || true)" != "true" ]]; then
+    --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null | tail -n 1 || true)" != "true" ]]; then
     echo "Enable GitHub release immutability, then set DORF_IMMUTABLE_RELEASES_ENABLED=true." >&2
     exit 1
   fi
@@ -65,7 +65,7 @@ if [[ "$PUBLISH" == true ]]; then
     gh release verify "$OFFICIAL_IMAGE_RELEASE" --repo "$GITHUB_REPOSITORY" >/dev/null
     if [[ "$(gh release view "$OFFICIAL_IMAGE_RELEASE" --repo "$GITHUB_REPOSITORY" \
       --json isDraft,isImmutable,isPrerelease,assets \
-      --jq '[.isImmutable, (.isDraft | not), (.isPrerelease | not), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.tar.gz")) | length == 1), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.json")) | length == 1)] | all')" != "true" ]]; then
+      --jq '[.isImmutable, (.isDraft | not), (.isPrerelease | not), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.tar.gz")) | length == 1), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.json")) | length == 1)] | all' | tail -n 1)" != "true" ]]; then
       echo "Pinned official Incus image release is not immutable and complete: $OFFICIAL_IMAGE_RELEASE" >&2
       exit 1
     fi
