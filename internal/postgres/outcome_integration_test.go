@@ -85,7 +85,7 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	if _, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
 		t.Fatalf("post-abandon Message created=%v err=%v", created, err)
 	}
-	if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
+	if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
 		t.Fatalf("cleanup close after abandonment: %v", err)
 	}
 }

@@ -51,7 +51,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("selected reviewer Actions precede its AgentRun and implementation feedback", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
-		reviewer := ReviewRunView{AgentRun: core.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunPending, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName("review-1")}}
+		reviewer := ReviewRunView{AgentRun: core.AgentRun{ID: "review-1", JobID: facts.Job.ID, MessageID: "review-request-1", InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunPending, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName(facts.Job.ID, "review-1")}}
 		reviewer.Sandbox = core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID}
 		facts.Deliveries = []core.Delivery{factDelivery(core.Message{ID: reviewer.MessageID, JobID: facts.Job.ID}, reviewer.AgentRun)}
 		facts.Sandboxes = append(facts.Sandboxes, reviewer.Sandbox)
@@ -82,7 +82,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		facts.ReviewPlans[0].Plan = policy.ReviewPlan{Roles: []policy.Role{policy.RoleGeneral}}
 		requestID := ReviewRequestMessageID(facts.Job.ID, facts.Job.Revision, string(policy.RoleGeneral))
 		reviewerID := core.AgentRunID(requestID)
-		reviewer := core.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunCompleted, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName(reviewerID)}
+		reviewer := core.AgentRun{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), State: core.AgentRunCompleted, Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName(facts.Job.ID, reviewerID)}
 		feedback := core.Message{ID: core.MessageID(facts.Job.ID, core.MessageFromAgent, reviewerID), JobID: facts.Job.ID, FromKind: core.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: core.MessageFollow}
 		facts.Deliveries = []core.Delivery{factDelivery(core.Message{ID: requestID, JobID: facts.Job.ID}, reviewer), factDelivery(feedback, core.AgentRun{MessageID: feedback.ID, Role: "implement"})}
 		facts.Sandboxes = append(facts.Sandboxes, core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID})

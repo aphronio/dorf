@@ -35,7 +35,11 @@ type RuntimeResolver interface {
 // Register installs the investigation workflow's task and recovery loop.
 func Register(application core.Application, store Store, runtimes RuntimeResolver) {
 	application.Tasks.MustRegister(absurd.Task(TaskName, func(ctx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName); err != nil {
+		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName, params.PreviousTaskID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		jobHandle, err := application.OpenJob(ctx, params.JobID)
+		if err != nil {
 			return core.TaskResultV1{}, err
 		}
 		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID)
@@ -43,7 +47,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			return core.TaskResultV1{}, err
 		}
 		for {
-			work, err := Run(ctx, runtime.Investigation, store, params.JobID)
+			work, err := Run(ctx, jobHandle, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr

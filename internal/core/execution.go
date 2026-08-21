@@ -11,7 +11,7 @@ type AgentExecution interface {
 
 // SandboxExecution reconciles one already-admitted stable Sandbox Action.
 type SandboxExecution interface {
-	ExecuteSandboxAction(context.Context, Job, Sandbox, Action) error
+	ExecuteSandboxAction(context.Context, string, string) error
 }
 
 // Execution is the shared in-process Core application contract consumed by

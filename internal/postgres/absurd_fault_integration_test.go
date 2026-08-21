@@ -81,7 +81,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	ctx := context.Background()
 	queueName := fmt.Sprintf("dorf_cleanup_retry_%d", time.Now().UnixNano())
 	client := newFaultClient(t, store, queueName)
-	const taskName = "dorf-cleanup-retry-proof-v1"
+	const taskName = core.CleanupTaskName
 	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
 		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable cleanup outage")
 	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
@@ -95,7 +95,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})

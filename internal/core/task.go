@@ -21,15 +21,19 @@ func MessageWakeEvent(jobID string, sequence int64) string {
 // ScheduleJobTask reconciles one workflow-owned task with the Job's durable
 // current attachment. The workflow owns the task name and idempotency key.
 func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, taskKey string) error {
-	if !job.AdmissionOpen {
-		return nil
-	}
 	return a.Store.WithJobFence(ctx, job.ID, func() error {
-		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID}, absurdruntime.TaskSpawnOptions(taskKey))
+		current, err := a.Store.Job(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		if !current.AdmissionOpen || current.CleanupState != CleanupPending {
+			return fmt.Errorf("Job %s cannot schedule ordinary work after cleanup begins", job.ID)
+		}
+		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}
-		if err := a.Store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
+		if err := a.Store.AttachJobTask(ctx, job.ID, current.CurrentTaskID, spawned.TaskID, taskName); err != nil {
 			return fmt.Errorf("attach Job task: %w", err)
 		}
 		return nil

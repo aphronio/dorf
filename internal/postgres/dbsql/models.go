@@ -75,6 +75,7 @@ type DorfReviewRunProjection struct {
 	RequestTargetTurnID   string
 	RequestAdmittedAt     time.Time
 	SandboxID             string
+	SandboxName           string
 	OwnershipNonce        string
 	SubmissionNonce       string
 }
@@ -83,5 +84,6 @@ type DorfReviewRunProjection struct {
 type DorfSandbox struct {
 	ID             string
 	JobID          string
+	Name           string
 	OwnershipNonce string
 }

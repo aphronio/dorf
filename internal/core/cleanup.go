@@ -18,7 +18,7 @@ type cleanupTarget struct {
 // RegisterCleanup installs the Core-owned resource cleanup task.
 func (a Application) RegisterCleanup() {
 	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params JobTaskParams) (TaskResultV1, error) {
-		if err := a.VerifyAttachedTask(ctx, params.JobID, CleanupTaskName); err != nil {
+		if err := a.VerifyAttachedTask(ctx, params.JobID, CleanupTaskName, params.PreviousTaskID); err != nil {
 			return TaskResultV1{}, err
 		}
 		job, err := a.Store.Job(ctx, params.JobID)
@@ -97,7 +97,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
 		err = absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-			return service.ExecuteSandboxAction(workCtx, job, target.Sandbox, action)
+			return service.ExecuteSandboxAction(workCtx, job.ID, action.ID)
 		})
 		if err != nil {
 			_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
@@ -106,7 +106,11 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	}
 
 	detail := "verifying no owned resource or non-cleanup Job claim remains unsettled"
-	if err := a.Store.CompleteCleanup(ctx, jobID); err != nil {
+	task, ok := absurd.TaskFromContext(ctx)
+	if !ok {
+		return absurd.ErrNoTaskContext
+	}
+	if err := a.Store.CompleteCleanup(ctx, jobID, task.TaskID()); err != nil {
 		_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
 	}

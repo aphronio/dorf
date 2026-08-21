@@ -9,8 +9,32 @@ import (
 	"context"
 )
 
+const getJobSandboxByNameForUpdate = `-- name: GetJobSandboxByNameForUpdate :one
+select id,job_id,name,ownership_nonce
+from dorf.sandboxes
+where job_id=$1 and name=$2
+for update
+`
+
+type GetJobSandboxByNameForUpdateParams struct {
+	JobID string
+	Name  string
+}
+
+func (q *Queries) GetJobSandboxByNameForUpdate(ctx context.Context, arg GetJobSandboxByNameForUpdateParams) (DorfSandbox, error) {
+	row := q.db.QueryRowContext(ctx, getJobSandboxByNameForUpdate, arg.JobID, arg.Name)
+	var i DorfSandbox
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Name,
+		&i.OwnershipNonce,
+	)
+	return i, err
+}
+
 const getSandbox = `-- name: GetSandbox :one
-select id,job_id,ownership_nonce
+select id,job_id,name,ownership_nonce
 from dorf.sandboxes
 where id=$1
 `
@@ -18,12 +42,36 @@ where id=$1
 func (q *Queries) GetSandbox(ctx context.Context, id string) (DorfSandbox, error) {
 	row := q.db.QueryRowContext(ctx, getSandbox, id)
 	var i DorfSandbox
-	err := row.Scan(&i.ID, &i.JobID, &i.OwnershipNonce)
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Name,
+		&i.OwnershipNonce,
+	)
+	return i, err
+}
+
+const getSandboxForUpdate = `-- name: GetSandboxForUpdate :one
+select id,job_id,name,ownership_nonce
+from dorf.sandboxes
+where id=$1
+for update
+`
+
+func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (DorfSandbox, error) {
+	row := q.db.QueryRowContext(ctx, getSandboxForUpdate, id)
+	var i DorfSandbox
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.Name,
+		&i.OwnershipNonce,
+	)
 	return i, err
 }
 
 const listJobSandboxes = `-- name: ListJobSandboxes :many
-select s.id,s.job_id,s.ownership_nonce
+select s.id,s.job_id,s.name,s.ownership_nonce
 from dorf.sandboxes s
 where s.job_id=$1
 order by s.id
@@ -38,7 +86,12 @@ func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]DorfSan
 	var items []DorfSandbox
 	for rows.Next() {
 		var i DorfSandbox
-		if err := rows.Scan(&i.ID, &i.JobID, &i.OwnershipNonce); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.JobID,
+			&i.Name,
+			&i.OwnershipNonce,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

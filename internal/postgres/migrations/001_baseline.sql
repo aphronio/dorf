@@ -56,7 +56,7 @@ create table dorf.jobs (
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
     admission_open boolean not null default true,
-    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
+    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','requested','scheduled','complete')),
     workflow_attention text,
     workflow_attention_source text,
     workflow_attention_at timestamptz,
@@ -149,8 +149,10 @@ create unique index actions_one_scoped_job_effect
 create table dorf.sandboxes (
     id text primary key,
     job_id text not null references dorf.jobs(id),
+    name text not null check (name ~ '^[a-z][a-z0-9-]{0,126}$'),
     ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
-    unique(job_id,id)
+    unique(job_id,id),
+    unique(job_id,name)
 );
 create index sandboxes_by_job on dorf.sandboxes(job_id,id);
 
@@ -302,6 +304,7 @@ select
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
     request.admitted_at as request_admitted_at,
     ar.sandbox_id as sandbox_id,
+    sandbox.name as sandbox_name,
     sandbox.ownership_nonce as ownership_nonce,
     coalesce(ar.submission_nonce,'') as submission_nonce
 from dorf.agent_runs ar

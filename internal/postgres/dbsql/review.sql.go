@@ -100,7 +100,7 @@ func (q *Queries) GetReviewJobForUpdate(ctx context.Context, arg GetReviewJobFor
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, input_revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, request_admitted_at, sandbox_id, ownership_nonce, submission_nonce
+select id, job_id, message_id, state, harness, thread_id, baseline_recorded, baseline_turn_id, turn_id, turn_outcome, attention, role, input_revision, capability, started_at, finished_at, request_from_kind, request_from_id, request_sequence, request_input, request_delivery_intent, request_target_turn_id, request_admitted_at, sandbox_id, sandbox_name, ownership_nonce, submission_nonce
 from dorf.review_run_projection
 where id=$1 and role<>'implement'
 `
@@ -133,6 +133,7 @@ func (q *Queries) GetReviewRun(ctx context.Context, runID string) (DorfReviewRun
 		&i.RequestTargetTurnID,
 		&i.RequestAdmittedAt,
 		&i.SandboxID,
+		&i.SandboxName,
 		&i.OwnershipNonce,
 		&i.SubmissionNonce,
 	)

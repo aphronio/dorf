@@ -108,6 +108,28 @@ from dorf.jobs
 where id=sqlc.arg(job_id)
 for update;
 
+-- name: GetJobForSandboxEnsure :one
+select admission_open,cleanup_state
+from dorf.jobs
+where id=sqlc.arg(job_id)
+for update;
+
+-- name: GetJobForSandboxActionAuthorization :one
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
+       coalesce(current_task.task_name,'') as current_task_name,
+       coalesce(j.workflow_attention,'') as workflow_attention,
+       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
+       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       j.admitted_at,j.cleaned_at
+from dorf.jobs j
+left join lateral (
+    select task_id,task_name from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
+where j.id=sqlc.arg(job_id)
+for update of j;
+
 -- name: GetJobSandboxProfileForUpdate :one
 select sandbox_profile
 from dorf.jobs
@@ -117,7 +139,8 @@ for update;
 -- name: GetCurrentJobTaskForUpdate :one
 select coalesce(current_task.task_id,'') as task_id,
        coalesce(current_task.task_name,'') as task_name,
-       coalesce(current_task.sequence,0)::bigint as sequence
+       coalesce(current_task.sequence,0)::bigint as sequence,
+       j.admission_open,j.cleanup_state
 from dorf.jobs j
 left join lateral (
     select task_id,task_name,sequence
@@ -139,8 +162,8 @@ on conflict(task_id) do nothing;
 
 -- name: MarkCleanupScheduled :execrows
 update dorf.jobs
-set cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end
-where id=sqlc.arg(job_id);
+set cleanup_state='scheduled'
+where id=sqlc.arg(job_id) and not admission_open and cleanup_state='requested';
 
 -- name: SetWorkflowAttention :execrows
 update dorf.jobs

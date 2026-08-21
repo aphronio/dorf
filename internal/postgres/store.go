@@ -27,6 +27,7 @@ var ErrNotFound = errors.New("Dorf Job not found")
 var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
 var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var sandboxName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,126}$`)
 
 const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
@@ -336,10 +337,14 @@ func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool,
 	if err != nil {
 		return core.Job{}, false, err
 	}
-	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, OwnershipNonce: ownerNonce})); err != nil {
+	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, Name: core.DefaultSandbox, OwnershipNonce: ownerNonce})); err != nil {
 		// A retry must retain the originally reserved ownership nonce.
-		if _, getErr := queries.GetSandbox(ctx, sandboxID); getErr != nil {
+		reserved, getErr := queries.GetSandbox(ctx, sandboxID)
+		if getErr != nil {
 			return core.Job{}, false, err
+		}
+		if reserved.ID != sandboxID || reserved.JobID != id || reserved.Name != core.DefaultSandbox || !sha256Digest.MatchString(reserved.OwnershipNonce) {
+			return core.Job{}, false, fmt.Errorf("Job %s default Sandbox conflicts with its exact owned identity", id)
 		}
 	}
 	if input.Workflow == investigation.Workflow {
@@ -692,7 +697,7 @@ func timeValue(value sql.NullTime) time.Time {
 	return value.Time
 }
 
-func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error {
+func (s Store) RequestCleanup(ctx context.Context, jobID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -702,14 +707,18 @@ func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error
 	if _, err := queries.GetCleanupJobForUpdate(ctx, jobID); err != nil {
 		return err
 	}
-	closed, err := queries.CloseAdmissionForCleanup(ctx, jobID)
+	closed, err := queries.RequestCleanup(ctx, jobID)
 	if err != nil {
 		return err
 	}
 	if closed != 1 {
-		return fmt.Errorf("cleanup cannot close admission while a pull-request Action or Proposal lacks a recorded Outcome")
+		return fmt.Errorf("Job %s cannot record cleanup request from its current state", jobID)
 	}
 	return tx.Commit()
+}
+
+func (s Store) CleanupRequests(ctx context.Context) ([]string, error) {
+	return dbsql.New(s.DB).ListCleanupRequests(ctx)
 }
 
 func (s Store) AttachCleanupTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
@@ -724,6 +733,9 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 	if jobID == "" || taskID == "" || taskName == "" {
 		return fmt.Errorf("Job task attachment requires exact Job, task, and task-name identities")
 	}
+	if cleanup && taskName != core.CleanupTaskName {
+		return fmt.Errorf("Job cleanup task must use Core task name %s", core.CleanupTaskName)
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -733,6 +745,16 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
 	if err != nil {
 		return err
+	}
+	if cleanup {
+		if current.AdmissionOpen || (current.CleanupState != core.CleanupRequested && current.CleanupState != core.CleanupScheduled) {
+			return fmt.Errorf("Job %s cannot attach cleanup from state %s", jobID, current.CleanupState)
+		}
+		if current.CleanupState == core.CleanupScheduled && current.TaskID != taskID {
+			return fmt.Errorf("Job %s already has cleanup task %s", jobID, current.TaskID)
+		}
+	} else if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
+		return fmt.Errorf("Job %s cannot attach ordinary task after cleanup begins", jobID)
 	}
 	if current.TaskID == taskID {
 		if current.TaskName != taskName {
@@ -752,7 +774,7 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 			return fmt.Errorf("Absurd task %s is already attached to another Job", taskID)
 		}
 	}
-	if cleanup {
+	if cleanup && current.CleanupState == core.CleanupRequested {
 		updated, err := queries.MarkCleanupScheduled(ctx, jobID)
 		if err != nil {
 			return err
@@ -787,7 +809,7 @@ func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce}, nil
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
 }
 func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, error) {
 	rows, err := dbsql.New(s.DB).ListJobSandboxes(ctx, jobID)
@@ -796,9 +818,72 @@ func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, err
 	}
 	out := make([]core.Sandbox, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, OwnershipNonce: r.OwnershipNonce})
+		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, Name: r.Name, OwnershipNonce: r.OwnershipNonce})
 	}
 	return out, nil
+}
+
+// EnsureSandbox durably reserves one stable logical Sandbox identity. Provider
+// reconciliation is deliberately outside this transaction and is protected by
+// the Job effect fence plus the Sandbox's stable Action.
+func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sandbox, error) {
+	jobID = strings.TrimSpace(jobID)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = core.DefaultSandbox
+	}
+	if jobID == "" || !sandboxName.MatchString(name) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox ensure requires a Job and a lowercase name containing only letters, digits, and hyphens")
+	}
+	id := core.NamedSandboxID(jobID, name)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	job, err := queries.GetJobForSandboxEnsure(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		return core.Sandbox{}, fmt.Errorf("Job %s cannot admit Sandbox %q after cleanup begins", jobID, name)
+	}
+	row, err := queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+	if errors.Is(err, sql.ErrNoRows) {
+		foreign, foreignErr := queries.GetSandboxForUpdate(ctx, id)
+		if foreignErr == nil {
+			return core.Sandbox{}, fmt.Errorf("Sandbox identity %s is already owned by Job %s as name %q", id, foreign.JobID, foreign.Name)
+		}
+		if !errors.Is(foreignErr, sql.ErrNoRows) {
+			return core.Sandbox{}, foreignErr
+		}
+		nonce, nonceErr := reviewNonce()
+		if nonceErr != nil {
+			return core.Sandbox{}, nonceErr
+		}
+		inserted, insertErr := queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: id, JobID: jobID, Name: name, OwnershipNonce: nonce})
+		if insertErr != nil {
+			return core.Sandbox{}, insertErr
+		}
+		if inserted != 1 {
+			return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with an existing durable resource", name)
+		}
+		row, err = queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+	}
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	if row.ID != id || row.JobID != jobID || row.Name != name || !sha256Digest.MatchString(row.OwnershipNonce) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with its exact Job-owned identity", name)
+	}
+	if err := tx.Commit(); err != nil {
+		return core.Sandbox{}, err
+	}
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
 }
 
 func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, error) {
@@ -998,48 +1083,94 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	completed, err := queries.GetActionByIDForUpdate(ctx, id)
+	completed, err := authorizeSandboxActionTx(ctx, queries, id, "", "", false)
 	if err != nil {
 		return err
 	}
-	if completed.State != core.ActionUnsettled && completed.State != core.ActionSucceeded {
-		return fmt.Errorf("Sandbox Action %s is %s, not unsettled or succeeded", id, completed.State)
-	}
-	kind, scope := completed.Kind, completed.ScopeKey
-	if scope == "" {
-		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
-	}
-	sandbox, err := queries.GetSandbox(ctx, scope)
-	if err != nil {
-		return err
-	}
-	if completed.ID != id || sandbox.JobID != completed.JobID || id != core.ScopedActionID(completed.JobID, kind, scope) {
-		return fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
-	}
-	if kind == core.ActionSandboxDelete {
-		revokedRow, getErr := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: completed.JobID, Kind: core.ActionRouteRevoke, ScopeKey: scope})
-		if errors.Is(getErr, sql.ErrNoRows) {
-			err = fmt.Errorf("Sandbox cleanup cannot complete before its exact route revoke Action succeeds")
-		} else if getErr != nil {
-			err = getErr
-		} else {
-			var revoked core.Action
-			revoked, err = exactScopedAction(revokedRow, completed.JobID, core.ActionRouteRevoke, scope)
-			if err == nil && revoked.State != core.ActionSucceeded {
-				err = fmt.Errorf("Sandbox cleanup cannot complete before its exact route revoke Action succeeds")
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if completed.State == core.ActionSucceeded {
+	if completed.Action.State == core.ActionSucceeded {
 		return tx.Commit()
 	}
 	if err := expectOneRows(queries.RecordSandboxActionSuccess(ctx, id)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// AuthorizeSandboxAction validates immutable ownership and cleanup
+// prerequisites before any provider mutation. In particular, external delete
+// is never attempted until route revocation is durably settled.
+func (s Store) AuthorizeSandboxAction(ctx context.Context, id, taskID, taskName string) (core.SandboxActionAuthorization, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	authorized, err := authorizeSandboxActionTx(ctx, queries, id, strings.TrimSpace(taskID), strings.TrimSpace(taskName), true)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	return authorized, nil
+}
+
+func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, taskID, taskName string, requireTask bool) (core.SandboxActionAuthorization, error) {
+	row, err := queries.GetActionByIDForUpdate(ctx, id)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if row.State != core.ActionUnsettled && row.State != core.ActionSucceeded {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s is %s, not unsettled or succeeded", id, row.State)
+	}
+	if row.ScopeKey == "" || row.ID != core.ScopedActionID(row.JobID, row.Kind, row.ScopeKey) {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	}
+	owned, err := queries.GetSandbox(ctx, row.ScopeKey)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if owned.JobID != row.JobID {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	}
+	job, err := queries.GetJobForSandboxActionAuthorization(ctx, row.JobID)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if requireTask && (taskID == "" || taskName == "" || job.CurrentTaskID != taskID || job.CurrentTaskName != taskName) {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s requires the exact current attached task", id)
+	}
+	cleanup := row.Kind == core.ActionRouteRevoke || row.Kind == core.ActionSandboxDelete
+	if cleanup {
+		if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled || requireTask && taskName != core.CleanupTaskName {
+			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup Action %s requires a durably scheduled cleanup", id)
+		}
+	} else if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s cannot mutate provider after cleanup begins", id)
+	}
+	if row.Kind == core.ActionSandboxDelete {
+		revoked, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: row.JobID, Kind: core.ActionRouteRevoke, ScopeKey: row.ScopeKey})
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && revoked.State != core.ActionSucceeded) {
+			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup cannot delete before its exact route revoke Action succeeds")
+		}
+		if err != nil {
+			return core.SandboxActionAuthorization{}, err
+		}
+	}
+	return core.SandboxActionAuthorization{
+		Job: core.Job{
+			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, Goal: job.Goal,
+			SandboxProfile: job.SandboxProfile, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
+			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,
+			WorkflowAttention: job.WorkflowAttention, WorkflowAttentionSource: job.WorkflowAttentionSource,
+			WorkflowAttentionAt: timeValue(job.WorkflowAttentionAt), CleanupAttention: job.CleanupAttention,
+			AdmittedAt: job.AdmittedAt, CleanedAt: timeValue(job.CleanedAt),
+		},
+		Sandbox: core.Sandbox{ID: owned.ID, JobID: owned.JobID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce},
+		Action:  actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt),
+		TaskID:  job.CurrentTaskID, TaskName: job.CurrentTaskName,
+	}, nil
 }
 
 func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, error) {
@@ -1282,7 +1413,7 @@ func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) er
 	return expectOneRows(dbsql.New(s.DB).SetCleanupAttention(ctx, dbsql.SetCleanupAttentionParams{Detail: detail, JobID: jobID}))
 }
 
-func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
+func (s Store) CompleteCleanup(ctx context.Context, jobID, taskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1293,11 +1424,21 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if job.CurrentTaskID == "" || job.CurrentTaskID != strings.TrimSpace(taskID) {
+		return fmt.Errorf("cleanup cannot complete without ownership by the Job's current attached cleanup task")
+	}
+	tasks, err := queries.ListJobTasks(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if len(tasks) == 0 || tasks[len(tasks)-1].TaskID != taskID || tasks[len(tasks)-1].TaskName != core.CleanupTaskName {
+		return fmt.Errorf("cleanup cannot complete without the exact Core cleanup task attachment")
+	}
+	if !job.AdmissionOpen && job.CleanupState == core.CleanupComplete {
+		return tx.Commit()
+	}
 	if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled {
 		return fmt.Errorf("cleanup cannot complete while admission or cleanup scheduling remains unsettled")
-	}
-	if job.CurrentTaskID == "" {
-		return fmt.Errorf("cleanup cannot complete without the Job's current attached execution task")
 	}
 	deliveries, err := queries.ListDeliveries(ctx, jobID)
 	if err != nil {

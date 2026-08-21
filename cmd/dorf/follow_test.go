@@ -202,7 +202,7 @@ func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
 	job := core.Job{ID: "job-123"}
 	main := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	reviewRun := core.AgentRun{ID: "review-run"}
-	review := core.Sandbox{ID: coding.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
+	review := core.Sandbox{ID: coding.ReviewSandboxName(job.ID, reviewRun.ID), JobID: job.ID}
 	reviewRun.SandboxID = review.ID
 	now := time.Now()
 	actions := []core.Action{

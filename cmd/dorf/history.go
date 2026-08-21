@@ -230,7 +230,7 @@ func sandboxHumanRole(job core.Job, runs []core.AgentRun, sandboxID string) stri
 		return "primary"
 	}
 	for _, run := range runs {
-		if run.SandboxID == sandboxID && sandboxID == coding.ReviewSandboxName(run.ID) {
+		if run.SandboxID == sandboxID && sandboxID == coding.ReviewSandboxName(job.ID, run.ID) {
 			return "reviewer"
 		}
 	}

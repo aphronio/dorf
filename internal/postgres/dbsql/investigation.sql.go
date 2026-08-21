@@ -14,7 +14,9 @@ import (
 )
 
 const getCodebaseInvestigationRunForUpdate = `-- name: GetCodebaseInvestigationRunForUpdate :one
-select j.workflow_name,j.workflow_revision,s.revision,j.admission_open,j.cleanup_state,
+select coalesce(j.workflow_name,'') as workflow_name,
+       coalesce(j.workflow_revision,'') as workflow_revision,
+       s.revision,j.admission_open,j.cleanup_state,
        ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
        coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.input_revision,'') as input_revision,
        ar.started_at,ar.finished_at

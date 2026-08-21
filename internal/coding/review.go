@@ -62,7 +62,7 @@ func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID strin
 	if err != nil {
 		return err
 	}
-	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID ||
+	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != ReviewSandboxName(job.ID, run.ID) || run.Sandbox.ID != run.SandboxID ||
 		action.ID != core.ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
 		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
 	}
@@ -138,7 +138,7 @@ func fullGitObjectID(value string) bool {
 func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewRunView) (core.HarnessTurn, error) {
 	expectedFromID := ReviewRequestFromID(original.InputRevision, original.Role)
 	expectedMessageID := ReviewRequestMessageID(job.ID, original.InputRevision, original.Role)
-	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != core.MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != core.MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
+	if original.MessageID != expectedMessageID || original.Request.ID != expectedMessageID || original.Request.JobID != job.ID || original.Request.FromKind != core.MessageFromWorkflow || original.Request.FromID != expectedFromID || original.Request.Intent != core.MessageFollow || original.Request.TargetTurnID != "" || strings.TrimSpace(original.Request.Input) == "" || original.SandboxID != ReviewSandboxName(job.ID, original.ID) || original.Sandbox.ID != original.SandboxID || original.Sandbox.JobID != job.ID || len(original.Sandbox.OwnershipNonce) != 64 || len(original.SubmissionNonce) != 64 {
 		reason := "review AgentRun request Message, Sandbox ownership, or exact submission contract is invalid"
 		_ = s.uncertainAgentRun(ctx, original.ID, reason)
 		return core.HarnessTurn{}, reviewBoundaryError(reason)
@@ -204,7 +204,7 @@ func (s Service) executeReviewRun(ctx context.Context, job Job, original ReviewR
 }
 
 func (s Service) requireReviewActions(ctx context.Context, job Job, run ReviewRunView) error {
-	if run.SandboxID != ReviewSandboxName(run.ID) || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != job.ID {
+	if run.SandboxID != ReviewSandboxName(job.ID, run.ID) || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != job.ID {
 		return reviewBoundaryError("review AgentRun has no exact dedicated reviewer Sandbox")
 	}
 	actions, err := s.store.Actions(ctx, job.ID)

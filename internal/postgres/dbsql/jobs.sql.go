@@ -205,7 +205,8 @@ func (q *Queries) GetCodingToProposalInput(ctx context.Context, jobID string) (G
 const getCurrentJobTaskForUpdate = `-- name: GetCurrentJobTaskForUpdate :one
 select coalesce(current_task.task_id,'') as task_id,
        coalesce(current_task.task_name,'') as task_name,
-       coalesce(current_task.sequence,0)::bigint as sequence
+       coalesce(current_task.sequence,0)::bigint as sequence,
+       j.admission_open,j.cleanup_state
 from dorf.jobs j
 left join lateral (
     select task_id,task_name,sequence
@@ -216,15 +217,23 @@ for update of j
 `
 
 type GetCurrentJobTaskForUpdateRow struct {
-	TaskID   string
-	TaskName string
-	Sequence int64
+	TaskID        string
+	TaskName      string
+	Sequence      int64
+	AdmissionOpen bool
+	CleanupState  core.CleanupState
 }
 
 func (q *Queries) GetCurrentJobTaskForUpdate(ctx context.Context, jobID string) (GetCurrentJobTaskForUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getCurrentJobTaskForUpdate, jobID)
 	var i GetCurrentJobTaskForUpdateRow
-	err := row.Scan(&i.TaskID, &i.TaskName, &i.Sequence)
+	err := row.Scan(
+		&i.TaskID,
+		&i.TaskName,
+		&i.Sequence,
+		&i.AdmissionOpen,
+		&i.CleanupState,
+	)
 	return i, err
 }
 
@@ -314,6 +323,91 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 		&i.AdmissionOpen,
 		&i.OutcomeExists,
 	)
+	return i, err
+}
+
+const getJobForSandboxActionAuthorization = `-- name: GetJobForSandboxActionAuthorization :one
+select j.id,j.admission_key,j.workflow_name,j.workflow_revision,j.goal,
+       j.sandbox_profile,j.provider_connection,j.model,j.reasoning_effort,j.admission_open,
+       j.cleanup_state,coalesce(current_task.task_id,'') as current_task_id,
+       coalesce(current_task.task_name,'') as current_task_name,
+       coalesce(j.workflow_attention,'') as workflow_attention,
+       coalesce(j.workflow_attention_source,'') as workflow_attention_source,
+       j.workflow_attention_at,coalesce(j.cleanup_attention,'') as cleanup_attention,
+       j.admitted_at,j.cleaned_at
+from dorf.jobs j
+left join lateral (
+    select task_id,task_name from dorf.job_tasks where job_id=j.id order by sequence desc limit 1
+) current_task on true
+where j.id=$1
+for update of j
+`
+
+type GetJobForSandboxActionAuthorizationRow struct {
+	ID                      string
+	AdmissionKey            string
+	WorkflowName            core.WorkflowName
+	WorkflowRevision        string
+	Goal                    string
+	SandboxProfile          string
+	ProviderConnection      string
+	Model                   string
+	ReasoningEffort         string
+	AdmissionOpen           bool
+	CleanupState            core.CleanupState
+	CurrentTaskID           string
+	CurrentTaskName         string
+	WorkflowAttention       string
+	WorkflowAttentionSource string
+	WorkflowAttentionAt     sql.NullTime
+	CleanupAttention        string
+	AdmittedAt              time.Time
+	CleanedAt               sql.NullTime
+}
+
+func (q *Queries) GetJobForSandboxActionAuthorization(ctx context.Context, jobID string) (GetJobForSandboxActionAuthorizationRow, error) {
+	row := q.db.QueryRowContext(ctx, getJobForSandboxActionAuthorization, jobID)
+	var i GetJobForSandboxActionAuthorizationRow
+	err := row.Scan(
+		&i.ID,
+		&i.AdmissionKey,
+		&i.WorkflowName,
+		&i.WorkflowRevision,
+		&i.Goal,
+		&i.SandboxProfile,
+		&i.ProviderConnection,
+		&i.Model,
+		&i.ReasoningEffort,
+		&i.AdmissionOpen,
+		&i.CleanupState,
+		&i.CurrentTaskID,
+		&i.CurrentTaskName,
+		&i.WorkflowAttention,
+		&i.WorkflowAttentionSource,
+		&i.WorkflowAttentionAt,
+		&i.CleanupAttention,
+		&i.AdmittedAt,
+		&i.CleanedAt,
+	)
+	return i, err
+}
+
+const getJobForSandboxEnsure = `-- name: GetJobForSandboxEnsure :one
+select admission_open,cleanup_state
+from dorf.jobs
+where id=$1
+for update
+`
+
+type GetJobForSandboxEnsureRow struct {
+	AdmissionOpen bool
+	CleanupState  core.CleanupState
+}
+
+func (q *Queries) GetJobForSandboxEnsure(ctx context.Context, jobID string) (GetJobForSandboxEnsureRow, error) {
+	row := q.db.QueryRowContext(ctx, getJobForSandboxEnsure, jobID)
+	var i GetJobForSandboxEnsureRow
+	err := row.Scan(&i.AdmissionOpen, &i.CleanupState)
 	return i, err
 }
 
@@ -604,8 +698,8 @@ func (q *Queries) ListRevisions(ctx context.Context, jobID string) ([]ListRevisi
 
 const markCleanupScheduled = `-- name: MarkCleanupScheduled :execrows
 update dorf.jobs
-set cleanup_state=case when cleanup_state='complete' or cleaned_at is not null then 'complete' else 'scheduled' end
-where id=$1
+set cleanup_state='scheduled'
+where id=$1 and not admission_open and cleanup_state='requested'
 `
 
 func (q *Queries) MarkCleanupScheduled(ctx context.Context, jobID string) (int64, error) {

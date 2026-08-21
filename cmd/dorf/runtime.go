@@ -45,6 +45,17 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 	}, nil
 }
 
+func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string) (core.SandboxRuntime, error) {
+	resolved, err := r.resolveBase(ctx, name, true)
+	if err != nil {
+		return core.SandboxRuntime{}, err
+	}
+	return core.SandboxRuntime{
+		Execution:      resolved.Execution,
+		SandboxProfile: resolved.Profile.SandboxProfile,
+	}, nil
+}
+
 func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (coding.Runtime, error) {
 	resolved, err := r.resolveBase(ctx, name, true)
 	if err != nil {

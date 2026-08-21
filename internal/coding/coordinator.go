@@ -31,7 +31,7 @@ func reviewPolicyStepName(job, revision string) string {
 // RunJob tells the coding story in dependency order. CurrentWork derives the
 // next operation from product facts; this loop executes it and asks again.
 // PostgreSQL never stores this disposable answer.
-func RunJob(ctx context.Context, service CodingExecution, store Store, proposal ProposalRuntime, jobID string) (Work, error) {
+func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution, store Store, proposal ProposalRuntime, jobID string) (Work, error) {
 	for {
 		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -45,12 +45,11 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 		if work.Kind == WorkComplete || work.Kind == WorkAttention {
 			return work, nil
 		}
-
 		job := snapshot.Job
 
 		switch work.Kind {
 		case WorkAction:
-			err = runSandboxAction(ctx, service, store, job, snapshot, work)
+			err = runSandboxAction(ctx, custody, service, store, job, snapshot, work)
 		case WorkRunReviewer:
 			err = absurdruntime.RunFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.RunReview(workCtx, job, work.FactID)
@@ -167,7 +166,7 @@ func runPublicationStep(ctx context.Context, store Store, proposal ProposalRunti
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, service CodingExecution, store Store, job Job, snapshot Snapshot, work Work) error {
+func runSandboxAction(ctx context.Context, custody core.JobHandle, service CodingExecution, store Store, job Job, snapshot Snapshot, work Work) error {
 	var sandbox *core.Sandbox
 	for i := range snapshot.Sandboxes {
 		if snapshot.Sandboxes[i].ID == work.Scope {
@@ -178,7 +177,24 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store Store,
 	if sandbox == nil || sandbox.JobID != job.ID {
 		return fmt.Errorf("Action %s has no exact Job-owned Sandbox %s", work.FactID, work.Scope)
 	}
-
+	// Sandbox-create is a truthful projection of the next Core custody
+	// prerequisite. Provider mutation remains exclusive to the opaque handle.
+	if work.ActionKind == core.ActionSandboxCreate {
+		var ensured core.SandboxHandle
+		var err error
+		if sandbox.Name == core.DefaultSandbox {
+			ensured, err = custody.EnsureDefaultSandbox(ctx)
+		} else {
+			ensured, err = custody.EnsureNamedSandbox(ctx, sandbox.Name)
+		}
+		if err != nil {
+			return err
+		}
+		if ensured.ID() != sandbox.ID {
+			return fmt.Errorf("ensured Sandbox %s changed selected identity %s", ensured.ID(), sandbox.ID)
+		}
+		return nil
+	}
 	var reviewer *ReviewRunView
 	if sandbox.ID != snapshot.MainSandbox.ID {
 		reviewRuns, err := snapshot.currentReviewRuns()
@@ -221,6 +237,6 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store Store,
 		if work.ActionKind == gitworkspace.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, job.Job, *sandbox, action, job.Repository, job.Revision, job.Branch)
 		}
-		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)
+		return service.ExecuteSandboxAction(workCtx, job.ID, action.ID)
 	})
 }

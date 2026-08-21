@@ -30,39 +30,17 @@ func preparePublicationRaceJob(t *testing.T, label string) (postgres.Store, codi
 	return store, job, revision
 }
 
-func TestPostgresCleanupAndPublicationSerializeToOneWinner(t *testing.T) {
-	store, job, revision := preparePublicationRaceJob(t, "race")
-	start := make(chan struct{})
-	type result struct {
-		kind string
-		err  error
-	}
-	results := make(chan result, 2)
-	go func() {
-		<-start
-		results <- result{kind: "cleanup", err: store.CloseAdmissionForCleanup(context.Background(), job.ID)}
-	}()
-	go func() {
-		<-start
-		_, _, _, err := store.BeginPublication(context.Background(), job.ID, revision)
-		results <- result{kind: "publication", err: err}
-	}()
-	close(start)
-
-	errorsByKind := map[string]error{}
-	for range 2 {
-		result := <-results
-		errorsByKind[result.kind] = result.err
-	}
-	stored, err := store.Job(context.Background(), job.ID)
-	if err != nil {
+func TestExplicitCleanupAcceptsExistingCodingPublicationIntent(t *testing.T) {
+	store, job, revision := preparePublicationRaceJob(t, "explicit-cleanup")
+	if _, _, _, err := store.BeginPublication(context.Background(), job.ID, revision); err != nil {
 		t.Fatal(err)
 	}
-	cleanupWon := errorsByKind["cleanup"] == nil
-	publicationWon := errorsByKind["publication"] == nil
-	_, _, publicationActionsErr := store.PublicationActions(context.Background(), job.ID, revision)
-	if cleanupWon == publicationWon || cleanupWon == stored.AdmissionOpen || publicationWon != (publicationActionsErr == nil) {
-		t.Fatalf("cleanupErr=%v publicationErr=%v publicationActionsErr=%v Job=%#v", errorsByKind["cleanup"], errorsByKind["publication"], publicationActionsErr, stored)
+	if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
+		t.Fatalf("Core rejected explicit cleanup using coding Proposal eligibility: %v", err)
+	}
+	stored, err := store.Job(context.Background(), job.ID)
+	if err != nil || stored.AdmissionOpen || stored.CleanupState != core.CleanupRequested {
+		t.Fatalf("explicit cleanup request=%#v err=%v", stored, err)
 	}
 }
 
@@ -90,7 +68,7 @@ func TestSandboxScopedPullRequestActionIsNotPublicationIntent(t *testing.T) {
 
 	t.Run("cleanup", func(t *testing.T) {
 		store, job := collisionJob(t, "cleanup")
-		if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
+		if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
 			t.Fatalf("close admission for cleanup: %v", err)
 		}
 	})

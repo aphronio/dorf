@@ -12,10 +12,10 @@ import (
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -51,10 +51,8 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if _, _, err := store.AdmitInvestigation(ctx, changedSource); err == nil || !strings.Contains(err.Error(), "different complete Job input") {
 		t.Fatalf("same admission key changed source identity: %v", err)
 	}
-	changed := input
-	changed.Workflow = coding.Workflow
-	changed.WorkflowRevision = coding.WorkflowRevision
-	if _, _, err := store.AdmitInvestigation(ctx, changed); err == nil {
+	changedWorkflow := codingJobInput(key, input.Goal, input.Source.Revision, "dorf/cross-workflow")
+	if _, _, err := store.AdmitCoding(ctx, changedWorkflow); err == nil {
 		t.Fatal("same admission key changed workflow identity")
 	}
 	if _, err := store.DB.ExecContext(ctx, `insert into dorf.coding_to_proposal_inputs(job_id,workflow_name,repository,starting_revision,revision,branch,github_repository,github_installation_id,base_branch) values($1,'coding-to-proposal',$2,$3,$3,$4,$5,$6,$7)`,
@@ -262,6 +260,10 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	execution := core.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
 	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, absurdruntime.RequireClaim)
 	service := investigation.NewService(workspaceExecutor, store, externals, records, absurdruntime.RequireClaim)
+	application := core.Application{
+		Store: store, Tasks: client,
+		SandboxRuntimes: integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: "incus"}},
+	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	job, created, err := store.AdmitInvestigation(ctx, investigation.Admission{
 		JobAdmission: core.JobAdmission{
@@ -280,7 +282,11 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	taskName := "test-codebase-investigation-" + suffix
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		work, err := investigation.Run(taskCtx, service, store, params.JobID)
+		handle, err := application.OpenJob(taskCtx, params.JobID)
+		if err != nil {
+			return core.TaskResultV1{}, err
+		}
+		work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
@@ -336,7 +342,11 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	revisionTaskName := taskName + "-follow-up"
 	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		work, err := investigation.Run(taskCtx, service, store, params.JobID)
+		handle, err := application.OpenJob(taskCtx, params.JobID)
+		if err != nil {
+			return core.TaskResultV1{}, err
+		}
+		work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
@@ -359,31 +369,21 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || len(drafts) != 2 {
 		t.Fatalf("revised Drafts=%#v err=%v", drafts, err)
 	}
-	cleaning, err := (core.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
+	handle, err := application.OpenJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cleaning, err := store.Job(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cleaning.AdmissionOpen || cleaning.CleanupState != core.CleanupScheduled {
 		t.Fatalf("explicit cleanup did not close admission and schedule release: %#v", cleaning)
 	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), cleaning.CurrentTaskID) })
-	cleanupService := core.NewExecutionService(store, externals, records, nil, func(context.Context) error { return nil })
-	cleaning, sandboxes, err := cleanupService.PrepareCleanup(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, owned := range sandboxes {
-		for _, kind := range []core.ActionKind{core.ActionRouteRevoke, core.ActionSandboxDelete} {
-			action, err := store.GetOrCreateSandboxAction(ctx, owned.ID, kind)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := cleanupService.ExecuteSandboxAction(ctx, cleaning, owned, action); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-cleanup", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	cleaned, err := store.Job(ctx, job.ID)

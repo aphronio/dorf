@@ -183,7 +183,7 @@ func (s Snapshot) Project() Work {
 	}
 }
 
-func Run(ctx context.Context, service Service, store Store, jobID string) (Work, error) {
+func Run(ctx context.Context, custody core.JobHandle, service Service, store Store, jobID string) (Work, error) {
 	for {
 		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -194,7 +194,7 @@ func Run(ctx context.Context, service Service, store Store, jobID string) (Work,
 		case WorkComplete, WorkAttention, WorkWaitInput:
 			return work, nil
 		case WorkAction:
-			err = runInvestigationAction(ctx, service, store, snapshot, work)
+			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)
 		case WorkDeliver:
 			err = absurdruntime.RunFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
 				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
@@ -239,9 +239,21 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
 }
 
-func runInvestigationAction(ctx context.Context, service Service, store Store, snapshot Snapshot, work Work) error {
+func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, store Store, snapshot Snapshot, work Work) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != core.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
+	}
+	// Sandbox-create stays visible to inspection while its provider mutation is
+	// executed only through Core's opaque Job custody handle.
+	if work.ActionKind == core.ActionSandboxCreate {
+		ensured, err := custody.EnsureDefaultSandbox(ctx)
+		if err != nil {
+			return err
+		}
+		if ensured.ID() != snapshot.MainSandbox.ID {
+			return fmt.Errorf("ensured Sandbox %s changed selected identity %s", ensured.ID(), snapshot.MainSandbox.ID)
+		}
+		return nil
 	}
 	action, err := store.GetOrCreateSandboxAction(ctx, work.Scope, work.ActionKind)
 	if err != nil {
@@ -260,7 +272,7 @@ func runInvestigationAction(ctx context.Context, service Service, store Store, s
 		if work.ActionKind == gitworkspace.ActionRepositoryClone {
 			return service.ExecuteRepositoryClone(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source.Repository, snapshot.Source.Revision, "")
 		}
-		return service.ExecuteSandboxAction(workCtx, snapshot.Job, snapshot.MainSandbox, action)
+		return service.ExecuteSandboxAction(workCtx, snapshot.Job.ID, action.ID)
 	})
 }
 

@@ -124,24 +124,28 @@ North Star ownership boundary.
 
 ## Vertical slices
 
-### 1. Core Job admission and Job-owned Sandbox application path
+### 1. Existing workflow Job to claimed Job-owned Sandbox application path
 
 **Seam discovery:** Trace complete Job input, atomic Core and workflow-fact insertion, idempotent
 replay, scheduling attachment, profile pinning, Sandbox create/reconcile Actions, route ownership,
 cleanup inventory, provider adapters, and every workflow-specific wrapper over those paths.
 
-Introduce Core admission plus the Job and Sandbox handles just deeply enough for a direct Job to be
-admitted without workflow identity, reconcile its default or named Sandbox through its verified
-profile, and request cleanup through the same Job handle. Preserve atomic complete-input replay,
-stable task attachment when execution is scheduled, Sandbox ownership, and Action reconciliation
-across process loss. Keep typed workflow input with its module and preserve atomic admission without
-requiring a workflow author to know PostgreSQL or Absurd.
+Start from the existing typed workflow admission transactions. Open their durable Jobs through an
+opaque Job handle, reconcile the default or named Job-owned Sandbox only from the exact attached
+Absurd task through its pinned verified profile, and request cleanup through the same handle.
+Preserve atomic workflow admission replay, predecessor-bound task attachment, Sandbox ownership,
+Action reconciliation across process loss, and route-before-delete cleanup. Workflow authors must
+not know PostgreSQL, Absurd, raw provider types, or a workflow registry.
 
-Prove exact admission replay/conflict, direct Job recovery, default and named Sandbox identity,
-idempotent ensure, foreign-resource refusal, profile resolution, and route-before-Sandbox cleanup in
-PostgreSQL-backed tests. Reach one live direct Job on a verified profile from admission through
-ensure and confirmed cleanup. Delete superseded service façades and direct workflow calls once all
-consumers in this slice use the Job path.
+Prove default and named Sandbox identity, idempotent ensure, foreign-resource refusal, pinned-profile
+resolution, claimed execution authority, stale-task refusal, ensure-versus-cleanup serialization,
+cleanup-request recovery, and route-before-Sandbox cleanup in PostgreSQL-backed tests. Delete the
+superseded native-workflow Sandbox-create path once coding and investigation both use the handle.
+
+This slice does not introduce `Application.Admit`, workflow-less durable Jobs, or a synchronous
+direct-client execution path. Direct admission and its live terminal proof are deferred until an
+actual trusted client or transport earns a durable scheduling and claim-recovery path. That
+sequencing narrows the implementation slice; it does not change D088's target Core ownership.
 
 ### 2. Agent Message convenience with hidden AgentRun recovery
 
@@ -244,7 +248,9 @@ current dogfood terminals:
 - across those runs, both supported Harnesses are exercised so provider/Harness variation occurs
   only through profile selection.
 
-At least one direct Job without workflow identity must be admitted through the Core application path.
+Before the refactor is complete, an earned trusted-client or transport slice must admit at least one
+direct Job without workflow identity through the Core application path; slice 1 deliberately does
+not manufacture that caller or its scheduling authority.
 At least one run must become open and idle, accept a follow on its continuing Thread, accept an active
 steer without a duplicate Turn, automatically retain an agent-written Artifact, survive controller
 restart or forced executor loss at an AgentRun reconciliation boundary, accept an explicit cleanup

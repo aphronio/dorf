@@ -13,6 +13,7 @@ type CleanupState string
 
 const (
 	CleanupPending   CleanupState = "pending"
+	CleanupRequested CleanupState = "requested"
 	CleanupScheduled CleanupState = "scheduled"
 	CleanupComplete  CleanupState = "complete"
 )
@@ -129,6 +130,7 @@ type Job struct {
 type Sandbox struct {
 	ID             string `json:"id"`
 	JobID          string `json:"job_id"`
+	Name           string `json:"name"`
 	OwnershipNonce string `json:"-"`
 }
 
@@ -205,6 +207,16 @@ type Action struct {
 	Scope     string      `json:"scope"`
 	CreatedAt time.Time   `json:"created_at,omitempty"`
 	SettledAt time.Time   `json:"settled_at,omitempty"`
+}
+
+// SandboxActionAuthorization is the authoritative persisted provider-effect
+// tuple, including the exact current Absurd task attachment.
+type SandboxActionAuthorization struct {
+	Job      Job
+	Sandbox  Sandbox
+	Action   Action
+	TaskID   string
+	TaskName string
 }
 
 type Evidence struct {
@@ -286,10 +298,20 @@ func ArtifactID(jobID, name string) string {
 	return "artifact-" + digest(jobID+"\x00"+name, 24)
 }
 
+const DefaultSandbox = "default"
+
 // MainSandboxName and ProviderRouteID are exact resource identities derived
-// before their external create effects.
+// before their external create effects. MainSandboxName remains the stable
+// identity of the Job's default Sandbox.
 func MainSandboxName(jobID string) string {
 	return "dorf-" + digest(jobID, 20)
+}
+
+func NamedSandboxID(jobID, name string) string {
+	if name == DefaultSandbox {
+		return MainSandboxName(jobID)
+	}
+	return "dorf-" + digest(jobID+"\x00sandbox\x00"+name, 20)
 }
 
 func ProviderRouteID(actionID string) string {

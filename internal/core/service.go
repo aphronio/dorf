@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type ExecutionStore interface {
@@ -13,6 +14,8 @@ type ExecutionStore interface {
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	Deliveries(context.Context, string) ([]Delivery, error)
 	InterruptAgentRun(context.Context, string, string) error
+	WithJobFence(context.Context, string, func() error) error
+	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
@@ -49,6 +52,7 @@ const (
 	BarrierHarnessActive         = "harness-active"
 	BarrierPushAccepted          = "push-accepted-before-record"
 	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
+	BarrierSandboxCreated        = "sandbox-created-before-record"
 	BarrierRouteRevoked          = "route-revoked-before-record"
 	BarrierSandboxDeleted        = "sandbox-deleted-before-record"
 )
@@ -305,6 +309,9 @@ func (s ExecutionService) PrepareCleanup(ctx context.Context, jobID string) (Job
 	if job.CleanupState == CleanupComplete {
 		return job, nil, nil
 	}
+	if job.CleanupState != CleanupScheduled {
+		return Job{}, nil, fmt.Errorf("cleanup recovery requires a durably scheduled cleanup task")
+	}
 	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
 		return Job{}, nil, err
 	}
@@ -444,49 +451,67 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
 }
 
-// ExecuteSandboxAction reconciles one external mutation against its exact
-// Sandbox. The caller uses the Action ID as the durable Absurd Step identity.
-func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) error {
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
-		return fmt.Errorf("Sandbox Action does not belong to the exact Job and Sandbox")
+// ExecuteSandboxAction reconciles one authoritative persisted mutation. The
+// caller supplies only the Job and Action identities used by durable custody.
+func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, actionID string) error {
+	if jobID == "" || actionID == "" {
+		return fmt.Errorf("Sandbox Action requires durable Job and Action identities")
 	}
-	var err error
-	switch action.Kind {
-	case ActionSandboxCreate:
-		err = s.externals.SandboxCreate(ctx, job, sandbox)
-	case ActionRouteCreate, ActionRouteRevoke:
-		route := RouteForSandbox(sandbox)
-		if action.Kind == ActionRouteCreate {
-			err = s.externals.RouteCreate(ctx, job, sandbox, route)
-		}
-		if action.Kind == ActionRouteRevoke {
-			err = s.externals.RouteRevoke(ctx, job, sandbox, route)
-		}
-	case ActionSandboxDelete:
-		err = s.externals.SandboxDelete(ctx, job, sandbox)
-	default:
-		return fmt.Errorf("unsupported Sandbox Action kind %q", action.Kind)
-	}
-	if err != nil {
-		return err
-	}
-	point := ""
-	if action.Kind == ActionRouteRevoke {
-		point = BarrierRouteRevoked
-	}
-	if action.Kind == ActionSandboxDelete {
-		point = BarrierSandboxDeleted
-	}
-	if point != "" {
-		if err := s.reachWorkflow(ctx, point, job.ID, action.ID); err != nil {
+	return s.store.WithJobFence(ctx, jobID, func() error {
+		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-	}
-	if err := s.requireClaim(ctx); err != nil {
-		return err
-	}
-	if err := s.store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
-		return err
-	}
-	return nil
+		task, ok := absurd.TaskFromContext(ctx)
+		if !ok {
+			return absurd.ErrNoTaskContext
+		}
+		authorized, err := s.store.AuthorizeSandboxAction(ctx, actionID, task.TaskID(), task.TaskName())
+		if err != nil {
+			return err
+		}
+		authoritative := authorized.Action
+		if authorized.Job.ID != jobID || authoritative.ID != actionID || authoritative.JobID != jobID || authorized.Sandbox.JobID != jobID || authoritative.Scope != authorized.Sandbox.ID ||
+			authorized.TaskID != task.TaskID() || authorized.TaskName != task.TaskName() {
+			return fmt.Errorf("Sandbox Action does not match its authoritative Job, Sandbox, and task")
+		}
+		if authoritative.State == ActionSucceeded {
+			return nil
+		}
+		switch authoritative.Kind {
+		case ActionSandboxCreate:
+			err = s.externals.SandboxCreate(ctx, authorized.Job, authorized.Sandbox)
+		case ActionRouteCreate, ActionRouteRevoke:
+			route := RouteForSandbox(authorized.Sandbox)
+			if authoritative.Kind == ActionRouteCreate {
+				err = s.externals.RouteCreate(ctx, authorized.Job, authorized.Sandbox, route)
+			} else {
+				err = s.externals.RouteRevoke(ctx, authorized.Job, authorized.Sandbox, route)
+			}
+		case ActionSandboxDelete:
+			err = s.externals.SandboxDelete(ctx, authorized.Job, authorized.Sandbox)
+		default:
+			return fmt.Errorf("unsupported Sandbox Action kind %q", authoritative.Kind)
+		}
+		if err != nil {
+			return err
+		}
+		point := ""
+		switch authoritative.Kind {
+		case ActionSandboxCreate:
+			point = BarrierSandboxCreated
+		case ActionRouteRevoke:
+			point = BarrierRouteRevoked
+		case ActionSandboxDelete:
+			point = BarrierSandboxDeleted
+		}
+		if point != "" {
+			if err := s.reachWorkflow(ctx, point, authorized.Job.ID, authoritative.ID); err != nil {
+				return err
+			}
+		}
+		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		return s.store.RecordSandboxActionSuccess(ctx, authoritative.ID)
+	})
 }

@@ -127,7 +127,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
-		return worker(ctx, client, cfg, args[1:], stdout, stderr)
+		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	case "cleanup":
@@ -153,6 +153,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}
 	core := coreApplication(store, client)
+	core.SandboxRuntimes = runtimes
 	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
 	coding.Register(core, store, runtimes)
@@ -1017,7 +1018,7 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": "queued"})
 }
 
-func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	once := set.Bool("once", false, "claim at most one batch and return")
@@ -1027,6 +1028,9 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	}
 	if *concurrency < 1 {
 		return fmt.Errorf("worker concurrency must be positive")
+	}
+	if err := coreApplication(store, client).RecoverCleanupRequests(ctx); err != nil {
+		return err
 	}
 	claimTimeout := cfg.TurnTimeout + 5*time.Minute
 	if *once {
@@ -1038,8 +1042,23 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	}
 	workerCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	runCtx, cancel := context.WithCancel(workerCtx)
+	defer cancel()
+	recoveryDone := make(chan error, 1)
+	go func() {
+		err := coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
+		recoveryDone <- err
+		if err != nil && !errors.Is(err, context.Canceled) {
+			cancel()
+		}
+	}()
 	fmt.Fprintln(stdout, "Dorf durable worker started")
-	err := client.RunWorker(workerCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	err := client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	cancel()
+	recoveryErr := <-recoveryDone
+	if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
+		return recoveryErr
+	}
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -1306,7 +1325,15 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if set.NArg() != 1 {
 		return fmt.Errorf("cleanup requires one Job ID")
 	}
-	job, err := coreApplication(store, client).RequestCleanup(ctx, set.Arg(0))
+	application := coreApplication(store, client)
+	handle, err := application.OpenJob(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
+		return err
+	}
+	job, err := store.Job(ctx, handle.ID())
 	if err != nil {
 		return err
 	}
@@ -1324,9 +1351,17 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	if err != nil {
 		return err
 	}
-	job, err := coreApplication(store, client).RequestCleanup(ctx, receipt.JobID)
+	application := coreApplication(store, client)
+	handle, err := application.OpenJob(ctx, receipt.JobID)
 	if err != nil {
+		return fmt.Errorf("%s outcome receipt was retained, but loading its Job failed: %w", receipt.Kind, err)
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
 		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
+	}
+	job, err := store.Job(ctx, handle.ID())
+	if err != nil {
+		return fmt.Errorf("%s outcome receipt was retained, but reloading cleanup state failed: %w", receipt.Kind, err)
 	}
 	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID})
 }

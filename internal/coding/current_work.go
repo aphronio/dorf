@@ -232,8 +232,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		return work(WorkComplete, f.Job.ID, "admission closed")
 	}
 
-	// Infrastructure is a fixed prerequisite chain owned by the Job's main
-	// Sandbox. Missing Actions are created only when RunJob executes this work.
+	// Infrastructure is a fixed prerequisite chain. Sandbox-create truthfully
+	// projects Core custody; the workflow never executes its provider mutation.
 	if !actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
 		return actionWork(core.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}

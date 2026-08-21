@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
@@ -33,11 +35,56 @@ type providerCheck struct {
 
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
+type failOnceWorkflowBarrier struct {
+	mu     sync.Mutex
+	point  string
+	failed bool
+}
+
+func (*failOnceWorkflowBarrier) Reach(context.Context, string, core.Delivery) error { return nil }
+
+func (b *failOnceWorkflowBarrier) ReachWorkflow(_ context.Context, point, _, _ string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if point == b.point && !b.failed {
+		b.failed = true
+		return errors.New("lost provider success before durable Action receipt")
+	}
+	return nil
+}
+
+type blockingCreateExternals struct {
+	*integrationExternals
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (e *blockingCreateExternals) SandboxCreate(ctx context.Context, job core.Job, sandbox core.Sandbox) error {
+	if err := e.integrationExternals.SandboxCreate(ctx, job, sandbox); err != nil {
+		return err
+	}
+	e.once.Do(func() { close(e.entered) })
+	select {
+	case <-e.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 type integrationRuntimeResolver struct {
 	execution            core.CleanupExecution
 	profile              profileapp.Runtime
 	codingRuntime        coding.Runtime
 	investigationRuntime investigation.Runtime
+}
+
+func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name string) (core.SandboxRuntime, error) {
+	if name != r.profile.SandboxProfile {
+		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+	}
+	return core.SandboxRuntime{Execution: r.execution, SandboxProfile: r.profile.SandboxProfile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (core.CleanupRuntime, error) {
@@ -109,7 +156,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
+	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
 	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, func(context.Context) error { return nil })
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
@@ -120,7 +167,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		codingRuntime:        coding.Runtime{Profile: runtimeProfile, Coding: codingService},
 		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Investigation: investigationService},
 	}
-	application := core.Application{Store: store, Tasks: client, CleanupRuntimes: resolver}
+	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
 	coding.Register(application, store, resolver)
 	investigation.Register(application, store, resolver)
@@ -134,6 +181,175 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	return db, store, client
 }
 
+func TestActiveWorkerRecoversOrphanedCleanupRequestAndScheduledReplayIsInert(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	key := fmt.Sprintf("cleanup-request-recovery-%d", time.Now().UnixNano())
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(key, "recover explicit cleanup scheduling", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-recovery"))
+	if err != nil || !created {
+		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
+	}
+	application := core.Application{Store: store, Tasks: client}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	recoveryDone := make(chan error, 1)
+	go func() {
+		workerDone <- client.RunWorker(workerCtx, absurd.WorkerOptions{WorkerID: "cleanup-request-recovery", ClaimTimeout: time.Minute, BatchSize: 1, Concurrency: 1})
+	}()
+	go func() { recoveryDone <- application.ReconcileCleanupRequests(workerCtx, 100*time.Millisecond) }()
+	t.Cleanup(func() {
+		stopWorker()
+		<-workerDone
+		<-recoveryDone
+	})
+
+	// This is the crash boundary: the request is durable, but no caller Spawns
+	// or attaches cleanup. The already-running recovery loop must do so.
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := store.Job(ctx, job.ID)
+	if err != nil || requested.CleanupState != core.CleanupRequested || requested.CurrentTaskID != "" || requested.AdmissionOpen {
+		t.Fatalf("durable cleanup request=%#v err=%v", requested, err)
+	}
+	var scheduled core.Job
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		scheduled, err = store.Job(ctx, job.ID)
+		if err == nil && scheduled.CurrentTaskID != "" && scheduled.CleanupState != core.CleanupRequested {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil || scheduled.CurrentTaskID == "" || (scheduled.CleanupState != core.CleanupScheduled && scheduled.CleanupState != core.CleanupComplete) {
+		t.Fatalf("continuously recovered cleanup=%#v err=%v", scheduled, err)
+	}
+	handle, err := application.OpenJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.Job(ctx, job.ID)
+	if err != nil || replayed.CurrentTaskID != scheduled.CurrentTaskID || (replayed.CleanupState != core.CleanupScheduled && replayed.CleanupState != core.CleanupComplete) {
+		t.Fatalf("scheduled cleanup replay=%#v err=%v", replayed, err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), scheduled.CurrentTaskID); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.Job(ctx, job.ID)
+	if err != nil || cleaned.CleanupState != core.CleanupComplete {
+		execution, _ := client.FetchTaskResult(ctx, client.QueueName(), scheduled.CurrentTaskID)
+		t.Fatalf("recovered cleanup completion=%#v err=%v task=%#v", cleaned, err, execution)
+	}
+}
+
+func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	externals := &blockingCreateExternals{
+		integrationExternals: &integrationExternals{}, entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	workspace := gitworkspace.NewExecutor(execution, store, externals, absurdruntime.RequireClaim)
+	service := coding.NewService(workspace, store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	profile := profileapp.Runtime{SandboxProfile: "incus"}
+	resolver := integrationRuntimeResolver{
+		execution: execution, profile: profile,
+		codingRuntime: coding.Runtime{Profile: profile, Coding: service},
+	}
+	client := newFaultClient(t, store, fmt.Sprintf("dorf_workflow_cleanup_race_%d", time.Now().UnixNano()))
+	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
+	application.RegisterCleanup()
+	coding.Register(application, store, resolver)
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- client.RunWorker(workerCtx, absurd.WorkerOptions{WorkerID: "workflow-cleanup-race", ClaimTimeout: time.Minute, BatchSize: 1, Concurrency: 1})
+	}()
+	t.Cleanup(func() { stopWorker(); <-workerDone })
+
+	job, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("ensure-wins-%d", time.Now().UnixNano()), "ensure wins the effect fence",
+		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/ensure-wins",
+	))
+	if err != nil || !created {
+		t.Fatalf("admit ensure winner created=%t err=%v", created, err)
+	}
+	if err := application.ScheduleJobTask(ctx, job, coding.TaskName, coding.TaskKey(job.ID)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-externals.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("workflow Sandbox ensure did not enter provider")
+	}
+	handle, err := application.OpenJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- handle.RequestCleanup(ctx) }()
+	select {
+	case err := <-cleanupDone:
+		t.Fatalf("cleanup crossed active Sandbox provider fence: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(externals.release)
+	if err := <-cleanupDone; err != nil {
+		t.Fatal(err)
+	}
+	cleaning, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), cleaning.CurrentTaskID); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.Job(ctx, job.ID)
+	if err != nil || cleaned.CleanupState != core.CleanupComplete {
+		t.Fatalf("cleanup did not inventory winning ensure: %#v err=%v", cleaned, err)
+	}
+	got := externals.effectKinds()
+	if len(got) < 3 || got[0] != core.ActionSandboxCreate || got[len(got)-2] != core.ActionRouteRevoke || got[len(got)-1] != core.ActionSandboxDelete {
+		t.Fatalf("ensure-winner provider effects=%v", got)
+	}
+
+	loserExternals := &integrationExternals{}
+	loserExecution := core.NewExecutionService(store, loserExternals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	loserWorkspace := gitworkspace.NewExecutor(loserExecution, store, loserExternals, absurdruntime.RequireClaim)
+	loserService := coding.NewService(loserWorkspace, store, loserExternals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	loserResolver := integrationRuntimeResolver{
+		execution: loserExecution, profile: profile,
+		codingRuntime: coding.Runtime{Profile: profile, Coding: loserService},
+	}
+	loserClient := newFaultClient(t, store, fmt.Sprintf("dorf_cleanup_wins_%d", time.Now().UnixNano()))
+	loserApplication := core.Application{Store: store, Tasks: loserClient, SandboxRuntimes: loserResolver, CleanupRuntimes: loserResolver}
+	loserApplication.RegisterCleanup()
+	coding.Register(loserApplication, store, loserResolver)
+	loser, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("cleanup-wins-%d", time.Now().UnixNano()), "cleanup wins before ensure",
+		"2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-wins",
+	))
+	if err != nil || !created {
+		t.Fatalf("admit cleanup winner created=%t err=%v", created, err)
+	}
+	if err := loserApplication.ScheduleJobTask(ctx, loser, coding.TaskName, coding.TaskKey(loser.ID)); err != nil {
+		t.Fatal(err)
+	}
+	loserHandle, err := loserApplication.OpenJob(ctx, loser.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := loserHandle.RequestCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := loserExternals.effectKinds(); len(got) != 0 {
+		t.Fatalf("cleanup winner allowed provider effect before worker start: %v", got)
+	}
+}
+
 func codingJobInput(key, goal, revision, branch string) coding.Admission {
 	return coding.Admission{
 		JobAdmission: core.JobAdmission{
@@ -143,6 +359,22 @@ func codingJobInput(key, goal, revision, branch string) coding.Admission {
 		Repository: "https://github.com/aphronio/dorf.git", Revision: revision, Branch: branch,
 		GitHubRepository: "aphronio/dorf", GitHubInstallation: "42", BaseBranch: "greenfield",
 	}
+}
+
+func requestCleanupIntegration(t *testing.T, application core.Application, jobID string) core.Job {
+	t.Helper()
+	handle, err := application.OpenJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.RequestCleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	job, err := application.Store.Job(context.Background(), jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job
 }
 
 func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T) {
@@ -303,7 +535,15 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	cleanupDone := make(chan cleanupResult, 1)
 	go func() {
-		cleaning, err := (core.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
+		application := core.Application{Store: store, Tasks: client}
+		handle, err := application.OpenJob(ctx, job.ID)
+		if err == nil {
+			err = handle.RequestCleanup(ctx)
+		}
+		var cleaning core.Job
+		if err == nil {
+			cleaning, err = store.Job(ctx, job.ID)
+		}
 		cleanupDone <- cleanupResult{job: cleaning, err: err}
 	}()
 	select {
@@ -311,10 +551,6 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 		close(releaseFence)
 		t.Fatalf("cleanup crossed the active harness-mutation fence: %#v", result)
 	case <-time.After(100 * time.Millisecond):
-	}
-	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "during-active", Input: "must be rejected after cleanup closes admission"}); err == nil || created || !strings.Contains(err.Error(), "admission is closed") {
-		close(releaseFence)
-		t.Fatalf("cleanup did not close admission before waiting for the active harness-mutation fence: created=%v err=%v", created, err)
 	}
 	close(releaseFence)
 	if err := <-fenceDone; err != nil {
@@ -514,9 +750,9 @@ func TestUnavailableSandboxProfileFencesNewJobsAndPreservesExactAttention(t *tes
 	if _, _, err := store.AdmitCoding(ctx, newInput); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
 		t.Fatalf("new Job admitted through unavailable profile: %v", err)
 	}
-	cleaning, err := (core.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
-	if err != nil || cleaning.CleanupState != core.CleanupScheduled {
-		t.Fatalf("cleanup from unavailable profile state=%q err=%v", cleaning.CleanupState, err)
+	cleaning := requestCleanupIntegration(t, core.Application{Store: store, Tasks: client}, job.ID)
+	if cleaning.CleanupState != core.CleanupScheduled {
+		t.Fatalf("cleanup from unavailable profile state=%q", cleaning.CleanupState)
 	}
 }
 
@@ -1094,7 +1330,7 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 				for i, role := range test.roles {
 					request := runs[i].Request
 					wantInput := policy.RolePrompt(role, facts)
-					if runs[i].Role != string(role) || runs[i].ID != core.AgentRunID(request.ID) || runs[i].MessageID != request.ID || runs[i].Capability != coding.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != coding.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != core.MessageFromWorkflow || request.FromID != coding.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != core.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != coding.ReviewSandboxName(runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 {
+					if runs[i].Role != string(role) || runs[i].ID != core.AgentRunID(request.ID) || runs[i].MessageID != request.ID || runs[i].Capability != coding.ReviewReadOnlyCapability || runs[i].InputRevision != revision || request.ID != coding.ReviewRequestMessageID(job.ID, revision, string(role)) || request.JobID != job.ID || request.FromKind != core.MessageFromWorkflow || request.FromID != coding.ReviewRequestFromID(revision, string(role)) || request.Sequence != int64(i+2) || request.Input != wantInput || request.Intent != core.MessageFollow || request.TargetTurnID != "" || request.AdmittedAt.IsZero() || runs[i].SandboxID != runs[i].Sandbox.ID || runs[i].Sandbox.ID != coding.ReviewSandboxName(job.ID, runs[i].ID) || runs[i].Sandbox.JobID != job.ID || len(runs[i].Sandbox.OwnershipNonce) != 64 || len(runs[i].SubmissionNonce) != 64 {
 						t.Fatalf("selected runs=%#v err=%v", runs, err)
 					}
 					for prior := 0; prior < i; prior++ {
@@ -1132,7 +1368,7 @@ func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testin
 
 	t.Run("closed Job rejects only a new policy", func(t *testing.T) {
 		job, record := prepare(t, "review-policy-closed")
-		if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+		if err := store.RequestCleanup(ctx, job.ID); err != nil {
 			t.Fatal(err)
 		}
 		if err := store.RecordReviewPolicy(ctx, record); err == nil || !strings.Contains(err.Error(), "cannot record a new review policy") {
@@ -1148,7 +1384,7 @@ func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testin
 		if err := store.RecordReviewPolicy(ctx, record); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+		if err := store.RequestCleanup(ctx, job.ID); err != nil {
 			t.Fatal(err)
 		}
 		if err := store.RecordReviewPolicy(ctx, record); err != nil {
@@ -1167,7 +1403,7 @@ func TestReviewPolicySerializesWithAdmissionClosureAndKeepsExactReplay(t *testin
 		}()
 		go func() {
 			<-start
-			closeResult <- store.CloseAdmissionForCleanup(ctx, job.ID)
+			closeResult <- store.RequestCleanup(ctx, job.ID)
 		}()
 		close(start)
 		policyErr, closeErr := <-policyResult, <-closeResult
@@ -1236,7 +1472,7 @@ func TestReviewFeedbackReplaySurvivesClosureButNewFeedbackDoesNot(t *testing.T) 
 		t.Fatalf("first review feedback=%#v created=%t err=%v", first, created, err)
 	}
 	secondOutcome, secondEvidence := feedback(runs[1], "5")
-	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	replayed, created, err := store.RecordReviewFeedback(ctx, runs[0].ID, firstOutcome, firstEvidence)
@@ -1339,31 +1575,201 @@ func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store,
 	return db, store, job
 }
 
+func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
+	db, store, job := actionIntegrationJob(t, "handle-sandbox-identity")
+	ctx := context.Background()
+	foreign, created, err := store.AdmitCoding(ctx, codingJobInput(
+		fmt.Sprintf("foreign-sandbox-owner-%d", time.Now().UnixNano()), "own a conflicting Sandbox identity",
+		strings.Repeat("b", 40), "dorf/foreign-sandbox-owner",
+	))
+	if err != nil || !created {
+		t.Fatalf("admit foreign owner created=%t err=%v", created, err)
+	}
+	conflictName := "conflict"
+	foreignNonce := fmt.Sprintf("%x", sha256.Sum256([]byte(job.ID+":"+conflictName)))
+	if _, err := db.ExecContext(ctx, `insert into dorf.sandboxes(id,job_id,name,ownership_nonce) values($1,$2,$3,$4)`,
+		core.NamedSandboxID(job.ID, conflictName), foreign.ID, "foreign", foreignNonce); err != nil {
+		t.Fatal(err)
+	}
+
+	externals := &integrationExternals{}
+	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	profile := profileapp.Runtime{SandboxProfile: job.SandboxProfile}
+	resolver := integrationRuntimeResolver{execution: execution, profile: profile}
+	client := newFaultClient(t, store, "dorf-handle-sandbox-identity-"+job.ID)
+	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
+	taskName := "dorf-handle-sandbox-identity-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		handle, err := application.OpenJob(taskCtx, job.ID)
+		if err != nil {
+			return core.TaskResultV1{}, err
+		}
+		for _, ensure := range []func(context.Context) (core.SandboxHandle, error){
+			handle.EnsureDefaultSandbox,
+			handle.EnsureDefaultSandbox,
+			func(ctx context.Context) (core.SandboxHandle, error) { return handle.EnsureNamedSandbox(ctx, "review") },
+			func(ctx context.Context) (core.SandboxHandle, error) { return handle.EnsureNamedSandbox(ctx, "review") },
+		} {
+			if _, err := ensure(taskCtx); err != nil {
+				return core.TaskResultV1{}, err
+			}
+		}
+		if _, err := handle.EnsureNamedSandbox(taskCtx, conflictName); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("foreign Sandbox identity was accepted")
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "sandboxes-ensured"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "handle-sandbox-identity", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]string{
+		core.DefaultSandbox: core.NamedSandboxID(job.ID, core.DefaultSandbox),
+		"review":            core.NamedSandboxID(job.ID, "review"),
+	} {
+		owned, err := store.Sandbox(ctx, id)
+		if err != nil || owned.JobID != job.ID || owned.Name != name {
+			t.Fatalf("Sandbox %q=%#v err=%v", name, owned, err)
+		}
+		action, err := store.GetOrCreateSandboxAction(ctx, id, core.ActionSandboxCreate)
+		if err != nil || action.State != core.ActionSucceeded {
+			t.Fatalf("Sandbox %q create Action=%#v err=%v", name, action, err)
+		}
+	}
+	if effects := externals.effectKinds(); len(effects) != 2 || effects[0] != core.ActionSandboxCreate || effects[1] != core.ActionSandboxCreate {
+		t.Fatalf("idempotent Sandbox effects=%v", effects)
+	}
+}
+
 func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	_, store, job := actionIntegrationJob(t, "cleanup-order")
 	ctx := context.Background()
 	sandboxID := core.MainSandboxName(job.ID)
-	remove, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
+	externals := &integrationExternals{}
+	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	create, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err == nil {
-		t.Fatal("Sandbox delete succeeded before its exact Route revoke Action")
-	}
-	stillUnsettled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxDelete)
-	if err != nil || stillUnsettled.ID != remove.ID || stillUnsettled.State != core.ActionUnsettled {
-		t.Fatalf("premature Sandbox delete=%#v err=%v", stillUnsettled, err)
-	}
-
 	revoke, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionRouteRevoke)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, revoke.ID); err != nil {
+	client := newFaultClient(t, store, "dorf-authority-"+job.ID)
+	taskName := "dorf-authority-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := service.ExecuteSandboxAction(taskCtx, "wrong-job", create.ID); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("wrong Job selected a provider mutation")
+		}
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, "wrong-action"); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("wrong Action selected a provider mutation")
+		}
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, revoke.ID); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("route revoke reached provider before cleanup scheduling")
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "authority-refused"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordSandboxActionSuccess(ctx, remove.ID); err != nil {
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
 		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "authority-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if got := externals.effectKinds(); len(got) != 0 {
+		t.Fatalf("forged tuple or premature cleanup mutated provider: %v", got)
+	}
+
+	barrier := &failOnceWorkflowBarrier{point: core.BarrierSandboxCreated}
+	recovery := core.NewExecutionService(store, externals, blob.Store{}, barrier, absurdruntime.RequireClaim)
+	recoveryTaskName := "lost-provider-receipt-v1"
+	client.MustRegister(absurd.Task(recoveryTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := recovery.ExecuteSandboxAction(taskCtx, job.ID, create.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "provider-reconciled"}, nil
+	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
+	recoveryTask, err := client.Spawn(ctx, recoveryTaskName, core.JobTaskParams{JobID: job.ID, PreviousTaskID: spawned.TaskID}, absurd.SpawnOptions{IdempotencyKey: recoveryTaskName + ":" + job.ID, MaxAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, spawned.TaskID, recoveryTask.TaskID, recoveryTaskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "lost-provider-receipt", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	unsettled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxCreate)
+	if err != nil || unsettled.State != core.ActionUnsettled || len(externals.effectKinds()) != 1 {
+		t.Fatalf("lost provider receipt action=%#v effects=%v err=%v", unsettled, externals.effectKinds(), err)
+	}
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "lost-provider-receipt-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxCreate)
+	if err != nil || settled.State != core.ActionSucceeded || len(externals.effectKinds()) != 2 {
+		t.Fatalf("reconciled provider receipt action=%#v effects=%v err=%v", settled, externals.effectKinds(), err)
+	}
+}
+
+func TestSandboxDeleteBeforeRevokeHasZeroProviderEffects(t *testing.T) {
+	_, store, job := actionIntegrationJob(t, "delete-before-revoke")
+	ctx := context.Background()
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remove, err := store.GetOrCreateSandboxAction(ctx, owned.ID, core.ActionSandboxDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externals := &integrationExternals{}
+	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	client := newFaultClient(t, store, "dorf-delete-before-revoke-"+job.ID)
+	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		cleaning, err := store.Job(taskCtx, job.ID)
+		if err != nil {
+			return core.TaskResultV1{}, err
+		}
+		if err := service.ExecuteSandboxAction(taskCtx, cleaning.ID, remove.ID); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("Sandbox delete reached provider before route revoke")
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "delete-refused"}, nil
+	}))
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	spawned, err := client.Spawn(ctx, core.CleanupTaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: "delete-before-revoke:" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachCleanupTask(ctx, job.ID, "", spawned.TaskID, core.CleanupTaskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "delete-before-revoke", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if got := externals.effectKinds(); len(got) != 0 {
+		t.Fatalf("delete-before-revoke provider effects=%v", got)
+	}
+	unsettled, err := store.GetOrCreateSandboxAction(ctx, owned.ID, core.ActionSandboxDelete)
+	if err != nil || unsettled.State != core.ActionUnsettled {
+		t.Fatalf("delete-before-revoke Action=%#v err=%v", unsettled, err)
 	}
 }
 
@@ -1562,134 +1968,6 @@ func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, threa
 	return delivery.AgentRun
 }
 
-func TestCleanupRecoversCompletedHarnessTurnAfterRunTaskExhaustion(t *testing.T) {
-	_, store, client := testDatabase(t)
-	ctx := context.Background()
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profileapp.Runtime{SandboxProfile: "incus"}, codingJobInput("cleanup-exhausted-"+suffix, "initial", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/cleanup-exhausted"))
-	if err != nil || !created {
-		t.Fatalf("admit Job created=%v err=%v", created, err)
-	}
-	sandbox, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(job.ID), core.ActionSandboxCreate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordSandboxActionSuccess(ctx, sandbox.ID); err != nil {
-		t.Fatal(err)
-	}
-	route, err := store.GetOrCreateSandboxAction(ctx, core.MainSandboxName(job.ID), core.ActionRouteCreate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.RecordSandboxActionSuccess(ctx, route.ID); err != nil {
-		t.Fatal(err)
-	}
-	taskIDs := []string{job.CurrentTaskID}
-	t.Cleanup(func() {
-		for _, id := range taskIDs {
-			_ = client.CancelTask(context.Background(), client.QueueName(), id)
-		}
-	})
-	threadID := "cleanup-thread-" + suffix
-	delivery, err := store.NextDelivery(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.PrepareAgentRun(ctx, delivery.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	turnID := "cleanup-turn-" + suffix
-	if err := store.BindAgentRun(ctx, delivery.AgentRun.ID, "codex", threadID, turnID, "running"); err != nil {
-		t.Fatal(err)
-	}
-	second, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: "human", FromID: "later-pending", Input: "must not be submitted by cleanup"})
-	if err != nil || !created || second.Sequence != 2 {
-		t.Fatalf("later message=%#v created=%v err=%v", second, created, err)
-	}
-	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: turnID, Status: "completed"}}, submitted: []int64{1}}
-	cleaning, err := (core.Application{Store: store, Tasks: client}).RequestCleanup(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskIDs = append(taskIDs, cleaning.CurrentTaskID)
-	if cleaning.AdmissionOpen {
-		t.Fatalf("cleanup did not close admission: %#v", cleaning)
-	}
-	claimLost := errors.New("cleanup claim lost")
-	stale := core.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return claimLost })
-	if _, _, err := stale.PrepareCleanup(ctx, job.ID); !errors.Is(err, claimLost) {
-		t.Fatalf("stale cleanup error = %v", err)
-	}
-	deliveries, err := store.Deliveries(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, deliveryFact := range deliveries {
-		run := deliveryFact.AgentRun
-		if run.ID == delivery.AgentRun.ID {
-			found = true
-			if run.State != core.AgentRunActive || run.ThreadID != threadID || run.TurnID != turnID {
-				t.Fatalf("stale cleanup history overwrote active replacement: %#v", run)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("active AgentRun %s disappeared", delivery.AgentRun.ID)
-	}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, func(context.Context) error { return nil })
-	cleanupOnce := func() error {
-		cleaning, sandboxes, err := service.PrepareCleanup(ctx, job.ID)
-		if err != nil || cleaning.CleanupState == core.CleanupComplete {
-			return err
-		}
-		for _, owned := range sandboxes {
-			for _, kind := range []core.ActionKind{core.ActionRouteRevoke, core.ActionSandboxDelete} {
-				action, err := store.GetOrCreateSandboxAction(ctx, owned.ID, kind)
-				if err != nil {
-					return err
-				}
-				if action.State != core.ActionSucceeded {
-					if err := service.ExecuteSandboxAction(ctx, cleaning, owned, action); err != nil {
-						return err
-					}
-				}
-			}
-		}
-		return store.CompleteCleanup(ctx, job.ID)
-	}
-	if err := cleanupOnce(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cleanupOnce(); err != nil {
-		t.Fatal(err)
-	}
-	cleaned, err := store.Job(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cleaned.CleanupState != core.CleanupComplete {
-		t.Fatalf("cleaned Job=%#v", cleaned)
-	}
-	deliveries, err = store.Deliveries(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(deliveries) != 2 || deliveries[0].AgentRun.State != core.AgentRunCompleted || deliveries[0].AgentRun.TurnID != turnID || deliveries[1].AgentRun.State != core.AgentRunInterrupted || deliveries[1].AgentRun.TurnID != "" {
-		t.Fatalf("cleanup delivery truth=%#v", deliveries)
-	}
-	if got := externals.submittedSequences(); fmt.Sprint(got) != "[1]" {
-		t.Fatalf("cleanup submitted pending FIFO input: %v", got)
-	}
-	if got := externals.effectKinds(); fmt.Sprint(got) != "[provider-route-revoke sandbox-delete]" {
-		t.Fatalf("cleanup effects=%v", got)
-	}
-	snapshot, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
-	if err != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled {
-		t.Fatalf("cancelled public run result=%#v err=%v", snapshot, err)
-	}
-}
-
 type integrationExternals struct {
 	coding.Externals
 	gitworkspace.GitExternals
@@ -1790,6 +2068,27 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
+	owned, err := store.Sandbox(ctx, core.MainSandboxName(job.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	action, err := store.GetOrCreateSandboxAction(ctx, owned.ID, core.ActionSandboxCreate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externals := &integrationExternals{}
+	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	staleTaskName := "stale-provider-effect-v1"
+	client.MustRegister(absurd.Task(staleTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, action.ID); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("unattached task acquired provider authority")
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "stale-refused"}, nil
+	}))
+	_, err = client.Spawn(ctx, staleTaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: staleTaskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	unrelated, err := client.Spawn(ctx, "unrelated-task", core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{QueueName: client.QueueName(), IdempotencyKey: "unrelated:" + job.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -1798,13 +2097,29 @@ func TestJobTaskAttachmentRequiresExactCurrentPredecessor(t *testing.T) {
 	if err := store.AttachJobTask(ctx, job.ID, "", unrelated.TaskID, "unrelated-task"); err != nil {
 		t.Fatal(err)
 	}
-	spawned, err := client.Spawn(ctx, coding.TaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: coding.TaskKey(job.ID)})
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "stale-effect-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if got := externals.effectKinds(); len(got) != 0 {
+		t.Fatalf("unattached stale task mutated provider: %v", got)
+	}
+	if err := client.CancelTask(ctx, client.QueueName(), unrelated.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	spawned, err := client.Spawn(ctx, coding.TaskName, core.JobTaskParams{JobID: job.ID, PreviousTaskID: ""}, absurd.SpawnOptions{IdempotencyKey: coding.TaskKey(job.ID)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), spawned.TaskID) })
 	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, coding.TaskName); err == nil {
 		t.Fatal("a second public Spawn result replaced the stored task binding")
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "stale-spawn-ack-proof", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.FetchTaskResult(ctx, client.QueueName(), spawned.TaskID)
+	if err != nil || result == nil || result.State == absurd.TaskCompleted {
+		t.Fatalf("stale Spawn acknowledgment task result=%#v err=%v", result, err)
 	}
 }
 
@@ -1849,7 +2164,7 @@ func TestClosedAdmissionRejectsLateRevisionObservation(t *testing.T) {
 	}
 	observedEvidence := integrationEvidence(run.ID, "git-revision", "", "", observation.Revision, "2")
 	observedEvidence.AgentRunID = run.ID
-	if err := store.CloseAdmissionForCleanup(ctx, observedJob.ID); err != nil {
+	if err := store.RequestCleanup(ctx, observedJob.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.RecordRevisionObservation(ctx, observedJob.ID, run.ID, observation, observedEvidence); !errors.Is(err, postgres.ErrRevisionObservationSuperseded) {
@@ -1873,6 +2188,12 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, "cleanup-task-"+job.ID, core.CleanupTaskName); err != nil {
+		t.Fatal(err)
+	}
 	sandboxID := core.MainSandboxName(job.ID)
 	for _, kind := range []core.ActionKind{core.ActionRouteRevoke, core.ActionSandboxDelete} {
 		action, err := store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
@@ -1883,14 +2204,14 @@ func TestCleanupCompletesWithExplanatoryWorkflowAttention(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+	if err := store.CompleteCleanup(ctx, job.ID, "cleanup-task-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachCleanupTask(ctx, job.ID, job.CurrentTaskID, "cleanup-task-"+job.ID, core.CleanupTaskName); err != nil {
-		t.Fatal(err)
+	if err := store.CompleteCleanup(ctx, job.ID, "cleanup-task-"+job.ID); err != nil {
+		t.Fatalf("exact cleanup completion replay failed: %v", err)
 	}
-	if err := store.CompleteCleanup(ctx, job.ID); err != nil {
-		t.Fatal(err)
+	if err := store.CompleteCleanup(ctx, job.ID, "other-cleanup-task"); err == nil {
+		t.Fatal("foreign cleanup task replay was accepted")
 	}
 	cleaned, err := store.Job(ctx, job.ID)
 	if err != nil || cleaned.CleanupState != core.CleanupComplete || cleaned.WorkflowAttention != "" || cleaned.WorkflowAttentionSource != "" || !cleaned.WorkflowAttentionAt.IsZero() {

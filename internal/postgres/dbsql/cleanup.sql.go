@@ -11,32 +11,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const closeAdmissionForCleanup = `-- name: CloseAdmissionForCleanup :execrows
-update dorf.jobs j
-set admission_open=false
-where j.id=$1
-  and (
-    exists(select 1 from dorf.job_outcomes o where o.job_id=j.id)
-    or (
-      not exists(
-        select 1
-        from dorf.actions a
-        join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
-        where a.job_id=j.id and a.kind='github-pull-request' and a.scope_key=c.revision
-      )
-      and not exists(select 1 from dorf.github_proposals p where p.job_id=j.id)
-    )
-  )
-`
-
-func (q *Queries) CloseAdmissionForCleanup(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, closeAdmissionForCleanup, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const completeCleanup = `-- name: CompleteCleanup :execrows
 update dorf.jobs
 set cleanup_state='complete',cleanup_attention=null,
@@ -96,4 +70,46 @@ func (q *Queries) GetCleanupJobForUpdate(ctx context.Context, jobID string) (Get
 		&i.CleanupAttention,
 	)
 	return i, err
+}
+
+const listCleanupRequests = `-- name: ListCleanupRequests :many
+select id from dorf.jobs where not admission_open and cleanup_state='requested' order by id
+`
+
+func (q *Queries) ListCleanupRequests(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listCleanupRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const requestCleanup = `-- name: RequestCleanup :execrows
+update dorf.jobs
+set admission_open=false,
+    cleanup_state=case when cleanup_state='pending' then 'requested' else cleanup_state end
+where id=$1 and cleanup_state in ('pending','requested')
+`
+
+func (q *Queries) RequestCleanup(ctx context.Context, jobID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requestCleanup, jobID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
