@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PUBLISH=false
+if [[ "${1:-}" == "--publish" ]]; then
+  PUBLISH=true
+  shift
+fi
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--publish]" >&2
+  exit 2
+fi
+
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
+readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/release}"
+readonly SOURCE_COMMIT="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
+readonly IMAGE_DESCRIPTOR="$PROJECT_ROOT/internal/release/official_image.json"
+
+for command in git go jq; do
+  if ! command -v "$command" >/dev/null 2>&1; then
+    echo "Required release command is unavailable: $command" >&2
+    exit 1
+  fi
+done
+if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=all)" ]]; then
+  echo "Release validation requires the exact clean source commit." >&2
+  exit 1
+fi
+
+"$PROJECT_ROOT/scripts/incus/check-image-inputs.sh"
+readonly PRODUCT_VERSION="$(go -C "$PROJECT_ROOT" run ./cmd/dorf version | awk '{print $2}')"
+readonly RELEASE_TAG="v$PRODUCT_VERSION"
+readonly OFFICIAL_IMAGE_RELEASE="$(jq -er .release_tag "$IMAGE_DESCRIPTOR")"
+readonly APP_ARCHIVE="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz"
+readonly APP_CHECKSUMS="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt"
+readonly INSTALLER="$OUTPUT_DIR/install.sh"
+readonly IMAGE_ARCHIVE="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.tar.gz"
+readonly IMAGE_MANIFEST="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.json"
+
+if [[ "$PUBLISH" == true ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Required publication command is unavailable: gh" >&2
+    exit 1
+  fi
+  if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" != "public" ]]; then
+    echo "Official Dorf releases require a public GitHub repository." >&2
+    exit 1
+  fi
+  if [[ "$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
+    --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null || true)" != "true" ]]; then
+    echo "Enable GitHub release immutability, then set DORF_IMMUTABLE_RELEASES_ENABLED=true." >&2
+    exit 1
+  fi
+  if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT" >/dev/null; then
+    echo "Source commit is not available from GitHub: $SOURCE_COMMIT" >&2
+    exit 1
+  fi
+  if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+    echo "Release already exists: $RELEASE_TAG" >&2
+    exit 1
+  fi
+  if [[ "$OFFICIAL_IMAGE_RELEASE" != "$RELEASE_TAG" ]]; then
+    gh release verify "$OFFICIAL_IMAGE_RELEASE" --repo "$GITHUB_REPOSITORY" >/dev/null
+    if [[ "$(gh release view "$OFFICIAL_IMAGE_RELEASE" --repo "$GITHUB_REPOSITORY" \
+      --json isDraft,isImmutable,isPrerelease,assets \
+      --jq '[.isImmutable, (.isDraft | not), (.isPrerelease | not), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.tar.gz")) | length == 1), ([.assets[].name] | map(select(. == "dorf-incus-vm-v5-x86_64.json")) | length == 1)] | all')" != "true" ]]; then
+      echo "Pinned official Incus image release is not immutable and complete: $OFFICIAL_IMAGE_RELEASE" >&2
+      exit 1
+    fi
+  fi
+fi
+
+mkdir -p "$OUTPUT_DIR"
+rm -f "$INSTALLER" "$APP_ARCHIVE" "$APP_CHECKSUMS" "$IMAGE_ARCHIVE" "$IMAGE_MANIFEST"
+"$PROJECT_ROOT/scripts/build-release.sh" "$OUTPUT_DIR"
+
+assets=("$INSTALLER" "$APP_ARCHIVE" "$APP_CHECKSUMS")
+image_promoted=false
+if [[ "$OFFICIAL_IMAGE_RELEASE" == "$RELEASE_TAG" ]]; then
+  if [[ -z "${AI_CONNECTION:-}" ]]; then
+    echo "Set AI_CONNECTION to one ready AI connection name for Incus image promotion." >&2
+    exit 2
+  fi
+  if [[ -z "${GITHUB_INSTALLATION_ID:-}" ]]; then
+    echo "Set GITHUB_INSTALLATION_ID to the Dorf GitHub App installation used by the real image proof." >&2
+    exit 2
+  fi
+  OUTPUT_DIR="$OUTPUT_DIR" RELEASE_TAG="$RELEASE_TAG" \
+    "$PROJECT_ROOT/scripts/incus/release-dorf-image.sh"
+  assets+=("$IMAGE_ARCHIVE" "$IMAGE_MANIFEST")
+  image_promoted=true
+fi
+
+printf '%s\n' \
+  "Application candidate ready: $RELEASE_TAG" \
+  "Archive: $APP_ARCHIVE" \
+  "Installer: $INSTALLER" \
+  "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
+
+if [[ "$PUBLISH" != true ]]; then
+  exit
+fi
+
+verify_release_attestation() {
+  local tag="$1"
+  local deadline=$((SECONDS + 600))
+
+  until gh release verify "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; do
+    if ((SECONDS >= deadline)); then
+      echo "Timed out waiting for GitHub's signed release attestation for $tag." >&2
+      return 1
+    fi
+    sleep 5
+  done
+  gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
+}
+
+notes_path="$(mktemp)"
+cleanup() { rm -f -- "$notes_path"; }
+trap cleanup EXIT
+{
+  printf '%s\n' \
+    "Dorf $PRODUCT_VERSION" \
+    "" \
+    "Go x86_64 Linux application with an immutable release installer." \
+    "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
+  if [[ "$image_promoted" == true ]]; then
+    printf '%s\n' \
+      "The image was promoted after real Dorf Codex and Pi turns against one fingerprint." \
+      "Codex: $(jq -r .harnesses.codex.version "$IMAGE_MANIFEST")" \
+      "Pi: $(jq -r .harnesses.pi.version "$IMAGE_MANIFEST")" \
+      "Base: $(jq -r .base_image.reference "$IMAGE_MANIFEST")"
+  else
+    printf '%s\n' "The previously proven image is reused without rebuilding or republishing it."
+  fi
+  printf '%s\n' \
+    "Environment: Linux x86_64" \
+    "Source commit: $SOURCE_COMMIT"
+} >"$notes_path"
+
+gh release create "$RELEASE_TAG" \
+  --repo "$GITHUB_REPOSITORY" \
+  --draft \
+  --generate-notes \
+  --target "$SOURCE_COMMIT" \
+  --title "Dorf $RELEASE_TAG" \
+  --notes-file "$notes_path" \
+  "${assets[@]}"
+gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+verify_release_attestation "$RELEASE_TAG"
+for asset in "${assets[@]}"; do
+  gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
+done
+echo "Published verified Dorf release: $RELEASE_TAG"

@@ -32,6 +32,7 @@ jobs:
       - name: Check out the source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up the repository
         run: scripts/dev/setup.sh
@@ -39,6 +40,15 @@ jobs:
         run: .dorf/bin/mise run check
       - name: Build supported release artifact
         run: .dorf/bin/mise exec -- scripts/build-release.sh dist/release
+      - name: Test release installer
+        run: bash scripts/install-test.sh dist/release/install.sh dist/release
+      - name: Check generated installer
+        run: |
+          test -x dist/release/install.sh
+          sh -n dist/release/install.sh
+          bash -n scripts/release.sh
+          bash -n scripts/incus/release-dorf-image.sh
+          bash -n scripts/incus/check-image-inputs.sh
       - name: Smoke installed artifact
         run: |
           archive="$(find dist/release -maxdepth 1 -name 'dorf_*_linux_x86_64.tar.gz' -print -quit)"

@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PUBLISH=false
-if [[ "${1:-}" == "--publish" ]]; then
-  PUBLISH=true
-  shift
-fi
 if [[ $# -ne 0 ]]; then
-  echo "usage: $0 [--publish]" >&2
+  echo "usage: $0" >&2
   exit 2
 fi
 if [[ -z "${AI_CONNECTION:-}" ]]; then
@@ -21,7 +16,6 @@ fi
 
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
-readonly GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-aphronio/dorf}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/incus-image}"
 readonly CANDIDATE_NETWORK="${NETWORK:-incusbr0}"
 readonly CANDIDATE_ROOT_DISK_SIZE="${ROOT_DISK_SIZE:-40GiB}"
@@ -96,24 +90,13 @@ for command in go incus git jq; do
   fi
 done
 
-if [[ "$PUBLISH" == true ]]; then
-  if ! command -v gh >/dev/null 2>&1; then
-    echo "Required publication command is unavailable: gh" >&2
-    exit 1
-  fi
-  if [[ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)" != "public" ]]; then
-    echo "Official Sandbox images require a public GitHub repository." >&2
-    exit 1
-  fi
-  if [[ "$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
-    --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null || true)" != "true" ]]; then
-    echo "Enable GitHub release immutability, then set DORF_IMMUTABLE_RELEASES_ENABLED=true." >&2
-    exit 1
-  fi
-  if ! gh api "repos/$GITHUB_REPOSITORY/commits/$SOURCE_COMMIT" >/dev/null; then
-    echo "Source commit is not available from GitHub: $SOURCE_COMMIT" >&2
-    exit 1
-  fi
+"$SCRIPT_DIR/check-image-inputs.sh"
+PRODUCT_VERSION="$(go -C "$PROJECT_ROOT" run ./cmd/dorf version | awk '{print $2}')"
+RELEASE_TAG="${RELEASE_TAG:-v$PRODUCT_VERSION}"
+OFFICIAL_IMAGE_RELEASE="$(jq -er .release_tag "$PROJECT_ROOT/internal/release/official_image.json")"
+if [[ "$RELEASE_TAG" != "v$PRODUCT_VERSION" ]] || [[ "$OFFICIAL_IMAGE_RELEASE" != "$RELEASE_TAG" ]]; then
+  echo "Incus image promotion requires the application release and official image pin to agree: application v$PRODUCT_VERSION, image $OFFICIAL_IMAGE_RELEASE, requested $RELEASE_TAG." >&2
+  exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"
@@ -202,26 +185,10 @@ prove_harness() {
   JOB_ID=""
 }
 
-verify_release_attestation() {
-  local tag="$1"
-  local deadline=$((SECONDS + 600))
-
-  until gh release verify "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; do
-    if ((SECONDS >= deadline)); then
-      echo "Timed out waiting for GitHub's signed release attestation for $tag." >&2
-      return 1
-    fi
-    sleep 5
-  done
-  gh release verify "$tag" --repo "$GITHUB_REPOSITORY"
-}
-
 prove_harness codex
 prove_harness pi
 
 incus image export "$CANDIDATE_ALIAS" "$OUTPUT_DIR/$ARCHIVE_BASENAME" --vm
-PRODUCT_VERSION="$($BINARY version | awk '{print $2}')"
-RELEASE_TAG="${RELEASE_TAG:-v$PRODUCT_VERSION}"
 "$BINARY" release-manifest \
   --archive "$ARCHIVE_PATH" \
   --image-metadata "$METADATA_PATH" \
@@ -236,60 +203,6 @@ else
   echo "Workstation evidence retained: $EVIDENCE_DIR"
 fi
 printf '%s\n' \
-  "Candidate ready: $RELEASE_TAG" \
+  "Incus image candidate ready: $RELEASE_TAG" \
   "Archive: $ARCHIVE_PATH" \
   "Manifest: $MANIFEST_PATH"
-
-if [[ "$PUBLISH" != true ]]; then
-  exit
-fi
-
-"$PROJECT_ROOT/scripts/build-release.sh" "$OUTPUT_DIR"
-if [[ "$RELEASE_TAG" != "v$PRODUCT_VERSION" ]]; then
-  echo "Image release tag must match Go product version v$PRODUCT_VERSION: $RELEASE_TAG" >&2
-  exit 1
-fi
-if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-  echo "Release already exists: $RELEASE_TAG" >&2
-  exit 1
-fi
-
-NOTES_PATH="$(mktemp)"
-trap 'rm -f "$NOTES_PATH"; cleanup' EXIT
-CODEX_VERSION="$(jq -r .harnesses.codex.version "$MANIFEST_PATH")"
-PI_VERSION="$(jq -r .harnesses.pi.version "$MANIFEST_PATH")"
-BASE_IMAGE_REFERENCE="$(jq -r .base_image.reference "$MANIFEST_PATH")"
-printf '%s\n' \
-  "Dorf $PRODUCT_VERSION" \
-  "" \
-  "Go x86_64 Linux application and credential-free Incus VM image." \
-  "The image was promoted after real Dorf Codex and Pi turns against one fingerprint." \
-  "" \
-  "Codex: $CODEX_VERSION" \
-  "Pi: $PI_VERSION" \
-  "Base: $BASE_IMAGE_REFERENCE" \
-  "Environment: Incus VM" \
-  "Architecture: x86_64" \
-  "Source commit: $SOURCE_COMMIT" >"$NOTES_PATH"
-
-gh release create "$RELEASE_TAG" \
-  --repo "$GITHUB_REPOSITORY" \
-  --draft \
-  --generate-notes \
-  --target "$SOURCE_COMMIT" \
-  --title "Dorf $RELEASE_TAG" \
-  --notes-file "$NOTES_PATH" \
-  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz" \
-  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt" \
-  "$ARCHIVE_PATH" \
-  "$MANIFEST_PATH"
-gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
-verify_release_attestation "$RELEASE_TAG"
-for asset in \
-  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_linux_x86_64.tar.gz" \
-  "$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt" \
-  "$ARCHIVE_PATH" \
-  "$MANIFEST_PATH"; do
-  gh release verify-asset "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
-done
-echo "Published verified official Sandbox image: $RELEASE_TAG"

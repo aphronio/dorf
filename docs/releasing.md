@@ -6,12 +6,11 @@ authority:
 ```bash
 scripts/dev/setup.sh
 .dorf/bin/mise run check
-
-AI_CONNECTION=personal-chatgpt \
-GITHUB_INSTALLATION_ID=INSTALLATION_ID \
-  scripts/incus/release-dorf-image.sh --publish
+scripts/release.sh --publish
 ```
 
-[`scripts/incus/release-dorf-image.sh`](../scripts/incus/release-dorf-image.sh) is the
-source of truth for release inputs, proof gates, artifacts, and publication. Do not duplicate those
-details here or publish by bypassing that command.
+[`scripts/release.sh`](../scripts/release.sh) is the source of truth for release inputs, artifacts,
+and publication. It reuses the exact pinned Incus image unless that image's declared inputs changed.
+When the pin advances to the release being published, set `AI_CONNECTION` and
+`GITHUB_INSTALLATION_ID`; the authority then invokes the real Codex and Pi image proof before
+publication. Do not duplicate those details here or publish by bypassing that command.

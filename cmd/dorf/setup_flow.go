@@ -22,8 +22,8 @@ import (
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
+	releaseapp "github.com/aphronio/dorf/internal/release"
 	providerapi "github.com/aphronio/dorf/internal/sandbox"
-	"github.com/aphronio/dorf/internal/version"
 )
 
 const (
@@ -623,7 +623,7 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 			case core.SandboxProviderIncus:
 				err = presenter.Run(ctx, "Installing official Incus Sandbox", func(ctx context.Context) error {
 					var installErr error
-					profile, _, _, installErr = reconcileOfficialIncusProfile(ctx, store, name, plan.Harness, "v"+version.Version, "", "", guidedIncusNetwork, guidedIncusDiskSize)
+					profile, _, _, installErr = reconcileOfficialIncusProfile(ctx, store, name, plan.Harness, releaseapp.OfficialImageRelease(), "", "", guidedIncusNetwork, guidedIncusDiskSize)
 					return installErr
 				})
 			case core.SandboxProviderE2B:

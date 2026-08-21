@@ -36,6 +36,7 @@ fi
 : "${DORF_TEST_DATABASE_URL:?run scripts/dev/setup.sh or set DORF_TEST_DATABASE_URL}"
 sqlc diff
 sqlc vet
+scripts/incus/check-image-inputs.sh
 go run ./cmd/dorf-brand-terminal --check
 go test ./...
 go vet ./...

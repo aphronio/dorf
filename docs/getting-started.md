@@ -4,7 +4,23 @@ Check [Support and diagnostics](support.md) before installing Dorf.
 
 ## 1. Install the application and initialize storage
 
-Download and verify one exact immutable Dorf release, then put `dorf` on `PATH`:
+Beginning with the first release after `v0.3.0`, install the latest immutable Dorf release:
+
+```bash
+curl -fsSL https://github.com/aphronio/dorf/releases/latest/download/install.sh | sh
+```
+
+The installer downloads the matching x86_64 Linux archive and checksum, verifies the archive before
+atomically installing `dorf` to `~/.local/bin`, and prints a `PATH` handoff when needed. It does not
+run setup. Install an exact release by using its pinned installer asset:
+
+```bash
+RELEASE_TAG=YOUR_RELEASE_TAG
+curl -fsSL "https://github.com/aphronio/dorf/releases/download/$RELEASE_TAG/install.sh" | sh
+```
+
+Release `v0.3.0` predates the installer asset. For that release, or when independently verifying
+GitHub's signed release attestation is required, use the transparent manual path:
 
 ```bash
 RELEASE_TAG=v0.3.0

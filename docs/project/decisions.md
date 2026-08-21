@@ -743,10 +743,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Status:** Accepted and implemented — 2026-07-31; local-first and combined product-release
   boundaries revised during public activation — 2026-08-04; Go artifact boundary at D047 cutover
   — 2026-08-08; Go-required schema 4 after issue #38 dogfood — 2026-08-08; base and inventory
-  clauses superseded by D064 and current artifact identity refined by D066 — 2026-08-13
-- **Decision:** Publish the credential-free x86_64 Sandbox VM as an immutable GitHub Release containing
-  exactly one Go x86_64 Linux archive/checksum and one Incus archive/compatibility manifest. One repo-owned
-  local command builds from an immutable base fingerprint, records its exact Harness packages,
+  clauses superseded by D064 and current artifact identity refined by D066 — 2026-08-13; installer
+  asset and change-driven image promotion added — 2026-08-21
+- **Decision:** Every immutable Dorf product release contains one Go x86_64 Linux archive/checksum
+  and its small installer. GitHub Releases remain the credential-free x86_64 Sandbox VM store, but
+  an Incus archive/compatibility manifest is attached only to the product release that promotes a
+  changed image. Later application releases pin and reuse that exact earlier immutable image rather
+  than rebuilding or republishing unchanged bytes. The installer selects the exact release's Go
+  archive, verifies it against that release's checksum, and installs only the verified binary. One
+  repo-owned local command builds a promoted image from an immutable base fingerprint, records its exact Harness packages,
   proves the credential boundary, and completes a real coding tracer for every declared Harness from clone and
   repo-owned preparation through an implementation turn, checks, scoped routing,
   content-addressed evidence, and exact cleanup. The image includes Git, Go, Node, uv, and its
@@ -754,9 +759,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   publishes it with GitHub CLI. The consumer accepts only a
   published immutable release and requires agreement among GitHub's asset digests, the manifest,
   the downloaded archive SHA-256, and the post-import Incus fingerprint.
-- **Artifact identity:** Attach the image to the normal immutable `vX.Y.Z` Dorf product release
-  instead of creating machine-only releases in the human-facing release feed. The current exact
-  schema and asset identity live in D066. The manifest requires `environment: incus`, the complete
+- **Artifact identity:** Attach each newly promoted image to a normal immutable `vX.Y.Z` Dorf
+  product release instead of creating machine-only releases in the human-facing release feed. The
+  application and official image release pins are independent; the repository check compares
+  declared image inputs with the immutable pinned release tag and fails on drift. Advancing the pin
+  explicitly can also earn a deliberate security refresh without a source-input change. The current
+  exact schema and asset identity live in D066. The manifest requires `environment: incus`, the complete
   coding-workstation inventory, and verified pinned tool release-archive digests. Its
   candidate proof executes `go`, `gofmt`, and the repository's declared preparation in a fresh
   Sandbox. Issue #38 dogfood showed that the historical schema-3 image could reach a Go repository
