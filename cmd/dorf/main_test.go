@@ -585,3 +585,18 @@ func TestSandboxProfileNotReadyDetailSurfacesUnavailableArtifact(t *testing.T) {
 		t.Fatalf("detail = %q", detail)
 	}
 }
+
+func TestRemoteGitAdmissionRejectsOnlyOfflineE2BProfiles(t *testing.T) {
+	offline := core.SandboxProfile{Name: "cloud-codex", Provider: core.SandboxProviderE2B}
+	if err := requireRemoteGitAccess(offline); err == nil || !strings.Contains(err.Error(), "use --local-repo") || !strings.Contains(err.Error(), "update and reverify") {
+		t.Fatalf("offline E2B error=%v", err)
+	}
+	for _, profile := range []core.SandboxProfile{
+		{Name: "cloud-online", Provider: core.SandboxProviderE2B, E2BAllowInternet: true},
+		{Name: "local", Provider: core.SandboxProviderIncus},
+	} {
+		if err := requireRemoteGitAccess(profile); err != nil {
+			t.Fatalf("profile %#v rejected remote Git: %v", profile, err)
+		}
+	}
+}

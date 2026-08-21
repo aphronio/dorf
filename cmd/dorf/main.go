@@ -872,6 +872,9 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
+	if err := requireRemoteGitAccess(profile); err != nil {
+		return err
+	}
 	selectedConnection, err := selectedAIConnection(providers, *connection)
 	if err != nil {
 		return err
@@ -927,6 +930,11 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
+	if source.Kind == investigation.SourceRemote {
+		if err := requireRemoteGitAccess(profile); err != nil {
+			return err
+		}
+	}
 	input := investigation.Admission{
 		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
 		Source:       source,
@@ -941,6 +949,13 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 		"created":                        created, "task_id": job.CurrentTaskID, "scheduled": true,
 		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
+}
+
+func requireRemoteGitAccess(profile core.SandboxProfile) error {
+	if profile.Provider == core.SandboxProviderE2B && !profile.E2BAllowInternet {
+		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; use --local-repo when supported, or update and reverify the profile with internet access", profile.Name)
+	}
+	return nil
 }
 
 func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {

@@ -10,7 +10,9 @@ Guided setup supports a named Cloudflare Tunnel; any operator-owned route satisf
 HTTPS `/v1` contract is valid. Disposable Quick Tunnels are proof-only. macOS, Windows, ARM, remote
 Incus daemons, and host Docker-socket isolation are not supported. Custom Sandbox artifacts may be
 admitted through an explicitly created and functionally verified profile, but carry no Dorf release
-provenance.
+provenance. An E2B profile that blocks general internet access can consume a retained local Git
+source, but cannot run coding or investigation work that must clone a remote Git source; Dorf rejects
+that combination before admitting a Job.
 
 Run the Go CLI's direct diagnostic boundary:
 
