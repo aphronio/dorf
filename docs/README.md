@@ -3,6 +3,7 @@
 | Goal | Document |
 | --- | --- |
 | Install and run the Go product | [Getting started](getting-started.md) |
+| Delegate installation and operation to an agent | [Agent guide](agent-guide.md) |
 | Diagnose support and readiness | [Support](support.md) |
 | Build and publish a Go release | [Release process](releasing.md) |
 | Understand product direction, vocabulary, and workflow examples | [North Star](project/north-star.md) |

@@ -27,7 +27,8 @@ directly or delegate policy to a predefined workflow.
 
 The built-in workflows currently cover coding to a verified pull-request Proposal and
 repository-grounded codebase investigation. See [Getting started](docs/getting-started.md) for the
-supported deployment, profiles, commands, and workflow inputs.
+supported deployment, profiles, commands, and workflow inputs. To hand installation or operation to
+an agent, point it at the concise [Agent guide](docs/agent-guide.md).
 
 ## Build
 

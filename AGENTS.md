@@ -10,6 +10,7 @@ Read only the authority relevant to the task:
 - [Architecture](docs/project/architecture.md): storage, sequencing, recovery, and composition.
 - [Decision Log](docs/project/decisions.md): accepted consequential choices and reconsideration triggers.
 - [Provider Gateway](docs/project/provider-gateway.md): provider authentication, routing, and broker ownership.
+- [Agent Guide](docs/agent-guide.md): delegated installation and CLI-operation runbook.
 - [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and operations.
 - [Release Process](docs/releasing.md): release operator entry point.
 - [Sandbox and VM Watchlist](docs/research/sandbox-vm-watchlist.md): non-normative candidates and
@@ -33,6 +34,10 @@ requirements.
 - Execute deterministic setup and verification through repository-owned commands before spending
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.
+- When installation, setup prompts, profile or Provider Connection readiness, Job operation,
+  Messages, retry, Artifacts, or cleanup UX changes, update its existing operator authority and the
+  [Agent Guide](docs/agent-guide.md) in the same slice. Keep the guide concise and link to authority
+  instead of copying detailed contracts into it.
 - For PostgreSQL changes, edit the schema and query sources rather than generated `dbsql` files;
   regenerate and check them through the repository's `sql:generate` and `sql:check` tasks.
 - Use the GitHub CLI (`gh`) for GitHub issues, pull requests, and other repository operations. Do not
