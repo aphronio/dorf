@@ -19,6 +19,14 @@ run = "sqlc diff"
 description = "Prepare every query against the migrated test database"
 run = "sqlc vet"
 
+[tasks."brand:generate"]
+description = "Regenerate the terminal brand lockup from the canonical assets"
+run = "go run ./cmd/dorf-brand-terminal"
+
+[tasks."brand:check"]
+description = "Fail when the generated terminal brand lockup is stale"
+run = "go run ./cmd/dorf-brand-terminal --check"
+
 [tasks.check]
 description = "Run the repository's deterministic SQL and Go checks"
 run = """
@@ -28,6 +36,7 @@ fi
 : "${DORF_TEST_DATABASE_URL:?run scripts/dev/setup.sh or set DORF_TEST_DATABASE_URL}"
 sqlc diff
 sqlc vet
+go run ./cmd/dorf-brand-terminal --check
 go test ./...
 go vet ./...
 """

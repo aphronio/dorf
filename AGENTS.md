@@ -6,6 +6,7 @@ Read only the authority relevant to the task:
 
 - [Principles](docs/project/principles.md): judgment, abstractions, and vertical-slice completion.
 - [North Star](docs/project/north-star.md): product direction, vocabulary, and experience.
+- [Visual Style](docs/project/style.md): brand character, palette, artwork, and interface presentation.
 - [Architecture](docs/project/architecture.md): storage, sequencing, recovery, and composition.
 - [Decision Log](docs/project/decisions.md): accepted consequential choices and reconsideration triggers.
 - [Provider Gateway](docs/project/provider-gateway.md): provider authentication, routing, and broker ownership.
