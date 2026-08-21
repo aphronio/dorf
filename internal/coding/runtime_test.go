@@ -9,9 +9,13 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if TaskName != "dorf-coding-job-v3" || TaskKey("job-1") != "coding-job:v3:job-1" {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
-	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2, 30*time.Second)
-	if options.StepName != "dorf/agent-run-wake/v1/run-1/00000000000000000002" || options.Timeout != time.Second {
+	options := wakeOptions(Work{Kind: WorkAgentMessage, FactID: "message-1"}, 2, 30*time.Second)
+	if options.StepName != "dorf/agent-run-wake/v1/message-1/00000000000000000002" || options.Timeout != time.Second {
 		t.Fatalf("active AgentRun wake=%#v", options)
+	}
+	options = wakeOptions(Work{Kind: WorkRunReviewer, FactID: "review-message-1"}, 3, 30*time.Second)
+	if options.StepName != "dorf/agent-run-wake/v1/review-message-1/00000000000000000003" || options.Timeout != time.Second {
+		t.Fatalf("active reviewer wake=%#v", options)
 	}
 	options = wakeOptions(Work{Kind: WorkObserveProposal, Revision: "rev-1"}, 3, 30*time.Second)
 	if options.StepName != "dorf/proposal-wake/v2/rev-1/00000000000000000003" || options.Timeout != 30*time.Second {

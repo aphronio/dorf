@@ -11,17 +11,13 @@ import (
 	"github.com/aphronio/dorf/internal/gitworkspace"
 )
 
-func investigationAgentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
-
 type WorkKind string
 
 const (
 	WorkComplete     WorkKind = "complete"
 	WorkAttention    WorkKind = "attention"
 	WorkAction       WorkKind = "action"
-	WorkDeliver      WorkKind = "deliver-message"
-	WorkObserveAgent WorkKind = "observe-agent-run"
-	WorkRecordDraft  WorkKind = "record-draft"
+	WorkAgentMessage WorkKind = "reconcile-agent-message"
 	WorkWaitInput    WorkKind = "wait-client-input"
 )
 
@@ -38,14 +34,8 @@ func (w Work) Description() string {
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
-	if w.Kind == WorkObserveAgent {
-		return definition.AgentRoleLabel("investigate") + " running"
-	}
-	if w.Kind == WorkDeliver {
-		return "Delivering brief to " + lowerFirst(definition.AgentRoleLabel("investigate"))
-	}
-	if w.Kind == WorkRecordDraft {
-		return "Recording " + lowerFirst(definition.ResultLabel("investigation-draft"))
+	if w.Kind == WorkAgentMessage {
+		return definition.AgentRoleLabel("investigate") + " working"
 	}
 	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
@@ -54,8 +44,8 @@ type Snapshot struct {
 	Job         core.Job
 	MainSandbox core.Sandbox
 	Actions     []core.Action
-	Deliveries  []core.Delivery
-	Delivery    core.Delivery
+	Messages    []core.AgentMessageWork
+	Message     core.AgentMessageWork
 	Drafts      []Draft
 	Source      Source
 }
@@ -94,21 +84,16 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	deliveries, err := store.Deliveries(ctx, jobID)
+	snapshot.Messages, err = store.CodebaseInvestigationMessages(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
-	for _, delivery := range deliveries {
-		if delivery.AgentRun.Role == "investigate" {
-			snapshot.Deliveries = append(snapshot.Deliveries, delivery)
-		}
+	if len(snapshot.Messages) == 0 {
+		return snapshot, fmt.Errorf("codebase-investigation Job has no exact investigator Message")
 	}
-	if len(snapshot.Deliveries) == 0 {
-		return snapshot, fmt.Errorf("codebase-investigation Job has no exact main-Sandbox investigator AgentRun")
-	}
-	for _, delivery := range snapshot.Deliveries {
-		if delivery.AgentRun.SandboxID != snapshot.MainSandbox.ID {
-			return snapshot, fmt.Errorf("codebase-investigation AgentRun does not use the exact main Sandbox")
+	for _, message := range snapshot.Messages {
+		if message.MessageID == "" || message.SandboxID != snapshot.MainSandbox.ID {
+			return snapshot, fmt.Errorf("codebase-investigation Message does not use the exact main Sandbox")
 		}
 	}
 	snapshot.Drafts, err = store.CodebaseInvestigationDrafts(ctx, jobID)
@@ -117,22 +102,21 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	}
 	drafted := make(map[string]struct{}, len(snapshot.Drafts))
 	for _, draft := range snapshot.Drafts {
-		drafted[draft.AgentRunID] = struct{}{}
+		drafted[draft.MessageID] = struct{}{}
 	}
-	for _, delivery := range snapshot.Deliveries {
-		if _, ok := drafted[delivery.AgentRun.ID]; !ok {
-			snapshot.Delivery = delivery
+	for _, message := range snapshot.Messages {
+		if _, ok := drafted[message.MessageID]; !ok {
+			snapshot.Message = message
 			break
 		}
 	}
-	if snapshot.Delivery.AgentRun.ID == "" {
-		snapshot.Delivery = snapshot.Deliveries[len(snapshot.Deliveries)-1]
+	if snapshot.Message.MessageID == "" {
+		snapshot.Message = snapshot.Messages[len(snapshot.Messages)-1]
 	}
 	return snapshot, nil
 }
 
 func (s Snapshot) Project() Work {
-	run := s.Delivery.AgentRun
 	if !s.Job.AdmissionOpen {
 		return Work{Kind: WorkComplete, FactID: s.Job.ID, Detail: "admission closed"}
 	}
@@ -158,29 +142,14 @@ func (s Snapshot) Project() Work {
 		return action(core.ActionRouteCreate)
 	}
 	for _, draft := range s.Drafts {
-		if draft.AgentRunID == run.ID {
+		if draft.MessageID == s.Message.MessageID {
 			return Work{Kind: WorkWaitInput, FactID: draft.ArtifactID, Detail: "send a follow-up or request cleanup"}
 		}
 	}
-	switch run.State {
-	case core.AgentRunPending, core.AgentRunSubmitting:
-		return Work{Kind: WorkDeliver, FactID: run.ID}
-	case core.AgentRunActive:
-		return Work{Kind: WorkObserveAgent, FactID: run.ID}
-	case core.AgentRunCompleted:
-		if s.Job.WorkflowAttentionSource == run.ID && s.Job.WorkflowAttention != "" {
-			return Work{Kind: WorkAttention, FactID: run.ID, Detail: s.Job.WorkflowAttention}
-		}
-		return Work{Kind: WorkRecordDraft, FactID: run.ID}
-	case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
-		detail := run.Attention
-		if detail == "" {
-			detail = string(run.State)
-		}
-		return Work{Kind: WorkAttention, FactID: run.ID, Detail: detail}
-	default:
-		return Work{Kind: WorkAttention, FactID: run.ID, Detail: "unsupported investigator AgentRun state " + string(run.State)}
+	if s.Job.WorkflowAttentionSource == s.Message.MessageID && s.Job.WorkflowAttention != "" {
+		return Work{Kind: WorkAttention, FactID: s.Message.MessageID, Detail: s.Job.WorkflowAttention}
 	}
+	return Work{Kind: WorkAgentMessage, FactID: s.Message.MessageID, Scope: s.Message.SandboxID}
 }
 
 func Run(ctx context.Context, custody core.JobHandle, service Service, store Store, jobID string) (Work, error) {
@@ -195,22 +164,27 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 			return work, nil
 		case WorkAction:
 			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)
-		case WorkDeliver:
-			err = absurdruntime.RunFactStep(ctx, investigationAgentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
-				return service.Deliver(workCtx, snapshot.Job, snapshot.Delivery, investigationAgentInput(snapshot.Source, snapshot.Delivery))
-			})
-		case WorkObserveAgent:
-			turn, observeErr := service.ObserveAgentRunTurn(ctx, snapshot.Job, snapshot.Delivery.AgentRun, "investigate")
-			if observeErr != nil {
-				return Work{}, observeErr
+		case WorkAgentMessage:
+			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
+			if openErr != nil {
+				return work, openErr
 			}
-			if turn.Status == "completed" || turn.Status == "failed" || turn.Status == "interrupted" {
-				continue
+			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
+			if reconcileErr != nil {
+				return work, reconcileErr
 			}
-			return work, nil
-		case WorkRecordDraft:
+			if !result.Terminal() {
+				return work, nil
+			}
+			if result.Outcome != "completed" {
+				detail := "investigator Harness work ended with outcome " + result.Outcome
+				if attentionErr := store.SetWorkflowAttention(ctx, snapshot.Job.ID, work.FactID, detail); attentionErr != nil {
+					return work, attentionErr
+				}
+				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
+			}
 			err = absurdruntime.RunFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
-				return recordInvestigationDraft(workCtx, service, store, snapshot)
+				return recordInvestigationDraft(workCtx, service, store, snapshot, result)
 			})
 		default:
 			return Work{}, fmt.Errorf("unsupported codebase-investigation work %q", work.Kind)
@@ -228,7 +202,9 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 	}
 }
 
-func investigationAgentInput(source Source, delivery core.Delivery) string {
+// AgentPrompt is investigation-owned prompt policy selected by the static
+// deployment composition from authoritative durable facts.
+func AgentPrompt(source Source, input string) string {
 	return fmt.Sprintf(`%s
 
 Dorf codebase-investigation contract:
@@ -236,7 +212,7 @@ Dorf codebase-investigation contract:
 - Do not modify the checkout.
 - Return a nonblank Markdown report grounded in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
 - Do not include absolute Sandbox paths.
-- If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(delivery.Message.Input), source.Revision)
+- If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision)
 }
 
 func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, store Store, snapshot Snapshot, work Work) error {
@@ -280,16 +256,11 @@ type investigationContractError string
 
 func (e investigationContractError) Error() string { return string(e) }
 
-func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot) error {
-	run := snapshot.Delivery.AgentRun
-	turn, err := service.ObserveAgentRunTurn(ctx, snapshot.Job, run, "investigate")
-	if err != nil {
-		return err
-	}
-	if turn.Status != "completed" || turn.ID != run.TurnID {
+func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot, result core.MessageResult) error {
+	if result.MessageID != snapshot.Message.MessageID || result.Outcome != "completed" {
 		return investigationContractError("investigator did not return an exact completed Harness Turn")
 	}
-	report, err := validateInvestigationReport(turn.Output)
+	report, err := validateInvestigationReport(result.Output)
 	if err != nil {
 		return err
 	}
@@ -300,14 +271,12 @@ func recordInvestigationDraft(ctx context.Context, service Service, store Store,
 	if err != nil {
 		return err
 	}
-	name := DraftArtifactName(snapshot.Delivery.Message.Sequence)
 	artifact := core.Artifact{
-		ID:    core.ArtifactID(snapshot.Job.ID, name),
-		JobID: snapshot.Job.ID, Name: name,
+		JobID:  snapshot.Job.ID,
 		Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "text/markdown",
-		Producer: "dorf-codebase-investigation", AgentRunID: run.ID, CreatedAt: run.FinishedAt,
+		Producer: "dorf-codebase-investigation",
 	}
-	_, _, err = store.RecordCodebaseInvestigationDraft(ctx, artifact)
+	_, _, err = store.RecordCodebaseInvestigationDraft(ctx, result.MessageID, artifact)
 	return err
 }
 

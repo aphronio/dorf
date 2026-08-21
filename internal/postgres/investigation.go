@@ -56,12 +56,81 @@ func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([
 	}
 	drafts := make([]investigation.Draft, 0, len(rows))
 	for _, row := range rows {
-		drafts = append(drafts, investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
+		drafts = append(drafts, investigation.Draft{JobID: row.JobID, MessageID: row.MessageID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
 	}
 	return drafts, nil
 }
 
-func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact core.Artifact) (investigation.Draft, bool, error) {
+func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) ([]core.AgentMessageWork, error) {
+	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationMessages(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	work := make([]core.AgentMessageWork, 0, len(rows))
+	for _, row := range rows {
+		work = append(work, core.AgentMessageWork{MessageID: row.MessageID, SandboxID: row.SandboxID})
+	}
+	return work, nil
+}
+
+func (s Store) ValidateInvestigationAgentMessage(ctx context.Context, execution core.AgentMessageExecution) error {
+	source, err := s.CodebaseInvestigationSource(ctx, execution.Job.ID)
+	if err != nil {
+		return err
+	}
+	if execution.AgentRun.Role != "investigate" || execution.AgentRun.Capability != "repository-read-report" ||
+		execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
+		return fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
+	}
+	messages, err := s.CodebaseInvestigationMessages(ctx, execution.Job.ID)
+	if err != nil {
+		return err
+	}
+	drafts, err := s.CodebaseInvestigationDrafts(ctx, execution.Job.ID)
+	if err != nil {
+		return err
+	}
+	drafted := make(map[string]struct{}, len(drafts))
+	for _, draft := range drafts {
+		drafted[draft.MessageID] = struct{}{}
+	}
+	for _, message := range messages {
+		if _, ok := drafted[message.MessageID]; ok {
+			continue
+		}
+		if message.MessageID != execution.Message.ID || message.SandboxID != execution.Sandbox.ID {
+			return fmt.Errorf("Message %s is no longer the exact eligible investigation Agent Message", execution.Message.ID)
+		}
+		return nil
+	}
+	return fmt.Errorf("Message %s is no longer eligible for investigation Agent reconciliation", execution.Message.ID)
+}
+
+func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, messageID string, artifact core.Artifact) (investigation.Draft, bool, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft requires its durable Message identity")
+	}
+	queries := dbsql.New(s.DB)
+	message, err := queries.GetMessage(ctx, messageID)
+	if err != nil {
+		return investigation.Draft{}, false, err
+	}
+	if artifact.JobID != message.JobID {
+		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft Message belongs to a different Job")
+	}
+	artifact.Name = investigation.DraftArtifactName(message.Sequence)
+	artifact.ID = core.ArtifactID(artifact.JobID, artifact.Name)
+	if strings.TrimSpace(artifact.JobID) == "" || !strings.HasPrefix(artifact.Name, "report-") || !strings.HasSuffix(artifact.Name, ".md") ||
+		artifact.MediaType != "text/markdown" ||
+		artifact.Producer != "dorf-codebase-investigation" || artifact.Digest == "" || artifact.ByteSize <= 0 {
+		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft lacks its exact Markdown Artifact")
+	}
+	runRow, err := queries.GetAgentRunByMessage(ctx, messageID)
+	if err != nil {
+		return investigation.Draft{}, false, err
+	}
+	artifact.AgentRunID = runRow.ID
+	artifact.CreatedAt = timeValue(runRow.FinishedAt)
 	if err := validateInvestigationDraft(artifact); err != nil {
 		return investigation.Draft{}, false, err
 	}
@@ -70,7 +139,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact co
 		return investigation.Draft{}, false, err
 	}
 	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
+	queries = dbsql.New(s.DB).WithTx(tx)
 	run, err := queries.GetCodebaseInvestigationRunForUpdate(ctx, dbsql.GetCodebaseInvestigationRunForUpdateParams{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -91,7 +160,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact co
 		if row.AgentRunID != artifact.AgentRunID {
 			continue
 		}
-		existing := investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
+		existing := investigation.Draft{JobID: row.JobID, MessageID: messageID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
 		if existing.ArtifactID != artifact.ID {
 			return investigation.Draft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", artifact.AgentRunID)
 		}
@@ -117,7 +186,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact co
 	if err := tx.Commit(); err != nil {
 		return investigation.Draft{}, false, err
 	}
-	stored := investigation.Draft{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
+	stored := investigation.Draft{JobID: artifact.JobID, MessageID: messageID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
 	return stored, true, nil
 }
 

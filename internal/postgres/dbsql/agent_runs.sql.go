@@ -8,7 +8,6 @@ package dbsql
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/aphronio/dorf/internal/core"
 )
@@ -72,6 +71,38 @@ func (q *Queries) BindHarnessTurn(ctx context.Context, arg BindHarnessTurnParams
 	return result.RowsAffected()
 }
 
+const bindPendingCodingMessageToPriorThread = `-- name: BindPendingCodingMessageToPriorThread :execrows
+with prior as (
+    select prior_run.harness,prior_run.thread_id
+    from dorf.agent_runs current_run
+    join dorf.job_messages current_message on current_message.id=current_run.message_id
+    join dorf.job_messages prior_message on prior_message.job_id=current_message.job_id
+      and prior_message.sequence<current_message.sequence
+    join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
+    where current_run.message_id=$1
+      and prior_run.role='implement' and prior_run.sandbox_id=current_run.sandbox_id
+      and prior_run.harness is not null and prior_run.thread_id is not null and prior_run.turn_id is not null
+      and (prior_message.delivery_intent='follow' or prior_run.turn_id<>prior_message.steer_target_turn_id)
+    order by prior_message.sequence desc
+    limit 1
+)
+update dorf.agent_runs current_run
+set harness=prior.harness,thread_id=prior.thread_id
+from prior
+where current_run.message_id=$1
+  and current_run.state='pending' and current_run.baseline_turn_id is null
+  and current_run.thread_id is null
+  and (current_run.harness is null or current_run.harness=prior.harness)
+`
+
+func (q *Queries) BindPendingCodingMessageToPriorThread(ctx context.Context, messageID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindPendingCodingMessageToPriorThread, messageID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const bindSteer = `-- name: BindSteer :one
 update dorf.agent_runs
 set turn_id=coalesce(turn_id,$1),state='completed',
@@ -125,7 +156,8 @@ select id,job_id,message_id,state,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(sandbox_id,'') as sandbox_id
+       coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
 from dorf.agent_runs
 where message_id=$1::text
 `
@@ -144,7 +176,11 @@ type GetAgentRunByMessageRow struct {
 	Attention        string
 	Role             string
 	InputRevision    string
+	Capability       string
 	SandboxID        string
+	SubmissionNonce  string
+	StartedAt        sql.NullTime
+	FinishedAt       sql.NullTime
 }
 
 func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (GetAgentRunByMessageRow, error) {
@@ -164,7 +200,11 @@ func (q *Queries) GetAgentRunByMessage(ctx context.Context, messageID string) (G
 		&i.Attention,
 		&i.Role,
 		&i.InputRevision,
+		&i.Capability,
 		&i.SandboxID,
+		&i.SubmissionNonce,
+		&i.StartedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }
@@ -222,83 +262,6 @@ func (q *Queries) GetAgentRunPreparation(ctx context.Context, runID string) (Get
 	row := q.db.QueryRowContext(ctx, getAgentRunPreparation, runID)
 	var i GetAgentRunPreparationRow
 	err := row.Scan(&i.Harness, &i.Recorded, &i.BaselineTurnID)
-	return i, err
-}
-
-const getHarnessMutationDelivery = `-- name: GetHarnessMutationDelivery :one
-select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.admitted_at,
-       m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
-       ar.id as agent_run_id,ar.job_id as agent_run_job_id,
-       ar.message_id as agent_run_message_id,ar.state,
-       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
-       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
-       coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,ar.role,
-       coalesce(ar.input_revision,'') as input_revision,
-       ar.sandbox_id
-from dorf.job_messages m
-join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1 and ar.state in ('submitting','active','uncertain')
-  and ar.role in ('implement','investigate')
-order by m.sequence
-limit 1
-`
-
-type GetHarnessMutationDeliveryRow struct {
-	MessageID         string
-	JobID             string
-	FromKind          core.MessageFromKind
-	FromID            string
-	Sequence          int64
-	Input             string
-	AdmittedAt        time.Time
-	DeliveryIntent    core.MessageDeliveryIntent
-	SteerTargetTurnID string
-	AgentRunID        string
-	AgentRunJobID     string
-	AgentRunMessageID string
-	State             core.AgentRunState
-	Harness           string
-	ThreadID          string
-	BaselineRecorded  bool
-	BaselineTurnID    string
-	TurnID            string
-	TurnOutcome       string
-	Attention         string
-	Role              string
-	InputRevision     string
-	SandboxID         string
-}
-
-func (q *Queries) GetHarnessMutationDelivery(ctx context.Context, jobID string) (GetHarnessMutationDeliveryRow, error) {
-	row := q.db.QueryRowContext(ctx, getHarnessMutationDelivery, jobID)
-	var i GetHarnessMutationDeliveryRow
-	err := row.Scan(
-		&i.MessageID,
-		&i.JobID,
-		&i.FromKind,
-		&i.FromID,
-		&i.Sequence,
-		&i.Input,
-		&i.AdmittedAt,
-		&i.DeliveryIntent,
-		&i.SteerTargetTurnID,
-		&i.AgentRunID,
-		&i.AgentRunJobID,
-		&i.AgentRunMessageID,
-		&i.State,
-		&i.Harness,
-		&i.ThreadID,
-		&i.BaselineRecorded,
-		&i.BaselineTurnID,
-		&i.TurnID,
-		&i.TurnOutcome,
-		&i.Attention,
-		&i.Role,
-		&i.InputRevision,
-		&i.SandboxID,
-	)
 	return i, err
 }
 
@@ -494,6 +457,44 @@ func (q *Queries) ListImplementationThreadBindings(ctx context.Context, arg List
 	for rows.Next() {
 		var i ListImplementationThreadBindingsRow
 		if err := rows.Scan(&i.Harness, &i.ThreadID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnsettledAgentMessages = `-- name: ListUnsettledAgentMessages :many
+select m.id as message_id,ar.sandbox_id
+from dorf.job_messages m
+join dorf.agent_runs ar on ar.message_id=m.id
+where m.job_id=$1
+  and (ar.state in ('submitting','active','uncertain')
+       or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
+order by m.sequence,ar.id
+`
+
+type ListUnsettledAgentMessagesRow struct {
+	MessageID string
+	SandboxID string
+}
+
+func (q *Queries) ListUnsettledAgentMessages(ctx context.Context, jobID string) ([]ListUnsettledAgentMessagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnsettledAgentMessages, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnsettledAgentMessagesRow
+	for rows.Next() {
+		var i ListUnsettledAgentMessagesRow
+		if err := rows.Scan(&i.MessageID, &i.SandboxID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

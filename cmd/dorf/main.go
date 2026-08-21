@@ -169,19 +169,24 @@ func coreApplication(store postgres.Store, client *absurd.Client) core.Applicati
 // Core workflow registry. Each known module retains its policy transaction.
 type workflowMessageAdmissions struct{ store postgres.Store }
 
-func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
+func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	job, err := a.store.Job(ctx, input.JobID)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
+	var admitted core.MessageAdmissionResult
 	switch {
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		return a.store.AdmitCodingMessage(ctx, input)
+		admitted, err = a.store.AdmitCodingMessageResult(ctx, input)
 	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		return a.store.AdmitInvestigationMessage(ctx, input)
+		admitted, err = a.store.AdmitInvestigationMessageResult(ctx, input)
 	default:
-		return core.Message{}, false, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
+		return core.MessageAdmissionResult{}, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
 	}
+	if err != nil {
+		return admitted, err
+	}
+	return admitted, nil
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -1132,7 +1137,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
-	history := workflowHistory(snapshot)
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	history := workflowHistory(snapshot, deliveries)
 	definition := coding.WorkflowDefinition()
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
@@ -1144,9 +1153,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		executionOperation = operation
 	}
 	if *jsonOutput {
-		messages := make([]core.Message, 0, len(snapshot.Deliveries))
-		agentRuns := make([]core.AgentRun, 0, len(snapshot.Deliveries))
-		for _, delivery := range snapshot.Deliveries {
+		messages := make([]core.Message, 0, len(deliveries))
+		agentRuns := make([]core.AgentRun, 0, len(deliveries))
+		for _, delivery := range deliveries {
 			messages = append(messages, delivery.Message)
 			agentRuns = append(agentRuns, delivery.AgentRun)
 		}
@@ -1213,6 +1222,10 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return err
 	}
 	work := snapshot.Project()
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil {
+		return err
+	}
 	artifacts, err := store.Artifacts(ctx, job.ID)
 	if err != nil {
 		return err
@@ -1234,7 +1247,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return writeJSON(stdout, map[string]any{
 			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts, "artifacts": artifacts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
-			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(snapshot.Deliveries), "sandbox": snapshot.MainSandbox},
+			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
 		})
 	}
@@ -1254,7 +1267,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
-	renderHistory(stdout, investigationHistory(snapshot))
+	renderHistory(stdout, investigationHistory(snapshot, deliveries))
 	if len(snapshot.Drafts) == 0 {
 		fmt.Fprintln(stdout, "  draft: none")
 		return nil

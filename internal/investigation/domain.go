@@ -30,7 +30,7 @@ type Source struct {
 
 type Draft struct {
 	JobID      string    `json:"job_id"`
-	AgentRunID string    `json:"agent_run_id"`
+	MessageID  string    `json:"message_id"`
 	ArtifactID string    `json:"artifact_id"`
 	CreatedAt  time.Time `json:"created_at"`
 }

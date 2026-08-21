@@ -145,6 +145,42 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 	return i, err
 }
 
+const getMessage = `-- name: GetMessage :one
+select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
+from dorf.job_messages
+where id=$1
+`
+
+type GetMessageRow struct {
+	ID                string
+	JobID             string
+	FromKind          core.MessageFromKind
+	FromID            string
+	Sequence          int64
+	Input             string
+	DeliveryIntent    core.MessageDeliveryIntent
+	SteerTargetTurnID string
+	AdmittedAt        time.Time
+}
+
+func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageRow, error) {
+	row := q.db.QueryRowContext(ctx, getMessage, messageID)
+	var i GetMessageRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.FromKind,
+		&i.FromID,
+		&i.Sequence,
+		&i.Input,
+		&i.DeliveryIntent,
+		&i.SteerTargetTurnID,
+		&i.AdmittedAt,
+	)
+	return i, err
+}
+
 const getMessageBySender = `-- name: GetMessageBySender :one
 select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
        coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at

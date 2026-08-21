@@ -7,10 +7,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-type ActionStore interface {
-	RecordSandboxActionSuccess(context.Context, string) error
-}
-
 type GitExternals interface {
 	RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error
 	RepositoryRevision(context.Context, core.Job, string, string) (Observation, error)
@@ -20,13 +16,11 @@ type GitExternals interface {
 // for Git-backed workflows.
 type Executor struct {
 	core.Execution
-	store      ActionStore
-	externals  GitExternals
-	claimCheck func(context.Context) error
+	externals GitExternals
 }
 
-func NewExecutor(execution core.Execution, store ActionStore, externals GitExternals, claimCheck func(context.Context) error) Executor {
-	return Executor{Execution: execution, store: store, externals: externals, claimCheck: claimCheck}
+func NewExecutor(execution core.Execution, externals GitExternals) Executor {
+	return Executor{Execution: execution, externals: externals}
 }
 
 func (s Executor) ObserveRevision(ctx context.Context, job core.Job, branch, revision string) (Observation, error) {
@@ -42,14 +36,10 @@ func (s Executor) ExecuteRepositoryClone(ctx context.Context, job core.Job, sand
 	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
 		return fmt.Errorf("repository clone does not belong to the exact Job and Sandbox")
 	}
-	if err := s.externals.RepositoryClone(ctx, job, sandbox, remote, revision, branch); err != nil {
-		return err
-	}
-	if s.claimCheck == nil {
-		return fmt.Errorf("durable executor claim check is not configured")
-	}
-	if err := s.claimCheck(ctx); err != nil {
-		return err
-	}
-	return s.store.RecordSandboxActionSuccess(ctx, action.ID)
+	return s.Execution.ExecuteSandboxActionEffect(ctx, job.ID, action.ID, ActionRepositoryClone, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
+		if authoritativeJob.ID != job.ID || authoritativeSandbox.ID != sandbox.ID {
+			return fmt.Errorf("repository clone authority changed before execution")
+		}
+		return s.externals.RepositoryClone(effectCtx, authoritativeJob, authoritativeSandbox, remote, revision, branch)
+	})
 }

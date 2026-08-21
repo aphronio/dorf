@@ -80,7 +80,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 
 func wakeOptions(work Work, sequence int64) absurd.AwaitEventOptions {
 	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), Timeout: idleMessagePollInterval}
-	if work.Kind == WorkObserveAgent {
+	if work.Kind == WorkAgentMessage {
 		options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}

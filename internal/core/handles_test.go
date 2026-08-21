@@ -10,12 +10,12 @@ import (
 func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	admittedAt := time.Now().UTC()
 	var got MessageAdmission
-	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (Message, bool, error) {
+	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
-		return Message{
+		return MessageAdmissionResult{Message: Message{
 			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: strings.TrimSpace(input.FromID),
 			Sequence: 2, Input: input.Input, Intent: input.Intent, AdmittedAt: admittedAt,
-		}, true, nil
+		}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
 	agent := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent()
@@ -26,16 +26,16 @@ func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	if got.JobID != "job-1" || got.SandboxID != "sandbox-named" || got.FromKind != MessageFromHuman || got.FromID != "send-1" || got.Input != "continue" || got.Intent != MessageFollow {
 		t.Fatalf("admission=%#v", got)
 	}
-	if receipt.MessageID != MessageID("job-1", MessageFromHuman, "send-1") || receipt.JobID != "job-1" || receipt.Sequence != 2 || receipt.Intent != MessageFollow || !receipt.Created || !receipt.AdmittedAt.Equal(admittedAt) {
+	if receipt.MessageID != MessageID("job-1", MessageFromHuman, "send-1") || receipt.JobID != "job-1" || receipt.SandboxID != "sandbox-named" || receipt.Sequence != 2 || receipt.Intent != MessageFollow || !receipt.Created || !receipt.AdmittedAt.Equal(admittedAt) {
 		t.Fatalf("receipt=%#v", receipt)
 	}
 }
 
 func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 	var got MessageAdmission
-	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (Message, bool, error) {
+	admit := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 		got = input
-		return Message{ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, TargetTurnID: "turn-active"}, true, nil
+		return MessageAdmissionResult{Message: Message{ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 3, Input: input.Input, Intent: input.Intent, TargetTurnID: "turn-active"}, SandboxID: input.SandboxID, Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admit}
 	agent := application.jobHandle("job-1").sandboxHandle("sandbox-a").Agent()
@@ -49,8 +49,22 @@ func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 }
 
 func TestAgentMessageRejectsForeignReceiptBeforeWake(t *testing.T) {
-	admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (Message, bool, error) {
-		return Message{ID: "message-foreign", JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 2, Input: "changed", Intent: input.Intent}, true, nil
+	admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
+		return MessageAdmissionResult{Message: Message{ID: "message-foreign", JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 2, Input: "changed", Intent: input.Intent}, SandboxID: input.SandboxID, Created: true}, nil
+	}}
+	application := Application{Store: handleTestStore{}, AgentMessages: admissions}
+	receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
+	if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
+		t.Fatalf("receipt=%#v err=%v", receipt, err)
+	}
+}
+
+func TestAgentMessageRejectsForeignSandboxReceiptBeforeWake(t *testing.T) {
+	admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
+		return MessageAdmissionResult{Message: Message{
+			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind,
+			FromID: input.FromID, Sequence: 2, Input: input.Input, Intent: input.Intent,
+		}, SandboxID: "sandbox-foreign", Created: true}, nil
 	}}
 	application := Application{Store: handleTestStore{}, AgentMessages: admissions}
 	receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
@@ -60,10 +74,10 @@ func TestAgentMessageRejectsForeignReceiptBeforeWake(t *testing.T) {
 }
 
 type handleTestAdmissions struct {
-	admit func(context.Context, MessageAdmission) (Message, bool, error)
+	admit func(context.Context, MessageAdmission) (MessageAdmissionResult, error)
 }
 
-func (a handleTestAdmissions) AdmitAgentMessage(ctx context.Context, input MessageAdmission) (Message, bool, error) {
+func (a handleTestAdmissions) AdmitAgentMessage(ctx context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
 	return a.admit(ctx, input)
 }
 

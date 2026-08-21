@@ -10,6 +10,12 @@ from dorf.job_messages
 where job_id=sqlc.arg(job_id) and from_kind=sqlc.arg(from_kind)
   and from_id=sqlc.arg(from_id);
 
+-- name: GetMessage :one
+select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
+from dorf.job_messages
+where id=sqlc.arg(message_id);
+
 -- name: GetActiveImplementationTurn :one
 select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,role

@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -73,9 +75,27 @@ func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, st
 }
 
 func (a Application) runCleanup(ctx context.Context, service CleanupExecution, jobID string) error {
-	job, sandboxes, err := service.PrepareCleanup(ctx, jobID)
-	if err != nil {
-		return err
+	var job Job
+	var sandboxes []Sandbox
+	for {
+		var err error
+		job, sandboxes, err = service.PrepareCleanup(ctx, jobID)
+		if err == nil {
+			break
+		}
+		var active cleanupStillActive
+		if !errors.As(err, &active) {
+			return err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if job.CleanupState == CleanupComplete {
 		return nil
@@ -106,11 +126,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	}
 
 	detail := "verifying no owned resource or non-cleanup Job claim remains unsettled"
-	task, ok := absurd.TaskFromContext(ctx)
-	if !ok {
-		return absurd.ErrNoTaskContext
-	}
-	if err := a.Store.CompleteCleanup(ctx, jobID, task.TaskID()); err != nil {
+	if err := service.CompleteCleanup(ctx, jobID); err != nil {
 		_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
 	}

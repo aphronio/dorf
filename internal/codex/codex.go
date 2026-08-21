@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -116,42 +115,21 @@ func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Owner
 	return binding, err
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
+func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownership, workspace string, review provider.ReviewMetadata, threadID, turnID, submissionNonce, input, model, effort string) (core.HarnessBinding, error) {
 	ctx, cancel := a.timeoutContext(ctx)
 	defer cancel()
 	binding := core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: TurnOutcome{ID: turnID, Status: "running"}}
 	err := a.withReviewServer(ctx, owner, review, func(protocol *protocol) error {
-		missingAttempts := 0
-		for {
-			observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
-			if err != nil {
-				var missing interface{ RetryableReviewVisibility() bool }
-				if !errors.As(err, &missing) || !missing.RetryableReviewVisibility() || missingAttempts >= 20 {
-					return err
-				}
-				missingAttempts++
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(100 * time.Millisecond):
-				}
-				continue
-			}
-			missingAttempts = 0
-			binding.ThreadID = observedThread
-			if len(turns) != 1 || turns[0].ID != turnID {
-				return reviewAttention("strict review recovery found the wrong native turn")
-			}
-			binding.Turn = turns[0]
-			if terminal(turns[0].Status) {
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(time.Second):
-			}
+		observedThread, turns, err := protocol.strictReviewHistory(ctx, workspace, threadID, submissionNonce, input, model, effort)
+		if err != nil {
+			return err
 		}
+		binding.ThreadID = observedThread
+		if len(turns) != 1 || turns[0].ID != turnID {
+			return reviewAttention("strict review recovery found the wrong native turn")
+		}
+		binding.Turn = turns[0]
+		return nil
 	})
 	return binding, err
 }

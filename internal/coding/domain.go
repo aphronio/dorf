@@ -78,10 +78,6 @@ func ReviewSandboxName(jobID, runID string) string {
 	return core.NamedSandboxID(jobID, runID)
 }
 
-func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
-	return "review-controller-" + codingDigest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
-}
-
 func codingDigest(value string, length int) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])[:length]

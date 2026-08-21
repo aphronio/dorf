@@ -27,16 +27,16 @@ type historyEntry struct {
 	Text string
 }
 
-func workflowHistory(snapshot coding.Snapshot) []historyEntry {
+func workflowHistory(snapshot coding.Snapshot, deliveries []core.Delivery) []historyEntry {
 	definition := coding.WorkflowDefinition()
-	entries := commonHistory(snapshot.Job.Job, snapshot.Deliveries, snapshot.Actions)
+	entries := commonHistory(snapshot.Job.Job, deliveries, snapshot.Actions)
 	add := func(at time.Time, text string) { addHistoryEntry(&entries, at, text) }
 
-	for _, delivery := range snapshot.Deliveries {
+	for _, delivery := range deliveries {
 		message := delivery.Message
 		add(message.AdmittedAt, fmt.Sprintf("Message %d received from %s", message.Sequence, humanIdentifier(string(message.FromKind))))
 	}
-	for _, delivery := range snapshot.Deliveries {
+	for _, delivery := range deliveries {
 		addAgentRunHistory(&entries, definition, delivery)
 	}
 	for _, revision := range snapshot.Revisions {
@@ -72,10 +72,10 @@ func workflowHistory(snapshot coding.Snapshot) []historyEntry {
 	return sortedHistory(entries)
 }
 
-func investigationHistory(snapshot investigation.Snapshot) []historyEntry {
+func investigationHistory(snapshot investigation.Snapshot, deliveries []core.Delivery) []historyEntry {
 	definition := investigation.WorkflowDefinition()
-	entries := commonHistory(snapshot.Job, snapshot.Deliveries, snapshot.Actions)
-	for _, delivery := range snapshot.Deliveries {
+	entries := commonHistory(snapshot.Job, deliveries, snapshot.Actions)
+	for _, delivery := range deliveries {
 		if delivery.Message.Sequence > 1 {
 			addHistoryEntry(&entries, delivery.Message.AdmittedAt, fmt.Sprintf("Follow-up Message %d received", delivery.Message.Sequence))
 		}

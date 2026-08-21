@@ -15,6 +15,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
+	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -101,9 +102,9 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		ID: core.ArtifactID(job.ID, name), JobID: job.ID,
 		Name: name, Digest: strings.Repeat("b", 64), ByteSize: 16,
 		MediaType: "text/markdown", Producer: "dorf-codebase-investigation",
-		AgentRunID: run.ID, CreatedAt: run.FinishedAt,
+		CreatedAt: run.FinishedAt,
 	}
-	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, artifact)
+	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, artifact)
 	if err != nil || !created || stored.JobID != artifact.JobID || stored.ArtifactID != artifact.ID || !stored.CreatedAt.Equal(artifact.CreatedAt) {
 		t.Fatalf("Draft=%#v created=%v err=%v", stored, created, err)
 	}
@@ -111,13 +112,13 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if err != nil || !job.AdmissionOpen {
 		t.Fatalf("draft prematurely closed Job=%#v err=%v", job, err)
 	}
-	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, artifact)
+	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, artifact)
 	if err != nil || created || replayed != stored {
 		t.Fatalf("idempotent Draft=%#v created=%v err=%v", replayed, created, err)
 	}
 	changedArtifact := artifact
 	changedArtifact.Digest = strings.Repeat("c", 64)
-	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
+	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
 		t.Fatalf("changed Artifact replay error=%v", err)
 	}
 	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
@@ -142,7 +143,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	secondRun = deliveries[1].AgentRun
 	secondName := investigation.DraftArtifactName(2)
 	secondArtifact := core.Artifact{ID: core.ArtifactID(job.ID, secondName), JobID: job.ID, Name: secondName, Digest: strings.Repeat("d", 64), ByteSize: 24, MediaType: "text/markdown", Producer: "dorf-codebase-investigation", AgentRunID: secondRun.ID, CreatedAt: secondRun.FinishedAt}
-	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, secondArtifact); err != nil || !created {
+	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, follow.ID, secondArtifact); err != nil || !created {
 		t.Fatalf("second draft created=%v err=%v", created, err)
 	}
 	job, err = store.Job(ctx, job.ID)
@@ -187,6 +188,24 @@ type investigationExternals struct {
 	job     core.Job
 	turn    core.HarnessTurn
 	effects []core.ActionKind
+}
+
+type investigationAgentStrategies struct{ store postgres.Store }
+
+func (s investigationAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+	source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
+	if err != nil {
+		return "", err
+	}
+	return investigation.AgentPrompt(source, execution.Message.Input), nil
+}
+
+func (investigationAgentStrategies) ResolveAgentHarnessStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+	return nil, nil
+}
+
+func (investigationAgentStrategies) ResolveCleanupAgentStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+	return nil, nil
 }
 
 func (*investigationExternals) Harness() string { return "codex" }
@@ -257,9 +276,10 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatal(err)
 	}
 	externals := &investigationExternals{}
-	execution := core.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim)
-	workspaceExecutor := gitworkspace.NewExecutor(execution, store, externals, absurdruntime.RequireClaim)
-	service := investigation.NewService(workspaceExecutor, store, externals, records, absurdruntime.RequireClaim)
+	execution := core.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim).
+		WithAgentStrategies(investigationAgentStrategies{store: store})
+	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
+	service := investigation.NewService(workspaceExecutor, store, externals, records)
 	application := core.Application{
 		Store: store, Tasks: client,
 		SandboxRuntimes: integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: "incus"}},

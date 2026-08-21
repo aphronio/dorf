@@ -236,7 +236,7 @@ func TestStrictReviewRecoveryWithoutNativeTurnAllowsOriginalSubmission(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Harness != "" || binding.ThreadID != "" || binding.Turn.ID != "" || binding.ControllerID != "" {
+	if binding.Harness != "" || binding.ThreadID != "" || binding.Turn.ID != "" {
 		t.Fatalf("empty strict review recovery binding=%#v", binding)
 	}
 }

@@ -132,7 +132,7 @@ func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) 
 	case WorkObserveProposal:
 		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
 		options.Timeout = proposalPollInterval
-	case WorkObserveAgent:
+	case WorkAgentMessage, WorkRunReviewer:
 		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}

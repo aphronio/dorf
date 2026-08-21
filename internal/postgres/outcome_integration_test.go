@@ -134,7 +134,7 @@ func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing
 	if err != nil || !created {
 		t.Fatalf("Message=%#v created=%v err=%v", message, created, err)
 	}
-	delivery, err := store.NextDelivery(context.Background(), job.ID)
+	delivery, err := codingDelivery(context.Background(), store, job.ID)
 	if err != nil || delivery == nil || delivery.Message.ID != message.ID {
 		t.Fatalf("delivery=%#v err=%v", delivery, err)
 	}
@@ -234,7 +234,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
 	}
-	target, err := store.NextDelivery(ctx, job.ID)
+	target, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || target == nil || target.Message.ID != follow.ID {
 		t.Fatalf("target delivery=%#v err=%v", target, err)
 	}
@@ -252,7 +252,7 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	fallback, err := store.NextDelivery(ctx, job.ID)
+	fallback, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || fallback == nil || fallback.Message.ID != steer.ID {
 		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
 	}

@@ -35,7 +35,7 @@ type CleanupRuntimeResolver interface {
 }
 
 type SandboxRuntime struct {
-	Execution      SandboxExecution
+	Execution      Execution
 	SandboxProfile string
 }
 
@@ -59,7 +59,6 @@ type ApplicationStore interface {
 	RecordSandboxActionSuccess(context.Context, string) error
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
-	CompleteCleanup(context.Context, string, string) error
 }
 
 // StopForUnavailableSandboxProfile turns one definitive provider artifact

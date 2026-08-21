@@ -75,19 +75,12 @@ func (s Service) readiness(ctx context.Context, job coding.Job, intentAt time.Ti
 	if err != nil {
 		return view, err
 	}
-	sandboxes, err := s.Store.Sandboxes(ctx, job.ID)
+	messages, reviews, err := s.Store.CodingMessages(ctx, job.ID)
 	if err != nil {
 		return view, err
 	}
-	deliveries, err := s.Store.Deliveries(ctx, job.ID)
-	if err != nil {
-		return view, err
-	}
-	view.ReviewRuns, err = coding.ReviewRuns(deliveries, sandboxes)
-	if err != nil {
-		return view, err
-	}
-	deliveries = coding.PublicationDeliveries(deliveries, intentAt)
+	view.ReviewRuns = reviews
+	messages = coding.PublicationMessages(messages, intentAt)
 	var plan *coding.ReviewPlanRecord
 	for i := range plans {
 		if plans[i].Revision == job.Revision {
@@ -95,7 +88,7 @@ func (s Service) readiness(ctx context.Context, job coding.Job, intentAt time.Ti
 		}
 	}
 	view.Plan = plan
-	view.Assessment = coding.AssessReviewReadiness(job, view.Evidence, s.Evidence, plan, view.ReviewRuns, deliveries)
+	view.Assessment = coding.AssessReviewReadiness(job, view.Evidence, s.Evidence, plan, view.ReviewRuns, messages)
 	return view, nil
 }
 

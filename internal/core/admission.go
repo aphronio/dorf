@@ -25,9 +25,18 @@ type MessageAdmission struct {
 	Intent    MessageDeliveryIntent
 }
 
+// MessageAdmissionResult is the immutable durable admission acknowledged by a
+// workflow policy transaction. SandboxID is repeated independently of Message
+// because Sandbox ownership belongs to the atomically admitted AgentRun.
+type MessageAdmissionResult struct {
+	Message   Message
+	SandboxID string
+	Created   bool
+}
+
 // AgentMessageAdmission is the provider-neutral composition seam behind an
 // Agent handle. The deployment selects a known module and delegates to its
 // typed policy transaction; Core never switches on workflow identity.
 type AgentMessageAdmission interface {
-	AdmitAgentMessage(context.Context, MessageAdmission) (Message, bool, error)
+	AdmitAgentMessage(context.Context, MessageAdmission) (MessageAdmissionResult, error)
 }

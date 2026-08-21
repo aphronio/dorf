@@ -421,31 +421,41 @@ type admittedAgentRun struct {
 type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, core.MessageAdmission) (admittedAgentRun, error)
 
 func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
-	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
+	admitted, err := s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
+	return admitted.Message, admitted.Created, err
 }
 
 func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
+	admitted, err := s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
+	return admitted.Message, admitted.Created, err
+}
+
+func (s Store) AdmitCodingMessageResult(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
+}
+
+func (s Store) AdmitInvestigationMessageResult(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
 }
 
-func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
+func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.MessageAdmissionResult, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	defer tx.Rollback()
 	message, created, err := admitMessageTx(ctx, tx, input, workflow, revision, authorize)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
-	return message, created, nil
+	return core.MessageAdmissionResult{Message: message, SandboxID: input.SandboxID, Created: created}, nil
 }
 
 func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
@@ -517,6 +527,9 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	run, err := authorize(ctx, queries, job, input)
 	if err != nil {
 		return core.Message{}, false, err
+	}
+	if run.SandboxID != input.SandboxID {
+		return core.Message{}, false, fmt.Errorf("message authorization returned a foreign Sandbox delivery")
 	}
 	var message core.Message
 	message.TargetTurnID = run.TargetTurnID
@@ -696,6 +709,16 @@ func exactScopedAction(row dbsql.DorfAction, jobID string, kind core.ActionKind,
 
 func agentRunFromValues(id, jobID, messageID string, state core.AgentRunState, harness, threadID string, baselineRecorded bool, baselineTurnID, turnID, turnOutcome, attention, role, inputRevision string) core.AgentRun {
 	return core.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
+}
+
+func agentRunOutcome(state core.AgentRunState, outcome string) string {
+	if state != core.AgentRunCompleted && state != core.AgentRunFailed && state != core.AgentRunInterrupted {
+		return ""
+	}
+	if outcome != "" {
+		return outcome
+	}
+	return string(state)
 }
 
 func timeValue(value sql.NullTime) time.Time {
@@ -918,6 +941,85 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		out = append(out, core.Delivery{Message: message, AgentRun: run})
 	}
 	return out, nil
+}
+
+// CodingMessages converts Core's internal delivery facts into the
+// coding-owned read projection. Ordinary workflow coordination never receives
+// raw AgentRun lifecycle state, Thread, or Turn identities.
+func (s Store) CodingMessages(ctx context.Context, jobID string) ([]coding.MessageRecord, []coding.ReviewRunView, error) {
+	deliveries, err := s.Deliveries(ctx, jobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sandboxes, err := s.Sandboxes(ctx, jobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	owned := make(map[string]core.Sandbox, len(sandboxes))
+	for _, sandbox := range sandboxes {
+		owned[sandbox.ID] = sandbox
+	}
+	messages := make([]coding.MessageRecord, 0, len(deliveries))
+	reviews := make([]coding.ReviewRunView, 0)
+	for _, delivery := range deliveries {
+		run, message := delivery.AgentRun, delivery.Message
+		outcome := agentRunOutcome(run.State, run.TurnOutcome)
+		if run.Role == "implement" {
+			messages = append(messages, coding.MessageRecord{
+				Message: message, SandboxID: run.SandboxID, InputRevision: run.InputRevision,
+				ProducerID: run.ID, Outcome: outcome, Attention: run.Attention,
+				StartsTurn: message.Intent == core.MessageFollow || message.Intent == core.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID,
+			})
+			continue
+		}
+		sandbox, ok := owned[run.SandboxID]
+		if !ok || sandbox.JobID != run.JobID {
+			return nil, nil, fmt.Errorf("review producer %s has no exact Job-owned Sandbox %s", run.ID, run.SandboxID)
+		}
+		reviews = append(reviews, coding.ReviewRunView{
+			ID: run.ID, JobID: run.JobID, MessageID: run.MessageID, Harness: run.Harness,
+			ThreadID: run.ThreadID, TurnID: run.TurnID, Outcome: outcome, Attention: run.Attention,
+			Role: run.Role, InputRevision: run.InputRevision, Capability: run.Capability,
+			SandboxID: run.SandboxID, SubmissionNonce: run.SubmissionNonce,
+			StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, Request: message, Sandbox: sandbox,
+		})
+	}
+	return messages, reviews, nil
+}
+
+// AgentMessageExecution reloads the exact durable execution aggregate by the
+// stable Message identity. Callers that may touch the Harness invoke this only
+// while holding the owning Job's effect fence and discard earlier snapshots.
+func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (core.AgentMessageExecution, error) {
+	queries := dbsql.New(s.DB)
+	messageRow, err := queries.GetMessage(ctx, messageID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	message := messageFromValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
+	message.AdmittedAt = messageRow.AdmittedAt
+	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
+	if err != nil {
+		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
+	}
+	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run.Capability = runRow.Capability
+	run.SandboxID = runRow.SandboxID
+	run.SubmissionNonce = runRow.SubmissionNonce
+	run.StartedAt = timeValue(runRow.StartedAt)
+	run.FinishedAt = timeValue(runRow.FinishedAt)
+	job, err := s.Job(ctx, message.JobID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	sandbox, err := s.Sandbox(ctx, run.SandboxID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	if run.MessageID != message.ID || run.JobID != job.ID || message.JobID != job.ID || sandbox.JobID != job.ID || run.SandboxID != sandbox.ID {
+		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Job, AgentRun, and Sandbox", message.ID)
+	}
+	return core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: sandbox}, nil
 }
 
 func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
@@ -1181,7 +1283,28 @@ func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, t
 	}, nil
 }
 
-func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, error) {
+// CodingAgentMessage selects one opaque Message under the coding Job lock and
+// preserves the exact FIFO/steer, Revision, role, and shared-thread checks
+// required before Core may reconcile it.
+func (s Store) CodingAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+	return s.codingAgentMessage(ctx, jobID, "")
+}
+
+// ValidateCodingAgentMessage repeats selection from authoritative facts while
+// Core holds the Job effect fence. A stale workflow snapshot cannot mutate the
+// Harness after a different Message becomes eligible.
+func (s Store) ValidateCodingAgentMessage(ctx context.Context, execution core.AgentMessageExecution) error {
+	selected, err := s.codingAgentMessage(ctx, execution.Job.ID, execution.Message.ID)
+	if err != nil {
+		return err
+	}
+	if selected == nil || selected.MessageID != execution.Message.ID || selected.SandboxID != execution.Sandbox.ID {
+		return fmt.Errorf("Message %s is no longer the exact eligible coding Agent Message", execution.Message.ID)
+	}
+	return nil
+}
+
+func (s Store) codingAgentMessage(ctx context.Context, jobID, expectedMessageID string) (*core.AgentMessageWork, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1198,9 +1321,12 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 	// A steer is a distinct priority lane aimed at the active harness Turn. It may
 	// overtake older queued follow-ups; the immutable sequence still records
 	// admission order, while follow-up turn starts remain FIFO.
-	row, err := queries.NextDeliveryCandidate(ctx, jobID)
+	row, err := queries.NextCodingAgentMessage(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		if expectedMessageID != "" {
+			return nil, fmt.Errorf("Message %s is no longer eligible for coding Agent reconciliation", expectedMessageID)
+		}
+		return nil, tx.Commit()
 	}
 	if err != nil {
 		return nil, err
@@ -1215,11 +1341,34 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
+	if run.State == core.AgentRunPending && run.ThreadID == "" && message.Sequence > 1 {
+		if _, err := queries.BindPendingCodingMessageToPriorThread(ctx, message.ID); err != nil {
+			return nil, err
+		}
+		runRow, err = queries.GetAgentRunByMessage(ctx, message.ID)
+		if err != nil {
+			return nil, err
+		}
+		run = agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+		run.SandboxID = runRow.SandboxID
+		if run.ThreadID == "" {
+			prior, priorErr := queries.GetLatestImplementationThreadBinding(ctx, dbsql.GetLatestImplementationThreadBindingParams{JobID: jobID, SandboxID: run.SandboxID})
+			if priorErr == nil && prior.ThreadID != "" {
+				return nil, fmt.Errorf("eligible coding follow Message %s did not adopt authoritative prior implementation Thread %s", message.ID, prior.ThreadID)
+			}
+			if priorErr != nil && !errors.Is(priorErr, sql.ErrNoRows) {
+				return nil, priorErr
+			}
+		}
+	}
 	if run.Role != "implement" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has unsupported role %s", run.ID, run.Role)
 	}
 	if run.InputRevision != job.Revision && run.State == core.AgentRunPending {
 		return nil, fmt.Errorf("AgentRun %s input Revision %s conflicts with current Revision %s", run.ID, run.InputRevision, job.Revision)
+	}
+	if run.SandboxID != core.MainSandboxName(jobID) {
+		return nil, fmt.Errorf("AgentRun %s is not bound to the exact coding Sandbox", run.ID)
 	}
 	bindings, err := queries.ListImplementationThreadBindings(ctx, dbsql.ListImplementationThreadBindingsParams{JobID: jobID, SandboxID: run.SandboxID})
 	if err != nil {
@@ -1234,31 +1383,10 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &core.Delivery{Message: message, AgentRun: run}, nil
-}
-
-// DeliveryCandidate exposes the same FIFO/steer choice as NextDelivery without
-// binding the AgentRun or mutating any workflow fact.
-func (s Store) DeliveryCandidate(ctx context.Context, jobID string) (*core.Delivery, error) {
-	queries := dbsql.New(s.DB)
-	row, err := queries.NextDeliveryCandidate(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+	if expectedMessageID != "" && message.ID != expectedMessageID {
+		return nil, fmt.Errorf("Message %s is not the exact eligible coding Agent Message %s", expectedMessageID, message.ID)
 	}
-	if err != nil {
-		return nil, err
-	}
-	message := core.Message{
-		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		Sequence: row.Sequence, Input: row.Input, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
-	}
-	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
-	if err != nil {
-		return nil, err
-	}
-	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
-	run.SandboxID = runRow.SandboxID
-	return &core.Delivery{Message: message, AgentRun: run}, nil
+	return &core.AgentMessageWork{MessageID: message.ID, SandboxID: run.SandboxID}, nil
 }
 
 func (s Store) PrepareAgentRun(ctx context.Context, runID, harness, baselineTurnID string) error {
@@ -1380,21 +1508,16 @@ func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) erro
 	return expectOneRows(dbsql.New(s.DB).SetAgentRunAttention(ctx, dbsql.SetAgentRunAttentionParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
-func (s Store) HarnessMutationDelivery(ctx context.Context, jobID string) (*core.Delivery, error) {
-	row, err := dbsql.New(s.DB).GetHarnessMutationDelivery(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+func (s Store) UnsettledAgentMessages(ctx context.Context, jobID string) ([]core.AgentMessageWork, error) {
+	rows, err := dbsql.New(s.DB).ListUnsettledAgentMessages(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	delivery := core.Delivery{
-		Message:  messageFromValues(row.MessageID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
-		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.State, row.Harness, row.ThreadID, row.BaselineRecorded, row.BaselineTurnID, row.TurnID, row.TurnOutcome, row.Attention, row.Role, row.InputRevision),
+	messages := make([]core.AgentMessageWork, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, core.AgentMessageWork{MessageID: row.MessageID, SandboxID: row.SandboxID})
 	}
-	delivery.AgentRun.SandboxID = row.SandboxID
-	delivery.Message.AdmittedAt = row.AdmittedAt
-	return &delivery, nil
+	return messages, nil
 }
 
 func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) error {

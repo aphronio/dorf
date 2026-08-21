@@ -61,8 +61,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return coding.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
+	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -96,8 +96,8 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
+	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot})
 	return investigation.Runtime{Profile: resolved.Profile, Investigation: service}, nil
 }
 
@@ -141,12 +141,74 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string, re
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim).
+		WithAgentStrategies(workflowAgentStrategies{store: r.store, externals: externals})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
 		Externals: externals, Sandbox: sandbox, Ownership: ownership,
 	}, nil
+}
+
+// workflowAgentStrategies is static deployment composition. It selects prompt
+// policy and the strict-review Harness adapter owned by the pinned native
+// workflow; Core never switches on a workflow or receives caller-built AgentRun
+// lifecycle callbacks.
+type workflowAgentStrategies struct {
+	store     postgres.Store
+	externals terminal.Externals
+}
+
+func (s workflowAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+	switch {
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
+		if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
+			return "", err
+		}
+		job, err := s.store.CodingJob(ctx, execution.Job.ID)
+		if err != nil {
+			return "", err
+		}
+		return coding.AgentPrompt(job, execution.Message.Input), nil
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == "investigate":
+		if err := s.store.ValidateInvestigationAgentMessage(ctx, execution); err != nil {
+			return "", err
+		}
+		source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
+		if err != nil {
+			return "", err
+		}
+		return investigation.AgentPrompt(source, execution.Message.Input), nil
+	default:
+		return "", fmt.Errorf("Message %s has no statically composed ordinary Agent prompt", execution.Message.ID)
+	}
+}
+
+func (s workflowAgentStrategies) ResolveAgentHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+	return s.resolveHarnessStrategy(ctx, execution)
+}
+
+// Cleanup resolves only the Harness adapter. It intentionally never calls
+// ResolveAgentPrompt, whose workflow eligibility checks require open admission.
+func (s workflowAgentStrategies) ResolveCleanupAgentStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+	return s.resolveHarnessStrategy(ctx, execution)
+}
+
+func (s workflowAgentStrategies) resolveHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+	switch {
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
+		strategy, err := coding.NewReviewAgentStrategy(ctx, s.store, s.externals, execution)
+		if err != nil {
+			return nil, err
+		}
+		return strategy, nil
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
+		return nil, nil
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == "investigate":
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness strategy", execution.Message.ID)
+	}
 }
 
 func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {

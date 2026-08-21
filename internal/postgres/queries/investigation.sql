@@ -14,13 +14,20 @@ from dorf.codebase_investigation_sources s
 where s.job_id=sqlc.arg(job_id);
 
 -- name: ListCodebaseInvestigationDrafts :many
-select d.job_id,d.agent_run_id,d.artifact_id,a.created_at
+select d.job_id,d.agent_run_id,ar.message_id,d.artifact_id,a.created_at
 from dorf.codebase_investigation_drafts d
 join dorf.artifacts a on a.job_id=d.job_id and a.id=d.artifact_id
 join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
 join dorf.job_messages m on m.id=ar.message_id
 where d.job_id=sqlc.arg(job_id)
 order by m.sequence,d.artifact_id;
+
+-- name: ListCodebaseInvestigationMessages :many
+select m.id as message_id,ar.sandbox_id
+from dorf.job_messages m
+join dorf.agent_runs ar on ar.message_id=m.id
+where m.job_id=sqlc.arg(job_id) and ar.role='investigate'
+order by m.sequence;
 
 -- name: GetCodebaseInvestigationRunForUpdate :one
 select coalesce(j.workflow_name,'') as workflow_name,

@@ -1,16 +1,13 @@
 package coding
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/aphronio/dorf/internal/core"
 	policy "github.com/aphronio/dorf/internal/review"
 )
 
-const (
-	ReviewReadOnlyCapability = "immutable-read-only"
-)
+const ReviewReadOnlyCapability = "immutable-read-only"
 
 // ReviewPlanRecord exists only after deterministic policy has made its final
 // decision for an exact Revision. There is no pending plan state.
@@ -22,44 +19,40 @@ type ReviewPlanRecord struct {
 	RecordedAt time.Time          `json:"recorded_at,omitempty"`
 }
 
-type ReviewRunView struct {
-	core.AgentRun
-	Request core.Message `json:"request"`
-	Sandbox core.Sandbox `json:"sandbox"`
+// MessageRecord is coding's read projection of one implementation Message.
+// ProducerID is retained only to verify immutable Evidence provenance; Core
+// owns the underlying AgentRun lifecycle and Harness identities.
+type MessageRecord struct {
+	Message       core.Message `json:"message"`
+	SandboxID     string       `json:"sandbox_id"`
+	InputRevision string       `json:"input_revision"`
+	ProducerID    string       `json:"producer_id"`
+	Outcome       string       `json:"outcome,omitempty"`
+	Attention     string       `json:"attention,omitempty"`
+	StartsTurn    bool         `json:"starts_turn"`
 }
 
-// ReviewRuns derives the concrete reviewer execution aggregates from the
-// Message + AgentRun relationship and Job-owned Sandboxes. The returned views
-// are disposable; each durable fact remains represented once in Delivery or
-// Sandbox.
-func ReviewRuns(deliveries []core.Delivery, sandboxes []core.Sandbox) ([]ReviewRunView, error) {
-	byID := make(map[string]core.Sandbox, len(sandboxes))
-	for _, sandbox := range sandboxes {
-		byID[sandbox.ID] = sandbox
-	}
-	runs := make([]ReviewRunView, 0)
-	for _, delivery := range deliveries {
-		run := delivery.AgentRun
-		if run.Role == "implement" {
-			continue
-		}
-		if run.InputRevision == "" {
-			return nil, fmt.Errorf("review AgentRun %s has no exact input Revision", run.ID)
-		}
-		request := delivery.Message
-		if request.ID == "" || request.ID != run.MessageID || request.JobID == "" || request.JobID != run.JobID {
-			return nil, fmt.Errorf("review AgentRun %s has no exact input Message relationship", run.ID)
-		}
-		if run.Capability != ReviewReadOnlyCapability {
-			return nil, fmt.Errorf("review AgentRun %s has capability %q, want %q", run.ID, run.Capability, ReviewReadOnlyCapability)
-		}
-		sandbox, ok := byID[run.SandboxID]
-		if !ok || sandbox.ID == "" || sandbox.JobID != run.JobID {
-			return nil, fmt.Errorf("review AgentRun %s has no exact Job-owned Sandbox %s", run.ID, run.SandboxID)
-		}
-		runs = append(runs, ReviewRunView{AgentRun: run, Request: request, Sandbox: sandbox})
-	}
-	return runs, nil
+// ReviewRunView is coding's strict-review provenance projection. Harness
+// identity remains here because checkout attestation and review Evidence must
+// verify the independently isolated reviewer, but lifecycle state does not.
+type ReviewRunView struct {
+	ID              string       `json:"id"`
+	JobID           string       `json:"job_id"`
+	MessageID       string       `json:"message_id"`
+	Harness         string       `json:"harness,omitempty"`
+	ThreadID        string       `json:"thread_id,omitempty"`
+	TurnID          string       `json:"turn_id,omitempty"`
+	Outcome         string       `json:"outcome,omitempty"`
+	Attention       string       `json:"attention,omitempty"`
+	Role            string       `json:"role"`
+	InputRevision   string       `json:"input_revision"`
+	Capability      string       `json:"capability"`
+	SandboxID       string       `json:"sandbox_id"`
+	SubmissionNonce string       `json:"submission_nonce"`
+	StartedAt       time.Time    `json:"started_at,omitempty"`
+	FinishedAt      time.Time    `json:"finished_at,omitempty"`
+	Request         core.Message `json:"request"`
+	Sandbox         core.Sandbox `json:"sandbox"`
 }
 
 type reviewObservationArtifact struct {

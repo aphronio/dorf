@@ -147,8 +147,8 @@ func TestRepositoryRestoreRefusesUnownedWorkspaceContents(t *testing.T) {
 
 func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 	run := coding.ReviewRunView{
-		AgentRun: core.AgentRun{ID: "agent-run-review", JobID: "job-review", MessageID: "message-review"},
-		Request:  core.Message{ID: "message-review", JobID: "job-review", FromKind: core.MessageFromWorkflow, Input: "review this exact Revision"},
+		ID: "agent-run-review", JobID: "job-review", MessageID: "message-review",
+		Request: core.Message{ID: "message-review", JobID: "job-review", FromKind: core.MessageFromWorkflow, Input: "review this exact Revision"},
 	}
 	input, err := reviewInput(run)
 	if err != nil || input != run.Request.Input {
@@ -161,7 +161,7 @@ func TestReviewInputComesFromExactWorkflowMessage(t *testing.T) {
 }
 
 func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
-	requested := make([]string, 0, 3)
+	requested := make([]string, 0, 2)
 	externals := Externals{Ownership: func(_ context.Context, sandboxID string) (provider.Ownership, error) {
 		requested = append(requested, sandboxID)
 		return provider.Ownership{}, fmt.Errorf("stop after ownership resolution")
@@ -176,16 +176,12 @@ func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 			_, err := externals.AgentTurns(context.Background(), job, "sandbox-history", "thread-1")
 			return err
 		},
-		func() error {
-			_, err := externals.AgentWait(context.Background(), job, "sandbox-wait", "thread-1", "turn-1")
-			return err
-		},
 	} {
 		if err := observe(); err == nil {
 			t.Fatal("observation continued after ownership resolution failure")
 		}
 	}
-	want := []string{"sandbox-initial", "sandbox-history", "sandbox-wait"}
+	want := []string{"sandbox-initial", "sandbox-history"}
 	if fmt.Sprint(requested) != fmt.Sprint(want) {
 		t.Fatalf("ownership lookups=%v want=%v", requested, want)
 	}
@@ -295,8 +291,8 @@ func TestPrepareReviewCheckoutRealGitIgnoresImplementationForgedWorktree(t *test
 
 	job := coding.Job{Job: core.Job{ID: "job-real-boundary"}, Revision: revision}
 	run := coding.ReviewRunView{
-		AgentRun: core.AgentRun{ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real"},
-		Sandbox:  core.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
+		ID: "agent-run-real-boundary", JobID: job.ID, InputRevision: revision, SandboxID: "dorf-review-real",
+		Sandbox: core.Sandbox{ID: "dorf-review-real", JobID: job.ID, OwnershipNonce: strings.Repeat("d", 64)},
 	}
 	metadata := map[string]string{
 		"user.dorf.owner": "sandbox", "user.dorf.job": job.ID, "user.dorf.sandbox": run.Sandbox.ID, "user.dorf.agent_run": run.ID,

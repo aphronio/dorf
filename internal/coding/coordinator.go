@@ -16,13 +16,12 @@ import (
 type CodingExecution interface {
 	gitworkspace.Execution
 	BlobStore() blob.Store
-	ObserveRevision(context.Context, Job, core.AgentRun) error
+	ObserveRevision(context.Context, Job, string) error
 	PlanReview(context.Context, Job) error
-	RunReview(context.Context, Job, string) error
+	RecordReviewResult(context.Context, Job, string, core.MessageResult) error
 	ExecuteReviewCheckout(context.Context, Job, string, core.Action) error
 }
 
-func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
 func reviewPolicyStepName(job, revision string) string {
 	return fmt.Sprintf("dorf/review-policy/v1/%s/%s", job, revision)
@@ -51,20 +50,47 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 		case WorkAction:
 			err = runSandboxAction(ctx, custody, service, store, job, snapshot, work)
 		case WorkRunReviewer:
-			err = absurdruntime.RunFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
-				return service.RunReview(workCtx, job, work.FactID)
+			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
+			if openErr != nil {
+				return work, openErr
+			}
+			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
+			if reconcileErr != nil {
+				return work, reconcileErr
+			}
+			if !result.Terminal() {
+				return work, nil
+			}
+			if result.Outcome != "completed" {
+				detail := "review Harness work ended with outcome " + result.Outcome
+				if attentionErr := store.SetWorkflowAttention(ctx, job.ID, work.FactID, detail); attentionErr != nil {
+					return work, attentionErr
+				}
+				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
+			}
+			err = absurdruntime.RunFactStep(ctx, "dorf/review-feedback/v1/"+work.FactID, work.FactID, func(workCtx context.Context) error {
+				return service.RecordReviewResult(workCtx, job, work.FactID, result)
 			})
-		case WorkDeliverMessage:
-			err = runDeliveryStep(ctx, service, store, job, work)
-		case WorkObserveAgent:
-			terminal, observeErr := observeAgentRun(ctx, service, job, snapshot, work)
-			if observeErr != nil {
-				return Work{}, observeErr
+		case WorkAgentMessage:
+			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
+			if openErr != nil {
+				return work, openErr
 			}
-			if terminal {
-				continue
+			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
+			if reconcileErr != nil {
+				return work, reconcileErr
 			}
-			return work, nil
+			if !result.Terminal() {
+				return work, nil
+			}
+			if result.Outcome != "completed" {
+				detail := "implementation Harness work ended with outcome " + result.Outcome
+				if attentionErr := store.SetWorkflowAttention(ctx, job.ID, work.FactID, detail); attentionErr != nil {
+					return work, attentionErr
+				}
+				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
+			}
+			continue
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
 		case WorkChooseReview:
@@ -86,65 +112,23 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 			return Work{}, fmt.Errorf("unsupported current coding work %q", work.Kind)
 		}
 		if err != nil {
+			if attentionNeeded(err) {
+				return Work{Kind: WorkAttention, Revision: job.Revision, FactID: work.FactID, Detail: err.Error()}, nil
+			}
 			return work, err
 		}
 	}
 }
 
-func observeAgentRun(ctx context.Context, service CodingExecution, job Job, snapshot Snapshot, work Work) (bool, error) {
-	for i := range snapshot.Deliveries {
-		run := snapshot.Deliveries[i].AgentRun
-		if run.ID != work.FactID {
-			continue
-		}
-		if run.JobID != job.ID || run.Role != "implement" || run.State != core.AgentRunActive {
-			return false, fmt.Errorf("AgentRun observation changed from exact active implementation AgentRun %s", work.FactID)
-		}
-		turn, err := service.ObserveAgentRunTurn(ctx, job.Job, run, "implement")
-		if err != nil {
-			return false, err
-		}
-		return turn.Terminal(), nil
-	}
-	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
+// AgentPrompt is coding-owned prompt policy selected by the deployment's
+// static Agent strategy composition after Core reloads the durable Message.
+func AgentPrompt(job Job, input string) string {
+	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", strings.TrimSpace(input), job.Branch, job.Revision)
 }
 
-func runDeliveryStep(ctx context.Context, service CodingExecution, store Store, job Job, work Work) error {
-	delivery, err := store.NextDelivery(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if delivery == nil {
-		return nil
-	}
-	if delivery.AgentRun.ID != work.FactID {
-		return fmt.Errorf("delivery candidate changed from AgentRun %s to %s", work.FactID, delivery.AgentRun.ID)
-	}
-	return absurdruntime.RunFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
-		return service.Deliver(workCtx, job.Job, *delivery, codingAgentInput(job, *delivery))
-	})
-}
-
-func codingAgentInput(job Job, delivery core.Delivery) string {
-	if delivery.AgentRun.Role != "implement" {
-		return delivery.Message.Input
-	}
-	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", strings.TrimSpace(delivery.Message.Input), job.Branch, job.Revision)
-}
-
-func runRevisionStep(ctx context.Context, service CodingExecution, job Job, snapshot Snapshot, work Work) error {
-	var run *core.AgentRun
-	for i := range snapshot.Deliveries {
-		if snapshot.Deliveries[i].AgentRun.ID == work.FactID {
-			run = &snapshot.Deliveries[i].AgentRun
-			break
-		}
-	}
-	if run == nil || run.JobID != job.ID || run.Role != "implement" || run.InputRevision != job.Revision {
-		return fmt.Errorf("Revision observation has no exact current implementation AgentRun %s", work.FactID)
-	}
-	return absurdruntime.RunFactStep(ctx, revisionStepName(run.ID), run.ID, func(workCtx context.Context) error {
-		return service.ObserveRevision(workCtx, job, *run)
+func runRevisionStep(ctx context.Context, service CodingExecution, job Job, _ Snapshot, work Work) error {
+	return absurdruntime.RunFactStep(ctx, revisionStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
+		return service.ObserveRevision(workCtx, job, work.FactID)
 	})
 }
 
@@ -197,10 +181,7 @@ func runSandboxAction(ctx context.Context, custody core.JobHandle, service Codin
 	}
 	var reviewer *ReviewRunView
 	if sandbox.ID != snapshot.MainSandbox.ID {
-		reviewRuns, err := snapshot.currentReviewRuns()
-		if err != nil {
-			return err
-		}
+		reviewRuns := snapshot.currentReviewRuns()
 		for i := range reviewRuns {
 			run := &reviewRuns[i]
 			if run.InputRevision == job.Revision && run.Sandbox.ID == sandbox.ID {

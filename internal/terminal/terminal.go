@@ -209,15 +209,18 @@ func (e Externals) ReviewInitialTurn(ctx context.Context, job coding.Job, run co
 		return core.HarnessBinding{}, err
 	}
 	binding, err := e.Agent.StartStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
-	binding.ControllerID = reviewControllerID(run)
 	return binding, err
 }
 
 func (e Externals) ReviewTurns(ctx context.Context, job coding.Job, run coding.ReviewRunView) (core.HarnessHistory, error) {
-	binding, err := e.ReviewWait(ctx, job, run, run.TurnID)
+	input, err := reviewInput(run)
+	if err != nil {
+		return core.HarnessHistory{}, err
+	}
+	binding, err := e.Agent.ReadStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.ThreadID, run.TurnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
 	return core.HarnessHistory{
 		Harness: binding.Harness, ThreadID: binding.ThreadID,
-		Turns: []core.HarnessTurn{binding.Turn}, ControllerID: binding.ControllerID,
+		Turns: []core.HarnessTurn{binding.Turn},
 	}, err
 }
 
@@ -227,22 +230,7 @@ func (e Externals) ReviewRecover(ctx context.Context, job coding.Job, run coding
 		return core.HarnessBinding{}, err
 	}
 	binding, err := e.Agent.RecoverStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
-	binding.ControllerID = reviewControllerID(run)
 	return binding, err
-}
-
-func (e Externals) ReviewWait(ctx context.Context, job coding.Job, run coding.ReviewRunView, turnID string) (core.HarnessBinding, error) {
-	input, err := reviewInput(run)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	binding, err := e.Agent.WaitStrictReviewTurn(ctx, ownershipMetadata(run.Sandbox), e.Sandbox.Workspace(), reviewMetadata(job, run), run.ThreadID, turnID, run.SubmissionNonce, input, job.Model, reviewEffort(run.Role, job.ReasoningEffort))
-	binding.ControllerID = reviewControllerID(run)
-	return binding, err
-}
-
-func reviewControllerID(run coding.ReviewRunView) string {
-	return coding.ReviewControllerID(run.ID, run.SandboxID, run.Sandbox.OwnershipNonce)
 }
 
 type reviewInputError string
@@ -338,14 +326,6 @@ func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.D
 		return "", err
 	}
 	return e.Agent.SteerTurn(ctx, owner, delivery.AgentRun.ThreadID, delivery.Message.TargetTurnID, delivery.AgentRun.ID, delivery.Message.Input)
-}
-
-func (e Externals) AgentWait(ctx context.Context, _ core.Job, sandboxID, threadID, turnID string) (core.HarnessBinding, error) {
-	owner, err := e.owner(ctx, sandboxID)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	return e.Agent.WaitTurn(ctx, owner, threadID, turnID)
 }
 
 func (e Externals) RouteRevoke(ctx context.Context, job core.Job, sandbox core.Sandbox, route core.Route) error {

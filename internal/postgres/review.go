@@ -180,12 +180,10 @@ func (s Store) ReviewRun(ctx context.Context, runID string) (coding.ReviewRunVie
 
 func reviewRunView(row dbsql.DorfReviewRunProjection) coding.ReviewRunView {
 	view := coding.ReviewRunView{
-		AgentRun: core.AgentRun{
-			ID: row.ID, JobID: row.JobID, MessageID: row.MessageID, Harness: row.Harness, ThreadID: row.ThreadID,
-			State: core.AgentRunState(row.State), BaselineRecorded: row.BaselineRecorded, BaselineTurnID: row.BaselineTurnID,
-			TurnID: row.TurnID, TurnOutcome: row.TurnOutcome, Attention: row.Attention, Role: row.Role,
-			InputRevision: row.InputRevision, Capability: row.Capability, SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
-		},
+		ID: row.ID, JobID: row.JobID, MessageID: row.MessageID, Harness: row.Harness, ThreadID: row.ThreadID,
+		TurnID: row.TurnID, Outcome: agentRunOutcome(core.AgentRunState(row.State), row.TurnOutcome), Attention: row.Attention,
+		Role: row.Role, InputRevision: row.InputRevision, Capability: row.Capability,
+		SandboxID: row.SandboxID, SubmissionNonce: row.SubmissionNonce,
 		Request: messageFromValues(row.MessageID, row.JobID, core.MessageFromKind(row.RequestFromKind), row.RequestFromID, row.RequestSequence, row.RequestInput, core.MessageDeliveryIntent(row.RequestDeliveryIntent), row.RequestTargetTurnID),
 		Sandbox: core.Sandbox{ID: row.SandboxID, JobID: row.JobID, Name: row.SandboxName, OwnershipNonce: row.OwnershipNonce},
 	}

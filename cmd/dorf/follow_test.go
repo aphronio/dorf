@@ -178,13 +178,13 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 			Kind: core.ActionSandboxCreate, State: core.ActionSucceeded,
 			CreatedAt: base.Add(time.Minute), SettledAt: base.Add(2 * time.Minute),
 		}},
-		Deliveries: []core.Delivery{{AgentRun: core.AgentRun{
-			Role: "investigate", State: core.AgentRunCompleted,
-			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
-		}}},
 		Drafts: []investigation.Draft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
 	}
-	history := investigationHistory(snapshot)
+	deliveries := []core.Delivery{{AgentRun: core.AgentRun{
+		Role: "investigate", State: core.AgentRunCompleted,
+		StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
+	}}}
+	history := investigationHistory(snapshot, deliveries)
 	if len(history) != 7 {
 		t.Fatalf("history entries=%d: %#v", len(history), history)
 	}

@@ -19,16 +19,7 @@ type ReadinessAssessment struct {
 	Reason   string `json:"reason"`
 }
 
-// StartsImplementationTurn distinguishes an input which owns a new mutable
-// checkout boundary from a steer handled by its target Turn. A terminal-target
-// steer becomes a turn start only after it is durably bound to a different
-// Turn.
-func StartsImplementationTurn(message core.Message, run core.AgentRun) bool {
-	return message.Intent == core.MessageFollow ||
-		message.Intent == core.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID
-}
-
-func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, deliveries []core.Delivery) ReadinessAssessment {
+func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, plan *ReviewPlanRecord, reviews []ReviewRunView, messages []MessageRecord) ReadinessAssessment {
 	assessment := ReadinessAssessment{Revision: job.Revision}
 	if plan == nil || plan.JobID != job.ID || plan.Revision != job.Revision {
 		assessment.Reason = "exact current Revision has no explicit persisted ReviewPolicy decision"
@@ -52,9 +43,9 @@ func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, p
 	for _, run := range exactReviews {
 		byRole[run.Role] = run
 	}
-	deliveryByMessage := make(map[string]core.Delivery, len(deliveries))
-	for _, delivery := range deliveries {
-		deliveryByMessage[delivery.Message.ID] = delivery
+	messageByID := make(map[string]MessageRecord, len(messages))
+	for _, message := range messages {
+		messageByID[message.Message.ID] = message
 	}
 	verifyRun := func(run ReviewRunView) bool {
 		if err := VerifyReviewRunEvidence(run, records, blobs); err != nil {
@@ -71,9 +62,9 @@ func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, p
 		expectedRunID := core.AgentRunID(expectedRequestID)
 		expectedRequestFromID := ReviewRequestFromID(job.Revision, string(role))
 		expectedMessageID := core.MessageID(job.ID, core.MessageFromAgent, expectedRunID)
-		feedbackDelivery, feedbackOK := deliveryByMessage[expectedMessageID]
-		feedbackMessage := feedbackDelivery.Message
-		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != core.MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != core.MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.State != core.AgentRunCompleted || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != core.MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != core.MessageFollow {
+		feedbackRecord, feedbackOK := messageByID[expectedMessageID]
+		feedbackMessage := feedbackRecord.Message
+		if !ok || run.ID != expectedRunID || run.MessageID != expectedRequestID || run.Request.ID != expectedRequestID || run.Request.JobID != job.ID || run.Request.FromKind != core.MessageFromWorkflow || run.Request.FromID != expectedRequestFromID || run.Request.Intent != core.MessageFollow || strings.TrimSpace(run.Request.Input) == "" || run.Outcome != "completed" || !feedbackOK || feedbackMessage.JobID != job.ID || feedbackMessage.FromKind != core.MessageFromAgent || feedbackMessage.FromID != expectedRunID || feedbackMessage.Intent != core.MessageFollow {
 			assessment.Reason = fmt.Sprintf("selected review Role %s has not returned a feedback Message with observed AgentRun Evidence", role)
 			return assessment
 		}
@@ -84,49 +75,49 @@ func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, p
 	}
 
 	for _, item := range feedback {
-		delivery, ok := deliveryByMessage[item.messageID]
-		message, implementation := delivery.Message, delivery.AgentRun
-		if !ok || message.FromKind != core.MessageFromAgent || message.FromID != item.reviewerID || implementation.JobID != job.ID || implementation.Role != "implement" || implementation.InputRevision != job.Revision || implementation.State != core.AgentRunCompleted || implementation.TurnOutcome != "completed" {
+		implementation, ok := messageByID[item.messageID]
+		message := implementation.Message
+		if !ok || message.FromKind != core.MessageFromAgent || message.FromID != item.reviewerID || message.JobID != job.ID || implementation.InputRevision != job.Revision || implementation.Outcome != "completed" {
 			assessment.Reason = fmt.Sprintf("review feedback Message %s has not been handled by a completed implementation AgentRun", item.messageID)
 			return assessment
 		}
 	}
 
-	var latestInput core.AgentRun
+	var latestInput MessageRecord
 	var latestInputSequence int64
-	var latestTurnStart core.AgentRun
+	var latestTurnStart MessageRecord
 	var latestSequence int64
-	for _, delivery := range deliveries {
-		run, message := delivery.AgentRun, delivery.Message
-		if run.JobID != job.ID || run.Role != "implement" {
+	for _, record := range messages {
+		message := record.Message
+		if message.JobID != job.ID {
 			continue
 		}
-		if run.State != core.AgentRunCompleted && run.State != core.AgentRunFailed && run.State != core.AgentRunInterrupted {
-			assessment.Reason = fmt.Sprintf("implementation AgentRun %s is not terminal", run.ID)
+		if record.Outcome == "" {
+			assessment.Reason = fmt.Sprintf("implementation Message %s is not terminal", message.ID)
 			return assessment
 		}
-		if message.ID == "" || message.ID != run.MessageID {
-			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no retained input Message", run.ID)
+		if message.ID == "" || record.ProducerID == "" {
+			assessment.Reason = fmt.Sprintf("implementation Message %s has no retained producer provenance", message.ID)
 			return assessment
 		}
-		if latestInput.ID == "" || message.Sequence > latestInputSequence {
-			latestInput, latestInputSequence = run, message.Sequence
+		if latestInput.Message.ID == "" || message.Sequence > latestInputSequence {
+			latestInput, latestInputSequence = record, message.Sequence
 		}
-		if StartsImplementationTurn(message, run) && (latestTurnStart.ID == "" || message.Sequence > latestSequence) {
-			latestTurnStart, latestSequence = run, message.Sequence
+		if record.StartsTurn && (latestTurnStart.Message.ID == "" || message.Sequence > latestSequence) {
+			latestTurnStart, latestSequence = record, message.Sequence
 		}
 	}
-	if latestInput.ID != "" && latestInput.State != core.AgentRunCompleted {
-		assessment.Reason = fmt.Sprintf("latest implementation input AgentRun %s has not completed successfully", latestInput.ID)
+	if latestInput.Message.ID != "" && latestInput.Outcome != "completed" {
+		assessment.Reason = fmt.Sprintf("latest implementation input Message %s has not completed successfully", latestInput.Message.ID)
 		return assessment
 	}
-	if latestTurnStart.ID != "" {
-		if latestTurnStart.State != core.AgentRunCompleted || latestTurnStart.TurnOutcome != "completed" || latestTurnStart.InputRevision == "" {
-			assessment.Reason = fmt.Sprintf("latest implementation turn-start AgentRun %s has not completed successfully", latestTurnStart.ID)
+	if latestTurnStart.Message.ID != "" {
+		if latestTurnStart.Outcome != "completed" || latestTurnStart.InputRevision == "" {
+			assessment.Reason = fmt.Sprintf("latest implementation turn-start Message %s has not completed successfully", latestTurnStart.Message.ID)
 			return assessment
 		}
 		if err := verifyGitRevisionObservation(job, latestTurnStart, records, blobs); err != nil {
-			assessment.Reason = fmt.Sprintf("implementation AgentRun %s has no valid Git observation: %v", latestTurnStart.ID, err)
+			assessment.Reason = fmt.Sprintf("implementation producer %s has no valid Git observation: %v", latestTurnStart.ProducerID, err)
 			return assessment
 		}
 	}
@@ -139,24 +130,24 @@ func AssessReviewReadiness(job Job, records []core.Evidence, blobs blob.Store, p
 	return assessment
 }
 
-// PublicationDeliveries retains the exact admitted input boundary that began
+// PublicationMessages retains the exact admitted input boundary that began
 // publication. Later Messages remain accepted, but cannot strand recovery of
 // an already-started external effect.
-func PublicationDeliveries(deliveries []core.Delivery, startedAt time.Time) []core.Delivery {
+func PublicationMessages(messages []MessageRecord, startedAt time.Time) []MessageRecord {
 	if startedAt.IsZero() {
-		return deliveries
+		return messages
 	}
-	retained := make([]core.Delivery, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		if !delivery.Message.AdmittedAt.After(startedAt) {
-			retained = append(retained, delivery)
+	retained := make([]MessageRecord, 0, len(messages))
+	for _, message := range messages {
+		if !message.Message.AdmittedAt.After(startedAt) {
+			retained = append(retained, message)
 		}
 	}
 	return retained
 }
 
-func verifyGitRevisionObservation(job Job, run core.AgentRun, records []core.Evidence, blobs blob.Store) error {
-	expectedID := core.EvidenceID(run.ID, "git-revision")
+func verifyGitRevisionObservation(job Job, message MessageRecord, records []core.Evidence, blobs blob.Store) error {
+	expectedID := core.EvidenceID(message.ProducerID, "git-revision")
 	var observed core.Evidence
 	for _, record := range records {
 		if record.ID == expectedID {
@@ -164,7 +155,7 @@ func verifyGitRevisionObservation(job Job, run core.AgentRun, records []core.Evi
 			break
 		}
 	}
-	if observed.ID == "" || observed.AgentRunID != run.ID || observed.ActionID != "" || observed.Revision != job.Revision || observed.Kind != "git-revision" || observed.Producer != commandEvidenceProducer || observed.MediaType != "application/vnd.dorf.observation+json" {
+	if observed.ID == "" || observed.AgentRunID != message.ProducerID || observed.ActionID != "" || observed.Revision != job.Revision || observed.Kind != "git-revision" || observed.Producer != commandEvidenceProducer || observed.MediaType != "application/vnd.dorf.observation+json" {
 		return fmt.Errorf("Evidence metadata does not match the AgentRun and exact Revision")
 	}
 	if observed.StartedAt.IsZero() || observed.FinishedAt.Before(observed.StartedAt) {
@@ -183,7 +174,7 @@ func verifyGitRevisionObservation(job Job, run core.AgentRun, records []core.Evi
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return fmt.Errorf("observation artifact has trailing content")
 	}
-	if artifact.ComparisonBase != run.InputRevision || artifact.Revision != job.Revision || artifact.Branch != job.Branch || !fullGitObjectID(artifact.Tree) || !artifact.StartedAt.Equal(observed.StartedAt) || !artifact.FinishedAt.Equal(observed.FinishedAt) {
+	if artifact.ComparisonBase != message.InputRevision || artifact.Revision != job.Revision || artifact.Branch != job.Branch || !fullGitObjectID(artifact.Tree) || !artifact.StartedAt.Equal(observed.StartedAt) || !artifact.FinishedAt.Equal(observed.FinishedAt) {
 		return fmt.Errorf("observation artifact does not match its AgentRun, branch, timing, and exact Revision")
 	}
 	return nil
@@ -191,7 +182,7 @@ func verifyGitRevisionObservation(job Job, run core.AgentRun, records []core.Evi
 
 func VerifyReviewRunEvidence(run ReviewRunView, records []core.Evidence, blobs blob.Store) error {
 	expectedEvidenceID := core.EvidenceID(run.ID, "review-observation")
-	if run.State != core.AgentRunCompleted || run.TurnOutcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
+	if run.Outcome != "completed" || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" || run.InputRevision == "" || run.Capability != ReviewReadOnlyCapability {
 		return fmt.Errorf("terminal harness binding, exact Revision, or least-capability envelope is incomplete")
 	}
 	recordsByID := make(map[string]core.Evidence, len(records))
@@ -219,7 +210,7 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []core.Evidence, blobs b
 	}
 	expected := reviewObservationArtifact{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
-		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.TurnOutcome,
+		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome,
 		Checkout: artifact.Checkout,
 	}
 	if artifact.Checkout.Revision != run.InputRevision || !fullGitObjectID(artifact.Checkout.Tree) {

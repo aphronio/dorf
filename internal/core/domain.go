@@ -199,6 +199,34 @@ type Delivery struct {
 	AgentRun AgentRun `json:"agent_run"`
 }
 
+// AgentMessageExecution is Core's authoritative private execution aggregate.
+// Consumers address work by Message identity; Core reloads the internal
+// AgentRun and exact Job-owned Sandbox before touching the Harness.
+type AgentMessageExecution struct {
+	Job      Job
+	Message  Message
+	AgentRun AgentRun
+	Sandbox  Sandbox
+}
+
+// MessageResult is the smallest consumer observation of one admitted Message.
+// An empty Outcome means that the Harness work has not reached a terminal
+// result yet. Harness Thread, Turn, and AgentRun identity remain internal.
+type MessageResult struct {
+	MessageID string `json:"message_id"`
+	Outcome   string `json:"outcome,omitempty"`
+	Output    string `json:"output,omitempty"`
+}
+
+func (r MessageResult) Terminal() bool { return r.Outcome != "" }
+
+// AgentMessageWork is the opaque workflow-facing fact that one exact Message
+// in one exact Sandbox still needs Core reconciliation.
+type AgentMessageWork struct {
+	MessageID string `json:"message_id"`
+	SandboxID string `json:"sandbox_id"`
+}
+
 type Action struct {
 	ID        string      `json:"id"`
 	JobID     string      `json:"job_id"`
@@ -261,19 +289,16 @@ func (t HarnessTurn) Terminal() bool {
 }
 
 // HarnessBinding is the complete runner-neutral identity of one harness turn.
-// ControllerID is transient adapter ownership proof; Dorf does not persist it.
 type HarnessBinding struct {
-	Harness      string
-	ThreadID     string
-	Turn         HarnessTurn
-	ControllerID string
+	Harness  string
+	ThreadID string
+	Turn     HarnessTurn
 }
 
 type HarnessHistory struct {
-	Harness      string
-	ThreadID     string
-	Turns        []HarnessTurn
-	ControllerID string
+	Harness  string
+	ThreadID string
+	Turns    []HarnessTurn
 }
 
 type Reconciliation struct {

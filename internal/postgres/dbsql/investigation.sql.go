@@ -191,7 +191,7 @@ func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg Ins
 }
 
 const listCodebaseInvestigationDrafts = `-- name: ListCodebaseInvestigationDrafts :many
-select d.job_id,d.agent_run_id,d.artifact_id,a.created_at
+select d.job_id,d.agent_run_id,ar.message_id,d.artifact_id,a.created_at
 from dorf.codebase_investigation_drafts d
 join dorf.artifacts a on a.job_id=d.job_id and a.id=d.artifact_id
 join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
@@ -203,6 +203,7 @@ order by m.sequence,d.artifact_id
 type ListCodebaseInvestigationDraftsRow struct {
 	JobID      string
 	AgentRunID string
+	MessageID  string
 	ArtifactID string
 	CreatedAt  time.Time
 }
@@ -219,9 +220,46 @@ func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID str
 		if err := rows.Scan(
 			&i.JobID,
 			&i.AgentRunID,
+			&i.MessageID,
 			&i.ArtifactID,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCodebaseInvestigationMessages = `-- name: ListCodebaseInvestigationMessages :many
+select m.id as message_id,ar.sandbox_id
+from dorf.job_messages m
+join dorf.agent_runs ar on ar.message_id=m.id
+where m.job_id=$1 and ar.role='investigate'
+order by m.sequence
+`
+
+type ListCodebaseInvestigationMessagesRow struct {
+	MessageID string
+	SandboxID string
+}
+
+func (q *Queries) ListCodebaseInvestigationMessages(ctx context.Context, jobID string) ([]ListCodebaseInvestigationMessagesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCodebaseInvestigationMessages, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCodebaseInvestigationMessagesRow
+	for rows.Next() {
+		var i ListCodebaseInvestigationMessagesRow
+		if err := rows.Scan(&i.MessageID, &i.SandboxID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

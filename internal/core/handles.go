@@ -40,6 +40,7 @@ type AgentHandle struct {
 type MessageReceipt struct {
 	MessageID    string
 	JobID        string
+	SandboxID    string
 	Sequence     int64
 	Intent       MessageDeliveryIntent
 	TargetTurnID string
@@ -92,10 +93,17 @@ func (h JobHandle) EnsureNamedSandbox(ctx context.Context, name string) (Sandbox
 // infrastructure. Message callers use this read-only acquisition path outside
 // an Absurd task claim.
 func (h JobHandle) DefaultSandbox(ctx context.Context) (SandboxHandle, error) {
-	if h.application == nil || h.application.Store == nil || h.id == "" {
+	return h.Sandbox(ctx, MainSandboxName(h.id))
+}
+
+// Sandbox returns one already-owned exact Sandbox without exposing provider
+// custody. It is the read-only bridge from a workflow-selected Message fact to
+// the Sandbox-bound Agent convenience handle.
+func (h JobHandle) Sandbox(ctx context.Context, id string) (SandboxHandle, error) {
+	if h.application == nil || h.application.Store == nil || h.id == "" || strings.TrimSpace(id) == "" {
 		return SandboxHandle{}, fmt.Errorf("Job handle is not bound to Core")
 	}
-	owned, err := h.application.Store.Sandbox(ctx, MainSandboxName(h.id))
+	owned, err := h.application.Store.Sandbox(ctx, id)
 	if err != nil {
 		return SandboxHandle{}, err
 	}
@@ -183,21 +191,22 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 			return MessageReceipt{}, fmt.Errorf("unsupported Agent Message delivery option")
 		}
 	}
-	message, created, err := h.application.AgentMessages.AdmitAgentMessage(ctx, MessageAdmission{
+	admitted, err := h.application.AgentMessages.AdmitAgentMessage(ctx, MessageAdmission{
 		JobID: h.jobID, SandboxID: h.sandboxID, FromKind: MessageFromHuman,
 		FromID: key, Input: input, Intent: intent,
 	})
+	message := admitted.Message
 	receipt := MessageReceipt{
-		MessageID: message.ID, JobID: message.JobID, Sequence: message.Sequence,
+		MessageID: message.ID, JobID: message.JobID, SandboxID: admitted.SandboxID, Sequence: message.Sequence,
 		Intent: message.Intent, TargetTurnID: message.TargetTurnID,
-		AdmittedAt: message.AdmittedAt, Created: created,
+		AdmittedAt: message.AdmittedAt, Created: admitted.Created,
 	}
 	if err != nil {
 		return receipt, err
 	}
 	expectedID := MessageID(h.jobID, MessageFromHuman, key)
 	targetValid := message.Intent == MessageFollow && message.TargetTurnID == "" || message.Intent == MessageSteer && message.TargetTurnID != ""
-	if message.ID != expectedID || message.JobID != h.jobID || message.FromKind != MessageFromHuman || message.FromID != key ||
+	if message.ID != expectedID || message.JobID != h.jobID || admitted.SandboxID != h.sandboxID || message.FromKind != MessageFromHuman || message.FromID != key ||
 		message.Input != input || message.Sequence <= 0 || message.Intent != intent || !targetValid {
 		return MessageReceipt{}, fmt.Errorf("Agent Message admission returned a foreign receipt")
 	}
@@ -208,6 +217,34 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 		return receipt, err
 	}
 	return receipt, nil
+}
+
+// Reconcile advances one already-admitted Message through the Harness using
+// only stable Message and exact Sandbox identities. It performs one bounded
+// recovery cycle and never changes Message admission.
+func (h AgentHandle) Reconcile(ctx context.Context, messageID string) (MessageResult, error) {
+	if h.application == nil || h.application.Store == nil || h.jobID == "" || h.sandboxID == "" {
+		return MessageResult{}, fmt.Errorf("Agent handle is not bound to a Job Sandbox")
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return MessageResult{}, fmt.Errorf("Agent reconciliation requires a durable Message identity")
+	}
+	if h.application.SandboxRuntimes == nil {
+		return MessageResult{}, fmt.Errorf("Sandbox runtime resolution is not configured")
+	}
+	job, err := h.application.Store.Job(ctx, h.jobID)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.SandboxProfile)
+	if err != nil {
+		return MessageResult{}, fmt.Errorf("resolve Sandbox runtime for profile %q: %w", job.SandboxProfile, err)
+	}
+	if runtime.Execution == nil || strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile {
+		return MessageResult{}, fmt.Errorf("Sandbox runtime does not match Job profile %q", job.SandboxProfile)
+	}
+	return runtime.Execution.ReconcileAgentMessage(ctx, h.jobID, messageID, h.sandboxID)
 }
 
 func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox, action Action) error {

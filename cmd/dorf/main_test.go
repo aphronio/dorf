@@ -436,12 +436,12 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	base := time.Date(2026, 8, 10, 10, 0, 0, 0, time.UTC)
 	job := core.Job{ID: "job-1", AdmittedAt: base, SandboxProfile: "e2b"}
 	mainSandbox := core.MainSandboxName(job.ID)
+	deliveries := []core.Delivery{{
+		Message:  core.Message{ID: "message-1", Sequence: 1, FromKind: core.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
+		AgentRun: core.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: core.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
+	}}
 	entries := workflowHistory(coding.Snapshot{
 		Job: coding.Job{Job: job},
-		Deliveries: []core.Delivery{{
-			Message:  core.Message{ID: "message-1", Sequence: 1, FromKind: core.MessageFromHuman, AdmittedAt: base.Add(time.Second)},
-			AgentRun: core.AgentRun{ID: "run-secret", MessageID: "message-1", Role: "implement", State: core.AgentRunCompleted, InputRevision: "revision-0", StartedAt: base.Add(4 * time.Second), FinishedAt: base.Add(5 * time.Second)},
-		}},
 		Actions: []core.Action{
 			{ID: "action-secret", Kind: core.ActionSandboxCreate, Scope: mainSandbox, State: core.ActionSucceeded, CreatedAt: base.Add(2 * time.Second), SettledAt: base.Add(3 * time.Second)},
 			{Kind: coding.ActionGitHubPullRequest, State: core.ActionSucceeded, Scope: "revision-1", CreatedAt: base.Add(7 * time.Second), SettledAt: base.Add(8 * time.Second)},
@@ -452,7 +452,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 		},
 		Evidence: []core.Evidence{{ID: "evidence-secret", Kind: "git-revision", Revision: "revision-1", FinishedAt: base.Add(6500 * time.Millisecond)}},
 		Proposal: &coding.Proposal{Number: 42, ProposedRevision: "revision-1"},
-	})
+	}, deliveries)
 	for i := 1; i < len(entries); i++ {
 		if entries[i].At.Before(entries[i-1].At) {
 			t.Fatalf("history is not chronological: %#v", entries)
@@ -491,7 +491,7 @@ func TestWorkflowHistorySortsNaturalFactsAndIncludesRunsAndRevisions(t *testing.
 	abandoned := workflowHistory(coding.Snapshot{
 		Job:     coding.Job{Job: core.Job{AdmittedAt: base}},
 		Outcome: &coding.Outcome{Kind: coding.OutcomeAbandoned, ObservedAt: base.Add(time.Second)},
-	})
+	}, nil)
 	last := abandoned[len(abandoned)-1]
 	if !strings.Contains(last.Text, "Outcome Abandoned") || strings.Contains(last.Text, "GitHub") {
 		t.Fatalf("pre-Proposal abandonment history = %#v", last)

@@ -45,6 +45,29 @@ where ar.job_id=sqlc.arg(job_id) and ar.role='implement'
 order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
 limit 1;
 
+-- name: BindPendingCodingMessageToPriorThread :execrows
+with prior as (
+    select prior_run.harness,prior_run.thread_id
+    from dorf.agent_runs current_run
+    join dorf.job_messages current_message on current_message.id=current_run.message_id
+    join dorf.job_messages prior_message on prior_message.job_id=current_message.job_id
+      and prior_message.sequence<current_message.sequence
+    join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
+    where current_run.message_id=sqlc.arg(message_id)
+      and prior_run.role='implement' and prior_run.sandbox_id=current_run.sandbox_id
+      and prior_run.harness is not null and prior_run.thread_id is not null and prior_run.turn_id is not null
+      and (prior_message.delivery_intent='follow' or prior_run.turn_id<>prior_message.steer_target_turn_id)
+    order by prior_message.sequence desc
+    limit 1
+)
+update dorf.agent_runs current_run
+set harness=prior.harness,thread_id=prior.thread_id
+from prior
+where current_run.message_id=sqlc.arg(message_id)
+  and current_run.state='pending' and current_run.baseline_turn_id is null
+  and current_run.thread_id is null
+  and (current_run.harness is null or current_run.harness=prior.harness);
+
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
@@ -59,7 +82,8 @@ select id,job_id,message_id,state,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(sandbox_id,'') as sandbox_id
+       coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
@@ -149,21 +173,11 @@ update dorf.agent_runs
 set attention=sqlc.arg(reason)
 where id=sqlc.arg(run_id);
 
--- name: GetHarnessMutationDelivery :one
-select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.admitted_at,
-       m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
-       ar.id as agent_run_id,ar.job_id as agent_run_job_id,
-       ar.message_id as agent_run_message_id,ar.state,
-       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
-       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
-       coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,ar.role,
-       coalesce(ar.input_revision,'') as input_revision,
-       ar.sandbox_id
+-- name: ListUnsettledAgentMessages :many
+select m.id as message_id,ar.sandbox_id
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertain')
-  and ar.role in ('implement','investigate')
-order by m.sequence
-limit 1;
+where m.job_id=sqlc.arg(job_id)
+  and (ar.state in ('submitting','active','uncertain')
+       or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
+order by m.sequence,ar.id;
