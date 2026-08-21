@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/blob"
 	cloudflareapp "github.com/aphronio/dorf/internal/cloudflare"
 	"github.com/aphronio/dorf/internal/coding"
@@ -164,7 +165,12 @@ func coreApplication(store postgres.Store, client *absurd.Client) core.Applicati
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
-	return absurd.New(absurd.Options{DB: db, QueueName: config.QueueName, DefaultMaxAttempts: 5})
+	return absurd.New(absurd.Options{
+		DB:                 db,
+		QueueName:          config.QueueName,
+		DefaultMaxAttempts: 5,
+		Logger:             absurdruntime.WorkerLogger(os.Stderr),
+	})
 }
 
 func migrate(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
