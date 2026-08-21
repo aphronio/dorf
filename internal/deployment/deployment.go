@@ -12,6 +12,11 @@ import (
 
 type Config struct {
 	Database Database `json:"database"`
+	E2B      *E2B     `json:"e2b,omitempty"`
+}
+
+type E2B struct {
+	APIKey string `json:"api_key"`
 }
 
 type Database struct {
@@ -47,12 +52,18 @@ func Load(path string) (Config, bool, error) {
 	if err := cfg.Database.Validate(); err != nil {
 		return Config{}, false, err
 	}
+	if cfg.E2B != nil && strings.TrimSpace(cfg.E2B.APIKey) == "" {
+		return Config{}, false, fmt.Errorf("E2B deployment credential is empty")
+	}
 	return cfg, true, nil
 }
 
 func Save(path string, cfg Config) error {
 	if err := cfg.Database.Validate(); err != nil {
 		return err
+	}
+	if cfg.E2B != nil && strings.TrimSpace(cfg.E2B.APIKey) == "" {
+		return fmt.Errorf("E2B deployment credential is empty")
 	}
 	contents, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -87,6 +98,24 @@ func Save(path string, cfg Config) error {
 		return fmt.Errorf("commit Dorf deployment configuration: %w", err)
 	}
 	return nil
+}
+
+// SaveE2BAPIKey adds or rotates the host's E2B project credential without
+// replacing the already-owned database identity in the same deployment file.
+func SaveE2BAPIKey(path, apiKey string) error {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("E2B API key is empty")
+	}
+	cfg, found, err := Load(path)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("Dorf deployment is not initialized")
+	}
+	cfg.E2B = &E2B{APIKey: apiKey}
+	return Save(path, cfg)
 }
 
 func (d Database) Validate() error {

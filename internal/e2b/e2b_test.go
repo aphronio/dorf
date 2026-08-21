@@ -174,6 +174,28 @@ func TestCreateCanExplicitlyUseProfileInternetAccess(t *testing.T) {
 	}
 }
 
+func TestCredentialCheckIsReadOnlyAndAuthenticated(t *testing.T) {
+	requests := 0
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodGet || request.URL.Path != "/v2/sandboxes" || request.URL.Query().Get("limit") != "1" || request.URL.Query().Get("state") != "running,paused" {
+			t.Fatalf("request=%s %s", request.Method, request.URL)
+		}
+		if request.Header.Get("X-API-Key") != "test-key" {
+			t.Fatalf("authentication=%q", request.Header.Get("X-API-Key"))
+		}
+		response.Header().Set("Content-Type", "application/json")
+		io.WriteString(response, "[]")
+	})
+	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
+	if err := client.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d, want 1", requests)
+	}
+}
+
 func TestFindOwnedPaginatesRunningAndPausedAndRejectsDuplicates(t *testing.T) {
 	owner := Ownership{JobID: "job-2", SandboxID: "dorf-job-2", OwnershipNonce: strings.Repeat("c", 64)}
 	requests := 0

@@ -4,13 +4,14 @@ The Provider Gateway is a sibling application subsystem. It owns durable upstrea
 Connections and revocable consumer-specific Inference Routes; it does not own Job sequencing,
 Sandbox lifecycle, transcripts, review, or repository policy.
 
-The supported Connection is a ChatGPT subscription through the pinned broker. Codex consumes its
-scoped route through Responses WebSockets; Pi consumes the same scoped route as an OpenAI Responses
-provider. `dorf provider connect chatgpt` installs the checksum-verified broker artifact, binds it to
-the selected private Incus bridge rather than wildcard/LAN, completes one device login, and records
-protected connection metadata. Executable code owns the exact broker version and artifact integrity.
-The broker is the sole upstream credential and refresh writer. Each Sandbox receives only a scoped
-route and its selected Harness configuration.
+The supported Connection is either a ChatGPT subscription or one OpenAI API key through the pinned
+broker. Codex consumes its scoped route through Responses WebSockets; Pi consumes the same scoped
+route as an OpenAI Responses provider. `dorf setup` offers subscription device confirmation or a
+masked API-key input. The standalone `provider connect` command accepts the same choices and reads
+API keys only from a file or standard input. The protected host state retains the selected upstream
+credential; a deployment currently admits one unprefixed OpenAI authentication mode at a time.
+Executable code owns the exact broker version and artifact integrity. Each Sandbox receives only a
+scoped route and its selected Harness configuration.
 
 The Go Job path creates, observes, and revokes routes directly. Provider connection data, broker
 route configuration and keys, and the broker executable live under the configured
@@ -18,16 +19,23 @@ route configuration and keys, and the broker executable live under the configure
 identity derivation and Action settlement state needed for reconciliation.
 
 Remote Sandbox profiles supply one exact HTTPS `/v1` Gateway URL whose transport is owned by the
-deployment, not by the Sandbox adapter. The broker remains bound to its private address behind an
-outbound tunnel; Dorf neither opens a public listener nor gives the tunnel upstream credentials.
+deployment, not by the Sandbox adapter. An existing operator-owned URL is the universal contract.
+Guided setup asks for the intended hostname and discovers its nearest public DNS delegation. When
+the hostname is unused and every authoritative nameserver is Cloudflare, it offers to reconcile one
+named, outbound-only Cloudflare Tunnel; otherwise it keeps the universal existing-HTTPS-ingress
+path and never replaces DNS it cannot prove is available. The broker remains bound to loopback on a cloud-only host or
+to the selected private Incus bridge when local and cloud profiles coexist; it never opens a public
+listener. The Tunnel exposes only `/v1`, retains one exact Tunnel credential and a Dorf-owned host
+service, and receives no upstream Provider credential. Browser authorization creates a broad
+Cloudflare account certificate only for Tunnel and DNS reconciliation; setup removes it after those
+account-level mutations settle, then verifies anonymous-401 reachability separately.
+
 The E2B adapter defaults to restricting Sandbox egress to the configured Gateway hostname, and the
 Gateway's revocable consumer key remains the request capability. A repository profile may
 explicitly admit general internet egress when clean setup and agent work require changing package,
 redirect, or documentation hosts; that broader policy is visible deployment configuration and does
-not give the Sandbox an upstream credential. The E2B wire and no-change Job proofs used a disposable
-TryCloudflare Quick Tunnel only to validate this path. Quick Tunnels are not a supported deployment:
-they have no stable hostname or uptime guarantee, and durable tunnel/domain selection remains a
-deployment decision.
+not give the Sandbox an upstream credential. Disposable Quick Tunnels remain proof tooling only;
+they have no stable hostname or uptime guarantee.
 
 `dorf provider status --profile NAME [--name CONNECTION]` is the observational deployment check. It
 verifies the named Provider Connection and private broker locally, then, for a remote profile,
@@ -39,9 +47,11 @@ Gateway reachability separately and exits unsuccessfully when either authority i
 
 ## Security and recovery
 
-- Upstream OAuth state stays in the host broker's protected `auth` directory.
+- Upstream OAuth or API-key state stays in protected host storage.
 - Route keys are broker-local capabilities, never upstream credentials.
 - The broker binds to loopback or one exact private Incus bridge IPv4, never wildcard.
+- The guided Cloudflare route forwards only the exact `/v1` API path and runs as
+  `dorf-cloudflared.service`; other public paths terminate at the Tunnel with HTTP 404.
 - A remote route is admitted only as an exact HTTPS `/v1` URL; query credentials and userinfo are
   rejected. E2B egress is default-deny unless its selected profile explicitly admits internet access.
 - Route creation and revocation use stable Action identities and authenticated management calls.
@@ -51,7 +61,7 @@ Gateway reachability separately and exits unsuccessfully when either authority i
 - Logs and CLI output never render upstream, management, guard, route, GitHub, or Harness control
   credentials.
 
-Do not add provider pooling, fallback, quotas, a registry, another broker, or a wire dialect until a
-concrete validated consumer requires it. D036 remains the governing Gateway decision; D065 records
-Pi's reuse of the route. D047 changes the control plane from Python to Go, not this connection/route
-authority model.
+Do not add provider pooling, fallback, quotas, an ingress registry, another broker, or a wire dialect
+until a concrete validated consumer requires it. D036 remains the governing Gateway decision; D065
+records Pi's reuse of the route. D047 changes the control plane from Python to Go, not this
+connection/route authority model.

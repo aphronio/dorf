@@ -38,7 +38,12 @@ func Run(ctx context.Context, db *sql.DB, cfg config.Config, profile core.Sandbo
 		}
 		checks = append(checks, Check{Name: name, Status: "failed", Detail: detail})
 	}
-	add("host-capacity", HostCapacity(), "provide at least 4 GiB total memory and 20 GiB free on /")
+	localVMs := profile.Provider == core.SandboxProviderIncus
+	capacityRepair := "provide at least 2 GiB total memory and 10 GiB free on /"
+	if localVMs {
+		capacityRepair = "provide at least 4 GiB total memory and 20 GiB free on /"
+	}
+	add("host-capacity", HostCapacity(localVMs), capacityRepair)
 	databaseRepair := "run dorf setup to reconcile the selected PostgreSQL deployment"
 	if cfg.DatabaseExternal {
 		databaseRepair = "verify DORF_DATABASE_URL and the external PostgreSQL service"
@@ -125,7 +130,7 @@ func addIncusChecks(ctx context.Context, profile core.SandboxProfile, add func(s
 	add("incus-image", err, "restore the exact Incus image fingerprint selected by this profile, then rerun profile verification")
 }
 
-func HostCapacity() error {
+func HostCapacity(localVMs bool) error {
 	contents, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return fmt.Errorf("read memory capacity: %w", err)
@@ -138,7 +143,13 @@ func HostCapacity() error {
 			break
 		}
 	}
-	if memoryKiB < 4*1024*1024 {
+	minimumMemoryKiB := uint64(2 * 1024 * 1024)
+	minimumDisk := uint64(10 * 1024 * 1024 * 1024)
+	if localVMs {
+		minimumMemoryKiB = 4 * 1024 * 1024
+		minimumDisk = 20 * 1024 * 1024 * 1024
+	}
+	if memoryKiB < minimumMemoryKiB {
 		return fmt.Errorf("total memory is %.1f GiB", float64(memoryKiB)/(1024*1024))
 	}
 	var stat syscall.Statfs_t
@@ -146,7 +157,7 @@ func HostCapacity() error {
 		return fmt.Errorf("read root filesystem capacity: %w", err)
 	}
 	free := stat.Bavail * uint64(stat.Bsize)
-	if free < 20*1024*1024*1024 {
+	if free < minimumDisk {
 		return fmt.Errorf("root filesystem has %.1f GiB free", float64(free)/(1024*1024*1024))
 	}
 	return nil

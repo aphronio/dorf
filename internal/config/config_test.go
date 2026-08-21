@@ -99,7 +99,7 @@ func TestLoadUsesPersistedDockerDatabase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	contents := `{"database":{"host":"127.0.0.1","port":54329,"name":"dorf","user":"dorf","password":"secret","image":"postgres:17.10-bookworm","image_id":"sha256:exact"}}`
+	contents := `{"database":{"host":"127.0.0.1","port":54329,"name":"dorf","user":"dorf","password":"secret","image":"postgres:17.10-bookworm","image_id":"sha256:exact"},"e2b":{"api_key":"persisted-e2b-key"}}`
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestLoadUsesPersistedDockerDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DatabaseExternal || !strings.Contains(cfg.DatabaseURL, "127.0.0.1:54329/dorf") {
+	if cfg.DatabaseExternal || !strings.Contains(cfg.DatabaseURL, "127.0.0.1:54329/dorf") || cfg.E2BAPIKey != "persisted-e2b-key" {
 		t.Fatalf("cfg=%#v", cfg)
 	}
 }

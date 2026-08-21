@@ -120,7 +120,9 @@ exist. Do not generalize workflow authoring before Core portability is proved.
 
 Architecture advances through narrow slices that end in real Job behavior. A schema, abstraction,
 or mocked adapter is not a terminal. Dogfood the smallest new path, use its evidence to shape the
-next slice, and delete redundant implementation when the replacement is authoritative.
+next slice, and delete redundant implementation when the replacement is authoritative. Choose the
+relevant live terminal from the current deployment shapes in the
+[architecture](architecture.md#current-dogfood-deployment-terminals).
 
 There are no existing users or local data to preserve during the Go and Absurd replacement. Do not
 add migrations, dual writes, facades, deprecated commands, or compatibility tests for the Python

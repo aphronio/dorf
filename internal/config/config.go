@@ -62,6 +62,9 @@ func Load() (Config, error) {
 			if err != nil {
 				return Config{}, err
 			}
+			if cfg.E2BAPIKey == "" && stored.E2B != nil {
+				cfg.E2BAPIKey = strings.TrimSpace(stored.E2B.APIKey)
+			}
 		}
 	}
 	cfg.GatewayStatePath, err = filepath.Abs(cfg.GatewayStatePath)

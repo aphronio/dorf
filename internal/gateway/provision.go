@@ -3,6 +3,7 @@ package gateway
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/rand"
@@ -27,10 +28,11 @@ import (
 )
 
 const (
-	BackendVersion = "7.2.104"
-	backendArchive = "CLIProxyAPI_7.2.104_linux_amd64.tar.gz"
-	backendSHA256  = "993babb37b6de831600f0eb31527ca0f938337e1d1f837d5cf846263affa9724"
-	defaultPort    = 8317
+	BackendVersion  = "7.2.104"
+	backendArchive  = "CLIProxyAPI_7.2.104_linux_amd64.tar.gz"
+	backendSHA256   = "993babb37b6de831600f0eb31527ca0f938337e1d1f837d5cf846263affa9724"
+	defaultPort     = 8317
+	openAIModelsURL = "https://api.openai.com/v1/models"
 )
 
 var connectionName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
@@ -87,14 +89,21 @@ func (g Gateway) Provision(ctx context.Context, bind string) error {
 		if err != nil || !strings.Contains(string(help), BackendVersion) {
 			return fmt.Errorf("Provider Gateway executable is not pinned version %s", BackendVersion)
 		}
-		if err := g.writeBrokerConfig(normalizedBind, allowRemote); err != nil {
+		configChanged, err := g.writeBrokerConfig(normalizedBind, allowRemote)
+		if err != nil {
 			return err
 		}
 		if g.probeBroker(ctx) == nil {
-			return nil
+			if !configChanged {
+				return nil
+			}
+			return g.restartBroker(ctx, executable)
 		}
 		if pid := g.brokerPID(); pid > 1 {
 			if g.processMatches(pid, executable) {
+				if configChanged {
+					return g.restartBroker(ctx, executable)
+				}
 				return fmt.Errorf("Provider Gateway process %d is running but unavailable; inspect %s", pid, filepath.Join(g.StatePath, "broker.log"))
 			}
 			_ = os.Remove(filepath.Join(g.StatePath, "broker.pid"))
@@ -143,6 +152,9 @@ func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authoriz
 		return err
 	}
 	for _, existing := range connections {
+		if existing.Name != name && existing.Provider != "deepseek" {
+			return fmt.Errorf("provider connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
+		}
 		if existing.Name != name {
 			continue
 		}
@@ -229,6 +241,106 @@ func (g Gateway) ConnectChatGPT(ctx context.Context, name, bind string, authoriz
 		return err
 	}
 	return g.Check(ctx, name)
+}
+
+// ConnectOpenAIAPIKey reconciles one named OpenAI API-key connection. The
+// upstream key remains in the protected Gateway state and is never returned to
+// callers or copied into a Sandbox. Replaying the same name and key is
+// idempotent; a validated key rotation keeps the stable connection identity.
+func (g Gateway) ConnectOpenAIAPIKey(ctx context.Context, name, bind, apiKey string) error {
+	name = strings.TrimSpace(name)
+	apiKey = strings.TrimSpace(apiKey)
+	if !connectionName.MatchString(name) {
+		return fmt.Errorf("provider connection name must be 1-64 safe characters")
+	}
+	if apiKey == "" || len(apiKey) > 16<<10 {
+		return fmt.Errorf("OpenAI API key must be nonempty and at most 16 KiB")
+	}
+	if err := g.validateOpenAIAPIKey(ctx, apiKey); err != nil {
+		return err
+	}
+	if err := g.Provision(ctx, bind); err != nil {
+		return err
+	}
+	if err := g.lock(func() error {
+		_, err := g.recordOpenAIAPIKey(name, apiKey)
+		return err
+	}); err != nil {
+		return err
+	}
+	// Re-run ordinary provisioning even when the credential record already
+	// existed. This closes the process-loss window between durable credential
+	// custody and writing/restarting the broker configuration.
+	if err := g.Provision(ctx, bind); err != nil {
+		return err
+	}
+	return g.Check(ctx, name)
+}
+
+func (g Gateway) validateOpenAIAPIKey(ctx context.Context, apiKey string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openAIModelsURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	client := g.UpstreamClient
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("validate OpenAI API key: %w", err)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("OpenAI API key readiness check returned HTTP %d", response.StatusCode)
+	}
+	return nil
+}
+
+func (g Gateway) recordOpenAIAPIKey(name, apiKey string) (bool, error) {
+	connections, err := g.connections()
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range connections {
+		if existing.Name != name && existing.Provider != "deepseek" {
+			return false, fmt.Errorf("provider connection %q already owns the deployment's unprefixed OpenAI route; configure one upstream authentication mode at a time", existing.Name)
+		}
+		if existing.Name != name {
+			continue
+		}
+		if existing.Provider != "openai" || existing.AuthMode != "api_key" {
+			return false, fmt.Errorf("provider connection %q already has another authentication mode", name)
+		}
+		credentialPath := filepath.Join(g.StatePath, "credentials", existing.CredentialRef)
+		secret, err := os.ReadFile(credentialPath)
+		if err != nil {
+			return false, fmt.Errorf("read Provider Connection %q credential: %w", name, err)
+		}
+		if strings.TrimSpace(string(secret)) == apiKey {
+			return false, nil
+		}
+		if err := writePrivateFile(credentialPath, []byte(apiKey+"\n"), 0o600); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return false, err
+	}
+	credentialRef := "openai-" + hex.EncodeToString(random) + ".key"
+	if err := writePrivateFile(filepath.Join(g.StatePath, "credentials", credentialRef), []byte(apiKey+"\n"), 0o600); err != nil {
+		return false, err
+	}
+	connections = append(connections, connection{Name: name, Provider: "openai", AuthMode: "api_key", CredentialRef: credentialRef})
+	if err := writePrivateJSON(filepath.Join(g.StatePath, "connections.json"), connections); err != nil {
+		_ = os.Remove(filepath.Join(g.StatePath, "credentials", credentialRef))
+		return false, err
+	}
+	return true, nil
 }
 
 func (g Gateway) ensureAuthority() error {
@@ -354,18 +466,18 @@ func (g Gateway) connections() ([]connection, error) {
 	return records, nil
 }
 
-func (g Gateway) writeBrokerConfig(bind string, allowRemote bool) error {
+func (g Gateway) writeBrokerConfig(bind string, allowRemote bool) (bool, error) {
 	auth, err := g.readAuthority()
 	if err != nil {
-		return err
+		return false, err
 	}
 	routes, err := g.readRoutes()
 	if err != nil {
-		return err
+		return false, err
 	}
 	connections, err := g.connections()
 	if err != nil {
-		return err
+		return false, err
 	}
 	lines := []string{fmt.Sprintf("host: %q", bind), fmt.Sprintf("port: %d", defaultPort), fmt.Sprintf("auth-dir: %q", filepath.Join(g.StatePath, "auth")), "force-model-prefix: true", "api-keys:", fmt.Sprintf("  - %q", auth.GuardKey)}
 	for _, route := range routes {
@@ -378,11 +490,18 @@ func (g Gateway) writeBrokerConfig(bind string, allowRemote bool) error {
 		}
 		secret, err := os.ReadFile(filepath.Join(g.StatePath, "credentials", record.CredentialRef))
 		if err != nil {
-			return err
+			return false, err
 		}
 		lines = append(lines, "codex-api-key:", fmt.Sprintf("  - api-key: %q", strings.TrimSpace(string(secret))), "    base-url: \"https://api.openai.com/v1\"")
 	}
-	return writePrivateFile(filepath.Join(g.StatePath, "broker.yaml"), []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	path := filepath.Join(g.StatePath, "broker.yaml")
+	raw := []byte(strings.Join(lines, "\n") + "\n")
+	if current, readErr := os.ReadFile(path); readErr == nil && bytes.Equal(current, raw) {
+		return false, nil
+	} else if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return false, readErr
+	}
+	return true, writePrivateFile(path, raw, 0o600)
 }
 
 func (g Gateway) startBroker(ctx context.Context, executable string) error {
@@ -414,6 +533,28 @@ func (g Gateway) startBroker(ctx context.Context, executable string) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("Provider Gateway did not become ready; inspect %s", filepath.Join(g.StatePath, "broker.log"))
+}
+
+func (g Gateway) restartBroker(ctx context.Context, executable string) error {
+	pid := g.brokerPID()
+	if pid > 1 && g.processMatches(pid, executable) {
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+		if err := process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("stop Provider Gateway process %d: %w", pid, err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && g.processMatches(pid, executable) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if g.processMatches(pid, executable) {
+			return fmt.Errorf("Provider Gateway process %d did not stop", pid)
+		}
+	}
+	_ = os.Remove(filepath.Join(g.StatePath, "broker.pid"))
+	return g.startBroker(ctx, executable)
 }
 
 func (g Gateway) probeBroker(ctx context.Context) error {

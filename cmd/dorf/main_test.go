@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
@@ -15,6 +19,25 @@ import (
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
+
+func TestOpenAIProviderConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "openai.key")
+	if err := os.WriteFile(path, []byte("  sk-file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fromFile, err := readSecretFile(path, strings.NewReader("unused"))
+	if err != nil || fromFile != "sk-file-secret" {
+		t.Fatalf("from file=%q err=%v", fromFile, err)
+	}
+	fromStdin, err := readSecretFile("-", strings.NewReader("sk-stdin-secret\n"))
+	if err != nil || fromStdin != "sk-stdin-secret" {
+		t.Fatalf("from stdin=%q err=%v", fromStdin, err)
+	}
+	if _, err := readSecretFile("-", strings.NewReader(" \n")); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("empty secret error=%v", err)
+	}
+}
 
 func TestProfileUpdateIsTheOnlyDefinitionMutationCommand(t *testing.T) {
 	var stdout, stderr strings.Builder
@@ -97,17 +120,172 @@ func TestProviderGatewayStatusDistinguishesHistoricalVerificationFromCurrentReac
 	}
 }
 
+func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
+	statePath := t.TempDir()
+	cloudflarePath := filepath.Join(statePath, "cloudflare")
+	if err := os.MkdirAll(cloudflarePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloudflarePath, "state.json"), []byte(`{
+  "schema_version": 1,
+  "tunnel_name": "dorf-proof",
+  "hostname": "dorf.example.com",
+  "origin": "http://127.0.0.1:8317"
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := core.SandboxProfile{Provider: core.SandboxProviderE2B, E2BGatewayURL: "https://dorf.example.com/v1"}
+	g, err := remoteGatewayForProviderStatus(config.Config{GatewayStatePath: statePath}, profile)
+	if err != nil || g.Client == nil {
+		t.Fatalf("gateway=%#v err=%v", g, err)
+	}
+	profile.E2BGatewayURL = "https://operator.example/v1"
+	g, err = remoteGatewayForProviderStatus(config.Config{GatewayStatePath: statePath}, profile)
+	if err != nil || g.Client != nil {
+		t.Fatalf("foreign gateway=%#v err=%v", g, err)
+	}
+}
+
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
-	options, err := parseSetupOptions([]string{"--yes", "--provider", "personal-chatgpt", "--profile", "local-codex"}, &stderr)
+	options, err := parseSetupOptions([]string{
+		"--yes", "--provider", "personal-chatgpt",
+		"--sandbox-provider", "incus", "--sandbox-provider", "e2b",
+		"--harness", "codex", "--e2b-template", "dorf:exact-build",
+		"--gateway-url", "https://gateway.example/v1", "--allow-internet",
+	}, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !options.Yes || options.Connection != "personal-chatgpt" || options.ProfileName != "local-codex" {
+	if !options.Yes || options.Connection != "personal-chatgpt" || options.ProfileName != "" ||
+		options.Harness != "codex" || options.E2BTemplate != "dorf:exact-build" ||
+		options.GatewayURL != "https://gateway.example/v1" || !options.AllowInternet ||
+		!containsSandboxProvider(options.SandboxProviders, core.SandboxProviderIncus) ||
+		!containsSandboxProvider(options.SandboxProviders, core.SandboxProviderE2B) {
 		t.Fatalf("options=%#v", options)
+	}
+	if _, err := parseSetupOptions([]string{"--profile", "local-codex", "--sandbox-provider", "incus", "--sandbox-provider", "e2b"}, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("multi-provider named profile error=%v", err)
+	}
+	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--provider", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
+		t.Fatalf("conflicting connection input error=%v", err)
 	}
 	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {
 		t.Fatal("removed database selection was accepted")
+	}
+	if _, err := parseSetupOptions([]string{"--sandbox-provider", "unknown"}, &stderr); err == nil {
+		t.Fatal("unknown Sandbox provider was accepted")
+	}
+	if _, err := parseSetupOptions([]string{"--yes", "--e2b-template", "dorf:build"}, &stderr); err == nil || !strings.Contains(err.Error(), "--sandbox-provider") {
+		t.Fatalf("provider-less agent setup error=%v", err)
+	}
+	for _, invalid := range []string{"", "dorf", ":build", "dorf:", "dorf:build id"} {
+		if err := validateExactE2BTemplate(invalid); err == nil {
+			t.Fatalf("accepted E2B template %q", invalid)
+		}
+	}
+	automated, err := selectSetupSandboxProviders(context.Background(), setupOptions{Yes: true}, newSetupPresenter(&strings.Builder{}))
+	if err != nil || len(automated) != 0 {
+		t.Fatalf("common-only automation providers=%v error=%v", automated, err)
+	}
+	selected := []core.SandboxProvider{}
+	presenter := setupPresenter{}
+	view := presenter.ProviderGroup(&selected, true).Content()
+	for _, label := range []string{"Local · Incus", "Hardware-isolated Linux VMs on this machine", "Cloud · E2B", "Managed Linux VMs"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("provider selector omitted %q:\n%s", label, view)
+		}
+	}
+	keymap := setupKeyMap()
+	if help := keymap.MultiSelect.Toggle.Help(); help.Key != "space" || help.Desc != "select" {
+		t.Fatalf("toggle help=%#v", help)
+	}
+	if help := keymap.MultiSelect.Submit.Help(); help.Key != "enter" || help.Desc != "continue" {
+		t.Fatalf("submit help=%#v", help)
+	}
+	if strings.Contains(view, "    Hardware-isolated") || strings.Contains(view, "    Managed Linux") {
+		t.Fatalf("provider descriptions carry embedded indentation:\n%s", view)
+	}
+	withoutKVM := presenter.ProviderGroup(&selected, false)
+	if !strings.Contains(withoutKVM.Content(), "[—] Local · Incus") ||
+		!strings.Contains(withoutKVM.Content(), "Unavailable on this machine · KVM not detected") ||
+		strings.Contains(withoutKVM.Content(), "[ ] Local · Incus") {
+		t.Fatalf("KVM-less provider selector is misleading:\n%s\n%s", withoutKVM.Header(), withoutKVM.Content())
+	}
+	for _, group := range []*huh.Group{
+		presenter.HarnessGroup(new(string)),
+		presenter.ConnectionGroup(new(setupConnectionMode)),
+		presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com"),
+	} {
+		if strings.TrimSpace(group.Header()) == "" || strings.TrimSpace(group.Content()) == "" {
+			t.Fatalf("guided setup group is empty: header=%q content=%q", group.Header(), group.Content())
+		}
+	}
+}
+
+func TestGuidedGatewayPlanningReusesTheDurableProfileContract(t *testing.T) {
+	existing := core.SandboxProfile{
+		Name: "cloud-codex", Provider: core.SandboxProviderE2B, Harness: "codex",
+		Artifact: "dorf:exact-build", E2BGatewayURL: "https://gateway.example/v1",
+	}
+	plan, err := planRemoteGateway(context.Background(), setupOptions{}, []guidedProfilePlan{{
+		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
+	}}, setupPresenter{}, fakeDNSResolver{})
+	if err != nil || plan.Mode != setupGatewayExisting || plan.URL != existing.E2BGatewayURL {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+	_, err = planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "other.example.com"}, []guidedProfilePlan{{
+		Provider: core.SandboxProviderE2B, Name: existing.Name, Harness: existing.Harness, Existing: &existing,
+	}}, setupPresenter{}, fakeDNSResolver{records: map[string][]*net.NS{
+		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "update the profile explicitly") {
+		t.Fatalf("conflicting Gateway error=%v", err)
+	}
+	for _, invalid := range []string{
+		"http://gateway.example/v1", "https://user@gateway.example/v1", "https://gateway.example/v1/", "https://gateway.example/v1?token=secret",
+	} {
+		if err := validateExactGatewayURL(invalid); err == nil {
+			t.Fatalf("accepted Gateway URL %q", invalid)
+		}
+	}
+}
+
+func TestGuidedGatewayPlanningRequiresCloudflareDNSAndAnUnusedHostname(t *testing.T) {
+	cloudflare := fakeDNSResolver{records: map[string][]*net.NS{
+		"example.com": {{Host: "cash.ns.cloudflare.com."}, {Host: "lana.ns.cloudflare.com."}},
+	}}
+	plan, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, cloudflare)
+	if err != nil || plan.Mode != setupGatewayCloudflare || plan.URL != "https://dorf.example.com/v1" {
+		t.Fatalf("plan=%#v err=%v", plan, err)
+	}
+
+	nonCloudflare := fakeDNSResolver{records: map[string][]*net.NS{
+		"example.com": {{Host: "ns1.other-provider.example."}},
+	}}
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, nonCloudflare); err == nil || !strings.Contains(err.Error(), "not Cloudflare") {
+		t.Fatalf("non-Cloudflare error=%v", err)
+	}
+
+	occupied := cloudflare
+	occupied.addresses = map[string][]net.IPAddr{"dorf.example.com": {{IP: net.ParseIP("192.0.2.1")}}}
+	if _, err := planRemoteGateway(context.Background(), setupOptions{CloudflareHost: "dorf.example.com"}, nil, setupPresenter{}, occupied); err == nil || !strings.Contains(err.Error(), "already resolves") {
+		t.Fatalf("occupied hostname error=%v", err)
+	}
+}
+
+func TestGuidedGatewayBindPreservesExistingLocalProfiles(t *testing.T) {
+	network, err := gatewayIncusNetwork([]core.SandboxProfile{{
+		Name: "local-codex", Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0",
+	}}, []guidedProfilePlan{{Provider: core.SandboxProviderE2B, Name: "cloud-codex"}})
+	if err != nil || network != "incusbr0" {
+		t.Fatalf("network=%q err=%v", network, err)
+	}
+	_, err = gatewayIncusNetwork([]core.SandboxProfile{{Provider: core.SandboxProviderIncus, IncusNetwork: "incusbr0"}}, []guidedProfilePlan{{
+		Provider: core.SandboxProviderIncus, Name: "local-pi", Existing: &core.SandboxProfile{Provider: core.SandboxProviderIncus, IncusNetwork: "otherbr0"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "multiple networks") {
+		t.Fatalf("ambiguous network error=%v", err)
 	}
 }
 

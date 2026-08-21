@@ -200,6 +200,25 @@ The composition root resolves that durable name into one provider-neutral runtim
 the Job runs or cleans up. Profiles are immutable while a referencing Job has incomplete cleanup;
 an update clears verification and default status. Credentials remain host configuration.
 
+### Current dogfood deployment terminals
+
+The local workstation terminal runs Dorf, PostgreSQL, the Worker, Incus/KVM Sandboxes, and a private
+Provider Gateway on one owner-controlled machine. It requires no cloud controller, public Gateway
+hostname, or tunnel.
+
+The cloud controller terminal runs Dorf, PostgreSQL, the Worker, and a loopback-bound Provider
+Gateway on an ordinary shared Linux VM without Incus or KVM. Managed E2B Sandboxes reach only the
+scoped Gateway through a stable deployment-owned outbound HTTPS tunnel; administration and storage
+remain private.
+
+Live proof selects the terminal that exercises the changed authority. Local Incus, image, KVM, or
+private-network changes require the workstation terminal. E2B, remote Gateway, and cloud
+self-hosting changes require the cloud-controller terminal. Provider-neutral lifecycle, setup,
+profile, or portability changes that claim to serve both require both fresh terminals. Other Core
+and workflow slices require one real end-to-end terminal on the relevant target, not both by
+default. Host requirements derive from the selected Sandbox profiles; Incus and KVM are not
+universal Dorf prerequisites.
+
 ## Harness and Sandbox adapters
 
 Sandbox and Harness implementations meet provider-neutral custody contracts. Every external

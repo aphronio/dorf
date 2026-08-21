@@ -54,8 +54,7 @@ func TestEnsureDatabaseCreatesDockerAndPersistsExactDeployment(t *testing.T) {
 		}
 	}}
 	setup := databaseSetup{runner: runner, random: bytes.NewReader(bytes.Repeat([]byte{7}, 32)), wait: func(time.Duration) {}}
-	var output bytes.Buffer
-	database, err := setup.ensure(context.Background(), path, &output)
+	database, err := setup.ensure(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func TestEnsureDatabaseReconcilesPersistedDocker(t *testing.T) {
 		}
 	}}
 	setup := databaseSetup{runner: runner, random: bytes.NewReader(nil), wait: func(time.Duration) {}}
-	if _, err := setup.ensure(context.Background(), path, &bytes.Buffer{}); err != nil {
+	if _, err := setup.ensure(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,7 +122,7 @@ func TestEnsureDatabaseDoesNotTreatInspectFailureAsAbsence(t *testing.T) {
 		return commandResult{}
 	}}
 	setup := databaseSetup{runner: runner, wait: func(time.Duration) {}}
-	if _, err := setup.ensure(context.Background(), path, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if _, err := setup.ensure(context.Background(), path); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -151,7 +150,7 @@ func TestEnsureDatabaseRefusesImplicitImageUpgrade(t *testing.T) {
 		}
 	}}
 	setup := databaseSetup{runner: runner, wait: func(time.Duration) {}}
-	if _, err := setup.ensure(context.Background(), path, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "refusing an implicit upgrade") {
+	if _, err := setup.ensure(context.Background(), path); err == nil || !strings.Contains(err.Error(), "refusing an implicit upgrade") {
 		t.Fatalf("err=%v", err)
 	}
 }

@@ -39,9 +39,10 @@ type authority struct {
 }
 
 type Gateway struct {
-	StatePath     string
-	PrivateBridge string
-	Client        *http.Client
+	StatePath      string
+	PrivateBridge  string
+	Client         *http.Client
+	UpstreamClient *http.Client
 }
 
 func (g Gateway) BaseURL() (string, error) {

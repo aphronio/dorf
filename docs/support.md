@@ -1,13 +1,16 @@
 # Support and diagnostics
 
-The default supported deployment is x86_64 Linux with a directly usable local Incus daemon. Ubuntu
-24.04 is the proven clean-machine path. Other Linux distributions are capability-compatible only
-after their operator installs and initializes Incus.
+The default supported deployment is x86_64 Linux. Ubuntu 24.04 is the proven clean-machine path.
+Local profiles require a directly usable Incus daemon and KVM; cloud-only E2B deployments do not.
+Other Linux distributions are capability-compatible only after their operator supplies the host
+requirements selected during setup.
 
-E2B is an admitted proof profile on the supported host. It requires an exact qualified template and
-a stable deployment-owned HTTPS Provider Gateway route. The disposable tunnel used in live proofs is
-not a supported deployment. macOS, Windows, ARM, remote Incus daemons, custom Sandbox artifacts, and
-host Docker-socket isolation are not supported.
+E2B requires an exact qualified template and a stable deployment-owned HTTPS Provider Gateway route.
+Guided setup supports a named Cloudflare Tunnel; any operator-owned route satisfying the same exact
+HTTPS `/v1` contract is valid. Disposable Quick Tunnels are proof-only. macOS, Windows, ARM, remote
+Incus daemons, and host Docker-socket isolation are not supported. Custom Sandbox artifacts may be
+admitted through an explicitly created and functionally verified profile, but carry no Dorf release
+provenance.
 
 Run the Go CLI's direct diagnostic boundary:
 

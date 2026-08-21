@@ -3,6 +3,7 @@ package hostsetup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,12 +16,25 @@ import (
 	"github.com/aphronio/dorf/internal/doctor"
 )
 
+// ErrKVMUnavailable identifies a host that cannot run the local Incus profile.
+// Callers may present provider-aware remediation without matching error text.
+var ErrKVMUnavailable = errors.New("KVM hardware virtualization is unavailable")
+
+// KVMDevicePresent is the cheap, read-only availability check used to avoid
+// offering local Incus setup on hosts that cannot provide it. Permission and
+// capacity remain part of the authoritative setup check after selection.
+func KVMDevicePresent() bool {
+	_, err := os.Stat("/dev/kvm")
+	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
+
 // HostPlan is the exact set of supported host changes observed as missing.
 // Its summaries are both the user-facing approval text and the authority for
 // ApplyHost, so presentation cannot drift from execution.
 type HostPlan struct {
 	username      string
 	requireDocker bool
+	requireIncus  bool
 	packages      []string
 	services      []string
 	groups        []string
@@ -32,6 +46,18 @@ func (p HostPlan) Empty() bool { return len(p.summaries) == 0 }
 
 func (p HostPlan) Summaries() []string {
 	return append([]string{}, p.summaries...)
+}
+
+// RuntimeNames reports the host runtimes this plan proves ready.
+func (p HostPlan) RuntimeNames() []string {
+	var names []string
+	if p.requireDocker {
+		names = append(names, "Docker")
+	}
+	if p.requireIncus {
+		names = append(names, "Incus", "QEMU", "KVM")
+	}
+	return names
 }
 
 func (p HostPlan) Description() string {
@@ -60,11 +86,20 @@ type hostObservation struct {
 
 // ObserveHost checks the supported local runtime prerequisites without
 // mutating them and returns only the changes that are actually needed.
-func ObserveHost(ctx context.Context, requireDocker bool) (HostPlan, error) {
+func ObserveHost(ctx context.Context, requireDocker, requireIncus bool) (HostPlan, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
 		return HostPlan{}, fmt.Errorf("automatic host setup supports only x86_64 Linux")
 	}
-	if err := doctor.HostCapacity(); err != nil {
+	kvmAccess := false
+	if requireIncus {
+		kvm, kvmErr := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
+		if kvmErr == nil {
+			kvmAccess = kvm.Close() == nil
+		} else if os.IsNotExist(kvmErr) {
+			return HostPlan{}, fmt.Errorf("%w: %v", ErrKVMUnavailable, kvmErr)
+		}
+	}
+	if err := doctor.HostCapacity(requireIncus); err != nil {
 		return HostPlan{}, err
 	}
 	account, err := user.Current()
@@ -80,13 +115,6 @@ func ObserveHost(ctx context.Context, requireDocker bool) (HostPlan, error) {
 	}
 	values := parseRelease(string(release))
 	configuredGroups, _ := exec.CommandContext(ctx, "id", "-nG", account.Username).Output()
-	kvmAccess := false
-	kvm, kvmErr := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
-	if kvmErr == nil {
-		kvmAccess = kvm.Close() == nil
-	} else if os.IsNotExist(kvmErr) {
-		return HostPlan{}, fmt.Errorf("hardware virtualization is unavailable: %w", kvmErr)
-	}
 	_, dockerErr := exec.LookPath("docker")
 	_, incusErr := exec.LookPath("incus")
 	_, qemuErr := exec.LookPath("qemu-system-x86_64")
@@ -105,15 +133,15 @@ func ObserveHost(ctx context.Context, requireDocker bool) (HostPlan, error) {
 		kvmGroup:      containsField(string(configuredGroups), "kvm") || account.Username == "root",
 		kvmAccess:     kvmAccess,
 	}
-	return deriveHostPlan(observation, requireDocker)
+	return deriveHostPlan(observation, requireDocker, requireIncus)
 }
 
-func deriveHostPlan(observation hostObservation, requireDocker bool) (HostPlan, error) {
-	plan := HostPlan{username: observation.username, requireDocker: requireDocker}
+func deriveHostPlan(observation hostObservation, requireDocker, requireIncus bool) (HostPlan, error) {
+	plan := HostPlan{username: observation.username, requireDocker: requireDocker, requireIncus: requireIncus}
 	if requireDocker && !observation.dockerAccess && observation.dockerCommand && observation.dockerService && observation.dockerGroup {
 		return HostPlan{}, fmt.Errorf("Docker is installed but inaccessible; if group membership just changed, sign out and back in, then rerun dorf setup")
 	}
-	if !observation.incusAccess && observation.incusCommand && observation.incusService && observation.incusGroup {
+	if requireIncus && !observation.incusAccess && observation.incusCommand && observation.incusService && observation.incusGroup {
 		return HostPlan{}, fmt.Errorf("Incus is installed but inaccessible; if group membership just changed, sign out and back in, then rerun dorf setup")
 	}
 	addPackage := func(packageName, summary string) {
@@ -140,7 +168,7 @@ func deriveHostPlan(observation hostObservation, requireDocker bool) (HostPlan, 
 			addGroup("docker", "Grant "+observation.username+" root-equivalent Docker access")
 		}
 	}
-	if !observation.incusAccess {
+	if requireIncus && !observation.incusAccess {
 		if !observation.incusCommand {
 			addPackage("incus", "Install Incus")
 		}
@@ -151,10 +179,10 @@ func deriveHostPlan(observation hostObservation, requireDocker bool) (HostPlan, 
 			addGroup("incus-admin", "Grant "+observation.username+" root-equivalent Incus access")
 		}
 	}
-	if !observation.qemuCommand {
+	if requireIncus && !observation.qemuCommand {
 		addPackage("qemu-system-x86", "Install QEMU")
 	}
-	if !observation.kvmAccess {
+	if requireIncus && !observation.kvmAccess {
 		if observation.kvmGroup {
 			return HostPlan{}, fmt.Errorf("hardware virtualization is present but inaccessible; if kvm group membership just changed, sign out and back in, then rerun dorf setup")
 		}
@@ -168,9 +196,9 @@ func deriveHostPlan(observation hostObservation, requireDocker bool) (HostPlan, 
 	return plan, nil
 }
 
-// ApplyHost executes exactly the approved plan, then validates and minimally
-// initializes the local runtime. An empty plan performs only validation and
-// safe pristine-Incus initialization.
+// ApplyHost executes exactly the approved plan, then validates only the
+// selected host capabilities. Incus initialization is never a common setup
+// side effect.
 func ApplyHost(ctx context.Context, plan HostPlan, stdout, stderr io.Writer) error {
 	prefix := []string{}
 	if !plan.Empty() && os.Geteuid() != 0 {
@@ -207,20 +235,13 @@ func ApplyHost(ctx context.Context, plan HostPlan, stdout, stderr io.Writer) err
 			return fmt.Errorf("Docker is not accessible to the current user")
 		}
 	}
-	if !commandSucceeds(ctx, []string{"incus", "info"}) {
-		return fmt.Errorf("Incus is not accessible to the current user")
-	}
-	if err := initializePristineIncus(ctx, stdout, stderr); err != nil {
-		return err
-	}
-	if plan.Empty() {
-		if plan.requireDocker {
-			fmt.Fprintln(stdout, "Host runtime ready: Docker, Incus, and QEMU")
-		} else {
-			fmt.Fprintln(stdout, "Host runtime ready: Incus and QEMU")
+	if plan.requireIncus {
+		if !commandSucceeds(ctx, []string{"incus", "info"}) {
+			return fmt.Errorf("Incus is not accessible to the current user")
 		}
-	} else {
-		fmt.Fprintln(stdout, "Host runtime ready: approved changes applied")
+		if err := initializePristineIncus(ctx, stdout, stderr); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -45,3 +45,28 @@ func TestLoadRejectsIncompleteDatabase(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestSaveE2BAPIKeyPreservesDatabaseAndSupportsRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deployment.json")
+	database := Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret", Image: "postgres:17.10-bookworm", ImageID: "sha256:exact"}
+	if err := Save(path, Config{Database: database}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveE2BAPIKey(path, "e2b-secret"); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := Load(path)
+	if err != nil || !found || got.Database != database || got.E2B == nil || got.E2B.APIKey != "e2b-secret" {
+		t.Fatalf("config=%#v found=%t err=%v", got, found, err)
+	}
+	if err := SaveE2BAPIKey(path, "e2b-secret"); err != nil {
+		t.Fatalf("idempotent save: %v", err)
+	}
+	if err := SaveE2BAPIKey(path, "different"); err != nil {
+		t.Fatal(err)
+	}
+	rotated, _, err := Load(path)
+	if err != nil || rotated.Database != database || rotated.E2B == nil || rotated.E2B.APIKey != "different" {
+		t.Fatalf("rotated=%#v err=%v", rotated, err)
+	}
+}

@@ -61,8 +61,8 @@ func (execDatabaseRunner) Run(ctx context.Context, environment map[string]string
 // EnsureDatabase creates or reconciles Dorf's one local Docker PostgreSQL
 // deployment. The durable record is written before Docker resources so a
 // process loss can converge on the same credential and stable names.
-func EnsureDatabase(ctx context.Context, path string, stdout io.Writer) (deployment.Database, error) {
-	return databaseSetup{runner: execDatabaseRunner{}, random: rand.Reader, wait: time.Sleep}.ensure(ctx, path, stdout)
+func EnsureDatabase(ctx context.Context, path string) (deployment.Database, error) {
+	return databaseSetup{runner: execDatabaseRunner{}, random: rand.Reader, wait: time.Sleep}.ensure(ctx, path)
 }
 
 type databaseSetup struct {
@@ -71,7 +71,7 @@ type databaseSetup struct {
 	wait   func(time.Duration)
 }
 
-func (s databaseSetup) ensure(ctx context.Context, path string, stdout io.Writer) (deployment.Database, error) {
+func (s databaseSetup) ensure(ctx context.Context, path string) (deployment.Database, error) {
 	stored, found, err := deployment.Load(path)
 	if err != nil {
 		return deployment.Database{}, err
@@ -80,7 +80,6 @@ func (s databaseSetup) ensure(ctx context.Context, path string, stdout io.Writer
 		if err := s.reconcileDocker(ctx, stored.Database); err != nil {
 			return deployment.Database{}, err
 		}
-		fmt.Fprintln(stdout, "PostgreSQL deployment ready: Docker")
 		return stored.Database, nil
 	}
 	if !s.dockerAvailable(ctx) {
@@ -118,7 +117,6 @@ func (s databaseSetup) ensure(ctx context.Context, path string, stdout io.Writer
 	if err := s.reconcileDocker(ctx, database); err != nil {
 		return deployment.Database{}, err
 	}
-	fmt.Fprintln(stdout, "PostgreSQL deployment ready: Docker")
 	return database, nil
 }
 

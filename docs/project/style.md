@@ -29,7 +29,7 @@ The palette is role-based rather than a requirement that every surface use every
 | Role | Color | Use |
 | --- | --- | --- |
 | Night forest | `#192F23` | Primary dark field and deep visual depth |
-| Forest | `#30452B` | Panels, headings, and quieter elevated surfaces |
+| Forest | `#30452B` | Panels and quieter elevated surfaces |
 | Moss teal | `#335446` | Secondary structure and cool natural contrast |
 | Leaf moss | `#678C28` | Selected, healthy, or active accents used sparingly |
 | Warm lichen | `#D5C592` | Dorf wordmark and warm primary emphasis |
@@ -62,6 +62,7 @@ tagline. Edit the source assets or generator, then run `mise run brand:generate`
 
 - Start with the situation or decision the user is facing, followed by one muted sentence of
   context.
+- Keep ordinary questions and headings on the native surface; do not turn them into colored badges.
 - Group choices by their real distinction, such as local and cloud, without turning every label
   into a badge.
 - Keep the primary path visually obvious. Secondary controls and help belong in muted text.

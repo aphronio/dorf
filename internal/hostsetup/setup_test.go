@@ -11,7 +11,7 @@ func TestDeriveHostPlanContainsOnlyObservedMissingChanges(t *testing.T) {
 		username: "alice", ubuntu2404: true,
 		dockerCommand: true, dockerService: true, dockerGroup: true, dockerAccess: true,
 		incusService: true, incusGroup: true, kvmAccess: true,
-	}, true)
+	}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestDeriveHostPlanContainsOnlyObservedMissingChanges(t *testing.T) {
 }
 
 func TestDeriveHostPlanFreshUbuntuIncludesEveryRequiredAuthority(t *testing.T) {
-	plan, err := deriveHostPlan(hostObservation{username: "alice", ubuntu2404: true}, true)
+	plan, err := deriveHostPlan(hostObservation{username: "alice", ubuntu2404: true}, true, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestDeriveHostPlanFreshUbuntuIncludesEveryRequiredAuthority(t *testing.T) {
 }
 
 func TestDeriveHostPlanRefusesMutationOutsideSupportedUbuntu(t *testing.T) {
-	_, err := deriveHostPlan(hostObservation{username: "alice"}, true)
+	_, err := deriveHostPlan(hostObservation{username: "alice"}, true, true)
 	if err == nil || !strings.Contains(err.Error(), "Ubuntu 24.04") {
 		t.Fatalf("error=%v", err)
 	}
@@ -55,7 +55,7 @@ func TestDeriveHostPlanAcceptsReadyNonUbuntuHost(t *testing.T) {
 		dockerCommand: true, dockerService: true, dockerGroup: true, dockerAccess: true,
 		incusCommand: true, incusService: true, incusGroup: true, incusAccess: true,
 		qemuCommand: true, kvmAccess: true,
-	}, true)
+	}, true, true)
 	if err != nil || !plan.Empty() {
 		t.Fatalf("plan=%#v error=%v", plan, err)
 	}
@@ -67,8 +67,18 @@ func TestDeriveHostPlanReportsStaleGroupAccess(t *testing.T) {
 		dockerCommand: true, dockerService: true, dockerGroup: true,
 		incusCommand: true, incusService: true, incusGroup: true,
 		qemuCommand: true, kvmAccess: true,
-	}, true)
+	}, true, true)
 	if err == nil || !strings.Contains(err.Error(), "sign out and back in") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestDeriveHostPlanManagedProviderNeedsNoLocalVirtualization(t *testing.T) {
+	plan, err := deriveHostPlan(hostObservation{
+		username: "alice", ubuntu2404: true,
+		dockerCommand: true, dockerService: true, dockerGroup: true, dockerAccess: true,
+	}, true, false)
+	if err != nil || !plan.Empty() || plan.requireIncus {
+		t.Fatalf("managed-provider plan=%#v error=%v", plan, err)
 	}
 }

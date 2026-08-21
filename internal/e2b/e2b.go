@@ -101,6 +101,17 @@ func ownershipErrorf(format string, args ...any) error {
 	return provider.OwnershipErrorf(format, args...)
 }
 
+// Check proves that the configured project credential can reach E2B's
+// Sandbox inventory without creating or changing a provider resource.
+func (c Client) Check(ctx context.Context) error {
+	query := url.Values{}
+	query.Set("limit", "1")
+	query.Set("state", "running,paused")
+	var sandboxes []listedSandbox
+	_, err := c.doJSONWithHeaders(ctx, http.MethodGet, "/v2/sandboxes", query, nil, http.StatusOK, &sandboxes)
+	return err
+}
+
 func (c Client) Create(ctx context.Context, request CreateRequest) (Sandbox, error) {
 	if err := validateOwnership(request.Owner); err != nil {
 		return Sandbox{}, err

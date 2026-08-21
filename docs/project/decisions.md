@@ -643,7 +643,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D035 — Brokered model-plane authentication; credential-free sandbox images
 
-- **Status:** Accepted — 2026-07-29 (supersedes D008 for Codex)
+- **Status:** Accepted — 2026-07-29 (supersedes D008 for Codex); OpenAI API-key path implemented,
+  live credential proof pending — 2026-08-21
 - **Decision:** A single host-side broker (pinned, vendored CLIProxyAPI) holds the ChatGPT OAuth
   bundle as the sole refresh writer. Sandboxes run real Codex app-server (D003) pointed at the
   broker via `model_providers` with a per-sandbox scoped key; sandboxes contain no OpenAI
@@ -665,7 +666,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D036 — Shared Provider Gateway for trusted clients and Dorf Sandboxes
 
 - **Status:** Accepted direction — 2026-07-29; Go control plane at D047 cutover — 2026-08-08;
-  remote E2B route wire proved — 2026-08-14
+  remote E2B route wire proved — 2026-08-14; named Cloudflare route implemented, live hostname proof
+  pending — 2026-08-21
 - **Decision:** Keep the Provider Gateway as a sibling application subsystem outside the durable
   Job core. Its programmatic boundary manages durable upstream Provider
   Connections and revocable consumer-specific Inference Routes over a supervised broker backend.
@@ -684,15 +686,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   depend on that location. A remote Sandbox may use the same route shape through an exact
   deployment-supplied HTTPS `/v1` URL while the broker remains private behind an outbound tunnel.
   The Sandbox adapter owns topology validation and exact-host default-deny egress; the revocable
-  consumer route key authenticates Gateway requests. A disposable TryCloudflare tunnel proved that
-  wire path for E2B, but it is not a durable deployment choice. Stable tunnel/domain operations,
-  workload identity beyond the scoped route, and multi-user authority remain unimplemented until a
-  concrete deployment requires them.
+  consumer route key authenticates Gateway requests. Any exact stable HTTPS `/v1` ingress remains
+  valid deployment input. Guided setup owns one narrower convenience: a named outbound-only
+  Cloudflare Tunnel for an operator-authorized hostname, an exact retained Tunnel credential, and a
+  dedicated `dorf-cloudflared.service`. Only `/v1` reaches the private broker. The broad Cloudflare
+  account certificate used to create the Tunnel and DNS route is removed after readiness. Disposable
+  Quick Tunnels remain proof-only. Workload identity beyond the scoped route and multi-user authority
+  remain unimplemented until a concrete deployment requires them.
 - **Provider posture:** The gateway is intended to admit validated subscription providers such as
   ChatGPT, Kimi Code, or Grok and API-key providers such as OpenAI or OpenRouter. Names are direction,
   not support claims. Validate each provider, auth mode, consumer wire dialect, refresh path, and
-  concurrency behavior before advertising it. Do not add automatic pooling, fallback, quota
-  scheduling, or a speculative capability matrix.
+  concurrency behavior before advertising it. ChatGPT subscription and one OpenAI API key are the
+  supported choices; both retain the upstream credential on the host and use the same scoped
+  Sandbox route. The deployment currently admits only one unprefixed OpenAI authentication mode at
+  a time. Do not add automatic pooling, fallback, quota scheduling, or a speculative capability
+  matrix.
 - **Why:** Host applications and Dorf Sandboxes are distinct consumers of the same model-provider
   connection. Sharing a typed facade and broker authority gives them login-once behavior without
   coupling provider state to Job semantics, duplicating credentials, or forcing model streams
@@ -1822,7 +1830,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D071 — Setup converges one Docker PostgreSQL deployment
 
-- **Status:** Accepted portability and bootstrap slice, simplified to one setup path — 2026-08-19
+- **Status:** Accepted portability and bootstrap slice, simplified to one usable setup path —
+  2026-08-21
 - **Decision:** Keep Dorf as a native Go binary with PostgreSQL as its external durability authority.
   The supported ordinary deployment has one database shape: Dorf-owned Docker PostgreSQL. There is
   no backend selection, native PostgreSQL installer, Compose wrapper, or separate host-install
@@ -1833,14 +1842,22 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   generated credential in the mode-0600 deployment record, starts a stopped owned container, and
   refuses same-named resources without exact Dorf ownership or configuration. The host Docker socket
   remains control-plane authority and is never exposed to a Sandbox or AgentRun.
-- **Bootstrap:** Setup first observes Docker, Incus, QEMU, services, and required group access. If
-  supported Ubuntu 24.04 changes are missing, one Huh prompt renders directly from the exact plan
-  that will be applied; `--yes` approves that same plan for automation. A new login is reported only
-  when newly granted group membership cannot affect the current process. Already-ready non-Ubuntu
-  hosts are accepted, but Dorf does not mutate their packages. Setup then reconciles PostgreSQL and
-  migrates Absurd and Dorf storage before profile or Provider Connection validation. With no
-  Provider Connection supplied, it truthfully reports the next profile and connection operations;
-  a later `dorf setup --provider NAME` proves complete readiness.
+- **Bootstrap:** Setup first observes the common Docker/PostgreSQL host requirements, reconciles
+  PostgreSQL, and migrates Absurd and Dorf storage. Once that common foundation is ready, interactive
+  setup asks which Sandbox providers this host should prepare and accepts zero or more; the repeatable
+  `--sandbox-provider` flag supplies the same choice for automation. Selecting Incus adds Incus,
+  QEMU, KVM, services, and group access to a second exact observed plan. Selecting only E2B adds no
+  local virtualization requirement. Provider selection is setup input, not a durable enablement
+  registry; named verified profiles remain runtime authority. If supported Ubuntu 24.04 changes are
+  missing, a Huh prompt renders directly from the exact plan that will be applied; `--yes` approves
+  that same plan for automation. A new login is reported only when newly granted group membership
+  cannot affect the current process. Already-ready non-Ubuntu hosts are accepted, but Dorf does not
+  mutate their packages. When at least one Sandbox provider is selected, setup continues through
+  Harness choice, protected upstream authentication, provider credential and remote-Gateway input
+  when required, exact profile creation, functional verification, and default selection. Success
+  therefore means the selected profile can admit Agent work; selecting no provider deliberately
+  stops after the common foundation. Explicit profile and provider commands remain composable
+  operator surfaces, not required follow-up chores for the ordinary path.
 - **Deliberate omission:** `DORF_DATABASE_URL` remains the existing advanced and test override, but
   there is no database-provider registry, native database path, Compose project,
   external-database command, database migration command, or automatic backend conversion. Those

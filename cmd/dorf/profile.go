@@ -125,21 +125,7 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 	if err := postgres.ValidateSandboxProfileIdentity(name, *harness); err != nil {
 		return err
 	}
-	alias := "dorf-profile-" + name
-	var installed releaseapp.Manifest
-	var err error
-	if *releaseTag != "" {
-		installed, err = releaseapp.InstallPublishedImage(ctx, *releaseTag, alias)
-	} else {
-		installed, err = releaseapp.InstallImage(ctx, *manifestPath, *archive, alias)
-	}
-	if err != nil {
-		return err
-	}
-	profile, created, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
-		Name: name, Provider: core.SandboxProviderIncus, Harness: *harness,
-		Artifact: installed.ImageFingerprint, IncusNetwork: *network, IncusDiskSize: *diskSize,
-	})
+	profile, created, installed, err := reconcileOfficialIncusProfile(ctx, store, name, *harness, *releaseTag, *manifestPath, *archive, *network, *diskSize)
 	if err != nil {
 		return err
 	}
@@ -147,6 +133,25 @@ func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args
 		"profile": profileView(profile), "created": created, "official_release": installed.ReleaseTag,
 		"next": "dorf profile verify " + profile.Name,
 	})
+}
+
+func reconcileOfficialIncusProfile(ctx context.Context, store postgres.Store, name, harness, releaseTag, manifestPath, archive, network, diskSize string) (core.SandboxProfile, bool, releaseapp.Manifest, error) {
+	alias := "dorf-profile-" + name
+	var installed releaseapp.Manifest
+	var err error
+	if strings.TrimSpace(releaseTag) != "" {
+		installed, err = releaseapp.InstallPublishedImage(ctx, releaseTag, alias)
+	} else {
+		installed, err = releaseapp.InstallImage(ctx, manifestPath, archive, alias)
+	}
+	if err != nil {
+		return core.SandboxProfile{}, false, installed, err
+	}
+	profile, created, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderIncus, Harness: harness,
+		Artifact: installed.ImageFingerprint, IncusNetwork: network, IncusDiskSize: diskSize,
+	})
+	return profile, created, installed, err
 }
 
 type sandboxProfileView struct {

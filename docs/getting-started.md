@@ -8,57 +8,37 @@ Download the application archive and checksum from an immutable Dorf release, ve
 `dorf` on `PATH`. Contributors building from source should use the repository-managed toolchain in
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-Run the convergent setup entry point. It observes the host first. When supported Ubuntu 24.04 host
-changes are needed, the interactive prompt lists only those exact changes and applies them after
-approval. Automation may approve the same observed plan explicitly:
+Run the convergent setup entry point:
 
 ```bash
 dorf setup
-dorf setup --yes
 ```
+
+It prepares Docker/PostgreSQL first, then offers local Incus, cloud E2B, both, or neither. Selecting a
+provider continues through Harness choice, ChatGPT-subscription or OpenAI-API authentication,
+provider inputs, profile creation, functional verification, and default selection. E2B additionally
+needs an exact template-build reference and one stable HTTPS `/v1` Gateway route. Setup can verify an
+existing route or guide a named Cloudflare Tunnel after you authorize a hostname on a
+Cloudflare-managed domain. Interactive setup discovers the hostname's DNS provider and offers the
+guided Tunnel only when it finds Cloudflare nameservers and no existing address records; every
+other domain stays on the existing-HTTPS-ingress path.
+
+When supported Ubuntu 24.04 host changes are needed, setup previews and applies only those exact
+changes after approval. `--yes` approves the same host and Cloudflare plans for automation; every
+credential and provider choice must still be explicit in flags. `dorf setup --yes` alone prepares
+only the common foundation.
 
 Sign out and back in if setup adds Docker or Incus group access, then run the same command again.
-Setup initializes only a pristine Incus daemon and preserves operator-owned storage and networking.
-It owns only the labeled `dorf-postgres` container and `dorf-postgres-data` volume, exposes
-PostgreSQL on loopback, and never gives a Sandbox the host Docker socket.
+Setup initializes a pristine Incus daemon only when Incus was selected and preserves operator-owned
+storage and networking. It owns only the labeled `dorf-postgres` container and
+`dorf-postgres-data` volume, exposes PostgreSQL on loopback, and never gives a Sandbox the host
+Docker socket.
 
-## 2. Install a Sandbox profile
+The separate `profile` and `provider` commands remain available for custom artifacts and advanced
+operations. Their exact-artifact, credential, and route boundaries are described by the
+[release process](releasing.md) and [Provider Gateway](project/provider-gateway.md).
 
-Use the same release tag as the application:
-
-```bash
-dorf profile install local-codex --release vX.Y.Z --harness codex
-dorf profile verify local-codex
-dorf profile set-default local-codex
-```
-
-For an offline-prepared host, download the manifest and archive from that release and pass them
-explicitly:
-
-```bash
-dorf profile install local-codex \
-  --manifest MANIFEST.json --archive IMAGE.tar.gz --harness codex
-```
-
-The CLI verifies release and image identity before import, then stores the exact fingerprint. The
-explicit profile verification creates one disposable Sandbox, runs Dorf's base functional probe,
-deletes it, and confirms absence before the profile can admit work. To bring an existing artifact,
-use `dorf profile create` with its provider-specific image or template reference. Image construction,
-publication, and consumer validation are owned by the repository's release command; see the
-[release process](releasing.md).
-
-## 3. Connect the provider and initialize Dorf
-
-```bash
-dorf provider connect chatgpt --name personal-chatgpt --profile local-codex
-dorf setup --provider personal-chatgpt --profile local-codex
-```
-
-Provider state is deployment-owned and defaults under the XDG data directory. Override its location
-with `DORF_PROVIDER_GATEWAY_STATE` when needed. See the [Provider Gateway](project/provider-gateway.md)
-for its credential and route boundary.
-
-## 4. Prove GitHub and repository authority
+## 2. Prove GitHub and repository authority
 
 Configure a GitHub App with metadata-read, issues-read, contents-write, and pull-requests-write
 access to the selected repository. Keep its metadata and private key at the paths reported by
@@ -76,7 +56,7 @@ dorf doctor \
 
 Every failed fact includes a remediation.
 
-## 5. Run a coding Job
+## 3. Run a coding Job
 
 The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
 Create and verify a separate Pi profile when that Job should use Pi; both may reference the same
