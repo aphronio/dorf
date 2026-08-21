@@ -4,8 +4,22 @@ Check [Support and diagnostics](support.md) before installing Dorf.
 
 ## 1. Install the application and initialize storage
 
-Download the application archive and checksum from an immutable Dorf release, verify them, and put
-`dorf` on `PATH`. Contributors building from source should use the repository-managed toolchain in
+Download and verify one exact immutable Dorf release, then put `dorf` on `PATH`:
+
+```bash
+RELEASE_TAG=v0.3.0
+release_dir="$(mktemp -d)"
+gh release verify "$RELEASE_TAG" --repo aphronio/dorf
+gh release download "$RELEASE_TAG" --repo aphronio/dorf --dir "$release_dir" \
+  --pattern "dorf_${RELEASE_TAG#v}_linux_x86_64.tar.gz" \
+  --pattern "dorf_${RELEASE_TAG#v}_checksums.txt"
+(cd "$release_dir" && sha256sum --check "dorf_${RELEASE_TAG#v}_checksums.txt")
+tar -xzf "$release_dir/dorf_${RELEASE_TAG#v}_linux_x86_64.tar.gz" -C "$release_dir"
+sudo install -m 0755 "$release_dir/dorf" /usr/local/bin/dorf
+dorf version
+```
+
+Contributors building from source should instead use the repository-managed toolchain in
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 Run the convergent setup entry point:
