@@ -48,6 +48,12 @@ const (
 	setupGatewayExisting   setupGatewayMode = "existing"
 )
 
+type setupChoice[T comparable] struct {
+	Title       string
+	Description string
+	Value       T
+}
+
 func newSetupPresenter(output io.Writer) setupPresenter {
 	file, isFile := output.(*os.File)
 	interactive := isFile && isTerminal(os.Stdin) && isTerminal(file)
@@ -164,41 +170,43 @@ func (p setupPresenter) ProviderGroup(selected *[]core.SandboxProvider, kvmAvail
 
 func (p setupPresenter) HarnessGroup(selected *string) *huh.Group {
 	return huh.NewGroup(
-		huh.NewSelect[string]().
-			Options(
-				huh.NewOption(p.option("Codex", "OpenAI Codex Harness"), "codex"),
-				huh.NewOption(p.option("Pi", "Pi coding-agent Harness"), "pi"),
-			).
-			Value(selected).
-			Height(4),
+		setupSelect(p, selected,
+			setupChoice[string]{Title: "Codex", Description: "OpenAI Codex Harness", Value: "codex"},
+			setupChoice[string]{Title: "Pi", Description: "Pi coding-agent Harness", Value: "pi"},
+		),
 	).Title("Which Harness should agents use?").
 		Description("The selected Harness is verified inside every configured Sandbox profile.")
 }
 
 func (p setupPresenter) ConnectionGroup(selected *setupConnectionMode) *huh.Group {
 	return huh.NewGroup(
-		huh.NewSelect[setupConnectionMode]().
-			Options(
-				huh.NewOption(p.option("ChatGPT subscription", "Sign in with device confirmation"), setupConnectionChatGPT),
-				huh.NewOption(p.option("OpenAI API key", "Usage is billed to your OpenAI API account"), setupConnectionOpenAI),
-			).
-			Value(selected).
-			Height(4),
+		setupSelect(p, selected,
+			setupChoice[setupConnectionMode]{Title: "ChatGPT subscription", Description: "Sign in with device confirmation", Value: setupConnectionChatGPT},
+			setupChoice[setupConnectionMode]{Title: "OpenAI API key", Description: "Usage is billed to your OpenAI API account", Value: setupConnectionOpenAI},
+		),
 	).Title("How should your agents access OpenAI?").
 		Description("The upstream credential stays on this host and never enters a Sandbox.")
 }
 
 func (p setupPresenter) CloudflareGatewayGroup(selected *setupGatewayMode, zone string) *huh.Group {
 	return huh.NewGroup(
-		huh.NewSelect[setupGatewayMode]().
-			Options(
-				huh.NewOption(p.option("Guided Cloudflare Tunnel", "Create and run a stable outbound-only route"), setupGatewayCloudflare),
-				huh.NewOption(p.option("Existing HTTPS ingress", "Use routing infrastructure you already operate"), setupGatewayExisting),
-			).
-			Value(selected).
-			Height(4),
+		setupSelect(p, selected,
+			setupChoice[setupGatewayMode]{Title: "Guided Cloudflare Tunnel", Description: "Create and run a stable outbound-only route", Value: setupGatewayCloudflare},
+			setupChoice[setupGatewayMode]{Title: "Existing HTTPS ingress", Description: "Use routing infrastructure you already operate", Value: setupGatewayExisting},
+		),
 	).Title("Cloudflare DNS detected for " + zone).
 		Description("Choose how cloud Sandboxes should reach Dorf at this hostname.")
+}
+
+func setupSelect[T comparable](p setupPresenter, selected *T, choices ...setupChoice[T]) *huh.Select[T] {
+	options := make([]huh.Option[T], 0, len(choices))
+	for _, choice := range choices {
+		options = append(options, huh.NewOption(p.option(choice.Title, choice.Description), choice.Value))
+	}
+	return huh.NewSelect[T]().
+		Options(options...).
+		Value(selected).
+		Height(len(choices)*2 + 1)
 }
 
 func (p setupPresenter) SecretGroup(title, description string, value *string) *huh.Group {
@@ -258,6 +266,9 @@ func (p setupPresenter) option(title, description string) string {
 
 func setupKeyMap() *huh.KeyMap {
 	keymap := huh.NewDefaultKeyMap()
+	keymap.Select.Filter.SetEnabled(false)
+	keymap.Select.Next.SetHelp("enter", "continue")
+	keymap.Select.Submit.SetHelp("enter", "continue")
 	keymap.MultiSelect.Toggle.SetKeys("space")
 	keymap.MultiSelect.Toggle.SetHelp("space", "select")
 	keymap.MultiSelect.Submit.SetHelp("enter", "continue")
@@ -268,12 +279,14 @@ func setupKeyMap() *huh.KeyMap {
 func setupTheme(isDark bool) *huh.Styles {
 	styles := huh.ThemeBase(isDark)
 	muted := lipgloss.Color(setupMutedText)
+	button := lipgloss.NewStyle().Padding(0, 1).MarginRight(1)
 
 	styles.Group.Title = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(setupFormText))
 	styles.Group.Description = lipgloss.NewStyle().Foreground(muted).MarginTop(1).MarginBottom(1)
 	styles.Focused.Base = styles.Focused.Base.BorderForeground(lipgloss.Color(setupMossTeal))
+	styles.Focused.SelectSelector = lipgloss.NewStyle().Foreground(lipgloss.Color(setupLeafMoss)).SetString("› ")
 	styles.Focused.MultiSelectSelector = lipgloss.NewStyle().Foreground(lipgloss.Color(setupLeafMoss)).SetString("› ")
 	styles.Focused.SelectedPrefix = lipgloss.NewStyle().Foreground(lipgloss.Color(setupLeafMoss)).SetString("[✓] ")
 	styles.Focused.UnselectedPrefix = lipgloss.NewStyle().Foreground(muted).SetString("[ ] ")
@@ -283,8 +296,19 @@ func setupTheme(isDark bool) *huh.Styles {
 	styles.Focused.Description = lipgloss.NewStyle().Foreground(muted).MarginBottom(1)
 	styles.Focused.ErrorIndicator = styles.Focused.ErrorIndicator.Foreground(lipgloss.Color(setupHearthAmber))
 	styles.Focused.ErrorMessage = styles.Focused.ErrorMessage.Foreground(lipgloss.Color(setupHearthAmber))
+	styles.Focused.FocusedButton = button.
+		Bold(true).
+		Foreground(lipgloss.Color(setupFormText)).
+		BorderStyle(lipgloss.Border{Left: "›"}).
+		BorderLeft(true).
+		BorderForeground(lipgloss.Color(setupLeafMoss))
+	styles.Focused.BlurredButton = button.
+		Foreground(muted).
+		BorderStyle(lipgloss.Border{Left: " "}).
+		BorderLeft(true)
 	styles.Blurred = styles.Focused
 	styles.Blurred.Base = styles.Blurred.Base.BorderStyle(lipgloss.HiddenBorder())
+	styles.Blurred.SelectSelector = lipgloss.NewStyle().SetString("  ")
 	styles.Blurred.MultiSelectSelector = lipgloss.NewStyle().SetString("  ")
 	styles.Help.ShortKey = lipgloss.NewStyle().Foreground(lipgloss.Color(setupFormText))
 	styles.Help.ShortDesc = lipgloss.NewStyle().Foreground(muted)

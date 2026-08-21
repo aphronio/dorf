@@ -1858,6 +1858,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   therefore means the selected profile can admit Agent work; selecting no provider deliberately
   stops after the common foundation. Explicit profile and provider commands remain composable
   operator surfaces, not required follow-up chores for the ordinary path.
+  Guided E2B setup defaults to the exact public Dorf Standard template build compiled into that
+  Dorf release; `--e2b-template` remains the explicit bring-your-own exact-build path.
 - **Deliberate omission:** `DORF_DATABASE_URL` remains the existing advanced and test override, but
   there is no database-provider registry, native database path, Compose project,
   external-database command, database migration command, or automatic backend conversion. Those

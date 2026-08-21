@@ -664,7 +664,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	presenter.Ready("Durable state", databaseDetail)
 	fmt.Fprintln(stdout)
 
-	providers, err := selectSetupSandboxProviders(ctx, options, presenter)
+	providers, err := selectSetupSandboxProviders(ctx, cfg, options, presenter)
 	if err != nil {
 		if errors.Is(err, errSetupCancelled) {
 			presenter.Note("Setup paused", "Foundation is ready; no Sandbox provider was prepared")
@@ -694,18 +694,27 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 
 var errSetupCancelled = errors.New("setup cancelled")
 
-func selectSetupSandboxProviders(ctx context.Context, options setupOptions, presenter setupPresenter) ([]core.SandboxProvider, error) {
-	selected := append([]core.SandboxProvider{}, options.SandboxProviders...)
-	if len(selected) > 0 || options.Yes {
+func selectSetupSandboxProviders(ctx context.Context, cfg config.Config, options setupOptions, presenter setupPresenter) ([]core.SandboxProvider, error) {
+	kvmAvailable := hostsetup.KVMDevicePresent()
+	selected, settled := deriveSetupSandboxProviders(cfg, options, presenter.interactive, kvmAvailable)
+	if settled {
 		return selected, nil
 	}
-	if !presenter.interactive {
-		return selected, nil
-	}
-	if err := presenter.RunForm(ctx, presenter.ProviderGroup(&selected, hostsetup.KVMDevicePresent())); err != nil {
+	if err := presenter.RunForm(ctx, presenter.ProviderGroup(&selected, kvmAvailable)); err != nil {
 		return nil, fmt.Errorf("select Sandbox providers: %w", err)
 	}
 	return selected, nil
+}
+
+func deriveSetupSandboxProviders(cfg config.Config, options setupOptions, interactive, kvmAvailable bool) ([]core.SandboxProvider, bool) {
+	selected := append([]core.SandboxProvider{}, options.SandboxProviders...)
+	if len(selected) > 0 || options.Yes || !interactive {
+		return selected, true
+	}
+	if !kvmAvailable && strings.TrimSpace(cfg.E2BAPIKey) != "" {
+		return []core.SandboxProvider{core.SandboxProviderE2B}, true
+	}
+	return selected, false
 }
 
 func containsSandboxProvider(values []core.SandboxProvider, wanted core.SandboxProvider) bool {

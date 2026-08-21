@@ -29,6 +29,7 @@ import (
 const (
 	guidedIncusNetwork  = "incusbr0"
 	guidedIncusDiskSize = "40GiB"
+	guidedE2BTemplate   = "dorf/standard:248684ca-1b17-4251-aaf9-6aac792fa806"
 )
 
 type guidedProfilePlan struct {
@@ -212,16 +213,21 @@ func gatewayIncusNetwork(profiles []core.SandboxProfile, selected []guidedProfil
 }
 
 func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string, options setupOptions, presenter setupPresenter) (string, error) {
+	if err := g.Provision(ctx, bind); err != nil {
+		return "", fmt.Errorf("start the Provider Gateway: %w", err)
+	}
 	if options.Connection != "" {
-		if err := g.Provision(ctx, bind); err != nil {
-			return "", fmt.Errorf("start the Provider Gateway: %w", err)
-		}
 		if err := g.Check(ctx, options.Connection); err != nil {
 			return "", fmt.Errorf("existing Provider Connection %q is not ready: %w", options.Connection, err)
 		}
 		return options.Connection, nil
 	}
 	mode := options.ConnectionMode
+	if mode == "" {
+		if existing := unambiguousSetupConnection(func(name string) error { return g.Check(ctx, name) }); existing != "" {
+			return existing, nil
+		}
+	}
 	if mode == "" && presenter.interactive && !options.Yes {
 		mode = setupConnectionChatGPT
 		if err := presenter.RunForm(ctx, presenter.ConnectionGroup(&mode)); err != nil {
@@ -230,9 +236,6 @@ func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string
 	}
 	if mode == "" {
 		return "", fmt.Errorf("automated setup requires --provider NAME or --connection-auth chatgpt|openai")
-	}
-	if err := g.Provision(ctx, bind); err != nil {
-		return "", fmt.Errorf("start the Provider Gateway: %w", err)
 	}
 	switch mode {
 	case setupConnectionChatGPT:
@@ -271,6 +274,19 @@ func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string
 		return name, nil
 	default:
 		return "", fmt.Errorf("connection authentication must be chatgpt or openai")
+	}
+}
+
+func unambiguousSetupConnection(check func(string) error) string {
+	chatGPT := check("personal-chatgpt") == nil
+	openAI := check("openai-api") == nil
+	switch {
+	case chatGPT && !openAI:
+		return "personal-chatgpt"
+	case openAI && !chatGPT:
+		return "openai-api"
+	default:
+		return ""
 	}
 }
 
@@ -582,7 +598,7 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 					return installErr
 				})
 			case core.SandboxProviderE2B:
-				template, templateErr := setupE2BTemplate(ctx, options, presenter)
+				template, templateErr := setupE2BTemplate(options)
 				if templateErr != nil {
 					return nil, templateErr
 				}
@@ -614,20 +630,10 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 	return profiles, nil
 }
 
-func setupE2BTemplate(ctx context.Context, options setupOptions, presenter setupPresenter) (string, error) {
+func setupE2BTemplate(options setupOptions) (string, error) {
 	template := strings.TrimSpace(options.E2BTemplate)
-	if template == "" && presenter.interactive && !options.Yes {
-		if err := presenter.RunForm(ctx, presenter.TextGroup(
-			"Enter the exact E2B template build",
-			"Use the immutable name:build-id produced by the Dorf template release.",
-			"dorf-debian13-combined:build-id", &template,
-			validateExactE2BTemplate),
-		); err != nil {
-			return "", err
-		}
-	}
 	if template == "" {
-		return "", fmt.Errorf("E2B setup requires --e2b-template with an exact build reference")
+		template = guidedE2BTemplate
 	}
 	if err := validateExactE2BTemplate(template); err != nil {
 		return "", err
@@ -650,11 +656,13 @@ func setupDefaultProfile(ctx context.Context, store postgres.Store, profiles []c
 	}
 	selected := profiles[0].Name
 	if len(profiles) > 1 && presenter.interactive && !yes {
-		options := make([]huh.Option[string], 0, len(profiles))
+		options := make([]setupChoice[string], 0, len(profiles))
 		for _, profile := range profiles {
-			options = append(options, huh.NewOption(presenter.option(profile.Name, string(profile.Provider)+" · "+profile.Harness), profile.Name))
+			options = append(options, setupChoice[string]{
+				Title: profile.Name, Description: string(profile.Provider) + " · " + profile.Harness, Value: profile.Name,
+			})
 		}
-		group := huh.NewGroup(huh.NewSelect[string]().Options(options...).Value(&selected).Height(len(options) * 2)).
+		group := huh.NewGroup(setupSelect(presenter, &selected, options...)).
 			Title("Which Sandbox profile should be the default?").
 			Description("Every Job may still select another verified profile explicitly.")
 		if err := presenter.RunForm(ctx, group); err != nil {

@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	BinaryVersion = "2026.5.2"
-	binarySHA256  = "5286698547f03df745adb2355f04c12dde52ef425491e81f433642d695521886"
+	BinaryVersion = "2026.8.2"
+	binarySHA256  = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2"
 	binaryURL     = "https://github.com/cloudflare/cloudflared/releases/download/" + BinaryVersion + "/cloudflared-linux-amd64"
 )
 

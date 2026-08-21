@@ -16,9 +16,10 @@ dorf setup
 
 It prepares Docker/PostgreSQL first, then offers local Incus, cloud E2B, both, or neither. Selecting a
 provider continues through Harness choice, ChatGPT-subscription or OpenAI-API authentication,
-provider inputs, profile creation, functional verification, and default selection. E2B additionally
-needs an exact template-build reference and one stable HTTPS `/v1` Gateway route. Setup can verify an
-existing route or guide a named Cloudflare Tunnel after you authorize a hostname on a
+provider inputs, profile creation, functional verification, and default selection. E2B uses Dorf's
+exact public Standard template build unless `--e2b-template` selects a custom exact build, and needs
+one stable HTTPS `/v1` Gateway route. Setup can verify an existing route or guide a named Cloudflare
+Tunnel after you authorize a hostname on a
 Cloudflare-managed domain. Interactive setup discovers the hostname's DNS provider and offers the
 guided Tunnel only when it finds Cloudflare nameservers and no existing address records; every
 other domain stays on the existing-HTTPS-ingress path.

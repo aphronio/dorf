@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Template, defaultBuildLogger } from "e2b";
 
 const sdkVersion = "2.39.0";
-const templateName = process.env.DORF_E2B_TEMPLATE_NAME ?? "dorf-debian13-combined";
+const templateName = process.env.DORF_E2B_TEMPLATE_NAME ?? "standard";
 const baseDigest = "d8f17b92dc7ff10f9c1fdecab0ad21103d1d24aed823c3a0359e4f50adfab3eb";
 const baseReference = `debian@sha256:${baseDigest}`;
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));

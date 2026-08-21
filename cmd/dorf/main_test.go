@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
@@ -184,9 +185,41 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 			t.Fatalf("accepted E2B template %q", invalid)
 		}
 	}
-	automated, err := selectSetupSandboxProviders(context.Background(), setupOptions{Yes: true}, newSetupPresenter(&strings.Builder{}))
+	if template, err := setupE2BTemplate(setupOptions{}); err != nil || template != guidedE2BTemplate {
+		t.Fatalf("guided E2B template=%q error=%v", template, err)
+	}
+	if template, err := setupE2BTemplate(setupOptions{E2BTemplate: "operator/custom:exact-build"}); err != nil || template != "operator/custom:exact-build" {
+		t.Fatalf("custom E2B template=%q error=%v", template, err)
+	}
+	automated, err := selectSetupSandboxProviders(context.Background(), config.Config{}, setupOptions{Yes: true}, newSetupPresenter(&strings.Builder{}))
 	if err != nil || len(automated) != 0 {
 		t.Fatalf("common-only automation providers=%v error=%v", automated, err)
+	}
+	inferred, settled := deriveSetupSandboxProviders(config.Config{E2BAPIKey: "configured"}, setupOptions{}, true, false)
+	if !settled || len(inferred) != 1 || inferred[0] != core.SandboxProviderE2B {
+		t.Fatalf("cloud-only inference providers=%v settled=%t", inferred, settled)
+	}
+	if _, settled := deriveSetupSandboxProviders(config.Config{E2BAPIKey: "configured"}, setupOptions{}, true, true); settled {
+		t.Fatal("setup inferred one provider when local and cloud were both viable")
+	}
+	for _, test := range []struct {
+		ready map[string]bool
+		want  string
+	}{
+		{ready: map[string]bool{"personal-chatgpt": true}, want: "personal-chatgpt"},
+		{ready: map[string]bool{"openai-api": true}, want: "openai-api"},
+		{ready: map[string]bool{"personal-chatgpt": true, "openai-api": true}},
+		{ready: map[string]bool{}},
+	} {
+		got := unambiguousSetupConnection(func(name string) error {
+			if test.ready[name] {
+				return nil
+			}
+			return context.Canceled
+		})
+		if got != test.want {
+			t.Fatalf("ready connections=%v got=%q want=%q", test.ready, got, test.want)
+		}
 	}
 	selected := []core.SandboxProvider{}
 	presenter := setupPresenter{}
@@ -197,11 +230,28 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		}
 	}
 	keymap := setupKeyMap()
+	if keymap.Select.Filter.Enabled() {
+		t.Fatal("short setup choices should not advertise filtering")
+	}
+	if help := keymap.Select.Next.Help(); help.Key != "enter" || help.Desc != "continue" {
+		t.Fatalf("select help=%#v", help)
+	}
 	if help := keymap.MultiSelect.Toggle.Help(); help.Key != "space" || help.Desc != "select" {
 		t.Fatalf("toggle help=%#v", help)
 	}
 	if help := keymap.MultiSelect.Submit.Help(); help.Key != "enter" || help.Desc != "continue" {
 		t.Fatalf("submit help=%#v", help)
+	}
+	styles := setupTheme(true)
+	if !strings.Contains(styles.Focused.SelectSelector.String(), "› ") ||
+		!strings.Contains(styles.Focused.MultiSelectSelector.String(), "› ") {
+		t.Fatalf("setup menus do not share the same selector")
+	}
+	if focused := styles.Focused.FocusedButton.Render("Continue"); !strings.Contains(focused, "›") {
+		t.Fatalf("focused confirmation is not structurally marked: %q", focused)
+	}
+	if blurred := styles.Focused.BlurredButton.Render("Cancel"); strings.Contains(blurred, "›") {
+		t.Fatalf("inactive confirmation looks focused: %q", blurred)
 	}
 	if strings.Contains(view, "    Hardware-isolated") || strings.Contains(view, "    Managed Linux") {
 		t.Fatalf("provider descriptions carry embedded indentation:\n%s", view)
@@ -219,6 +269,15 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	} {
 		if strings.TrimSpace(group.Header()) == "" || strings.TrimSpace(group.Content()) == "" {
 			t.Fatalf("guided setup group is empty: header=%q content=%q", group.Header(), group.Content())
+		}
+	}
+	harness := "codex"
+	harnessForm := huh.NewForm(presenter.HarnessGroup(&harness)).WithKeyMap(setupKeyMap()).WithTheme(huh.ThemeFunc(setupTheme))
+	model, _ := harnessForm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	harnessContent := model.(*huh.Form).View()
+	for _, text := range []string{"Codex", "OpenAI Codex Harness", "Pi", "Pi coding-agent Harness"} {
+		if !strings.Contains(harnessContent, text) {
+			t.Fatalf("Harness selector omitted %q:\n%s", text, harnessContent)
 		}
 	}
 }
