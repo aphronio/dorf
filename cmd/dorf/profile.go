@@ -206,7 +206,7 @@ func profileView(profile core.SandboxProfile) sandboxProfileView {
 func parseSandboxProfile(ctx context.Context, command, name string, args []string, stderr io.Writer) (core.SandboxProfile, error) {
 	set := flag.NewFlagSet("profile "+command, flag.ContinueOnError)
 	set.SetOutput(stderr)
-	provider := set.String("provider", "", "Sandbox provider: incus or e2b")
+	provider := set.String("sandbox-provider", "", "Sandbox provider: incus or e2b")
 	harness := set.String("harness", "", "Harness: codex or pi")
 	image := set.String("image", "", "existing Incus image alias or fingerprint")
 	network := set.String("network", "incusbr0", "Incus network")
@@ -239,7 +239,7 @@ func parseSandboxProfile(ctx context.Context, command, name string, args []strin
 		profile.Artifact, profile.E2BGatewayURL = *template, *gatewayURL
 		profile.E2BSandboxTimeout, profile.E2BAllowInternet = *sandboxTimeout, *allowInternet
 	default:
-		return core.SandboxProfile{}, fmt.Errorf("profile requires --provider incus or --provider e2b")
+		return core.SandboxProfile{}, fmt.Errorf("profile requires --sandbox-provider incus or --sandbox-provider e2b")
 	}
 	return profile, nil
 }

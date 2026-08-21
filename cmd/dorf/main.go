@@ -545,7 +545,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	yes := set.Bool("yes", false, "approve every host change shown by setup")
-	connection := set.String("provider", "", "named Provider Connection")
+	connection := set.String("connection", "", "named Provider Connection")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
 	providers := sandboxProviderFlags{}
@@ -587,7 +587,7 @@ func validateSetupOptions(options setupOptions) error {
 		return fmt.Errorf("setup accepts either --gateway-url or --cloudflare-hostname, not both")
 	}
 	if options.Connection != "" && options.ConnectionMode != "" {
-		return fmt.Errorf("setup accepts either an existing --provider or --connection-auth, not both")
+		return fmt.Errorf("setup accepts either an existing --connection or --connection-auth, not both")
 	}
 	if options.ConnectionMode != "" && options.ConnectionMode != setupConnectionChatGPT && options.ConnectionMode != setupConnectionOpenAI {
 		return fmt.Errorf("--connection-auth must be chatgpt or openai")
@@ -763,7 +763,7 @@ func isTerminal(file *os.File) bool {
 func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	connection := set.String("provider", "", "named Provider Connection")
+	connection := set.String("connection", "", "named Provider Connection")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	cloneURL := set.String("repo", "", "managed GitHub clone URL")
 	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
@@ -773,7 +773,7 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 		return err
 	}
 	if strings.TrimSpace(*connection) == "" {
-		return fmt.Errorf("doctor requires --provider")
+		return fmt.Errorf("doctor requires --connection")
 	}
 	profile, err := sandboxProfileByNameOrDefault(ctx, postgres.Store{DB: db}, *profileName)
 	if err != nil {
@@ -829,7 +829,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	githubRepository := set.String("github-repo", "", "canonical lower-case GitHub owner/repository")
 	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
 	base := set.String("base", "", "explicit immutable GitHub base branch")
-	provider := set.String("provider", "", "named Provider Connection")
+	connection := set.String("connection", "", "named Provider Connection")
 	model := set.String("model", "", "Codex model")
 	effort := set.String("reasoning", "high", "Codex reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -849,7 +849,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 		return err
 	}
 	job, created, err := coding.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, coding.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort},
 		Repository:   *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
 	})
 	if err != nil {
@@ -875,7 +875,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	repositoryURL := set.String("repo", "", "clone URL")
 	localRepository := set.String("local-repo", "", "local Git repository containing the committed Revision")
 	revision := set.String("revision", "", "exact repository Revision (default HEAD with --local-repo)")
-	provider := set.String("provider", "", "named Provider Connection")
+	connection := set.String("connection", "", "named Provider Connection")
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -895,7 +895,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 		return err
 	}
 	input := investigation.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *provider, Model: *model, ReasoningEffort: *effort},
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort},
 		Source:       source,
 	}
 	job, created, err := investigation.Admit(ctx, store, coreApplication(store, client), gateway.Gateway{StatePath: cfg.GatewayStatePath}, profileapp.Runtime{SandboxProfile: profile.Name}, input)

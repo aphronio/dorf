@@ -67,7 +67,7 @@ func TestProfileUpdatePatchContainsOnlyExplicitFlags(t *testing.T) {
 	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, nil, &stderr); err == nil || !strings.Contains(err.Error(), "at least one field flag") {
 		t.Fatalf("empty patch error=%v", err)
 	}
-	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--provider", "e2b"}, &stderr); err == nil {
+	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--sandbox-provider", "e2b"}, &stderr); err == nil {
 		t.Fatal("profile update accepted a provider change")
 	}
 	if _, err := parseSandboxProfilePatch(context.Background(), "update managed", core.SandboxProviderE2B, []string{"--image", "dorf"}, &stderr); err == nil || !strings.Contains(err.Error(), "does not accept Incus fields") {
@@ -150,7 +150,7 @@ func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
 	options, err := parseSetupOptions([]string{
-		"--yes", "--provider", "personal-chatgpt",
+		"--yes", "--connection", "personal-chatgpt",
 		"--sandbox-provider", "incus", "--sandbox-provider", "e2b",
 		"--harness", "codex", "--e2b-template", "dorf:exact-build",
 		"--gateway-url", "https://gateway.example/v1", "--allow-internet",
@@ -168,7 +168,7 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if _, err := parseSetupOptions([]string{"--profile", "local-codex", "--sandbox-provider", "incus", "--sandbox-provider", "e2b"}, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("multi-provider named profile error=%v", err)
 	}
-	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--provider", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
+	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--connection", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
 		t.Fatalf("conflicting connection input error=%v", err)
 	}
 	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {

@@ -235,7 +235,7 @@ func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string
 		}
 	}
 	if mode == "" {
-		return "", fmt.Errorf("automated setup requires --provider NAME or --connection-auth chatgpt|openai")
+		return "", fmt.Errorf("automated setup requires --connection NAME or --connection-auth chatgpt|openai")
 	}
 	switch mode {
 	case setupConnectionChatGPT:

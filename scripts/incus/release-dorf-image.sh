@@ -142,15 +142,15 @@ prove_harness() {
   local admission inspection
   if "$BINARY" profile show "$profile_name" >/dev/null 2>&1; then
     "$BINARY" profile update "$profile_name" \
-      --provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
+      --sandbox-provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
       --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
   else
     "$BINARY" profile create "$profile_name" \
-      --provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
+      --sandbox-provider incus --image "$CANDIDATE_ALIAS" --network "$CANDIDATE_NETWORK" \
       --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
   fi
   "$BINARY" profile verify "$profile_name"
-  "$BINARY" doctor --provider "$PROVIDER_CONNECTION" --profile "$profile_name"
+  "$BINARY" doctor --connection "$PROVIDER_CONNECTION" --profile "$profile_name"
   printf '%s\n' \
     'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
     >"$goal_file"
@@ -163,7 +163,7 @@ prove_harness() {
     --github-repo aphronio/dorf \
     --github-installation "$GITHUB_INSTALLATION_ID" \
     --base "${BASE_BRANCH:-main}" \
-    --provider "$PROVIDER_CONNECTION" \
+    --connection "$PROVIDER_CONNECTION" \
     --profile "$profile_name" \
     --model gpt-5.6-sol \
     --reasoning low)"
