@@ -31,6 +31,7 @@ type connection struct {
 	Provider      string `json:"provider"`
 	AuthMode      string `json:"auth_mode"`
 	CredentialRef string `json:"credential_ref"`
+	Default       bool   `json:"default"`
 }
 
 type authority struct {
@@ -189,6 +190,57 @@ func (g Gateway) Check(ctx context.Context, connectionName string) error {
 		return err
 	}
 	return g.checkModels(ctx, origin+"/v1", auth.GuardKey, "provider gateway")
+}
+
+// DefaultConnection returns the one deployment-default AI connection. The
+// selected name is copied into each admitted Job; the connection's credential
+// remains in protected Gateway state.
+func (g Gateway) DefaultConnection() (string, error) {
+	records, err := g.connections()
+	if err != nil {
+		return "", fmt.Errorf("AI connections are unreadable: %w", err)
+	}
+	name := ""
+	for _, record := range records {
+		if !record.Default {
+			continue
+		}
+		if name != "" {
+			return "", fmt.Errorf("multiple default AI connections are configured")
+		}
+		name = record.Name
+	}
+	if name == "" {
+		return "", fmt.Errorf("no default AI connection is configured; run dorf setup or pass --ai-connection")
+	}
+	if _, err := g.requireConnection(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// SetDefaultConnection selects one existing authenticated connection for new
+// Jobs without moving its credential into Dorf's durable Job state.
+func (g Gateway) SetDefaultConnection(name string) error {
+	name = strings.TrimSpace(name)
+	if _, err := g.requireConnection(name); err != nil {
+		return err
+	}
+	return g.lock(func() error {
+		records, err := g.connections()
+		if err != nil {
+			return err
+		}
+		found := false
+		for i := range records {
+			records[i].Default = records[i].Name == name
+			found = found || records[i].Default
+		}
+		if !found {
+			return fmt.Errorf("AI connection %q was not found", name)
+		}
+		return writePrivateJSON(filepath.Join(g.StatePath, "connections.json"), records)
+	})
 }
 
 // CheckRemote observes whether the exact deployment-owned HTTPS route reaches

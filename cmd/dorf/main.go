@@ -242,7 +242,10 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 		if err := g.ConnectOpenAIAPIKey(ctx, *name, resolvedBind, key); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Provider Connection ready: %s (OpenAI API key; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
+		if err := g.SetDefaultConnection(*name); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "AI connection ready: %s (OpenAI API key; default; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
 		return nil
 	}
 	if err := g.ConnectChatGPT(ctx, *name, resolvedBind, func(url, code string) {
@@ -250,7 +253,10 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 	}); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Provider Connection ready: %s (ChatGPT subscription; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
+	if err := g.SetDefaultConnection(*name); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "AI connection ready: %s (ChatGPT subscription; default; broker %s on %s)\n", *name, gateway.BackendVersion, resolvedBind)
 	return nil
 }
 
@@ -352,7 +358,7 @@ type providerGatewayStatusView struct {
 func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("provider status", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	connection := set.String("name", "personal-chatgpt", "stable Provider Connection name")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	jsonOutput := set.Bool("json", false, "emit machine-readable status")
 	if err := set.Parse(args); err != nil {
@@ -366,7 +372,11 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 		return err
 	}
 	g := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	authorityErr := g.Check(ctx, *connection)
+	selectedConnection, err := selectedAIConnection(g, *connection)
+	if err != nil {
+		return err
+	}
+	authorityErr := g.Check(ctx, selectedConnection)
 	var sandboxPathErr error
 	if profile.Provider == core.SandboxProviderE2B {
 		remote, gatewayErr := remoteGatewayForProviderStatus(cfg, profile)
@@ -376,7 +386,7 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 			sandboxPathErr = remote.CheckRemote(ctx, profile.E2BGatewayURL)
 		}
 	}
-	view := newProviderGatewayStatusView(profile, strings.TrimSpace(*connection), authorityErr, sandboxPathErr)
+	view := newProviderGatewayStatusView(profile, selectedConnection, authorityErr, sandboxPathErr)
 	if *jsonOutput {
 		if err := writeJSON(stdout, view); err != nil {
 			return err
@@ -388,6 +398,13 @@ func providerStatusCommand(ctx context.Context, store postgres.Store, cfg config
 		return fmt.Errorf("provider gateway status is not ready")
 	}
 	return nil
+}
+
+func selectedAIConnection(g gateway.Gateway, explicit string) (string, error) {
+	if name := strings.TrimSpace(explicit); name != "" {
+		return name, nil
+	}
+	return g.DefaultConnection()
 }
 
 func remoteGatewayForProviderStatus(cfg config.Config, profile core.SandboxProfile) (gateway.Gateway, error) {
@@ -545,7 +562,7 @@ func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	yes := set.Bool("yes", false, "approve every host change shown by setup")
-	connection := set.String("connection", "", "named Provider Connection")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	absurdSchema := set.String("absurd-schema", "", "optional local copy of the pinned Absurd schema")
 	providers := sandboxProviderFlags{}
@@ -587,7 +604,7 @@ func validateSetupOptions(options setupOptions) error {
 		return fmt.Errorf("setup accepts either --gateway-url or --cloudflare-hostname, not both")
 	}
 	if options.Connection != "" && options.ConnectionMode != "" {
-		return fmt.Errorf("setup accepts either an existing --connection or --connection-auth, not both")
+		return fmt.Errorf("setup accepts either an existing --ai-connection or --connection-auth, not both")
 	}
 	if options.ConnectionMode != "" && options.ConnectionMode != setupConnectionChatGPT && options.ConnectionMode != setupConnectionOpenAI {
 		return fmt.Errorf("--connection-auth must be chatgpt or openai")
@@ -763,7 +780,7 @@ func isTerminal(file *os.File) bool {
 func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	connection := set.String("connection", "", "named Provider Connection")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	cloneURL := set.String("repo", "", "managed GitHub clone URL")
 	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
@@ -772,14 +789,15 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	if strings.TrimSpace(*connection) == "" {
-		return fmt.Errorf("doctor requires --connection")
-	}
 	profile, err := sandboxProfileByNameOrDefault(ctx, postgres.Store{DB: db}, *profileName)
 	if err != nil {
 		return err
 	}
-	checks := doctor.Run(ctx, db, cfg, profile, *connection)
+	selectedConnection, err := selectedAIConnection(gateway.Gateway{StatePath: cfg.GatewayStatePath}, *connection)
+	if err != nil {
+		return err
+	}
+	checks := doctor.Run(ctx, db, cfg, profile, selectedConnection)
 	checks = appendProfileVerificationCheck(checks, profile)
 	githubValues := []string{*cloneURL, *githubRepository, *githubInstallation, *base}
 	wantsGitHub := false
@@ -829,7 +847,7 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	githubRepository := set.String("github-repo", "", "canonical lower-case GitHub owner/repository")
 	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
 	base := set.String("base", "", "explicit immutable GitHub base branch")
-	connection := set.String("connection", "", "named Provider Connection")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Codex model")
 	effort := set.String("reasoning", "high", "Codex reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -848,8 +866,12 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
+	selectedConnection, err := selectedAIConnection(providers, *connection)
+	if err != nil {
+		return err
+	}
 	job, created, err := coding.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, coding.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort},
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
 		Repository:   *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
 	})
 	if err != nil {
@@ -875,7 +897,7 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	repositoryURL := set.String("repo", "", "clone URL")
 	localRepository := set.String("local-repo", "", "local Git repository containing the committed Revision")
 	revision := set.String("revision", "", "exact repository Revision (default HEAD with --local-repo)")
-	connection := set.String("connection", "", "named Provider Connection")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
@@ -890,15 +912,20 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
+	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	selectedConnection, err := selectedAIConnection(providers, *connection)
+	if err != nil {
+		return err
+	}
 	source, workingTreeChangesExcluded, err := prepareInvestigationSource(ctx, blob.Store{Root: cfg.BlobRoot}, *repositoryURL, *localRepository, *revision)
 	if err != nil {
 		return err
 	}
 	input := investigation.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: *connection, Model: *model, ReasoningEffort: *effort},
+		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
 		Source:       source,
 	}
-	job, created, err := investigation.Admit(ctx, store, coreApplication(store, client), gateway.Gateway{StatePath: cfg.GatewayStatePath}, profileapp.Runtime{SandboxProfile: profile.Name}, input)
+	job, created, err := investigation.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, input)
 	if err != nil {
 		return err
 	}

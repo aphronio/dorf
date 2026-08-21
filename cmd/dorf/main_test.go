@@ -16,6 +16,7 @@ import (
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/e2b"
+	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -37,6 +38,26 @@ func TestOpenAIProviderConnectionReadsAProtectedFileOrStandardInput(t *testing.T
 	}
 	if _, err := readSecretFile("-", strings.NewReader(" \n")); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("empty secret error=%v", err)
+	}
+}
+
+func TestAIConnectionUsesTheDeploymentDefaultUnlessOverridden(t *testing.T) {
+	state := t.TempDir()
+	if err := os.Mkdir(filepath.Join(state, "auth"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "auth", "codex-account.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "connections.json"), []byte(`[{"name":"personal-chatgpt","provider":"chatgpt","auth_mode":"subscription","credential_ref":"codex-account.json","default":true}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := gateway.Gateway{StatePath: state}
+	if got, err := selectedAIConnection(g, ""); err != nil || got != "personal-chatgpt" {
+		t.Fatalf("default=%q err=%v", got, err)
+	}
+	if got, err := selectedAIConnection(g, " work-openai "); err != nil || got != "work-openai" {
+		t.Fatalf("override=%q err=%v", got, err)
 	}
 }
 
@@ -150,7 +171,7 @@ func TestProviderStatusUsesFreshDNSForTheExactDorfOwnedTunnel(t *testing.T) {
 func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	var stderr strings.Builder
 	options, err := parseSetupOptions([]string{
-		"--yes", "--connection", "personal-chatgpt",
+		"--yes", "--ai-connection", "personal-chatgpt",
 		"--sandbox-provider", "incus", "--sandbox-provider", "e2b",
 		"--harness", "codex", "--e2b-template", "dorf:exact-build",
 		"--gateway-url", "https://gateway.example/v1", "--allow-internet",
@@ -168,7 +189,7 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if _, err := parseSetupOptions([]string{"--profile", "local-codex", "--sandbox-provider", "incus", "--sandbox-provider", "e2b"}, &stderr); err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("multi-provider named profile error=%v", err)
 	}
-	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--connection", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
+	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--ai-connection", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
 		t.Fatalf("conflicting connection input error=%v", err)
 	}
 	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {

@@ -150,7 +150,7 @@ prove_harness() {
       --disk-size "$CANDIDATE_ROOT_DISK_SIZE" --harness "$harness"
   fi
   "$BINARY" profile verify "$profile_name"
-  "$BINARY" doctor --connection "$PROVIDER_CONNECTION" --profile "$profile_name"
+  "$BINARY" doctor --ai-connection "$PROVIDER_CONNECTION" --profile "$profile_name"
   printf '%s\n' \
     'Inspect the cloned repository without modifying it. Report the exact Git Revision, Debian release, and installed Codex, Pi, Git, Go, Python, Node, and uv versions. Keep the response concise.' \
     >"$goal_file"
@@ -163,7 +163,7 @@ prove_harness() {
     --github-repo aphronio/dorf \
     --github-installation "$GITHUB_INSTALLATION_ID" \
     --base "${BASE_BRANCH:-main}" \
-    --connection "$PROVIDER_CONNECTION" \
+    --ai-connection "$PROVIDER_CONNECTION" \
     --profile "$profile_name" \
     --model gpt-5.6-sol \
     --reasoning low)"

@@ -47,7 +47,6 @@ access to the selected repository. Keep its metadata and private key at the path
 
 ```bash
 dorf doctor \
-  --connection personal-chatgpt \
   --profile local-codex \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --github-repo OWNER/REPOSITORY \
@@ -75,7 +74,6 @@ dorf admit \
   --github-repo OWNER/REPOSITORY \
   --github-installation INSTALLATION_ID \
   --base main \
-  --connection personal-chatgpt \
   --model MODEL \
   --reasoning high
 

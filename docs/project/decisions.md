@@ -705,6 +705,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   connection. Sharing a typed facade and broker authority gives them login-once behavior without
   coupling provider state to Job semantics, duplicating credentials, or forcing model streams
   through the durable Job worker.
+- **Default selection:** Guided setup and an explicit successful provider connection select one
+  deployment-default AI connection. New Jobs use that name unless `--ai-connection` overrides it,
+  then durably pin the resolved name. This default is deployment-wide rather than part of a Sandbox
+  profile, so one authenticated model route can serve multiple Incus, E2B, Codex, and Pi profiles.
 - **Reconsider when:** A second broker backend proves a smaller shared interface; an actual remote
   deployment requires a network authority; a provider cannot fit connection-plus-route semantics
   without distortion; or observed multi-account pressure justifies routing policy.

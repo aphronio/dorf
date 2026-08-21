@@ -15,7 +15,7 @@ provenance.
 Run the Go CLI's direct diagnostic boundary:
 
 ```bash
-dorf doctor --connection NAME --profile SANDBOX_PROFILE
+dorf doctor --profile SANDBOX_PROFILE
 ```
 
 For a managed repository, also pass `--repo`, `--github-repo`, `--github-installation`, and `--base`.

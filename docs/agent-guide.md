@@ -37,8 +37,8 @@ Artifact or Proposal, attention, and cleanup facts.
 
    ```bash
    dorf profile list
-   dorf provider status --profile PROFILE --name CONNECTION --json
-   dorf doctor --profile PROFILE --connection CONNECTION
+   dorf provider status --profile PROFILE --json
+   dorf doctor --profile PROFILE
    ```
 
    A repository Job needs the additional GitHub authority checks documented in Getting started.

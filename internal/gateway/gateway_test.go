@@ -289,6 +289,37 @@ func TestRemoteGatewayCheckRequiresAnonymousAccessToBeRejectedWithoutMutatingRou
 	}
 }
 
+func TestDefaultAIConnectionIsExplicitAndUnique(t *testing.T) {
+	state := gatewayState(t, "http://127.0.0.1:8317")
+	g := Gateway{StatePath: state}
+	if _, err := g.DefaultConnection(); err == nil || !strings.Contains(err.Error(), "no default AI connection") {
+		t.Fatalf("missing default error=%v", err)
+	}
+	if err := g.SetDefaultConnection("primary"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := g.DefaultConnection(); err != nil || got != "primary" {
+		t.Fatalf("default=%q err=%v", got, err)
+	}
+	var records []connection
+	if err := readJSON(filepath.Join(state, "connections.json"), &records); err != nil {
+		t.Fatal(err)
+	}
+	records = append(records, connection{Name: "second", Provider: "deepseek", AuthMode: "api_key", CredentialRef: "deepseek-0123456789abcdef.key", Default: true})
+	if err := os.MkdirAll(filepath.Join(state, "credentials"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "credentials", records[1].CredentialRef), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateJSON(filepath.Join(state, "connections.json"), records); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.DefaultConnection(); err == nil || !strings.Contains(err.Error(), "multiple default") {
+		t.Fatalf("ambiguous default error=%v", err)
+	}
+}
+
 func TestAPIRoutesDoNotRequireChatGPTSubscriptionCapability(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v0/management/auth-files" {

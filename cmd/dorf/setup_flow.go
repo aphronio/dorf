@@ -216,65 +216,75 @@ func setupProviderConnection(ctx context.Context, g gateway.Gateway, bind string
 	if err := g.Provision(ctx, bind); err != nil {
 		return "", fmt.Errorf("start the Provider Gateway: %w", err)
 	}
-	if options.Connection != "" {
-		if err := g.Check(ctx, options.Connection); err != nil {
-			return "", fmt.Errorf("existing Provider Connection %q is not ready: %w", options.Connection, err)
-		}
-		return options.Connection, nil
-	}
-	mode := options.ConnectionMode
-	if mode == "" {
-		if existing := unambiguousSetupConnection(func(name string) error { return g.Check(ctx, name) }); existing != "" {
-			return existing, nil
-		}
-	}
-	if mode == "" && presenter.interactive && !options.Yes {
-		mode = setupConnectionChatGPT
-		if err := presenter.RunForm(ctx, presenter.ConnectionGroup(&mode)); err != nil {
-			return "", err
-		}
-	}
-	if mode == "" {
-		return "", fmt.Errorf("automated setup requires --connection NAME or --connection-auth chatgpt|openai")
-	}
-	switch mode {
-	case setupConnectionChatGPT:
-		const name = "personal-chatgpt"
-		if g.Check(ctx, name) == nil {
-			return name, nil
-		}
-		if err := g.ConnectChatGPT(ctx, name, bind, func(url, code string) {
-			presenter.Note("Device sign-in", "Open "+url+" and enter "+code)
-		}); err != nil {
-			return "", err
-		}
-		return name, nil
-	case setupConnectionOpenAI:
-		const name = "openai-api"
-		if g.Check(ctx, name) == nil {
-			return name, nil
-		}
-		key := ""
-		var err error
-		if options.OpenAIKeyFile != "" {
-			key, err = readSecretFile(options.OpenAIKeyFile, os.Stdin)
-		} else if presenter.interactive && !options.Yes {
-			if err = presenter.RunForm(ctx, presenter.SecretGroup("Enter your OpenAI API key", "Stored only in Dorf's protected Provider Gateway state.", &key)); err == nil {
-				key = strings.TrimSpace(key)
+	selectConnection := func() (string, error) {
+		if options.Connection != "" {
+			if err := g.Check(ctx, options.Connection); err != nil {
+				return "", fmt.Errorf("existing AI connection %q is not ready: %w", options.Connection, err)
 			}
-		} else {
-			err = fmt.Errorf("automated OpenAI setup requires --openai-api-key-file")
+			return options.Connection, nil
 		}
-		if err != nil {
-			return "", err
+		mode := options.ConnectionMode
+		if mode == "" {
+			if existing := unambiguousSetupConnection(func(name string) error { return g.Check(ctx, name) }); existing != "" {
+				return existing, nil
+			}
 		}
-		if err := g.ConnectOpenAIAPIKey(ctx, name, bind, key); err != nil {
-			return "", err
+		if mode == "" && presenter.interactive && !options.Yes {
+			mode = setupConnectionChatGPT
+			if err := presenter.RunForm(ctx, presenter.ConnectionGroup(&mode)); err != nil {
+				return "", err
+			}
 		}
-		return name, nil
-	default:
-		return "", fmt.Errorf("connection authentication must be chatgpt or openai")
+		if mode == "" {
+			return "", fmt.Errorf("automated setup requires --ai-connection NAME or --connection-auth chatgpt|openai")
+		}
+		switch mode {
+		case setupConnectionChatGPT:
+			const name = "personal-chatgpt"
+			if g.Check(ctx, name) == nil {
+				return name, nil
+			}
+			if err := g.ConnectChatGPT(ctx, name, bind, func(url, code string) {
+				presenter.Note("Device sign-in", "Open "+url+" and enter "+code)
+			}); err != nil {
+				return "", err
+			}
+			return name, nil
+		case setupConnectionOpenAI:
+			const name = "openai-api"
+			if g.Check(ctx, name) == nil {
+				return name, nil
+			}
+			key := ""
+			var err error
+			if options.OpenAIKeyFile != "" {
+				key, err = readSecretFile(options.OpenAIKeyFile, os.Stdin)
+			} else if presenter.interactive && !options.Yes {
+				if err = presenter.RunForm(ctx, presenter.SecretGroup("Enter your OpenAI API key", "Stored only in Dorf's protected Provider Gateway state.", &key)); err == nil {
+					key = strings.TrimSpace(key)
+				}
+			} else {
+				err = fmt.Errorf("automated OpenAI setup requires --openai-api-key-file")
+			}
+			if err != nil {
+				return "", err
+			}
+			if err := g.ConnectOpenAIAPIKey(ctx, name, bind, key); err != nil {
+				return "", err
+			}
+			return name, nil
+		default:
+			return "", fmt.Errorf("connection authentication must be chatgpt or openai")
+		}
 	}
+	connection, err := selectConnection()
+	if err != nil {
+		return "", err
+	}
+	if err := g.SetDefaultConnection(connection); err != nil {
+		return "", fmt.Errorf("select default AI connection %q: %w", connection, err)
+	}
+	return connection, nil
 }
 
 func unambiguousSetupConnection(check func(string) error) string {

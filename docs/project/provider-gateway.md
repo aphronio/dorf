@@ -37,8 +37,10 @@ redirect, or documentation hosts; that broader policy is visible deployment conf
 not give the Sandbox an upstream credential. Disposable Quick Tunnels remain proof tooling only;
 they have no stable hostname or uptime guarantee.
 
-`dorf provider status --profile NAME [--name CONNECTION]` is the observational deployment check. It
-verifies the named Provider Connection and private broker locally, then, for a remote profile,
+Setup selects one deployment-default AI connection. New Jobs use that default unless the caller
+passes `--ai-connection`; either way, the admitted Job durably pins the resolved connection name.
+`dorf provider status --profile NAME [--ai-connection CONNECTION]` is the observational deployment check. It
+verifies the selected AI connection and private broker locally, then, for a remote profile,
 requests the exact configured `/v1/models` path without a credential and requires the Gateway's HTTP
 401 rejection. It never starts the broker, repairs a tunnel, or creates a consumer route. Profile
 verification remains historical proof of the selected runtime artifact; status reports current
