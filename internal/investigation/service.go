@@ -21,7 +21,6 @@ type Store interface {
 	Actions(context.Context, string) ([]core.Action, error)
 	CodebaseInvestigationMessages(context.Context, string) ([]MessageRecord, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
-	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
 }
 
 type Externals interface {
@@ -42,19 +41,15 @@ func NewService(execution gitworkspace.Execution, externals Externals, blobs blo
 
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.
-func (s Service) ExecuteRepositoryRestore(ctx context.Context, job core.Job, sandbox core.Sandbox, action core.Action, source Source) error {
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID || action.Kind != ActionRepositoryRestore ||
-		source.JobID != job.ID || source.Kind != SourceGitBundle {
+func (s Service) ExecuteRepositoryRestore(ctx context.Context, job core.Job, sandbox core.Sandbox, source Source) error {
+	if sandbox.JobID != job.ID || source.JobID != job.ID || source.Kind != SourceGitBundle {
 		return fmt.Errorf("repository restore does not belong to the exact investigation Job and Sandbox")
 	}
 	contents, err := s.blobs.ReadVerified(source.BundleDigest, source.BundleByteSize)
 	if err != nil {
 		return fmt.Errorf("read retained repository bundle: %w", err)
 	}
-	return s.Execution.ExecuteSandboxActionEffect(ctx, job.ID, action.ID, ActionRepositoryRestore, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
-		if authoritativeJob.ID != job.ID || authoritativeSandbox.ID != sandbox.ID {
-			return fmt.Errorf("repository restore authority changed before execution")
-		}
+	return s.Execution.ExecuteSandboxActionEffect(ctx, job.ID, sandbox.ID, ActionRepositoryRestore, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
 		return s.externals.RepositoryRestore(effectCtx, authoritativeJob, authoritativeSandbox, source, contents)
 	})
 }

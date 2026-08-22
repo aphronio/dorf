@@ -253,10 +253,6 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			action, err := store.GetOrCreateSandboxAction(workCtx, core.MainSandboxName(params.JobID), gitworkspace.ActionRepositoryClone)
-			if err != nil {
-				return faultActionResultV1{}, err
-			}
 			runID := task.RunID()
 			execution := core.NewExecutionService(
 				store,
@@ -269,10 +265,10 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 				},
 			)
 			service := gitworkspace.NewExecutor(execution, faultActionExternals{effect: effect, runID: runID})
-			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, action, job.Repository, job.Revision, job.Branch); err != nil {
+			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, job.Repository, job.Revision, job.Branch); err != nil {
 				return faultActionResultV1{}, err
 			}
-			return faultActionResultV1{ActionID: action.ID}, nil
+			return faultActionResultV1{ActionID: core.ScopedActionID(job.ID, gitworkspace.ActionRepositoryClone, sandbox.ID)}, nil
 		})
 		if err != nil {
 			return faultActionResultV1{}, err

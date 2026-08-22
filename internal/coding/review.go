@@ -70,22 +70,16 @@ func (s Service) RecordReviewResult(ctx context.Context, job Job, messageID stri
 	return err
 }
 
-func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string, action core.Action) error {
+func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID string) error {
 	run, err := s.store.ReviewRun(ctx, runID)
 	if err != nil {
 		return err
 	}
 	if run.JobID != job.ID || run.InputRevision != job.Revision || run.SandboxID != ReviewSandboxName(job.ID, run.ID) || run.Sandbox.ID != run.SandboxID ||
-		action.ID != core.ScopedActionID(job.ID, ActionReviewCheckout, run.Sandbox.ID) || action.JobID != job.ID || action.Kind != ActionReviewCheckout || action.Scope != run.Sandbox.ID {
+		run.Sandbox.JobID != job.ID {
 		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
 	}
-	if action.State == core.ActionSucceeded {
-		return nil
-	}
-	return s.ExecuteSandboxActionEffect(ctx, job.ID, action.ID, ActionReviewCheckout, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
-		if authoritativeJob.ID != job.ID || authoritativeSandbox.ID != run.Sandbox.ID {
-			return reviewBoundaryError("review checkout authority changed before execution")
-		}
+	return s.ExecuteSandboxActionEffect(ctx, job.ID, run.Sandbox.ID, ActionReviewCheckout, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
 		return s.externals.PrepareReviewCheckout(effectCtx, job, run)
 	})
 }

@@ -60,8 +60,6 @@ type ApplicationStore interface {
 	AttachJobTask(context.Context, string, string, string, string) error
 	RequestCleanup(context.Context, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
-	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
-	RecordSandboxActionSuccess(context.Context, string) error
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
 }

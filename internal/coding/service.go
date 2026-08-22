@@ -35,7 +35,6 @@ type Store interface {
 	Outcome(context.Context, string) (*Outcome, error)
 	CodingAgentMessage(context.Context, string) (*core.AgentMessageWork, error)
 	BeginPublication(context.Context, string, string) (Job, core.Action, core.Action, error)
-	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
 	RecordRevisionObservation(context.Context, string, string, gitworkspace.Observation, core.Evidence) error
 	SetWorkflowAttention(context.Context, string, string, string) error
 	Evidence(context.Context, string) ([]core.Evidence, error)

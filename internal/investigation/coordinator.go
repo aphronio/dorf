@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 )
@@ -201,7 +200,7 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 		case "", WorkComplete, WorkAttention:
 			return work, nil
 		case WorkAction:
-			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)
+			err = runInvestigationAction(ctx, custody, service, snapshot, work)
 		case WorkWaitAgent:
 			return work, nil
 		default:
@@ -226,7 +225,7 @@ Dorf codebase-investigation contract:
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision)
 }
 
-func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, store Store, snapshot Snapshot, work Work) error {
+func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, snapshot Snapshot, work Work) error {
 	if work.Scope != snapshot.MainSandbox.ID || work.FactID != core.ScopedActionID(snapshot.Job.ID, work.ActionKind, work.Scope) {
 		return fmt.Errorf("investigation Action does not match the exact main Sandbox")
 	}
@@ -242,25 +241,13 @@ func runInvestigationAction(ctx context.Context, custody core.JobHandle, service
 		}
 		return nil
 	}
-	action, err := store.GetOrCreateSandboxAction(ctx, work.Scope, work.ActionKind)
-	if err != nil {
-		return err
+	if work.ActionKind == ActionRepositoryRestore {
+		return service.ExecuteRepositoryRestore(ctx, snapshot.Job, snapshot.MainSandbox, snapshot.Source)
 	}
-	if action.ID != work.FactID || action.JobID != snapshot.Job.ID || action.Scope != work.Scope || action.Kind != work.ActionKind {
-		return fmt.Errorf("selected investigation Action changed identity")
+	if work.ActionKind == gitworkspace.ActionRepositoryClone {
+		return service.ExecuteRepositoryClone(ctx, snapshot.Job, snapshot.MainSandbox, snapshot.Source.Repository, snapshot.Source.Revision, "")
 	}
-	if action.State == core.ActionSucceeded {
-		return nil
-	}
-	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == ActionRepositoryRestore {
-			return service.ExecuteRepositoryRestore(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source)
-		}
-		if work.ActionKind == gitworkspace.ActionRepositoryClone {
-			return service.ExecuteRepositoryClone(workCtx, snapshot.Job, snapshot.MainSandbox, action, snapshot.Source.Repository, snapshot.Source.Revision, "")
-		}
-		return service.ExecuteSandboxAction(workCtx, snapshot.Job.ID, action.ID)
-	})
+	return service.ExecuteSandboxAction(ctx, snapshot.Job.ID, snapshot.MainSandbox.ID, work.ActionKind)
 }
 
 func investigationActionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {

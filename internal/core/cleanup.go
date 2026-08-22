@@ -107,18 +107,8 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	}
 
 	for _, target := range cleanupTargets(sandboxes) {
-		action, err := a.Store.GetOrCreateSandboxAction(ctx, target.Sandbox.ID, target.Kind)
-		if err != nil {
-			return err
-		}
-		if action.State == ActionSucceeded {
-			continue
-		}
-
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
-		err = absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-			return service.ExecuteSandboxAction(workCtx, job.ID, action.ID)
-		})
+		err := service.ExecuteSandboxAction(ctx, job.ID, target.Sandbox.ID, target.Kind)
 		if err != nil {
 			_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 			return fmt.Errorf("reconcile %s for Sandbox %s: %w", target.Kind, target.Sandbox.ID, err)

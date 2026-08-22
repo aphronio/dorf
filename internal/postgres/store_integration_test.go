@@ -2278,13 +2278,13 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	client := newFaultClient(t, store, "dorf-authority-"+job.ID)
 	taskName := "dorf-authority-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := service.ExecuteSandboxAction(taskCtx, "wrong-job", create.ID); err == nil {
+		if err := service.ExecuteSandboxAction(taskCtx, "wrong-job", sandboxID, create.Kind); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("wrong Job selected a provider mutation")
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, "wrong-action"); err == nil {
-			return core.TaskResultV1{}, fmt.Errorf("wrong Action selected a provider mutation")
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, "wrong-sandbox", create.Kind); err == nil {
+			return core.TaskResultV1{}, fmt.Errorf("wrong Sandbox selected a provider mutation")
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, revoke.ID); err == nil {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, revoke.Kind); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("route revoke reached provider before cleanup scheduling")
 		}
 		return core.TaskResultV1{JobID: job.ID, Outcome: "authority-refused"}, nil
@@ -2307,7 +2307,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	recovery := core.NewExecutionService(store, externals, barrier, absurdruntime.RequireClaim)
 	recoveryTaskName := "lost-provider-receipt-v1"
 	client.MustRegister(absurd.Task(recoveryTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := recovery.ExecuteSandboxAction(taskCtx, job.ID, create.ID); err != nil {
+		if err := recovery.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, create.Kind); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		return core.TaskResultV1{JobID: job.ID, Outcome: "provider-reconciled"}, nil
@@ -2357,7 +2357,7 @@ func TestSandboxDeleteBeforeRevokeHasZeroProviderEffects(t *testing.T) {
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, cleaning.ID, remove.ID); err == nil {
+		if err := service.ExecuteSandboxAction(taskCtx, cleaning.ID, owned.ID, remove.Kind); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("Sandbox delete reached provider before route revoke")
 		}
 		return core.TaskResultV1{JobID: job.ID, Outcome: "delete-refused"}, nil
@@ -2437,7 +2437,7 @@ func TestCleanupOnlyObservesAcceptedSteerAndBlocksDestructiveActions(t *testing.
 		if _, _, err := service.PrepareCleanup(taskCtx, job.ID); err == nil || !strings.Contains(err.Error(), "remain") {
 			return core.TaskResultV1{}, fmt.Errorf("cleanup did not retain active accepted steer: %v", err)
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, revoke.ID); err == nil || !strings.Contains(err.Error(), "Harness mutations remain unsettled") {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, revoke.Kind); err == nil || !strings.Contains(err.Error(), "Harness mutations remain unsettled") {
 			return core.TaskResultV1{}, fmt.Errorf("route revoke did not enforce Harness barrier: %v", err)
 		}
 		return core.TaskResultV1{JobID: job.ID, Outcome: "accepted-steer-retained"}, nil
@@ -2523,10 +2523,10 @@ func TestClosedAdmissionCleanupRecoversOrdinaryCodingRunWithoutExecutionEligibil
 		if err != nil || cleaning.AdmissionOpen || len(sandboxes) != 1 {
 			return core.TaskResultV1{}, fmt.Errorf("prepare closed ordinary cleanup: Job=%#v Sandboxes=%#v: %w", cleaning, sandboxes, err)
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, revoke.ID); err != nil {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, revoke.Kind); err != nil {
 			return core.TaskResultV1{}, err
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, remove.ID); err != nil {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, remove.Kind); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		if err := service.CompleteCleanup(taskCtx, job.ID); err != nil {
@@ -3037,7 +3037,7 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 		if err := service.ReconcileJobAgent(taskCtx, job.ID); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("unattached task reached Agent Message selection")
 		}
-		if err := service.ExecuteSandboxAction(taskCtx, job.ID, action.ID); err == nil {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, owned.ID, action.Kind); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("unattached task acquired provider authority")
 		}
 		return core.TaskResultV1{JobID: job.ID, Outcome: "stale-refused"}, nil

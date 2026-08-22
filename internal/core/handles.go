@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/absurdruntime"
 	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -170,7 +169,6 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 
 	var job Job
 	var owned Sandbox
-	var action Action
 	err := h.application.Store.WithJobFence(ctx, h.id, func() error {
 		var err error
 		job, err = h.application.Store.Job(ctx, h.id)
@@ -184,17 +182,13 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 		if err != nil {
 			return err
 		}
-		action, err = h.application.Store.GetOrCreateSandboxAction(ctx, owned.ID, ActionSandboxCreate)
-		return err
+		return nil
 	})
 	if err != nil {
 		return SandboxHandle{}, err
 	}
 	handle := h.sandboxHandle(owned.ID)
-	if action.State == ActionSucceeded {
-		return handle, nil
-	}
-	if err := h.executeSandboxEnsure(ctx, job, owned, action); err != nil {
+	if err := h.executeSandboxEnsure(ctx, job, owned); err != nil {
 		return SandboxHandle{}, err
 	}
 	return handle, nil
@@ -258,7 +252,7 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	return receipt, nil
 }
 
-func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox, action Action) error {
+func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox) error {
 	if h.application.SandboxRuntimes == nil {
 		return fmt.Errorf("Sandbox runtime resolution is not configured")
 	}
@@ -269,13 +263,12 @@ func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sand
 	if strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile || runtime.Execution == nil {
 		return fmt.Errorf("Sandbox runtime does not match Job profile %q", job.SandboxProfile)
 	}
-	err = absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		return runtime.Execution.ExecuteSandboxAction(workCtx, job.ID, action.ID)
-	})
+	actionID := ScopedActionID(job.ID, ActionSandboxCreate, owned.ID)
+	err = runtime.Execution.ExecuteSandboxAction(ctx, job.ID, owned.ID, ActionSandboxCreate)
 	if err == nil || !provider.IsArtifactUnavailable(err) {
 		return err
 	}
-	attentionErr := h.application.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, action.ID, err)
+	attentionErr := h.application.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, actionID, err)
 	if attentionErr != nil {
 		return errors.Join(err, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, attentionErr))
 	}

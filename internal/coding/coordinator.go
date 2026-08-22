@@ -19,7 +19,7 @@ type CodingExecution interface {
 	ObserveRevision(context.Context, Job, string) error
 	PlanReview(context.Context, Job) error
 	RecordReviewResult(context.Context, Job, string) error
-	ExecuteReviewCheckout(context.Context, Job, string, core.Action) error
+	ExecuteReviewCheckout(context.Context, Job, string) error
 }
 
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
@@ -48,7 +48,7 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 
 		switch work.Kind {
 		case WorkAction:
-			err = runSandboxAction(ctx, custody, service, store, job, snapshot, work)
+			err = runSandboxAction(ctx, custody, service, job, snapshot, work)
 		case WorkRecordReview:
 			err = absurdruntime.RunFactStep(ctx, "dorf/review-feedback/v1/"+work.FactID, work.FactID, func(workCtx context.Context) error {
 				return service.RecordReviewResult(workCtx, job, work.FactID)
@@ -114,7 +114,7 @@ func runPublicationStep(ctx context.Context, store Store, proposal ProposalRunti
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, custody core.JobHandle, service CodingExecution, store Store, job Job, snapshot Snapshot, work Work) error {
+func runSandboxAction(ctx context.Context, custody core.JobHandle, service CodingExecution, job Job, snapshot Snapshot, work Work) error {
 	var sandbox *core.Sandbox
 	for i := range snapshot.Sandboxes {
 		if snapshot.Sandboxes[i].ID == work.Scope {
@@ -158,30 +158,17 @@ func runSandboxAction(ctx context.Context, custody core.JobHandle, service Codin
 		}
 	}
 
-	expectedID := core.ScopedActionID(job.ID, work.ActionKind, work.Scope)
-	if expectedID != work.FactID {
+	if expectedID := core.ScopedActionID(job.ID, work.ActionKind, work.Scope); expectedID != work.FactID {
 		return fmt.Errorf("Action changed from %s to %s", work.FactID, expectedID)
 	}
-	action, err := store.GetOrCreateSandboxAction(ctx, sandbox.ID, work.ActionKind)
-	if err != nil {
-		return err
-	}
-	if action.ID != work.FactID || action.JobID != job.ID || action.Kind != work.ActionKind || action.Scope != work.Scope {
-		return fmt.Errorf("selected Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
-	}
-	if action.State == core.ActionSucceeded {
-		return nil
-	}
-	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == ActionReviewCheckout {
-			if reviewer == nil {
-				return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", action.ID)
-			}
-			return service.ExecuteReviewCheckout(workCtx, job, reviewer.ID, action)
+	if work.ActionKind == ActionReviewCheckout {
+		if reviewer == nil {
+			return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", work.FactID)
 		}
-		if work.ActionKind == gitworkspace.ActionRepositoryClone {
-			return service.ExecuteRepositoryClone(workCtx, job.Job, *sandbox, action, job.Repository, job.Revision, job.Branch)
-		}
-		return service.ExecuteSandboxAction(workCtx, job.ID, action.ID)
-	})
+		return service.ExecuteReviewCheckout(ctx, job, reviewer.ID)
+	}
+	if work.ActionKind == gitworkspace.ActionRepositoryClone {
+		return service.ExecuteRepositoryClone(ctx, job.Job, *sandbox, job.Repository, job.Revision, job.Branch)
+	}
+	return service.ExecuteSandboxAction(ctx, job.ID, sandbox.ID, work.ActionKind)
 }

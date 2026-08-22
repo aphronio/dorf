@@ -17,9 +17,9 @@ type AgentObservation interface {
 	ObserveSettledAgentMessage(context.Context, string, string) (MessageResult, error)
 }
 
-// SandboxExecution reconciles one already-admitted stable Sandbox Action.
+// SandboxExecution reconciles one stable Sandbox Action through Core custody.
 type SandboxExecution interface {
-	ExecuteSandboxAction(context.Context, string, string) error
+	ExecuteSandboxAction(context.Context, string, string, ActionKind) error
 	ExecuteSandboxActionEffect(context.Context, string, string, ActionKind, SandboxActionEffect) error
 }
 

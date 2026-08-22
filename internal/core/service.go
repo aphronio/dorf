@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -25,6 +26,7 @@ type ExecutionStore interface {
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
 	UnsettledAgentMessages(context.Context, string) ([]AgentMessageWork, error)
+	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	CompleteCleanup(context.Context, string, string) error
 	SetCleanupAttention(context.Context, string, string) error
 }
@@ -717,10 +719,10 @@ func (e cleanupStillActive) Error() string {
 	return fmt.Sprintf("cleanup is waiting for active Message %s: %s", e.MessageID, e.Reason)
 }
 
-// ExecuteSandboxAction reconciles one authoritative persisted mutation. The
-// caller supplies only the Job and Action identities used by durable custody.
-func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, actionID string) error {
-	return s.executeSandboxAction(ctx, jobID, actionID, "", func(ctx context.Context, authorized SandboxActionAuthorization) error {
+// ExecuteSandboxAction reconciles one provider-owned mutation through the
+// stable Action and Absurd step identities owned by Core custody.
+func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, sandboxID string, kind ActionKind) error {
+	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
 		switch authorized.Action.Kind {
 		case ActionSandboxCreate:
 			return s.externals.SandboxCreate(ctx, authorized.Job, authorized.Sandbox)
@@ -736,22 +738,40 @@ func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, actio
 	})
 }
 
-// ExecuteSandboxActionEffect gives workflow-owned Sandbox mutations the same
-// Core custody, Job fencing, exact task authority, and durable Action receipt
-// as provider-owned actions without moving their semantics into Core.
-func (s ExecutionService) ExecuteSandboxActionEffect(ctx context.Context, jobID, actionID string, kind ActionKind, effect SandboxActionEffect) error {
+// ExecuteSandboxActionEffect is the private adapter seam that gives a
+// module-owned Sandbox mutation the same generic custody without moving the
+// mutation's meaning into Core.
+func (s ExecutionService) ExecuteSandboxActionEffect(ctx context.Context, jobID, sandboxID string, kind ActionKind, effect SandboxActionEffect) error {
+	actionID := ScopedActionID(jobID, kind, sandboxID)
 	if effect == nil {
 		return fmt.Errorf("Sandbox Action %s has no workflow-owned effect", actionID)
 	}
-	return s.executeSandboxAction(ctx, jobID, actionID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
+	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
 		return effect(ctx, authorized.Job, authorized.Sandbox)
 	})
 }
 
-func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actionID string, expectedKind ActionKind, effect func(context.Context, SandboxActionAuthorization) error) error {
-	if jobID == "" || actionID == "" {
-		return fmt.Errorf("Sandbox Action requires durable Job and Action identities")
+func (s ExecutionService) runSandboxAction(ctx context.Context, jobID, sandboxID string, kind ActionKind, effect func(context.Context, SandboxActionAuthorization) error) error {
+	if jobID == "" || sandboxID == "" || kind == "" {
+		return fmt.Errorf("Sandbox Action requires durable Job, Sandbox, and kind identities")
 	}
+	actionID := ScopedActionID(jobID, kind, sandboxID)
+	action, err := s.store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
+	if err != nil {
+		return err
+	}
+	if action.ID != actionID || action.JobID != jobID || action.Kind != kind || action.Scope != sandboxID {
+		return fmt.Errorf("Sandbox Action %s changed authoritative identity", actionID)
+	}
+	if action.State == ActionSucceeded {
+		return nil
+	}
+	return absurdruntime.RunActionStep(ctx, actionID, func(workCtx context.Context) error {
+		return s.executeSandboxAction(workCtx, jobID, actionID, kind, effect)
+	})
+}
+
+func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actionID string, expectedKind ActionKind, effect func(context.Context, SandboxActionAuthorization) error) error {
 	return s.store.WithJobFence(ctx, jobID, func() error {
 		if err := s.requireClaim(ctx); err != nil {
 			return err
