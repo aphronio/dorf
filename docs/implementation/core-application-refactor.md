@@ -195,9 +195,9 @@ rules.
 
 Prove idle persistence, later follow resumption on the same Thread, steer during active work, restart
 while idle, concurrent Message/cleanup fencing, bounded lost-wake reload without a separate or busy
-poller, and no duplicate task attachment. Reach a
-live Job that becomes idle, receives a later follow, exposes its typed workflow result, and then
-cleans up. Delete workflow wait operations, phase-like projections, and tests that assert their
+poller, and no duplicate task attachment. Reach a live Job that becomes idle, receives a later
+follow, lets its client read the current workflow-owned output, and then cleans up. Delete workflow wait
+operations, phase-like projections, and tests that assert their
 existence rather than observable idleness.
 
 ### 5. Compose repository and interaction modules over Core
@@ -212,7 +212,8 @@ handle, not a separate lifecycle interface. A repository module owns exact check
 coding owns revision, review, proposal, and outcome policy; HITL remains client/workflow interaction
 policy; GitHub owns its
 external-authority adapter and coding-facing composition. Investigation retains its own source and
-draft meaning. No module receives authorities it does not need.
+`REPORT.md` prompt/path policy while callers use the shared exact-file read. No module receives
+authorities it does not need.
 
 Prove each native workflow independently against narrow Core fakes and PostgreSQL, then run its real
 end-to-end terminal. Delete horizontal composition packages, central workflow switches, optional

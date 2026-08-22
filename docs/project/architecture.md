@@ -225,8 +225,11 @@ connection and provider identities, not controller filesystem paths or copied se
 PostgreSQL owns each named Sandbox profile's provider, exact artifact, Harness, provider settings,
 default selection, and Dorf functional-verification receipt. A Job pins the selected profile name.
 The composition root resolves that durable name into one provider-neutral runtime bundle whenever
-the Job runs or cleans up. Profiles are immutable while a referencing Job has incomplete cleanup;
-an update clears verification and default status. Credentials remain host configuration.
+the Job runs or cleans up. A current successful receipt gates default selection and new admission;
+it is not a runtime lease for already-admitted Jobs. Explicit re-verification may replace that
+receipt while Jobs continue against the unchanged definition, fencing new admission until the new
+attempt settles successfully. Profiles are immutable while a referencing Job has incomplete
+cleanup; an update clears verification and default status. Credentials remain host configuration.
 
 ### Current dogfood deployment terminals
 

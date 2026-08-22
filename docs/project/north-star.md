@@ -52,7 +52,7 @@ the same small application contract in-process. Neither receives a privileged hi
 Core provides mechanisms, never workflow or interaction policy. It may admit input, run and recover
 AgentRuns, return the exact bytes of a caller-selected Sandbox file while that Sandbox remains
 available, retain Evidence, and reconcile cleanup after a caller requests it. It does
-not decide that a draft is accepted, that a Job is semantically finished, that another Job should be
+not decide that a report is accepted, that a Job is semantically finished, that another Job should be
 started, or that resources should now be released. Those choices belong to a workflow or to a client
 such as Agent0, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in the same
 repository, process, or binary does not move its policy into Core.
@@ -92,9 +92,9 @@ Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 | **Evidence** | Immutable observed proof tied to the fact it supports |
 | **Outcome** | A typed consumer-defined terminal result, when used, separate from resource cleanup |
 
-Coding adds workflow facts such as Revision, ReviewPlan, Proposal, and GitHub acceptance. Research
-may add a scoped request, captured sources, and typed Markdown drafts. Those facts do not become core
-vocabulary merely because one workflow needs them.
+Coding adds workflow facts such as Revision, ReviewPlan, Proposal, and GitHub acceptance.
+Investigation adds a scoped source and owns the policy that asks its agent for a workspace report.
+Those facts and policies do not become Core vocabulary merely because one workflow needs them.
 
 `Role` is a field, not an executing object. There is no first-class Worker until personality,
 capability, reputation, ownership, or memory must persist across Jobs. A standing "researcher" or
@@ -139,12 +139,12 @@ requests cleanup, which remains a separate observable fact.
 
 A client delegates an exact reachable or locally committed repository Revision and an unstructured
 investigation brief. The workflow creates an isolated exact checkout, uses a bounded agent for
-inspection and synthesis, checks its completed Turn and unchanged checkout programmatically, and
-retains a flexible Markdown draft. An honest draft may simply explain that no useful finding exists.
-The workflow accepts follow-up Messages in the same Harness Thread and retains each revised draft.
-A client decides whether to request another draft, publish or otherwise consume one, start another
-workflow, or ask Core to clean up. Investigation owns no accept/reject policy, publication, pull
-request, or cleanup timing.
+inspection and synthesis, and asks it to write the current report to workspace-root `REPORT.md`.
+The workflow accepts follow-up Messages in the same Harness Thread; the agent may update the same
+file. A client reads the exact bytes it needs before cleanup and decides whether to request another
+revision, publish or otherwise consume the report, start another workflow, or ask Core to clean up.
+The file is not retained after cleanup. Investigation owns no accept/reject policy, publication,
+pull request, or cleanup timing.
 
 ## Deterministic and agentic boundary
 

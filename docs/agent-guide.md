@@ -11,7 +11,7 @@ Install and operate Dorf on this machine by following docs/agent-guide.md. Coord
 dorf CLI instead of configuring its database, containers, Sandboxes, Gateway, or tunnels by hand.
 Pause for every password, secret, browser authorization, or consequential provider choice. Never
 read, print, or copy credentials into chat. Finish by reporting only observed readiness, Job,
-typed workflow result or Proposal, attention, and cleanup facts.
+attention, caller-requested output, and cleanup facts.
 ```
 
 ## Installation protocol
@@ -47,26 +47,19 @@ typed workflow result or Proposal, attention, and cleanup facts.
 
 ## Operating protocol
 
+- Start with `dorf help` and the relevant subcommand help. Treat those commands and their current
+  output as the CLI authority; do not copy workflow-specific recipes into this guide or reproduce
+  workflow policy with ad-hoc Sandbox commands.
 - Put complete goals, briefs, and follow-up Messages in files. Use a stable caller key or request ID
   so a lost response can be retried without creating competing work.
-- Use the documented `dorf admit` command for coding or
-  `dorf workflow run codebase-investigation` for an investigation. Do not reproduce workflow policy
-  with ad-hoc Sandbox commands.
-- Keep one `dorf worker` running in a persistent terminal. Watching is optional; use
-  `dorf inspect --follow JOB_ID` when the human wants a live view.
-- Send later input with `dorf message --job JOB_ID --id REQUEST_ID --input-file FILE`. Use
-  `--intent steer` only when the human explicitly wants to redirect active work.
-- An open Job may report `current work: none` after producing its latest typed result. This is
-  ordinary idleness: send a later follow with `dorf message`; do not retry or create a replacement
-  Job merely to resume it.
-- When inspection reports attention, repair the reported cause and use `dorf retry JOB_ID`. Retry
-  delegates eligibility to the same durable task; it is not a request to create a replacement Job.
-- Retrieve one caller-known Sandbox file before cleanup with
-  `dorf sandbox file get JOB_ID RELATIVE_PATH --output DESTINATION`. Add
-  `--sandbox SANDBOX_ID` for a named Sandbox; the default is the Job's default Sandbox. Never treat
-  agent prose alone as verification.
-- Request `dorf cleanup JOB_ID` only when the workflow or human has decided that its resources may
-  be released. Outcome and cleanup are separate facts.
+- Keep one Dorf worker running in a persistent terminal. Watching is optional; inspect the Job when
+  the human wants a live view or when a command reports attention.
+- An open Job may have no current operation while retaining its execution owner for later input. Do
+  not retry or create a replacement Job merely because it is idle.
+- Repair the reported cause before retrying attention. Retry delegates eligibility to the same
+  durable task; it does not create replacement work.
+- Read any caller-required Sandbox files before requesting cleanup. Never treat agent prose alone as
+  verification. Cleanup is explicit and separate from workflow outcome.
 
 ## Safety and handback
 
@@ -80,7 +73,7 @@ At handback, report:
 - installed Dorf version and selected Sandbox profile and AI connection;
 - readiness checks that are actually `ready`;
 - Job ID and current work or attention, if a Job was admitted;
-- typed workflow result or Proposal URL, when present; and
+- any output the human explicitly asked the agent to retrieve; and
 - cleanup state.
 
 Do not say installation, work, or cleanup succeeded merely because a command was started. Use the

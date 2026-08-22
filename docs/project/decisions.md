@@ -1753,8 +1753,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D069 — Codebase investigation is the second explicit native workflow
 
-- **Status:** Accepted initial implementation slice; interaction boundary refined by D075 and draft
-  custody refined by D089 — 2026-08-22
+- **Status:** Accepted initial implementation slice; interaction boundary refined by D075 and report
+  custody replaced by D092 — 2026-08-22
 - **Decision:** Add `codebase-investigation` as a clean workflow identity, not a top-level
   `investigate` feature and not a generic researcher. One admitted Job pins the exact workflow
   revision, repository Revision, unstructured brief, execution profile, AI connection, model,
@@ -1801,7 +1801,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D070 — Named Sandbox profiles pin exact artifacts and require Dorf verification
 
-- **Status:** Accepted incremental profile-management slice; base file contract refined by D089 — 2026-08-22
+- **Status:** Accepted incremental profile-management slice; base file contract refined by D089 and
+  online re-verification refined by D091 — 2026-08-22
 - **Decision:** PostgreSQL owns named Sandbox profiles. A profile binds one provider, exact provider
   artifact, Harness, provider networking and lifecycle settings, and Dorf verification receipt.
   Provider credentials and host paths remain deployment configuration and never enter the profile.
@@ -1823,8 +1824,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   leak a proof resource. Each explicit `profile verify` and each selected-profile setup run starts
   a fresh functional attempt after any prior settled receipt; an interrupted attempt resumes its
   exact cleanup. Ordinary Job admission uses the latest successful receipt without making a
-  billable provider call, and a fresh attempt is refused while a Job using that profile has
-  incomplete cleanup. If a provider definitively reports that the pinned artifact no longer
+  billable provider call. D091 separates that admission receipt from already-admitted runtime
+  authority and permits a fresh attempt against the unchanged definition while Jobs remain open.
+  If a provider definitively reports that the pinned artifact no longer
   exists, Core invalidates the receipt for new admission, leaves the affected Job at its exact
   current fact with actionable attention, and completes that task attempt without retrying the
   unchanged create. Cleanup may still resolve the pinned profile so owned resources remain
@@ -1968,15 +1970,15 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D075 — Core mechanisms do not own workflow or interaction policy
 
-- **Status:** Accepted and implemented; draft custody refined by D089 — 2026-08-22
+- **Status:** Accepted and implemented; investigation report custody refined by D089 and D092 — 2026-08-22
 - **Decision:** Make the [North Star product boundary](north-star.md#product-boundary) the sole current
   authority for Core, workflow, and client ownership. This entry records the correction and its
   rationale rather than restating that contract.
-- **Investigation correction:** `codebase-investigation` produces immutable numbered typed Markdown drafts
-  and accepts follow-up Messages on the same Harness Thread. It does not persist accept/reject
-  decisions or infer cleanup timing. Agent0, n8n, a UI, another workflow, or a human-operated client
-  may consume a draft, create an Issue, chain work, request another draft, record its own disposition,
-  and finally request Dorf cleanup.
+- **Investigation correction:** `codebase-investigation` accepts follow-up Messages on the same
+  Harness Thread and asks the agent to maintain workspace-root `REPORT.md`. It does not persist the
+  report, accept/reject decisions, or cleanup timing. Agent0, n8n, a UI, another workflow, or a
+  human-operated client may read the report before cleanup, create an Issue, chain work, request a
+  revision, record its own disposition, and finally request Dorf cleanup.
 - **Coding distinction:** `coding-to-proposal` may interpret GitHub Proposal observations and request
   cleanup because that is workflow policy. Those facts and choices remain outside Core; compiling
   the workflow into Dorf grants no privileged authority or hidden execution path.
@@ -1985,15 +1987,14 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   decision authority.
 - **Why:** Maintainer-radar dogfood initially encoded accept/reject as a typed investigation decision.
   That made a useful client policy look like a Core requirement and contradicted the intended role of
-  workflows as ordinary Core consumers. The reusable primitives are drafts, Messages, AgentRuns,
-  retained Harness context, and requested cleanup—not the meaning a caller assigns to a draft.
+  workflows as ordinary Core consumers. The reusable primitives are exact Sandbox reads, Messages,
+  AgentRuns, retained Harness context, and requested cleanup—not the meaning a caller assigns to a
+  report.
 - **Proof:** The decision table, domain type, CLI command, workflow wake wrapper, automatic cleanup
-  branch, and decision rendering are deleted. Unit and PostgreSQL integration coverage prove that
-  numbered drafts remain open for same-Thread follow-up, explicit cleanup closes admission and
-  schedules shared route-before-Sandbox cleanup, and typed drafts survive it. Live Incus
-  dogfood produced two drafts on one Codex Thread, exposed only follow-up or cleanup while open,
-  accepted an explicit cleanup request and confirmed the exact Sandbox absent. D089 replaces the
-  generic deliverable proof with exact caller-selected file reads before cleanup.
+  branch, and decision rendering are deleted. Unit and PostgreSQL integration coverage prove
+  same-Thread follow-up, explicit cleanup closing admission, and shared route-before-Sandbox
+  cleanup. D089 and D092 replace retained Drafts with exact caller-selected reads of workspace-root
+  `REPORT.md` before cleanup.
 - **Reconsider when:** A reusable custody mechanism cannot support multiple real workflows without
   knowing their terminal policy. A single workflow needing a typed decision is not sufficient; that
   decision remains workflow-owned.
@@ -2010,7 +2011,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Execution:** Coding continues to own a mutable branch and Revision line. Investigation owns a
   clean detached checkout at one exact Revision and never fabricates a branch. Shared Sandbox,
   AgentRun, route, attention, task attachment, exact Sandbox file reads, and requested-cleanup
-  custody remain shared Core mechanisms. Investigation's typed Draft remains workflow-owned.
+  custody remain shared Core mechanisms. Investigation report bytes remain workspace state until a
+  caller reads them or requests cleanup.
 - **Why:** The first coding workflow had placed its repository and GitHub assumptions on the shared
   Job row. The second workflow proved those were not Core facts and that retaining them would force
   false branches and coding authority onto unrelated work.
@@ -2057,19 +2059,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   same lifecycle and recovery meaning. Add a typed composition for that workflow rather than
   widening the base runtime.
 
-## D079 — Investigation owns its source, draft, and restore policy
+## D079 — Investigation owns its source and restore policy
 
-- **Status:** Accepted Core/domain separation slice; Draft storage refined by D089 — 2026-08-22
-- **Decision:** Move the investigation `Source`, `Draft`, retained-bundle restore,
-  and unchanged detached-checkout proof into `internal/investigation`. Its typed runtime composes
-  that service over shared Git workspace execution. The base runtime now grants only execution;
-  coding and investigation each add their own Git-backed authority explicitly.
+- **Status:** Accepted Core/domain separation slice; Draft storage removed by D092 — 2026-08-22
+- **Decision:** Move the investigation `Source` and retained-bundle restore into
+  `internal/investigation`. Its typed runtime composes that service over shared Git workspace
+  execution. D092 later removes the Draft and unchanged-checkout result checkpoint. The base runtime
+  grants only execution; coding and investigation each add their own Git-backed authority
+  explicitly.
 - **Why:** Keeping investigation types and restore rules in the shared Core package made the second workflow look
   like shared Core semantics. Core owns the Action, Sandbox, AgentRun, and cleanup mechanisms;
   deployment blob custody supports Evidence and the investigation-owned retained Git source, while
-  the investigation workflow owns what its retained source and typed Markdown draft mean.
-- **Proof:** `internal/core` contains no investigation source, draft, restore, or unchanged-report
-  policy. PostgreSQL, CLI, terminal, coordinator, and typed runtime consume the investigation-owned
+  the investigation workflow owns its report-path prompt policy.
+- **Proof:** `internal/core` contains no investigation source, restore, or report-path policy.
+  PostgreSQL, CLI, terminal, coordinator, and typed runtime consume the investigation-owned source
   contract directly; real bundle materialization and PostgreSQL workflow tests retain their prior
   behavioral coverage.
 - **Reconsider when:** Another workflow needs retained repository input with the same accepted-input
@@ -2090,7 +2093,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   custody and concurrency fencing remain Core responsibilities; moving the decision does not weaken
   them.
 - **Proof:** The generic transaction contains no workflow switch or role switch. PostgreSQL
-  integration coverage retains concurrent FIFO, steer, outcome, cleanup-race, draft-gated follow-up,
+  integration coverage retains concurrent FIFO, steer, outcome, cleanup-race, completed-run follow-up,
   same-Thread reuse, and replay behavior, and explicitly rejects using either typed admission path
   for the other workflow.
 - **Reconsider when:** A third workflow demonstrates genuinely identical delivery authorization.
@@ -2196,12 +2199,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D085 — Workflow records live with the workflow that defines them
 
-- **Status:** Refined by D088 and D089 — 2026-08-22
+- **Status:** Refined by D088, D089, and D092 — 2026-08-22
 - **Decision:** Keep shared custody types limited to Job, Message, AgentRun, Sandbox, Action,
   Evidence, Harness bindings, exact Sandbox file reads, and cleanup. `internal/coding` owns its typed Job input,
   Revision, ReviewPlan and reviewer projections, Proposal, Outcome, readiness policy, workflow
-  identity, and review-scoped identities. `internal/investigation` owns its workflow identity and
-  existing source/draft records. `internal/gitworkspace` owns bounded Git observations.
+  identity, and review-scoped identities. `internal/investigation` owns its workflow identity,
+  source records, and report-path prompt policy. `internal/gitworkspace` owns bounded Git
+  observations.
 - **Durability:** This is Go package ownership, not a storage or sequencing change. PostgreSQL keeps
   the same typed workflow tables and transactions; Absurd keeps the same task, step, retry, wait,
   and claim authority. Moving a record out of the shared package does not move it out of durable
@@ -2316,9 +2320,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Custody:** Core does not prescribe an output path, change stock agent behavior, scan files,
   interpret output, or retain generic deliverables. A caller or workflow must know or discover the
   path and read the file before requesting cleanup. Requested cleanup closes reads; Sandbox deletion
-  makes the bytes unavailable. Workflows may store the smallest typed durable result their semantics
-  require: investigation stores immutable Markdown draft content directly in its own PostgreSQL
-  table.
+  makes the bytes unavailable. D092 applies that boundary to Investigation: the workflow chooses
+  `REPORT.md`, but neither Core nor the workflow retains its bytes.
 - **Storage:** Remove the generic Artifact domain, PostgreSQL table and queries, Core adapters, and
   `dorf artifact` CLI. The content-addressed blob store remains only for Evidence and retained Git
   input. No compatibility layer or migration preserves the pre-release Artifact shape.
@@ -2348,17 +2351,67 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   replacement executor reclaims the same attachment after process loss. Cleanup still closes
   admission under the Job fence, cancels the ordinary task, and attaches only the cleanup handoff.
 - **Ownership:** Absurd continues to own waits, wakes, claims, retries, and cancellation. Dorf owns
-  Message facts, task attachment, and deterministic wake emission. Workflows retain typed Draft,
-  Outcome, attention, and delivery-eligibility policy; an absence of current work adds no Core or
+  Message facts, task attachment, and deterministic wake emission. Workflows retain Outcome,
+  attention, report-path, and delivery-eligibility policy; an absence of current work adds no Core or
   workflow vocabulary.
 - **Refines:** D075's same-Thread investigation revision loop, D087's workflow task composition, and
   D088's requirement that task attachment and wake details remain behind the Core application
   behavior. It preserves D048's FIFO/steer rules and D068's operator retry authority.
-- **Proof:** PostgreSQL integration reaches a typed investigation Draft, observes the one attached
-  task remain nonterminal with no current workflow operation, constructs a fresh executor client,
-  admits a follow through `AgentHandle`, and records a second typed Draft on the same Thread and a
-  distinct Turn without another task attachment. Explicit cleanup then preserves both Drafts and
-  reconciles route revocation before Sandbox deletion.
+- **Proof:** PostgreSQL integration reaches a completed investigation AgentRun, observes the one
+  attached task remain nonterminal with no current workflow operation, constructs a fresh executor
+  client, admits a follow through `AgentHandle`, and completes a distinct Turn on the same Thread
+  without another task attachment. Explicit cleanup reconciles route revocation before Sandbox
+  deletion; `REPORT.md` remains readable only before that request.
 - **Reconsider when:** Absurd cannot preserve a durable open wait or bounded lost-wake recovery, or a
   real client requires terminal execution ownership while still accepting later input. Either case
   must preserve one Message-to-AgentRun identity and must not silently introduce another scheduler.
+
+## D091 — Profile verification gates admission, not admitted runtime
+
+- **Status:** Accepted profile concurrency correction — 2026-08-22
+- **Decision:** A successful current verification receipt gates default selection and brand-new Job
+  admission. It is not a lease held by a Job and it is not rechecked when an already-admitted Job
+  resolves its pinned runtime. Any number of Jobs may concurrently use one verified profile and own
+  independent Sandboxes.
+- **Re-verification:** An explicit fresh verification may replace the singleton receipt while Jobs
+  using the unchanged profile definition remain incomplete. Existing Jobs continue resolving that
+  definition. New admission is serialized with the attempt and remains fenced until its probe and
+  cleanup settle successfully. PostgreSQL grants one process the verification operation at a time;
+  a concurrent invocation fails before touching the proof Sandbox, while connection loss releases
+  ownership and the next invocation resumes the same durable attempt. Exact replay of an existing
+  admission key remains idempotent.
+- **Mutation:** Provider, image, Harness, and settings changes remain blocked while any referencing
+  Job has incomplete cleanup because Jobs pin the profile name rather than an immutable definition
+  revision. A changed definition clears default and verification state after that fence permits it.
+- **Why:** Verification proves eligibility for future admission; it does not allocate profile
+  capacity. Treating its mutable receipt as live runtime authority made a reusable profile appear
+  occupied and forced duplicate profile names during a contract refresh.
+- **Proof:** PostgreSQL coverage admits many Jobs through one receipt, grants one verifier ownership,
+  resumes its exact tuple after interruption, serializes new admission with receipt replacement,
+  preserves admitted runtime resolution and exact admission replay while a later receipt is pending
+  or failed, and retains the changed-definition fence until every referencing Job completes cleanup.
+
+## D092 — Investigation reports remain Sandbox files
+
+- **Status:** Accepted workflow simplification — 2026-08-22
+- **Decision:** `codebase-investigation` asks its agent, as workflow-owned prompt policy, to maintain
+  workspace-root `REPORT.md`. A completed internal AgentRun is the durable completion fact. The
+  workflow does not interpret Harness prose as the report, copy report bytes into PostgreSQL or the
+  blob store, record a Draft or report receipt, or add a generic result abstraction.
+- **Access and lifetime:** A caller retrieves the current exact bytes through
+  `SandboxHandle.ReadFile` before requesting cleanup. Follow-up Messages reuse the same Harness
+  Thread and may update the same path. Missing files fail honestly at read time. Requested cleanup
+  closes reads and Sandbox deletion makes the report unavailable; clients own any retention or
+  publication they require.
+- **Workflow boundary:** Remove the Draft domain, validation and unchanged-checkout checkpoint,
+  PostgreSQL table and queries, history/display persistence, and follow-up Draft gate. Follow-up
+  eligibility derives from the latest completed bound Investigation AgentRun. Core injects no
+  prompt, scans no output, and owns no Investigation result meaning.
+- **Why:** Retaining Markdown duplicated mutable Sandbox state and forced workflow authors to know a
+  persistence contract. The exact-read primitive already provides the smallest truthful boundary:
+  workflow policy chooses a path, the stock agent writes ordinary files, and the client decides what
+  to consume before cleanup.
+- **Refines:** D069, D075, D076, D079, D089, and D090. D074 remains superseded history.
+- **Proof:** Unit and PostgreSQL coverage preserve prompt ownership, completed-run follow admission,
+  same-Thread distinct Turns, open-idle task recovery, explicit cleanup ordering, exact pre-cleanup
+  file reads, and post-cleanup unavailability while deleting all Draft persistence.
