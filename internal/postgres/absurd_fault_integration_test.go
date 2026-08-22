@@ -13,6 +13,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
@@ -215,12 +216,12 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
 	core.Externals
-	gitworkspace.GitExternals
+	gitworkspace.Operations
 	effect *reconcilingFaultEffect
 	runID  string
 }
 
-func (e faultActionExternals) RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error {
+func (e faultActionExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	e.effect.reconcile(e.runID)
 	return nil
 }
@@ -264,7 +265,7 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			service := gitworkspace.NewExecutor(execution, faultActionExternals{effect: effect, runID: runID})
+			service := gitworkspace.NewExecutor(execution, faultActionExternals{effect: effect, runID: runID}, nil)
 			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, job.Repository, job.Revision, job.Branch); err != nil {
 				return faultActionResultV1{}, err
 			}

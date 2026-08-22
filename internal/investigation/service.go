@@ -23,20 +23,20 @@ type Store interface {
 	SetWorkflowAttention(context.Context, string, string, string) error
 }
 
-type Externals interface {
-	RepositoryRestore(context.Context, core.Job, core.Sandbox, Source, []byte) error
+type RetainedRestorer interface {
+	Reconcile(context.Context, core.Job, core.Sandbox, Source, []byte) error
 }
 
 // Service composes shared Git workspace execution with the retained-source
 // materialization owned only by codebase-investigation.
 type Service struct {
 	gitworkspace.Execution
-	externals Externals
-	blobs     blob.Store
+	restore RetainedRestorer
+	blobs   blob.Store
 }
 
-func NewService(execution gitworkspace.Execution, externals Externals, blobs blob.Store) Service {
-	return Service{Execution: execution, externals: externals, blobs: blobs}
+func NewService(execution gitworkspace.Execution, restore RetainedRestorer, blobs blob.Store) Service {
+	return Service{Execution: execution, restore: restore, blobs: blobs}
 }
 
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
@@ -50,6 +50,6 @@ func (s Service) ExecuteRepositoryRestore(ctx context.Context, job core.Job, san
 		return fmt.Errorf("read retained repository bundle: %w", err)
 	}
 	return s.Execution.ExecuteSandboxActionEffect(ctx, job.ID, sandbox.ID, ActionRepositoryRestore, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
-		return s.externals.RepositoryRestore(effectCtx, authoritativeJob, authoritativeSandbox, source, contents)
+		return s.restore.Reconcile(effectCtx, authoritativeJob, authoritativeSandbox, source, contents)
 	})
 }

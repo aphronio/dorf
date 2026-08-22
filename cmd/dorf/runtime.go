@@ -62,8 +62,8 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	if err != nil {
 		return coding.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
-	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
+	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -98,8 +98,9 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
-	service := investigation.NewService(workspaceExecutor, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot})
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
+	restore := investigation.RetainedRestore{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}
+	service := investigation.NewService(workspaceExecutor, restore, blob.Store{Root: r.cfg.BlobRoot})
 	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 
@@ -107,6 +108,7 @@ type resolvedBaseRuntime struct {
 	Profile   profileapp.Runtime
 	Execution core.ExecutionService
 	Externals terminal.Externals
+	Review    coding.ReviewExecution
 	Sandbox   provider.Sandbox
 	Ownership func(context.Context, string) (provider.Ownership, error)
 }
@@ -144,12 +146,13 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
+	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentExecution(workflowAgentExecution{store: r.store, externals: externals})
+		WithAgentExecution(workflowAgentExecution{store: r.store, externals: externals, review: review})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
-		Externals: externals, Sandbox: sandbox, Ownership: ownership,
+		Externals: externals, Review: review, Sandbox: sandbox, Ownership: ownership,
 	}, nil
 }
 
@@ -159,6 +162,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 type workflowAgentExecution struct {
 	store     postgres.Store
 	externals terminal.Externals
+	review    coding.ReviewExecution
 }
 
 func (s workflowAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
@@ -209,7 +213,7 @@ func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, executio
 func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	switch {
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
-		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.externals, execution)
+		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.review, execution)
 		if err != nil {
 			return nil, err
 		}

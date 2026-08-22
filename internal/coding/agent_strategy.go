@@ -12,13 +12,13 @@ import (
 // Core owns AgentRun preparation, recovery, submission ordering, observation,
 // binding, and fencing; this operation owns only the exact review boundary.
 type ReviewAgentOperation struct {
-	store     Store
-	externals Externals
-	job       Job
-	run       ReviewRunView
+	store  Store
+	review ReviewExecution
+	job    Job
+	run    ReviewRunView
 }
 
-func NewReviewAgentOperation(ctx context.Context, store Store, externals Externals, execution core.AgentMessageExecution) (ReviewAgentOperation, error) {
+func NewReviewAgentOperation(ctx context.Context, store Store, review ReviewExecution, execution core.AgentMessageExecution) (ReviewAgentOperation, error) {
 	job, err := store.CodingJob(ctx, execution.Job.ID)
 	if err != nil {
 		return ReviewAgentOperation{}, err
@@ -27,14 +27,14 @@ func NewReviewAgentOperation(ctx context.Context, store Store, externals Externa
 	if err != nil {
 		return ReviewAgentOperation{}, err
 	}
-	operation := ReviewAgentOperation{store: store, externals: externals, job: job, run: run}
+	operation := ReviewAgentOperation{store: store, review: review, job: job, run: run}
 	if err := operation.validate(ctx, execution); err != nil {
 		return ReviewAgentOperation{}, err
 	}
 	return operation, nil
 }
 
-func (s ReviewAgentOperation) Harness() string { return s.externals.Harness() }
+func (s ReviewAgentOperation) Harness() string { return s.review.Harness() }
 
 func (s ReviewAgentOperation) validate(ctx context.Context, execution core.AgentMessageExecution) error {
 	run := s.run
@@ -77,11 +77,11 @@ func (s ReviewAgentOperation) Submit(ctx context.Context, run core.AgentRun, inp
 	if input != s.run.Request.Input {
 		return core.HarnessBinding{}, reviewBoundaryError("review AgentRun input changed after exact Message validation")
 	}
-	return s.externals.ReviewInitialTurn(ctx, s.job, s.attempt(run))
+	return s.review.ReviewInitialTurn(ctx, s.job, s.attempt(run))
 }
 
 func (s ReviewAgentOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
-	return s.externals.ReviewRecover(ctx, s.job, s.attempt(run))
+	return s.review.ReviewRecover(ctx, s.job, s.attempt(run))
 }
 
 func (s ReviewAgentOperation) History(ctx context.Context, run core.AgentRun) (core.HarnessHistory, error) {
@@ -92,7 +92,7 @@ func (s ReviewAgentOperation) History(ctx context.Context, run core.AgentRun) (c
 		}
 		return core.HarnessHistory{Harness: binding.Harness, ThreadID: binding.ThreadID, Turns: []core.HarnessTurn{binding.Turn}}, nil
 	}
-	return s.externals.ReviewTurns(ctx, s.job, s.attempt(run))
+	return s.review.ReviewTurns(ctx, s.job, s.attempt(run))
 }
 
 var _ core.AgentRunOperation = ReviewAgentOperation{}

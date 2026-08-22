@@ -44,9 +44,8 @@ type Store interface {
 	RecordReviewFeedback(context.Context, string, core.HarnessTurn, core.Evidence) (core.Message, bool, error)
 }
 
-type Externals interface {
+type ReviewExecution interface {
 	Harness() string
-	RepositoryChangeFacts(context.Context, Job) (policy.ChangeFacts, error)
 	PrepareReviewCheckout(context.Context, Job, ReviewRunView) error
 	VerifyReviewCheckout(context.Context, Job, ReviewRunView) (ReviewCheckoutObservation, error)
 	ReviewInitialTurn(context.Context, Job, ReviewRunView) (core.HarnessBinding, error)
@@ -57,6 +56,7 @@ type Externals interface {
 type GitWorkspace interface {
 	gitworkspace.Execution
 	ObserveRevision(context.Context, core.Job, string, string) (gitworkspace.Observation, error)
+	ChangeFacts(context.Context, core.Job, string, string) (policy.ChangeFacts, error)
 }
 
 // Service owns Revision and review execution for the
@@ -64,13 +64,13 @@ type GitWorkspace interface {
 type Service struct {
 	GitWorkspace
 	store      Store
-	externals  Externals
+	review     ReviewExecution
 	blobs      blob.Store
 	claimCheck func(context.Context) error
 }
 
-func NewService(workspace GitWorkspace, store Store, externals Externals, blobs blob.Store, claimCheck func(context.Context) error) Service {
-	return Service{GitWorkspace: workspace, store: store, externals: externals, blobs: blobs, claimCheck: claimCheck}
+func NewService(workspace GitWorkspace, store Store, review ReviewExecution, blobs blob.Store, claimCheck func(context.Context) error) Service {
+	return Service{GitWorkspace: workspace, store: store, review: review, blobs: blobs, claimCheck: claimCheck}
 }
 
 func (s Service) BlobStore() blob.Store { return s.blobs }

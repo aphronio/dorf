@@ -18,6 +18,7 @@ import (
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -146,6 +147,7 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 
 type investigationExternals struct {
 	core.Externals
+	gitworkspace.Operations
 	mu      sync.Mutex
 	turn    core.HarnessTurn
 	report  []byte
@@ -238,10 +240,10 @@ func (e *investigationExternals) effect(kind core.ActionKind) error {
 func (e *investigationExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) error {
 	return e.effect(core.ActionSandboxCreate)
 }
-func (e *investigationExternals) RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error {
+func (e *investigationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)
 }
-func (e *investigationExternals) RepositoryRestore(_ context.Context, job core.Job, _ core.Sandbox, source investigation.Source, contents []byte) error {
+func (e *investigationExternals) Reconcile(_ context.Context, job core.Job, _ core.Sandbox, source investigation.Source, contents []byte) error {
 	if source.JobID != job.ID || string(contents) != "retained repository input" {
 		return fmt.Errorf("unexpected retained repository restore")
 	}
@@ -261,7 +263,7 @@ func (e *investigationExternals) SteerHistory(_ context.Context, _ core.Job, _ s
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: []core.HarnessTurn{e.turn}}, nil
 }
-func (*investigationExternals) RepositoryRevision(_ context.Context, _ core.Job, _ string, revision string) (gitworkspace.Observation, error) {
+func (*investigationExternals) ObserveRevision(_ context.Context, _ provider.Ownership, _ string, revision string) (gitworkspace.Observation, error) {
 	now := time.Now().UTC()
 	return gitworkspace.Observation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
 }
@@ -288,7 +290,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	externals := &investigationExternals{}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(investigationAgentExecution{store: store, externals: externals})
-	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
+	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
 	service := investigation.NewService(workspaceExecutor, externals, records)
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
 	resolver := integrationRuntimeResolver{

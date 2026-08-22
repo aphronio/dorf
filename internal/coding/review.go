@@ -20,7 +20,7 @@ func (e reviewBoundaryError) Error() string         { return string(e) }
 func (e reviewBoundaryError) AttentionNeeded() bool { return true }
 
 func (s Service) PlanReview(ctx context.Context, job Job) error {
-	facts, err := s.externals.RepositoryChangeFacts(ctx, job)
+	facts, err := s.GitWorkspace.ChangeFacts(ctx, job.Job, job.StartingRevision, job.Revision)
 	if err != nil {
 		return s.setWorkflowAttention(ctx, job.ID, ReviewPolicyAttentionSource(job.Revision), fmt.Errorf("deterministic ChangeFacts failed: %w", err))
 	}
@@ -80,7 +80,7 @@ func (s Service) ExecuteReviewCheckout(ctx context.Context, job Job, runID strin
 		return reviewBoundaryError("review checkout Action does not belong to the exact selected AgentRun, Revision, and Sandbox")
 	}
 	return s.ExecuteSandboxActionEffect(ctx, job.ID, run.Sandbox.ID, ActionReviewCheckout, func(effectCtx context.Context, authoritativeJob core.Job, authoritativeSandbox core.Sandbox) error {
-		return s.externals.PrepareReviewCheckout(effectCtx, job, run)
+		return s.review.PrepareReviewCheckout(effectCtx, job, run)
 	})
 }
 
@@ -92,7 +92,7 @@ func (s Service) recordReviewFeedback(ctx context.Context, runID string, outcome
 }
 
 func (s Service) verifyReviewCheckout(ctx context.Context, job Job, run ReviewRunView) (ReviewCheckoutObservation, error) {
-	checkout, err := s.externals.VerifyReviewCheckout(ctx, job, run)
+	checkout, err := s.review.VerifyReviewCheckout(ctx, job, run)
 	if err != nil {
 		reason := "review checkout verification failed: " + err.Error()
 		return ReviewCheckoutObservation{}, reviewBoundaryError(reason)

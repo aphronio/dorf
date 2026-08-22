@@ -29,7 +29,7 @@ func (s *reviewAttentionStore) SetWorkflowAttention(_ context.Context, jobID, so
 }
 
 type reviewAttentionExternals struct {
-	Externals
+	ReviewExecution
 	checkout ReviewCheckoutObservation
 	err      error
 }
@@ -78,7 +78,7 @@ func TestCompletedReviewBoundaryFailuresRecordWorkflowAttention(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := &reviewAttentionStore{run: run}
-			service := Service{GitWorkspace: reviewAttentionExecution{result: core.MessageResult{MessageID: messageID, Outcome: "completed", Output: test.output}}, store: store, externals: test.externals, claimCheck: func(context.Context) error { return nil }}
+			service := Service{GitWorkspace: reviewAttentionExecution{result: core.MessageResult{MessageID: messageID, Outcome: "completed", Output: test.output}}, store: store, review: test.externals, claimCheck: func(context.Context) error { return nil }}
 			err := service.RecordReviewResult(context.Background(), job, messageID)
 			if err == nil || !attentionNeeded(err) || store.jobID != job.ID || store.source != messageID || !strings.Contains(store.attention, test.want) {
 				t.Fatalf("error=%v attention=(%q,%q,%q)", err, store.jobID, store.source, store.attention)

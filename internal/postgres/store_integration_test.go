@@ -176,7 +176,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	}
 	externals := &integrationExternals{}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
-	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
+	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
 	investigationService := investigation.NewService(workspaceExecutor, externals, blob.Store{})
@@ -272,7 +272,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(codingAgentExecution{store: store, externals: externals.integrationExternals})
-	workspace := gitworkspace.NewExecutor(execution, externals)
+	workspace := gitworkspace.NewExecutor(execution, externals, nil)
 	service := coding.NewService(workspace, store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	profile := profileapp.Runtime{SandboxProfile: "incus"}
 	resolver := integrationRuntimeResolver{
@@ -338,7 +338,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 
 	loserExternals := &integrationExternals{}
 	loserExecution := core.NewExecutionService(store, loserExternals, nil, absurdruntime.RequireClaim)
-	loserWorkspace := gitworkspace.NewExecutor(loserExecution, loserExternals)
+	loserWorkspace := gitworkspace.NewExecutor(loserExecution, loserExternals, nil)
 	loserService := coding.NewService(loserWorkspace, store, loserExternals, blob.Store{}, absurdruntime.RequireClaim)
 	loserResolver := integrationRuntimeResolver{
 		execution: loserExecution, profile: profile,
@@ -1092,7 +1092,7 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 		WithAgentExecution(resultBoundaryAgentExecution{store: store, externals: externals})
 	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
-	service := coding.NewService(gitworkspace.NewExecutor(execution, externals), store, externals, blob.Store{}, absurdruntime.RequireClaim)
+	service := coding.NewService(gitworkspace.NewExecutor(execution, externals, nil), store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	taskName := "dorf-active-steer-result-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
@@ -2759,8 +2759,8 @@ func completeNextIntegrationRun(t *testing.T, store postgres.Store, jobID, threa
 }
 
 type integrationExternals struct {
-	coding.Externals
-	gitworkspace.GitExternals
+	coding.ReviewExecution
+	gitworkspace.Operations
 	mu         sync.Mutex
 	turns      []core.HarnessTurn
 	submitted  []int64
@@ -2974,10 +2974,10 @@ func (e *integrationExternals) effect(kind core.ActionKind) error {
 func (e *integrationExternals) SandboxCreate(context.Context, core.Job, core.Sandbox) error {
 	return e.effect(core.ActionSandboxCreate)
 }
-func (e *integrationExternals) RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error {
+func (e *integrationExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	return e.effect(gitworkspace.ActionRepositoryClone)
 }
-func (e *integrationExternals) RepositoryRestore(context.Context, core.Job, core.Sandbox, investigation.Source, []byte) error {
+func (e *integrationExternals) Reconcile(context.Context, core.Job, core.Sandbox, investigation.Source, []byte) error {
 	return e.effect(investigation.ActionRepositoryRestore)
 }
 func (e *integrationExternals) RouteCreate(context.Context, core.Job, core.Sandbox, core.Route) error {
