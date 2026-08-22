@@ -69,8 +69,6 @@ func (Definition) AgentRoleLabel(role string) string {
 	return humanizeIdentifier(role)
 }
 
-func (Definition) ResultLabel(kind string) string { return humanizeIdentifier(kind) }
-
 func humanizeIdentifier(value string) string {
 	words := strings.Fields(strings.NewReplacer("-", " ", "_", " ").Replace(strings.TrimSpace(value)))
 	if len(words) == 0 {

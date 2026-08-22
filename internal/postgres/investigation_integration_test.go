@@ -2,7 +2,9 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -19,7 +21,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
+func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	key := fmt.Sprintf("codebase-investigation-%d", time.Now().UnixNano())
@@ -60,7 +62,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
 	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
-		t.Fatalf("investigation accepted a follow-up before any draft: created=%v err=%v", created, err)
+		t.Fatalf("investigation accepted a follow-up before its first run completed: created=%v err=%v", created, err)
 	}
 	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
 		t.Fatalf("coding admission crossed into investigation: created=%v err=%v", created, err)
@@ -71,20 +73,6 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
 	}
 	run := deliveries[0].AgentRun
-	otherInput := input
-	otherInput.AdmissionKey += "-other"
-	otherJob, created, err := store.AdmitInvestigation(ctx, otherInput)
-	if err != nil || !created {
-		t.Fatalf("other Job=%#v created=%v err=%v", otherJob, created, err)
-	}
-	otherDeliveries, err := store.Deliveries(ctx, otherJob.ID)
-	if err != nil || len(otherDeliveries) != 1 {
-		t.Fatalf("other deliveries=%#v err=%v", otherDeliveries, err)
-	}
-	if _, err := store.DB.ExecContext(ctx, `insert into dorf.codebase_investigation_drafts(job_id,agent_run_id,content) values($1,$2,$3)`,
-		job.ID, otherDeliveries[0].AgentRun.ID, "foreign draft"); err == nil {
-		t.Fatal("investigation Draft accepted an AgentRun owned by another Job")
-	}
 	if err := store.PrepareAgentRun(ctx, run.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -96,21 +84,9 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = deliveries[0].AgentRun
-	draftContent := "# First finding\n"
-	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, draftContent)
-	if err != nil || !created || stored.JobID != job.ID || stored.MessageID != deliveries[0].Message.ID || stored.AgentRunID != run.ID || stored.Content != draftContent || !stored.CreatedAt.Equal(run.FinishedAt) {
-		t.Fatalf("Draft=%#v created=%v err=%v", stored, created, err)
-	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen {
-		t.Fatalf("draft prematurely closed Job=%#v err=%v", job, err)
-	}
-	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, draftContent)
-	if err != nil || created || replayed != stored {
-		t.Fatalf("idempotent Draft=%#v created=%v err=%v", replayed, created, err)
-	}
-	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, "# Changed finding\n"); err == nil || !strings.Contains(err.Error(), "different immutable investigation draft") {
-		t.Fatalf("changed Draft replay error=%v", err)
+		t.Fatalf("completed run prematurely closed Job=%#v err=%v", job, err)
 	}
 	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
 	if err != nil || !created || follow.Sequence != 2 {
@@ -132,12 +108,9 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRun = deliveries[1].AgentRun
-	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, follow.ID, "# Second finding\n"); err != nil || !created {
-		t.Fatalf("second draft created=%v err=%v", created, err)
-	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
-		t.Fatalf("second draft did not remain available for follow-up or cleanup: Job=%#v err=%v", job, err)
+		t.Fatalf("completed follow-up did not remain available for another follow-up or cleanup: Job=%#v err=%v", job, err)
 	}
 }
 
@@ -176,6 +149,8 @@ type investigationExternals struct {
 	mu      sync.Mutex
 	job     core.Job
 	turn    core.HarnessTurn
+	report  []byte
+	submits int
 	effects []core.ActionKind
 }
 
@@ -235,7 +210,7 @@ func (e *investigationExternals) AgentInitialTurn(_ context.Context, job core.Jo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.job = job
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n"}
+	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "Investigation complete."}
 	return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + job.ID, Turn: e.turn}, nil
 }
 func (e *investigationExternals) AgentInitialTurns(context.Context, core.Job, string) (core.HarnessHistory, error) {
@@ -249,7 +224,15 @@ func (e *investigationExternals) AgentSubmit(_ context.Context, job core.Job, de
 	if delivery.AgentRun.ThreadID != "thread-"+job.ID {
 		return core.HarnessBinding{}, fmt.Errorf("follow-up did not reuse the investigator Thread")
 	}
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n"}
+	e.submits++
+	output := "Investigation complete."
+	if e.submits == 1 {
+		e.report = []byte("# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n")
+	} else {
+		e.report = []byte("# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n")
+		output = "Investigation revised."
+	}
+	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: output}
 	return core.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: e.turn}, nil
 }
 func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, _ string, threadID string) (core.HarnessHistory, error) {
@@ -260,6 +243,17 @@ func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, _ s
 func (*investigationExternals) RepositoryRevision(_ context.Context, _ core.Job, _ string, revision string) (gitworkspace.Observation, error) {
 	now := time.Now().UTC()
 	return gitworkspace.Observation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
+}
+func (e *investigationExternals) ReadSandboxFile(_ context.Context, job core.Job, sandbox core.Sandbox, relativePath string) ([]byte, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if sandbox.JobID != job.ID || relativePath != investigation.ReportPath {
+		return nil, fmt.Errorf("workspace file %q: %w", relativePath, os.ErrNotExist)
+	}
+	if e.report == nil {
+		return nil, fmt.Errorf("workspace file %q: %w", relativePath, os.ErrNotExist)
+	}
+	return append([]byte(nil), e.report...), nil
 }
 
 func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *testing.T) {
@@ -277,7 +271,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	service := investigation.NewService(workspaceExecutor, externals, records)
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
 	resolver := integrationRuntimeResolver{
-		execution: execution, profile: runtimeProfile,
+		execution: execution, files: externals, profile: runtimeProfile,
 		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Agent: execution, Investigation: service},
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
@@ -302,11 +296,19 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
-	settleNextDraft := func(worker *absurd.Client, workerID string, want int) []investigation.Draft {
+	reportJob, err := application.OpenJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportSandbox, err := reportJob.DefaultSandbox(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settleNextRun := func(worker *absurd.Client, workerID string, want int) {
 		t.Helper()
 		// The first activation submits the Turn and durably suspends for the
 		// one-second active observation interval. The second observes the
-		// completed Turn, records its typed Draft, and enters the open idle wait.
+		// completed Turn and enters the open idle wait without copying report bytes.
 		if err := worker.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: workerID, BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 			t.Fatal(err)
 		}
@@ -314,16 +316,31 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 		if err := worker.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: workerID, BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 			t.Fatal(err)
 		}
-		drafts, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
-		if err != nil || len(drafts) != want {
-			t.Fatalf("Drafts=%#v want=%d err=%v", drafts, want, err)
+		deliveries, err := store.Deliveries(ctx, job.ID)
+		if err != nil || len(deliveries) != want || deliveries[want-1].AgentRun.State != core.AgentRunCompleted {
+			t.Fatalf("deliveries=%#v want completed count=%d err=%v", deliveries, want, err)
 		}
-		return drafts
 	}
-	drafts := settleNextDraft(client, "investigation-terminal", 1)
+	settleNextRun(client, "investigation-terminal", 1)
 	wantEffects := []core.ActionKind{core.ActionSandboxCreate, investigation.ActionRepositoryRestore, core.ActionRouteCreate}
-	if !strings.Contains(drafts[0].Content, "# Finding") {
-		t.Fatalf("typed Draft content=%q", drafts[0].Content)
+	snapshot, err := investigation.LoadSnapshot(ctx, store, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work := snapshot.Project(); work.Kind != "" || !snapshot.Job.AdmissionOpen || snapshot.Job.CleanupState != core.CleanupPending || snapshot.Job.WorkflowAttention != "" {
+		t.Fatalf("completed run without REPORT.md was not honestly open-idle: snapshot=%#v work=%#v", snapshot, work)
+	}
+	if _, err := reportSandbox.ReadFile(ctx, investigation.ReportPath); !errors.Is(err, os.ErrNotExist) || err.Error() != `workspace file "REPORT.md": file does not exist` {
+		t.Fatalf("completed run missing REPORT.md error=%v", err)
+	}
+	firstReceipt, err := reportSandbox.Agent().Message(ctx, "dogfood-first-report", "Write the complete initial report.")
+	if err != nil || !firstReceipt.Created || firstReceipt.Sequence != 2 {
+		t.Fatalf("initial-report follow-up receipt=%#v err=%v", firstReceipt, err)
+	}
+	settleNextRun(client, "investigation-first-report", 2)
+	report, err := reportSandbox.ReadFile(ctx, investigation.ReportPath)
+	if err != nil || string(report) != "# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n" {
+		t.Fatalf("REPORT.md=%q err=%v", report, err)
 	}
 	allEvidence, err := store.Evidence(ctx, job.ID)
 	if err != nil || len(allEvidence) != 0 {
@@ -368,12 +385,18 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 		t.Fatal(err)
 	}
 	receipt, err := sandbox.Agent().Message(ctx, "dogfood-follow-up", "Check whether the recommendation still holds after the recent workflow changes.")
-	if err != nil || !receipt.Created || receipt.Sequence != 2 {
+	if err != nil || !receipt.Created || receipt.Sequence != 3 {
 		t.Fatalf("follow-up receipt=%#v err=%v", receipt, err)
 	}
-	drafts = settleNextDraft(restarted, "investigation-restarted", 2)
+	settleNextRun(restarted, "investigation-restarted", 3)
+	report, err = reportSandbox.ReadFile(ctx, investigation.ReportPath)
+	if err != nil || string(report) != "# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n" {
+		t.Fatalf("revised REPORT.md=%q err=%v", report, err)
+	}
 	deliveries, err := store.Deliveries(ctx, job.ID)
-	if err != nil || len(deliveries) != 2 || deliveries[0].AgentRun.ThreadID == "" || deliveries[1].AgentRun.ThreadID != deliveries[0].AgentRun.ThreadID || deliveries[1].AgentRun.TurnID == deliveries[0].AgentRun.TurnID {
+	if err != nil || len(deliveries) != 3 || deliveries[0].AgentRun.ThreadID == "" ||
+		deliveries[1].AgentRun.ThreadID != deliveries[0].AgentRun.ThreadID || deliveries[2].AgentRun.ThreadID != deliveries[0].AgentRun.ThreadID ||
+		deliveries[1].AgentRun.TurnID == deliveries[0].AgentRun.TurnID || deliveries[2].AgentRun.TurnID == deliveries[1].AgentRun.TurnID {
 		t.Fatalf("same-Thread resumed deliveries=%#v err=%v", deliveries, err)
 	}
 	afterFollow, err := store.Job(ctx, job.ID)
@@ -401,9 +424,8 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	if err != nil || cleaned.CleanupState != core.CleanupComplete {
 		t.Fatalf("cleaned Job=%#v err=%v", cleaned, err)
 	}
-	afterCleanup, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
-	if err != nil || !slices.Equal(afterCleanup, drafts) {
-		t.Fatalf("typed Drafts did not survive cleanup: %#v err=%v", afterCleanup, err)
+	if _, err := reportSandbox.ReadFile(ctx, investigation.ReportPath); err == nil || !strings.Contains(err.Error(), "unavailable after cleanup begins") {
+		t.Fatalf("REPORT.md remained readable after cleanup: %v", err)
 	}
 	externals.mu.Lock()
 	effects := append([]core.ActionKind(nil), externals.effects...)

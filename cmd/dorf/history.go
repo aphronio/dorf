@@ -17,7 +17,6 @@ type workflowPresentation interface {
 	OperationLabel(string, string) string
 	ActionLabel(core.ActionKind) string
 	AgentRoleLabel(string) string
-	ResultLabel(string) string
 }
 
 // historyEntry is disposable human copy projected from durable product facts.
@@ -80,9 +79,6 @@ func investigationHistory(snapshot investigation.Snapshot, deliveries []core.Del
 			addHistoryEntry(&entries, delivery.Message.AdmittedAt, fmt.Sprintf("Follow-up Message %d received", delivery.Message.Sequence))
 		}
 		addAgentRunHistory(&entries, definition, delivery)
-	}
-	for _, draft := range snapshot.Drafts {
-		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready")
 	}
 	return sortedHistory(entries)
 }

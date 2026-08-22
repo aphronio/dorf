@@ -2,7 +2,6 @@ package investigation
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -14,11 +13,10 @@ import (
 type WorkKind string
 
 const (
-	WorkComplete    WorkKind = "complete"
-	WorkAttention   WorkKind = "attention"
-	WorkAction      WorkKind = "action"
-	WorkWaitAgent   WorkKind = "wait-agent"
-	WorkRecordDraft WorkKind = "record-draft"
+	WorkComplete  WorkKind = "complete"
+	WorkAttention WorkKind = "attention"
+	WorkAction    WorkKind = "action"
+	WorkWaitAgent WorkKind = "wait-agent"
 )
 
 type Work struct {
@@ -49,7 +47,6 @@ type Snapshot struct {
 	Actions     []core.Action
 	Messages    []MessageRecord
 	Message     MessageRecord
-	Drafts      []Draft
 	Source      Source
 }
 
@@ -108,16 +105,8 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 			return snapshot, fmt.Errorf("codebase-investigation Message does not use the exact main Sandbox")
 		}
 	}
-	snapshot.Drafts, err = store.CodebaseInvestigationDrafts(ctx, jobID)
-	if err != nil {
-		return snapshot, err
-	}
-	drafted := make(map[string]struct{}, len(snapshot.Drafts))
-	for _, draft := range snapshot.Drafts {
-		drafted[draft.MessageID] = struct{}{}
-	}
 	for _, message := range snapshot.Messages {
-		if _, ok := drafted[message.MessageID]; !ok {
+		if message.Outcome == "" && message.Attention == "" {
 			snapshot.Message = message
 			break
 		}
@@ -153,10 +142,8 @@ func (s Snapshot) Project() Work {
 	if !investigationActionSucceeded(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(core.ActionRouteCreate)
 	}
-	for _, draft := range s.Drafts {
-		if draft.MessageID == s.Message.MessageID {
-			return Work{}
-		}
+	if s.Message.MessageID == "" {
+		return Work{}
 	}
 	if s.Job.WorkflowAttentionSource == s.Message.MessageID && s.Job.WorkflowAttention != "" {
 		return Work{Kind: WorkAttention, FactID: s.Message.MessageID, Detail: s.Job.WorkflowAttention}
@@ -165,7 +152,7 @@ func (s Snapshot) Project() Work {
 		return Work{Kind: WorkAttention, FactID: s.Message.MessageID, Detail: messageAttention(s.Message)}
 	}
 	if s.Message.Outcome == "completed" {
-		return Work{Kind: WorkRecordDraft, FactID: s.Message.MessageID}
+		return Work{}
 	}
 	return Work{Kind: WorkWaitAgent, FactID: s.Message.MessageID, Detail: "awaiting investigator result"}
 }
@@ -197,11 +184,6 @@ func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.A
 		snapshot.Message.Outcome != "" || snapshot.Message.Attention != "" {
 		return nil, nil
 	}
-	for _, draft := range snapshot.Drafts {
-		if draft.MessageID == snapshot.Message.MessageID {
-			return nil, nil
-		}
-	}
 	if snapshot.Message.MessageID == "" || snapshot.Message.SandboxID != snapshot.MainSandbox.ID {
 		return nil, nil
 	}
@@ -220,23 +202,12 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 			return work, nil
 		case WorkAction:
 			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)
-		case WorkRecordDraft:
-			err = absurdruntime.RunFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
-				return recordInvestigationDraft(workCtx, service, store, snapshot)
-			})
 		case WorkWaitAgent:
 			return work, nil
 		default:
 			return Work{}, fmt.Errorf("unsupported codebase-investigation work %q", work.Kind)
 		}
 		if err != nil {
-			var contractErr investigationContractError
-			if errors.As(err, &contractErr) {
-				if attentionErr := store.SetWorkflowAttention(ctx, snapshot.Job.ID, work.FactID, contractErr.Error()); attentionErr != nil {
-					return Work{}, errors.Join(err, attentionErr)
-				}
-				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: contractErr.Error()}, nil
-			}
 			return work, err
 		}
 	}
@@ -249,8 +220,8 @@ func AgentPrompt(source Source, input string) string {
 
 Dorf codebase-investigation contract:
 - Inspect the repository at exact Revision %s; the current working directory is its root.
-- Do not modify the checkout.
-- Return a nonblank Markdown report grounded in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
+- Write the complete Markdown report to REPORT.md at the workspace root before finishing. Replace its contents when revising the report.
+- Ground the report in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
 - Do not include absolute Sandbox paths.
 - If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision)
 }
@@ -290,40 +261,6 @@ func runInvestigationAction(ctx context.Context, custody core.JobHandle, service
 		}
 		return service.ExecuteSandboxAction(workCtx, snapshot.Job.ID, action.ID)
 	})
-}
-
-type investigationContractError string
-
-func (e investigationContractError) Error() string { return string(e) }
-
-func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot) error {
-	result, err := service.ObserveSettledAgentMessage(ctx, snapshot.Job.ID, snapshot.Message.MessageID)
-	if err != nil {
-		return err
-	}
-	if result.MessageID != snapshot.Message.MessageID || result.Outcome != "completed" {
-		return investigationContractError("investigator did not return an exact completed Harness Turn")
-	}
-	report, err := validateInvestigationReport(result.Output)
-	if err != nil {
-		return err
-	}
-	if err := service.VerifyRepositoryUnchanged(ctx, snapshot.Job, snapshot.Source.Revision); err != nil {
-		return investigationContractError("investigator changed or dirtied the admitted checkout: " + err.Error())
-	}
-	_, _, err = store.RecordCodebaseInvestigationDraft(ctx, result.MessageID, report)
-	return err
-}
-
-func validateInvestigationReport(output string) (string, error) {
-	if len(output) > 1<<20 {
-		return "", investigationContractError("investigation report exceeds 1 MiB")
-	}
-	output = strings.ReplaceAll(output, "\r\n", "\n")
-	if strings.TrimSpace(output) == "" {
-		return "", investigationContractError("investigation report must be nonblank Markdown")
-	}
-	return strings.TrimSpace(output) + "\n", nil
 }
 
 func investigationActionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {

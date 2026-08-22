@@ -33,12 +33,12 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	}
 	snapshot.Message.Outcome = "completed"
 	snapshot.Messages[0].Outcome = "completed"
-	if work := snapshot.Project(); work.Kind != WorkRecordDraft || work.FactID != message.MessageID {
-		t.Fatalf("completed Message work=%#v", work)
-	}
-	snapshot.Drafts = []Draft{{JobID: job.ID, MessageID: message.MessageID, AgentRunID: "agent-run-draft", Content: "draft\n"}}
 	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
-		t.Fatalf("open Job with retained draft projected workflow work=%#v", work)
+		t.Fatalf("open Job with completed investigator projected workflow work=%#v", work)
+	}
+	snapshot.Message = MessageRecord{}
+	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
+		t.Fatalf("open Job with no unsettled Message projected workflow work=%#v", work)
 	}
 	snapshot.Job.AdmissionOpen = false
 	if work := snapshot.Project(); work.Kind != WorkComplete {
@@ -95,30 +95,13 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	}
 }
 
-func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
-	tests := []string{
-		"# Finding\n\nSee `internal/investigation/coordinator.go:54`.\n",
-		"No material issue was found.\n",
-	}
-	for _, test := range tests {
-		report, err := validateInvestigationReport(test)
-		if err != nil || report != test {
-			t.Fatalf("report=%q err=%v", report, err)
-		}
-	}
-	for _, invalid := range []string{"", " \n\t", strings.Repeat("x", (1<<20)+1)} {
-		if _, err := validateInvestigationReport(invalid); err == nil {
-			t.Fatalf("accepted invalid output %q", invalid)
-		}
-	}
-}
-
 func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	input := AgentPrompt(Source{Revision: revision}, "Find one architectural weakness.")
 	for _, required := range []string{
 		"current working directory is its root", "repository-relative paths with 1-based line numbers",
 		"<path>:<line> or <path>:<start>-<end>", "Do not include absolute Sandbox paths", revision,
+		"Write the complete Markdown report to REPORT.md at the workspace root", "Replace its contents when revising",
 	} {
 		if !strings.Contains(input, required) {
 			t.Fatalf("investigation input lacks %q:\n%s", required, input)
@@ -155,11 +138,5 @@ func TestPresentationUsesOptionalCopyWithReadableFallbacks(t *testing.T) {
 	}
 	if got := definition.AgentRoleLabel("security-review"); got != "Security review" {
 		t.Fatalf("agent role fallback=%q", got)
-	}
-	if got := definition.ResultLabel("investigation-draft"); got != "Investigation draft" {
-		t.Fatalf("result label=%q", got)
-	}
-	if got := definition.ResultLabel("architecture-note"); got != "Architecture note" {
-		t.Fatalf("result fallback=%q", got)
 	}
 }

@@ -1,16 +1,13 @@
 package investigation
 
-import (
-	"time"
-
-	"github.com/aphronio/dorf/internal/core"
-)
+import "github.com/aphronio/dorf/internal/core"
 
 type SourceKind string
 
 const (
 	Workflow         core.WorkflowName = "codebase-investigation"
 	WorkflowRevision                   = "2"
+	ReportPath                         = "REPORT.md"
 
 	SourceRemote    SourceKind = "remote"
 	SourceGitBundle SourceKind = "git-bundle"
@@ -25,12 +22,4 @@ type Source struct {
 	Revision       string     `json:"revision"`
 	BundleDigest   string     `json:"bundle_digest,omitempty"`
 	BundleByteSize int64      `json:"bundle_byte_size,omitempty"`
-}
-
-type Draft struct {
-	JobID      string    `json:"job_id"`
-	MessageID  string    `json:"message_id"`
-	AgentRunID string    `json:"agent_run_id"`
-	Content    string    `json:"content"`
-	CreatedAt  time.Time `json:"created_at"`
 }

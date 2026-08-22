@@ -1240,8 +1240,15 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		executionOperation = operation
 	}
 	if jsonOutput {
+		report := map[string]any{
+			"path": investigation.ReportPath, "storage": "workspace", "existence_checked": false, "durably_retained": false,
+			"readable_before_cleanup": job.CleanupState == core.CleanupPending,
+		}
+		if job.CleanupState == core.CleanupPending {
+			report["retrieval_command"] = fmt.Sprintf("dorf sandbox file get %s %s --output %s", job.ID, investigation.ReportPath, investigation.ReportPath)
+		}
 		return writeJSON(stdout, map[string]any{
-			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts,
+			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": report,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
@@ -1268,20 +1275,19 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
 	renderHistory(stdout, investigationHistory(snapshot, deliveries))
-	if len(snapshot.Drafts) == 0 {
-		fmt.Fprintln(stdout, "  draft: none")
-		return nil
-	}
-	latest := snapshot.Drafts[len(snapshot.Drafts)-1]
-	fmt.Fprintf(stdout, "  latest draft: created-at=%s\n%s", latest.CreatedAt.Format(time.RFC3339Nano), latest.Content)
-	if !strings.HasSuffix(latest.Content, "\n") {
-		fmt.Fprintln(stdout)
-	}
+	renderInvestigationReportAccess(stdout, job)
+	return nil
+}
+
+func renderInvestigationReportAccess(stdout io.Writer, job core.Job) {
+	fmt.Fprintf(stdout, "  report: %s (agent-owned workspace file; existence not checked; not durably retained)\n", investigation.ReportPath)
 	if job.AdmissionOpen && job.CleanupState == core.CleanupPending {
+		fmt.Fprintf(stdout, "  retrieve before cleanup: dorf sandbox file get %s %s --output %s\n", job.ID, investigation.ReportPath, investigation.ReportPath)
 		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
 		fmt.Fprintf(stdout, "  release resources: dorf cleanup %s\n", job.ID)
+	} else if job.CleanupState != core.CleanupPending {
+		fmt.Fprintln(stdout, "  report retrieval: unavailable after cleanup began")
 	}
-	return nil
 }
 
 func investigationAgentRuns(deliveries []core.Delivery) []core.AgentRun {

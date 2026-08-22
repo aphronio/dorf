@@ -18,6 +18,7 @@ import (
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -587,6 +588,27 @@ func TestCompletedWorkflowAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
 	renderWorkflowAttentionRecovery(&output, job, execution)
 	if got := output.String(); got != "  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
 		t.Fatalf("recovery output=%q", got)
+	}
+}
+
+func TestInvestigationReportAccessIsExplicitlyWorkspaceOwnedAndCleanupBound(t *testing.T) {
+	job := core.Job{ID: "job-report", AdmissionOpen: true, CleanupState: core.CleanupPending}
+	var output strings.Builder
+	renderInvestigationReportAccess(&output, job)
+	want := "  report: " + investigation.ReportPath + " (agent-owned workspace file; existence not checked; not durably retained)\n" +
+		"  retrieve before cleanup: dorf sandbox file get job-report " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
+		"  revise: dorf message --job job-report --id REQUEST_ID --input-file FOLLOW_UP.md\n" +
+		"  release resources: dorf cleanup job-report\n"
+	if output.String() != want {
+		t.Fatalf("open report access:\n%s\nwant:\n%s", output.String(), want)
+	}
+
+	output.Reset()
+	job.AdmissionOpen = false
+	job.CleanupState = core.CleanupComplete
+	renderInvestigationReportAccess(&output, job)
+	if got := output.String(); got != "  report: REPORT.md (agent-owned workspace file; existence not checked; not durably retained)\n  report retrieval: unavailable after cleanup began\n" {
+		t.Fatalf("cleaned report access=%q", got)
 	}
 }
 

@@ -12,62 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const getCodebaseInvestigationRunForUpdate = `-- name: GetCodebaseInvestigationRunForUpdate :one
-select coalesce(j.workflow_name,'') as workflow_name,
-       coalesce(j.workflow_revision,'') as workflow_revision,
-       s.revision,j.admission_open,j.cleanup_state,
-       ar.id as agent_run_id,ar.role,ar.state,coalesce(ar.turn_id,'') as turn_id,
-       coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.input_revision,'') as input_revision,
-       ar.started_at,ar.finished_at
-from dorf.jobs j
-join dorf.codebase_investigation_sources s on s.job_id=j.id
-join dorf.agent_runs ar on ar.job_id=j.id
-where j.id=$1 and ar.id=$2
-for update of j,ar
-`
-
-type GetCodebaseInvestigationRunForUpdateParams struct {
-	JobID      string
-	AgentRunID string
-}
-
-type GetCodebaseInvestigationRunForUpdateRow struct {
-	WorkflowName     core.WorkflowName
-	WorkflowRevision string
-	Revision         string
-	AdmissionOpen    bool
-	CleanupState     core.CleanupState
-	AgentRunID       string
-	Role             string
-	State            core.AgentRunState
-	TurnID           string
-	TurnOutcome      string
-	InputRevision    string
-	StartedAt        sql.NullTime
-	FinishedAt       sql.NullTime
-}
-
-func (q *Queries) GetCodebaseInvestigationRunForUpdate(ctx context.Context, arg GetCodebaseInvestigationRunForUpdateParams) (GetCodebaseInvestigationRunForUpdateRow, error) {
-	row := q.db.QueryRowContext(ctx, getCodebaseInvestigationRunForUpdate, arg.JobID, arg.AgentRunID)
-	var i GetCodebaseInvestigationRunForUpdateRow
-	err := row.Scan(
-		&i.WorkflowName,
-		&i.WorkflowRevision,
-		&i.Revision,
-		&i.AdmissionOpen,
-		&i.CleanupState,
-		&i.AgentRunID,
-		&i.Role,
-		&i.State,
-		&i.TurnID,
-		&i.TurnOutcome,
-		&i.InputRevision,
-		&i.StartedAt,
-		&i.FinishedAt,
-	)
-	return i, err
-}
-
 const getCodebaseInvestigationSource = `-- name: GetCodebaseInvestigationSource :one
 select s.job_id,s.kind,s.repository,s.revision,
        coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
@@ -98,61 +42,33 @@ func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID stri
 	return i, err
 }
 
-const getLatestInvestigationRunAndDraft = `-- name: GetLatestInvestigationRunAndDraft :one
+const getLatestInvestigationRun = `-- name: GetLatestInvestigationRun :one
 select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
-       coalesce(ar.thread_id,'') as thread_id,ar.state,
-       coalesce(d.agent_run_id,'') as draft_agent_run_id
+       coalesce(ar.thread_id,'') as thread_id,ar.state
 from dorf.agent_runs ar
 join dorf.job_messages m on m.id=ar.message_id
-left join dorf.codebase_investigation_drafts d
-  on d.job_id=ar.job_id and d.agent_run_id=ar.id
 where ar.job_id=$1 and ar.role='investigate'
 order by m.sequence desc
 limit 1
 `
 
-type GetLatestInvestigationRunAndDraftRow struct {
-	AgentRunID      string
-	Harness         string
-	ThreadID        string
-	State           core.AgentRunState
-	DraftAgentRunID string
+type GetLatestInvestigationRunRow struct {
+	AgentRunID string
+	Harness    string
+	ThreadID   string
+	State      core.AgentRunState
 }
 
-func (q *Queries) GetLatestInvestigationRunAndDraft(ctx context.Context, jobID string) (GetLatestInvestigationRunAndDraftRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestInvestigationRunAndDraft, jobID)
-	var i GetLatestInvestigationRunAndDraftRow
+func (q *Queries) GetLatestInvestigationRun(ctx context.Context, jobID string) (GetLatestInvestigationRunRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestInvestigationRun, jobID)
+	var i GetLatestInvestigationRunRow
 	err := row.Scan(
 		&i.AgentRunID,
 		&i.Harness,
 		&i.ThreadID,
 		&i.State,
-		&i.DraftAgentRunID,
 	)
 	return i, err
-}
-
-const insertCodebaseInvestigationDraft = `-- name: InsertCodebaseInvestigationDraft :execrows
-insert into dorf.codebase_investigation_drafts(
-    job_id,agent_run_id,content
-) values(
-    $1,$2,$3
-)
-on conflict(job_id,agent_run_id) do nothing
-`
-
-type InsertCodebaseInvestigationDraftParams struct {
-	JobID      string
-	AgentRunID string
-	Content    string
-}
-
-func (q *Queries) InsertCodebaseInvestigationDraft(ctx context.Context, arg InsertCodebaseInvestigationDraftParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDraft, arg.JobID, arg.AgentRunID, arg.Content)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const insertCodebaseInvestigationSource = `-- name: InsertCodebaseInvestigationSource :execrows
@@ -187,52 +103,6 @@ func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg Ins
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const listCodebaseInvestigationDrafts = `-- name: ListCodebaseInvestigationDrafts :many
-select d.job_id,d.agent_run_id,ar.message_id,d.content,ar.finished_at
-from dorf.codebase_investigation_drafts d
-join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
-join dorf.job_messages m on m.id=ar.message_id
-where d.job_id=$1
-order by m.sequence,d.agent_run_id
-`
-
-type ListCodebaseInvestigationDraftsRow struct {
-	JobID      string
-	AgentRunID string
-	MessageID  string
-	Content    string
-	FinishedAt sql.NullTime
-}
-
-func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]ListCodebaseInvestigationDraftsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listCodebaseInvestigationDrafts, jobID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListCodebaseInvestigationDraftsRow
-	for rows.Next() {
-		var i ListCodebaseInvestigationDraftsRow
-		if err := rows.Scan(
-			&i.JobID,
-			&i.AgentRunID,
-			&i.MessageID,
-			&i.Content,
-			&i.FinishedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listCodebaseInvestigationMessages = `-- name: ListCodebaseInvestigationMessages :many

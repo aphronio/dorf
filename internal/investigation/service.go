@@ -19,29 +19,13 @@ type Store interface {
 	CodebaseInvestigationSource(context.Context, string) (Source, error)
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	Actions(context.Context, string) ([]core.Action, error)
-	CodebaseInvestigationDrafts(context.Context, string) ([]Draft, error)
 	CodebaseInvestigationMessages(context.Context, string) ([]MessageRecord, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
 	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
-	RecordCodebaseInvestigationDraft(context.Context, string, string) (Draft, bool, error)
 }
 
 type Externals interface {
 	RepositoryRestore(context.Context, core.Job, core.Sandbox, Source, []byte) error
-	RepositoryRevision(context.Context, core.Job, string, string) (gitworkspace.Observation, error)
-}
-
-// VerifyRepositoryUnchanged proves the investigation left the admitted exact
-// detached checkout clean before its report becomes a workflow fact.
-func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job core.Job, revision string) error {
-	observation, err := s.externals.RepositoryRevision(ctx, job, "", revision)
-	if err != nil {
-		return err
-	}
-	if observation.Revision != revision || observation.ComparisonBase != revision || observation.Branch != "" {
-		return fmt.Errorf("investigation changed the admitted repository checkout")
-	}
-	return nil
 }
 
 // Service composes shared Git workspace execution with the retained-source

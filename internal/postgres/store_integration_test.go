@@ -93,6 +93,7 @@ type integrationExecution interface {
 
 type integrationRuntimeResolver struct {
 	execution            integrationExecution
+	files                core.SandboxFileReader
 	profile              profileapp.Runtime
 	codingRuntime        coding.Runtime
 	investigationRuntime investigation.Runtime
@@ -102,7 +103,7 @@ func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name strin
 	if name != r.profile.SandboxProfile {
 		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
 	}
-	return core.SandboxRuntime{Execution: r.execution, SandboxProfile: r.profile.SandboxProfile}, nil
+	return core.SandboxRuntime{Execution: r.execution, Files: r.files, SandboxProfile: r.profile.SandboxProfile}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveCleanup(_ context.Context, name string) (core.CleanupRuntime, error) {
