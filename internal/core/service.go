@@ -419,7 +419,7 @@ func activeHarness(status string) bool {
 }
 
 // PrepareCleanup reconciles harness ownership and returns the exact Sandboxes
-// whose cleanup Actions the workflow must execute under their own stable
+// whose cleanup Actions Core/Application executes under their own stable
 // Action Steps.
 func (s ExecutionService) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
 	var job Job

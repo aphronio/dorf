@@ -193,21 +193,11 @@ type admittedAgentRun struct {
 
 type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, core.MessageAdmission) (admittedAgentRun, error)
 
-func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
-	admitted, err := s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
-	return admitted.Message, admitted.Created, err
-}
-
-func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
-	admitted, err := s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
-	return admitted.Message, admitted.Created, err
-}
-
-func (s Store) AdmitCodingMessageResult(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
 }
 
-func (s Store) AdmitInvestigationMessageResult(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
 }
 

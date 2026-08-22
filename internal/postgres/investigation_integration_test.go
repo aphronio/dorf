@@ -62,11 +62,11 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || created {
-		t.Fatalf("investigation accepted a follow-up before its first run completed: created=%v err=%v", created, err)
+	if admitted, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || admitted.Created {
+		t.Fatalf("investigation accepted a follow-up before its first run completed: admitted=%#v err=%v", admitted, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
-		t.Fatalf("coding admission crossed into investigation: created=%v err=%v", created, err)
+	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
+		t.Fatalf("coding admission crossed into investigation: admitted=%#v err=%v", admitted, err)
 	}
 
 	deliveries, err := store.Deliveries(ctx, job.ID)
@@ -89,9 +89,9 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	if err != nil || !job.AdmissionOpen {
 		t.Fatalf("completed run prematurely closed Job=%#v err=%v", job, err)
 	}
-	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
-	if err != nil || !created || follow.Sequence != 2 {
-		t.Fatalf("follow-up=%#v created=%v err=%v", follow, created, err)
+	follow, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
+	if err != nil || !follow.Created || follow.Message.Sequence != 2 {
+		t.Fatalf("follow-up=%#v err=%v", follow, err)
 	}
 	deliveries, err = store.Deliveries(ctx, job.ID)
 	if err != nil || len(deliveries) != 2 || deliveries[1].AgentRun.ThreadID != "thread-investigation" || deliveries[1].AgentRun.Role != "investigate" {
@@ -163,7 +163,7 @@ type investigationAgentExecution struct {
 type investigationMessageAdmissions struct{ store postgres.Store }
 
 func (a investigationMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
-	return a.store.AdmitInvestigationMessageResult(ctx, input)
+	return a.store.AdmitInvestigationMessage(ctx, input)
 }
 
 func (s investigationAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {

@@ -180,9 +180,9 @@ func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input 
 	var admitted core.MessageAdmissionResult
 	switch {
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		admitted, err = a.store.AdmitCodingMessageResult(ctx, input)
+		admitted, err = a.store.AdmitCodingMessage(ctx, input)
 	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		admitted, err = a.store.AdmitInvestigationMessageResult(ctx, input)
+		admitted, err = a.store.AdmitInvestigationMessage(ctx, input)
 	default:
 		return core.MessageAdmissionResult{}, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
 	}
