@@ -44,7 +44,6 @@ type Snapshot struct {
 	Job         core.Job
 	MainSandbox core.Sandbox
 	Actions     []core.Action
-	Messages    []MessageRecord
 	Message     MessageRecord
 	Source      Source
 }
@@ -92,26 +91,23 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Messages, err = store.CodebaseInvestigationMessages(ctx, jobID)
+	messages, err := store.CodebaseInvestigationMessages(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
-	if len(snapshot.Messages) == 0 {
+	if len(messages) == 0 {
 		return snapshot, fmt.Errorf("codebase-investigation Job has no exact investigator Message")
 	}
-	for _, message := range snapshot.Messages {
+	for _, message := range messages {
 		if message.MessageID == "" || message.SandboxID != snapshot.MainSandbox.ID {
 			return snapshot, fmt.Errorf("codebase-investigation Message does not use the exact main Sandbox")
 		}
-	}
-	for _, message := range snapshot.Messages {
-		if message.Outcome == "" && message.Attention == "" {
+		if snapshot.Message.MessageID == "" && message.Outcome == "" && message.Attention == "" {
 			snapshot.Message = message
-			break
 		}
 	}
 	if snapshot.Message.MessageID == "" {
-		snapshot.Message = snapshot.Messages[len(snapshot.Messages)-1]
+		snapshot.Message = messages[len(messages)-1]
 	}
 	return snapshot, nil
 }
@@ -219,10 +215,10 @@ func AgentPrompt(source Source, input string) string {
 
 Dorf codebase-investigation contract:
 - Inspect the repository at exact Revision %s; the current working directory is its root.
-- Write the complete Markdown report to REPORT.md at the workspace root before finishing. Replace its contents when revising the report.
+- Write the complete Markdown report to %s at the workspace root before finishing. Replace its contents when revising the report.
 - Ground the report in repository-relative paths with 1-based line numbers, formatted as <path>:<line> or <path>:<start>-<end>.
 - Do not include absolute Sandbox paths.
-- If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision)
+- If there is no useful finding, say that plainly in the report.`, strings.TrimSpace(input), source.Revision, ReportPath)
 }
 
 func runInvestigationAction(ctx context.Context, custody core.JobHandle, service Service, snapshot Snapshot, work Work) error {

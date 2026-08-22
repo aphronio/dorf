@@ -193,13 +193,14 @@ func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, executio
 			return "", err
 		}
 		return coding.AgentPrompt(job, execution.Message.Input), nil
-	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == "investigate":
-		if err := s.store.ValidateInvestigationAgentMessage(ctx, execution); err != nil {
-			return "", err
-		}
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision:
 		source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
 		if err != nil {
 			return "", err
+		}
+		if execution.AgentRun.Role != investigation.InitialAgentRole || execution.AgentRun.Capability != investigation.InitialAgentCapability ||
+			execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
+			return "", fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
 		}
 		return investigation.AgentPrompt(source, execution.Message.Input), nil
 	default:
@@ -221,7 +222,7 @@ func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, ex
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
-	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == "investigate":
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == investigation.InitialAgentRole:
 		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
 		return operation, err
 	default:

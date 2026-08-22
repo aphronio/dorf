@@ -43,44 +43,26 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 		return admittedAgentRun{}, err
 	}
 	return admittedAgentRun{
-		Role: "investigate", Capability: "repository-read-report", InputRevision: source.Revision,
+		Role: investigation.InitialAgentRole, Capability: investigation.InitialAgentCapability, InputRevision: source.Revision,
 		SandboxID: input.SandboxID, Harness: latest.Harness, ThreadID: latest.ThreadID,
 	}, nil
 }
 
 func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) ([]investigation.MessageRecord, error) {
-	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationMessages(ctx, jobID)
+	deliveries, err := s.Deliveries(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	work := make([]investigation.MessageRecord, 0, len(rows))
-	for _, row := range rows {
-		work = append(work, investigation.MessageRecord{MessageID: row.MessageID, SandboxID: row.SandboxID, Outcome: agentRunOutcome(row.State, row.TurnOutcome), Attention: row.Attention})
-	}
-	return work, nil
-}
-
-func (s Store) ValidateInvestigationAgentMessage(ctx context.Context, execution core.AgentMessageExecution) error {
-	source, err := s.CodebaseInvestigationSource(ctx, execution.Job.ID)
-	if err != nil {
-		return err
-	}
-	if execution.AgentRun.Role != "investigate" || execution.AgentRun.Capability != "repository-read-report" ||
-		execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
-		return fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
-	}
-	messages, err := s.CodebaseInvestigationMessages(ctx, execution.Job.ID)
-	if err != nil {
-		return err
-	}
-	for _, message := range messages {
-		if message.Outcome != "" || message.Attention != "" {
+	work := make([]investigation.MessageRecord, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
+		if run.Role != investigation.InitialAgentRole {
 			continue
 		}
-		if message.MessageID != execution.Message.ID || message.SandboxID != execution.Sandbox.ID {
-			return fmt.Errorf("Message %s is no longer the exact eligible investigation Agent Message", execution.Message.ID)
-		}
-		return nil
+		work = append(work, investigation.MessageRecord{
+			MessageID: delivery.Message.ID, SandboxID: run.SandboxID,
+			Outcome: agentRunOutcome(run.State, run.TurnOutcome), Attention: run.Attention,
+		})
 	}
-	return fmt.Errorf("Message %s is no longer eligible for investigation Agent reconciliation", execution.Message.ID)
+	return work, nil
 }

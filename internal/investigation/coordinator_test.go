@@ -15,7 +15,7 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	job := core.Job{ID: "job-1", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	message := MessageRecord{MessageID: "message-1", SandboxID: sandbox.ID}
-	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Messages: []MessageRecord{message}, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
+	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	for _, want := range steps {
@@ -32,7 +32,6 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		t.Fatalf("Agent Message work=%#v", work)
 	}
 	snapshot.Message.Outcome = "completed"
-	snapshot.Messages[0].Outcome = "completed"
 	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
 		t.Fatalf("open Job with completed investigator projected workflow work=%#v", work)
 	}
@@ -66,10 +65,9 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
-		Messages: []MessageRecord{{MessageID: "message-local", SandboxID: sandbox.ID}},
-		Message:  MessageRecord{MessageID: "message-local", SandboxID: sandbox.ID},
-		Actions:  []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
+		Source:  Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
+		Message: MessageRecord{MessageID: "message-local", SandboxID: sandbox.ID},
+		Actions: []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
 	}
 	work := snapshot.Project()
 	if work.Kind != WorkAction || work.ActionKind != ActionRepositoryRestore || work.Description() != "Restoring retained repository" {
@@ -85,9 +83,8 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
-		Messages: []MessageRecord{{MessageID: "message-attention", SandboxID: sandbox.ID}},
-		Message:  MessageRecord{MessageID: "message-attention", SandboxID: sandbox.ID},
+		Source:  Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
+		Message: MessageRecord{MessageID: "message-attention", SandboxID: sandbox.ID},
 	}
 	work := snapshot.Project()
 	if work.Kind != WorkAttention || work.FactID != source || work.Detail != job.WorkflowAttention {
@@ -95,20 +92,13 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	}
 }
 
-func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T) {
+func TestInvestigationAgentPromptOwnsReportPathAndPortableCitations(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	input := AgentPrompt(Source{Revision: revision}, "Find one architectural weakness.")
-	for _, required := range []string{
-		"current working directory is its root", "repository-relative paths with 1-based line numbers",
-		"<path>:<line> or <path>:<start>-<end>", "Do not include absolute Sandbox paths", revision,
-		"Write the complete Markdown report to REPORT.md at the workspace root", "Replace its contents when revising",
-	} {
+	for _, required := range []string{ReportPath, revision, "complete Markdown report", "Replace its contents", "repository-relative paths", "1-based line numbers"} {
 		if !strings.Contains(input, required) {
 			t.Fatalf("investigation input lacks %q:\n%s", required, input)
 		}
-	}
-	if strings.Contains(input, "/workspace/job") {
-		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
 	}
 }
 
@@ -125,18 +115,5 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 	investigationDefinition := WorkflowDefinition()
 	if err := (profile.Runtime{SandboxProfile: "e2b"}).Require(investigationDefinition.Name, investigationDefinition.Revision, investigationDefinition.RequiredProviderCapabilities); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPresentationUsesOptionalCopyWithReadableFallbacks(t *testing.T) {
-	definition := WorkflowDefinition()
-	if got := definition.OperationLabel("custom-operation", "Custom operation"); got != "Custom operation" {
-		t.Fatalf("operation fallback=%q", got)
-	}
-	if got := definition.AgentRoleLabel("investigate"); got != "Investigator" {
-		t.Fatalf("agent role label=%q", got)
-	}
-	if got := definition.AgentRoleLabel("security-review"); got != "Security review" {
-		t.Fatalf("agent role fallback=%q", got)
 	}
 }

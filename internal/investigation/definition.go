@@ -51,7 +51,7 @@ func (Definition) ActionLabel(kind core.ActionKind) string {
 }
 
 func (Definition) AgentRoleLabel(role string) string {
-	if role == "investigate" {
+	if role == InitialAgentRole {
 		return "Investigator"
 	}
 	return humanizeIdentifier(role)
