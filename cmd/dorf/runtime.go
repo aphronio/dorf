@@ -145,7 +145,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 		Agent: agent, Ownership: ownership,
 	}
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentStrategies(workflowAgentStrategies{store: r.store, externals: externals})
+		WithAgentExecution(workflowAgentExecution{store: r.store, externals: externals})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
@@ -153,16 +153,15 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}, nil
 }
 
-// workflowAgentStrategies is static deployment composition. It selects prompt
-// policy and the strict-review Harness adapter owned by the pinned native
-// workflow; Core never switches on a workflow or receives caller-built AgentRun
-// lifecycle callbacks.
-type workflowAgentStrategies struct {
+// workflowAgentExecution is static deployment composition. It resolves the
+// prompt and one cohesive Harness operation from the pinned workflow; Core
+// never switches on workflow, Role, or review policy.
+type workflowAgentExecution struct {
 	store     postgres.Store
 	externals terminal.Externals
 }
 
-func (s workflowAgentStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+func (s workflowAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	job, err := s.store.Job(ctx, jobID)
 	if err != nil {
 		return nil, err
@@ -177,8 +176,10 @@ func (s workflowAgentStrategies) SelectAgentMessage(ctx context.Context, jobID s
 	}
 }
 
-func (s workflowAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	switch {
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
+		return execution.Message.Input, nil
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
 		if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
 			return "", err
@@ -202,23 +203,25 @@ func (s workflowAgentStrategies) ResolveAgentPrompt(ctx context.Context, executi
 	}
 }
 
-// ResolveAgentHarnessStrategy is shared by ordinary reconciliation and cleanup
-// recovery. Cleanup never asks for a prompt, so open-admission eligibility
-// remains confined to ResolveAgentPrompt.
-func (s workflowAgentStrategies) ResolveAgentHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+// ResolveAgentRunOperation is shared by reconciliation, settled observation,
+// and cleanup. Cleanup never asks for a prompt and the operation cannot choose
+// whether Core submits, recovers, or only observes.
+func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	switch {
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
-		strategy, err := coding.NewReviewAgentStrategy(ctx, s.store, s.externals, execution)
+		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.externals, execution)
 		if err != nil {
 			return nil, err
 		}
-		return strategy, nil
+		return operation, nil
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
-		return nil, nil
+		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
+		return operation, err
 	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == "investigate":
-		return nil, nil
+		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
+		return operation, err
 	default:
-		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness strategy", execution.Message.ID)
+		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness operation", execution.Message.ID)
 	}
 }
 

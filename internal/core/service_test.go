@@ -13,14 +13,16 @@ func TestAgentRunRecoversInitialHarnessTurnWithoutResubmission(t *testing.T) {
 	contract := agentRunContract{
 		store:        store,
 		run:          store.run,
-		harness:      "codex",
 		beforeRecord: allowAgentRunRecord,
-		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
-			submits++
-			return HarnessBinding{}, nil
-		},
-		recover: func(context.Context, AgentRun) (HarnessBinding, error) {
-			return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "completed"}}, nil
+		operation: agentRunTestOperation{
+			harness: "codex",
+			submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+				submits++
+				return HarnessBinding{}, nil
+			},
+			recover: func(context.Context, AgentRun) (HarnessBinding, error) {
+				return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "completed"}}, nil
+			},
 		},
 	}
 
@@ -41,13 +43,15 @@ func TestAgentRunPersistsHarnessBeforeFirstSubmission(t *testing.T) {
 	contract := agentRunContract{
 		store:        store,
 		run:          store.run,
-		harness:      "codex",
 		beforeRecord: allowAgentRunRecord,
-		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
-			if store.run.Harness != "codex" || !store.run.BaselineRecorded || store.run.State != AgentRunSubmitting {
-				t.Fatalf("submission began before harness preparation: %#v", store.run)
-			}
-			return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "completed"}}, nil
+		operation: agentRunTestOperation{
+			harness: "codex",
+			submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+				if store.run.Harness != "codex" || !store.run.BaselineRecorded || store.run.State != AgentRunSubmitting {
+					t.Fatalf("submission began before harness preparation: %#v", store.run)
+				}
+				return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "completed"}}, nil
+			},
 		},
 	}
 	if _, err := contract.execute(context.Background()); err != nil {
@@ -61,7 +65,6 @@ func TestAgentRunReturnsAfterDurablyBindingActiveTurn(t *testing.T) {
 	contract := agentRunContract{
 		store:        store,
 		run:          store.run,
-		harness:      "pi",
 		beforeRecord: allowAgentRunRecord,
 		reachBarrier: func(_ context.Context, point string, _ Delivery) error {
 			if point == BarrierHarnessActive {
@@ -69,8 +72,11 @@ func TestAgentRunReturnsAfterDurablyBindingActiveTurn(t *testing.T) {
 			}
 			return nil
 		},
-		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
-			return HarnessBinding{Harness: "pi", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "running"}}, nil
+		operation: agentRunTestOperation{
+			harness: "pi",
+			submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+				return HarnessBinding{Harness: "pi", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "running"}}, nil
+			},
 		},
 	}
 
@@ -91,10 +97,12 @@ func TestAgentRunObservationSettlesExactBoundTurn(t *testing.T) {
 	contract := agentRunContract{
 		store:        store,
 		run:          store.run,
-		harness:      "pi",
 		beforeRecord: allowAgentRunRecord,
-		history: func(context.Context, AgentRun) (HarnessHistory, error) {
-			return HarnessHistory{Harness: "pi", ThreadID: "thread-1", Turns: []HarnessTurn{{ID: "turn-1", Status: "completed"}}}, nil
+		operation: agentRunTestOperation{
+			harness: "pi",
+			history: func(context.Context, AgentRun) (HarnessHistory, error) {
+				return HarnessHistory{Harness: "pi", ThreadID: "thread-1", Turns: []HarnessTurn{{ID: "turn-1", Status: "completed"}}}, nil
+			},
 		},
 	}
 
@@ -114,11 +122,14 @@ func TestAgentRunReconcilesLostBoundSubmissionAcknowledgement(t *testing.T) {
 		store:        store,
 		run:          store.run,
 		beforeRecord: allowAgentRunRecord,
-		submitBound: func(context.Context, AgentRun) (HarnessBinding, error) {
-			history.Turns = append(history.Turns, HarnessTurn{ID: "turn-1", Status: "completed"})
-			return HarnessBinding{}, errors.New("response lost")
+		operation: agentRunTestOperation{
+			harness: "codex",
+			submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+				history.Turns = append(history.Turns, HarnessTurn{ID: "turn-1", Status: "completed"})
+				return HarnessBinding{}, errors.New("response lost")
+			},
+			history: func(context.Context, AgentRun) (HarnessHistory, error) { return history, nil },
 		},
-		history: func(context.Context, AgentRun) (HarnessHistory, error) { return history, nil },
 	}
 
 	turn, err := contract.execute(context.Background())
@@ -137,11 +148,13 @@ func TestAgentRunClaimLossBeforeBaselineDoesNotPrepareOrSubmit(t *testing.T) {
 	contract := agentRunContract{
 		store:        store,
 		run:          store.run,
-		harness:      "codex",
 		beforeRecord: func(context.Context) error { return claimLost },
-		submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
-			submits++
-			return HarnessBinding{}, nil
+		operation: agentRunTestOperation{
+			harness: "codex",
+			submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+				submits++
+				return HarnessBinding{}, nil
+			},
 		},
 	}
 
@@ -163,8 +176,14 @@ func TestLostClaimCannotOverwriteReplacementAgentRun(t *testing.T) {
 		{"failed", func(store *agentRunTestStore) agentRunContract {
 			return agentRunContract{
 				store: store, run: AgentRun{ID: replacement.ID, Harness: "codex", BaselineRecorded: true}, beforeRecord: func(context.Context) error { return claimLost },
-				submitNew: func(context.Context, AgentRun) (HarnessBinding, error) {
-					return HarnessBinding{}, errors.New("definite stale failure")
+				operation: agentRunTestOperation{
+					harness: "codex",
+					recover: func(context.Context, AgentRun) (HarnessBinding, error) {
+						return HarnessBinding{}, nil
+					},
+					submit: func(context.Context, AgentRun, string) (HarnessBinding, error) {
+						return HarnessBinding{}, errors.New("definite stale failure")
+					},
 				},
 				onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, _ error) (HarnessTurn, error) {
 					err := claimBeforeAgentRunRecord(ctx, func(context.Context) error { return claimLost }, func() error { return store.FailAgentRun(ctx, run.ID, "stale failure") })
@@ -175,8 +194,11 @@ func TestLostClaimCannotOverwriteReplacementAgentRun(t *testing.T) {
 		{"uncertain", func(store *agentRunTestStore) agentRunContract {
 			return agentRunContract{
 				store: store, run: AgentRun{ID: replacement.ID, Harness: "codex", ThreadID: "stale-thread", State: AgentRunActive}, beforeRecord: func(context.Context) error { return claimLost },
-				history: func(context.Context, AgentRun) (HarnessHistory, error) {
-					return HarnessHistory{Harness: "codex", ThreadID: "foreign-thread"}, nil
+				operation: agentRunTestOperation{
+					harness: "codex",
+					history: func(context.Context, AgentRun) (HarnessHistory, error) {
+						return HarnessHistory{Harness: "codex", ThreadID: "foreign-thread"}, nil
+					},
 				},
 			}
 		}},
@@ -233,6 +255,33 @@ func TestHarnessTurnReconciliationClassifications(t *testing.T) {
 
 type agentRunTestStore struct {
 	run AgentRun
+}
+
+type agentRunTestOperation struct {
+	harness string
+	submit  func(context.Context, AgentRun, string) (HarnessBinding, error)
+	recover func(context.Context, AgentRun) (HarnessBinding, error)
+	history func(context.Context, AgentRun) (HarnessHistory, error)
+}
+
+func (o agentRunTestOperation) Harness() string { return o.harness }
+func (o agentRunTestOperation) Submit(ctx context.Context, run AgentRun, input string) (HarnessBinding, error) {
+	if o.submit == nil {
+		return HarnessBinding{}, errors.New("unexpected submit")
+	}
+	return o.submit(ctx, run, input)
+}
+func (o agentRunTestOperation) Recover(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+	if o.recover == nil {
+		return HarnessBinding{}, errors.New("unexpected recover")
+	}
+	return o.recover(ctx, run)
+}
+func (o agentRunTestOperation) History(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+	if o.history == nil {
+		return HarnessHistory{}, errors.New("unexpected history")
+	}
+	return o.history(ctx, run)
 }
 
 func allowAgentRunRecord(context.Context) error { return nil }

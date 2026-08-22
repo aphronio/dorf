@@ -455,21 +455,37 @@ type blockingAgentExternals struct {
 	starts   int
 }
 
-func (e *blockingAgentExternals) AgentInitialTurn(ctx context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
-	binding, err := e.integrationExternals.AgentInitialTurn(ctx, job, delivery, input)
+type blockingAgentOperation struct {
+	externals *blockingAgentExternals
+	message   core.Message
+	job       core.Job
+}
+
+func (o blockingAgentOperation) Harness() string { return "codex" }
+func (o blockingAgentOperation) Submit(ctx context.Context, run core.AgentRun, input string) (core.HarnessBinding, error) {
+	binding, err := (integrationAgentOperation{
+		externals: o.externals.integrationExternals,
+		execution: core.AgentMessageExecution{Job: o.job, Message: o.message},
+	}).Submit(ctx, run, input)
 	if err != nil {
 		return core.HarnessBinding{}, err
 	}
-	e.mu.Lock()
-	e.starts++
-	e.mu.Unlock()
-	e.once.Do(func() { close(e.entered) })
+	o.externals.mu.Lock()
+	o.externals.starts++
+	o.externals.mu.Unlock()
+	o.externals.once.Do(func() { close(o.externals.entered) })
 	select {
-	case <-e.release:
+	case <-o.externals.release:
 		return binding, nil
 	case <-ctx.Done():
 		return core.HarnessBinding{}, ctx.Err()
 	}
+}
+func (o blockingAgentOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.Recover(ctx, run)
+}
+func (o blockingAgentOperation) History(ctx context.Context, run core.AgentRun) (core.HarnessHistory, error) {
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.History(ctx, run)
 }
 
 func (e *blockingAgentExternals) startCount() int {
@@ -497,7 +513,10 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 		attempts:             make(chan string, 2),
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(resultBoundaryPromptStrategies{fixed: &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)}})
+		WithAgentExecution(resultBoundaryAgentExecution{
+			fixed:     &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)},
+			operation: blockingAgentOperation{externals: externals, message: deliveries[0].Message, job: job},
+		})
 	taskName := "dorf-agent-fence-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ faultActionParams) (faultActionResultV1, error) {
 		task, ok := absurd.TaskFromContext(taskCtx)

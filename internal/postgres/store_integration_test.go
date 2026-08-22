@@ -271,7 +271,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 		integrationExternals: &integrationExternals{}, entered: make(chan struct{}), release: make(chan struct{}),
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(codingPromptStrategies{store: store})
+		WithAgentExecution(codingAgentExecution{store: store, externals: externals.integrationExternals})
 	workspace := gitworkspace.NewExecutor(execution, externals)
 	service := coding.NewService(workspace, store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	profile := profileapp.Runtime{SandboxProfile: "incus"}
@@ -1089,7 +1089,7 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: targetTurnID, Status: "inProgress"}}}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(resultBoundaryPromptStrategies{store: store})
+		WithAgentExecution(resultBoundaryAgentExecution{store: store, externals: externals})
 	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
 	service := coding.NewService(gitworkspace.NewExecutor(execution, externals), store, externals, blob.Store{}, absurdruntime.RequireClaim)
@@ -1385,7 +1385,7 @@ func TestEarlyCodingFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 
 	externals := &integrationExternals{turnStatus: "completed"}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(codingPromptStrategies{store: store})
+		WithAgentExecution(codingAgentExecution{store: store, externals: externals})
 	taskName := "dorf-early-follow-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		for _, messageID := range messageIDs {
@@ -1870,7 +1870,7 @@ func TestUnsettledHarnessInventoryIncludesActiveReviewRegardlessOfRole(t *testin
 	}
 }
 
-func TestReviewAgentStrategyRequiresExactNamedSandboxForSubmitAndRecovery(t *testing.T) {
+func TestReviewAgentOperationRequiresExactNamedSandboxForSubmitAndRecovery(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		recovery bool
@@ -1905,16 +1905,16 @@ func TestReviewAgentStrategyRequiresExactNamedSandboxForSubmitAndRecovery(t *tes
 				}
 			}
 
-			externals := &reviewStrategyIntegrationExternals{integrationExternals: &integrationExternals{}}
-			strategies := &reviewStrategyIntegrationResolver{store: store, externals: externals, messageID: run.MessageID}
-			execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+			externals := &reviewOperationIntegrationExternals{integrationExternals: &integrationExternals{}}
+			agents := &reviewOperationIntegrationResolver{store: store, externals: externals, messageID: run.MessageID}
+			execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentExecution(agents)
 			taskName := "dorf-review-named-sandbox-proof-v1"
 			client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-				strategies.sandboxID = core.MainSandboxName(job.ID)
+				agents.sandboxID = core.MainSandboxName(job.ID)
 				if err := execution.ReconcileJobAgent(taskCtx, job.ID); err == nil {
 					return core.TaskResultV1{}, fmt.Errorf("default Sandbox satisfied an isolated review Message")
 				}
-				strategies.sandboxID = run.Sandbox.ID
+				agents.sandboxID = run.Sandbox.ID
 				if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 					return core.TaskResultV1{}, err
 				}
@@ -2431,7 +2431,8 @@ func TestCleanupOnlyObservesAcceptedSteerAndBlocksDestructiveActions(t *testing.
 	externals := &integrationExternals{turns: []core.HarnessTurn{{
 		ID: targetTurnID, Status: "inProgress", AcceptedMessageIDs: []string{steerDelivery.AgentRun.ID},
 	}}}
-	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(&cleanupOnlyAgentExecution{externals: externals})
 	client := newFaultClient(t, store, "dorf-cleanup-accepted-steer-"+job.ID)
 	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if _, _, err := service.PrepareCleanup(taskCtx, job.ID); err == nil || !strings.Contains(err.Error(), "remain") {
@@ -2515,8 +2516,8 @@ func TestClosedAdmissionCleanupRecoversOrdinaryCodingRunWithoutExecutionEligibil
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: turnID, Status: "completed"}}}
-	strategies := &cleanupOnlyAgentStrategies{}
-	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+	agents := &cleanupOnlyAgentExecution{externals: externals}
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentExecution(agents)
 	client := newFaultClient(t, store, "dorf-cleanup-ordinary-closed-"+job.ID)
 	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		cleaning, sandboxes, err := service.PrepareCleanup(taskCtx, job.ID)
@@ -2551,8 +2552,8 @@ func TestClosedAdmissionCleanupRecoversOrdinaryCodingRunWithoutExecutionEligibil
 	if err != nil || cleaned.CleanupState != core.CleanupComplete {
 		t.Fatalf("cleanup Job=%#v err=%v", cleaned, err)
 	}
-	if strategies.executionCalls != 0 || strategies.cleanupCalls != 1 {
-		t.Fatalf("strategy calls: execution=%d cleanup=%d", strategies.executionCalls, strategies.cleanupCalls)
+	if agents.executionCalls != 0 || agents.cleanupCalls != 1 {
+		t.Fatalf("Agent resolver calls: execution=%d cleanup=%d", agents.executionCalls, agents.cleanupCalls)
 	}
 	if submitted := externals.submittedSequences(); len(submitted) != 0 {
 		t.Fatalf("cleanup submitted or steered ordinary Harness work: %v", submitted)
@@ -2768,7 +2769,7 @@ type integrationExternals struct {
 	turnStatus string
 }
 
-type reviewStrategyIntegrationExternals struct {
+type reviewOperationIntegrationExternals struct {
 	*integrationExternals
 	reviewMu   sync.Mutex
 	submits    int
@@ -2776,7 +2777,7 @@ type reviewStrategyIntegrationExternals struct {
 	sandboxes  []string
 }
 
-func (e *reviewStrategyIntegrationExternals) ReviewInitialTurn(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
+func (e *reviewOperationIntegrationExternals) ReviewInitialTurn(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
 	e.reviewMu.Lock()
 	e.submits++
 	e.sandboxes = append(e.sandboxes, run.Sandbox.ID)
@@ -2784,7 +2785,7 @@ func (e *reviewStrategyIntegrationExternals) ReviewInitialTurn(_ context.Context
 	return reviewIntegrationBinding(run), nil
 }
 
-func (e *reviewStrategyIntegrationExternals) ReviewRecover(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
+func (e *reviewOperationIntegrationExternals) ReviewRecover(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessBinding, error) {
 	e.reviewMu.Lock()
 	e.recoveries++
 	e.sandboxes = append(e.sandboxes, run.Sandbox.ID)
@@ -2792,7 +2793,7 @@ func (e *reviewStrategyIntegrationExternals) ReviewRecover(_ context.Context, _ 
 	return reviewIntegrationBinding(run), nil
 }
 
-func (*reviewStrategyIntegrationExternals) ReviewTurns(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessHistory, error) {
+func (*reviewOperationIntegrationExternals) ReviewTurns(_ context.Context, _ coding.Job, run coding.ReviewRunView) (core.HarnessHistory, error) {
 	binding := reviewIntegrationBinding(run)
 	return core.HarnessHistory{Harness: binding.Harness, ThreadID: binding.ThreadID, Turns: []core.HarnessTurn{binding.Turn}}, nil
 }
@@ -2804,67 +2805,72 @@ func reviewIntegrationBinding(run coding.ReviewRunView) core.HarnessBinding {
 	}
 }
 
-func (e *reviewStrategyIntegrationExternals) reviewCalls() (int, int, []string) {
+func (e *reviewOperationIntegrationExternals) reviewCalls() (int, int, []string) {
 	e.reviewMu.Lock()
 	defer e.reviewMu.Unlock()
 	return e.submits, e.recoveries, append([]string(nil), e.sandboxes...)
 }
 
-type reviewStrategyIntegrationResolver struct {
+type reviewOperationIntegrationResolver struct {
 	store     postgres.Store
-	externals *reviewStrategyIntegrationExternals
+	externals *reviewOperationIntegrationExternals
 	messageID string
 	sandboxID string
 }
 
-func (r reviewStrategyIntegrationResolver) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
+func (r reviewOperationIntegrationResolver) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
 	return &core.AgentMessageWork{MessageID: r.messageID, SandboxID: r.sandboxID}, nil
 }
 
-func (reviewStrategyIntegrationResolver) ResolveAgentPrompt(context.Context, core.AgentMessageExecution) (string, error) {
-	return "", errors.New("strict review must not resolve an ordinary Agent prompt")
+func (reviewOperationIntegrationResolver) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
+	return execution.Message.Input, nil
 }
 
-func (r reviewStrategyIntegrationResolver) ResolveAgentHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return coding.NewReviewAgentStrategy(ctx, r.store, r.externals, execution)
+func (r reviewOperationIntegrationResolver) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	return coding.NewReviewAgentOperation(ctx, r.store, r.externals, execution)
 }
 
-type codingPromptStrategies struct{ store postgres.Store }
+type codingAgentExecution struct {
+	store     postgres.Store
+	externals *integrationExternals
+}
 
-type countingCodingPromptStrategies struct {
-	codingPromptStrategies
+type countingCodingAgentExecution struct {
+	codingAgentExecution
 	selections int
 }
 
-func (s *countingCodingPromptStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+func (s *countingCodingAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	s.selections++
-	return s.codingPromptStrategies.SelectAgentMessage(ctx, jobID)
+	return s.codingAgentExecution.SelectAgentMessage(ctx, jobID)
 }
 
-func (s codingPromptStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+func (s codingAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	return coding.SelectAgentMessage(ctx, s.store, jobID)
 }
 
-func (s codingPromptStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+func (s codingAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
 		return "", err
 	}
 	return execution.Message.Input, nil
 }
 
-func (codingPromptStrategies) ResolveAgentHarnessStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return nil, nil
+func (s codingAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
-// resultBoundaryPromptStrategies leaves selector eligibility to the real
+// resultBoundaryAgentExecution leaves selector eligibility to the real
 // coding coordinator so this proof can replay a completed steer receipt and
 // exercise both Core completed-run result branches.
-type resultBoundaryPromptStrategies struct {
-	store postgres.Store
-	fixed *core.AgentMessageWork
+type resultBoundaryAgentExecution struct {
+	store     postgres.Store
+	fixed     *core.AgentMessageWork
+	externals *integrationExternals
+	operation core.AgentRunOperation
 }
 
-func (s resultBoundaryPromptStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+func (s resultBoundaryAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	if s.fixed != nil {
 		selected := *s.fixed
 		return &selected, nil
@@ -2872,30 +2878,34 @@ func (s resultBoundaryPromptStrategies) SelectAgentMessage(ctx context.Context, 
 	return s.store.CodingAgentMessage(ctx, jobID)
 }
 
-func (resultBoundaryPromptStrategies) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
+func (resultBoundaryAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
 	return execution.Message.Input, nil
 }
 
-func (resultBoundaryPromptStrategies) ResolveAgentHarnessStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return nil, nil
+func (s resultBoundaryAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	if s.operation != nil {
+		return s.operation, nil
+	}
+	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
-type cleanupOnlyAgentStrategies struct {
+type cleanupOnlyAgentExecution struct {
 	executionCalls int
 	cleanupCalls   int
+	externals      *integrationExternals
 }
 
-func (s *cleanupOnlyAgentStrategies) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
+func (s *cleanupOnlyAgentExecution) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
 	s.executionCalls++
 	return nil, errors.New("ordinary execution selection must not run after admission closes")
 }
 
-func (s *cleanupOnlyAgentStrategies) ResolveAgentPrompt(context.Context, core.AgentMessageExecution) (string, error) {
+func (s *cleanupOnlyAgentExecution) ResolveAgentPrompt(context.Context, core.AgentMessageExecution) (string, error) {
 	s.executionCalls++
 	return "", errors.New("ordinary execution eligibility must not run after admission closes")
 }
 
-func (s *cleanupOnlyAgentStrategies) ResolveAgentHarnessStrategy(_ context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
+func (s *cleanupOnlyAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	if execution.Job.AdmissionOpen {
 		s.executionCalls++
 		return nil, errors.New("ordinary execution Harness selection unexpectedly ran")
@@ -2904,10 +2914,56 @@ func (s *cleanupOnlyAgentStrategies) ResolveAgentHarnessStrategy(_ context.Conte
 	if execution.AgentRun.Role != "implement" {
 		return nil, fmt.Errorf("cleanup did not reload the exact closed ordinary coding run")
 	}
-	return nil, nil
+	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
 func (*integrationExternals) Harness() string { return "codex" }
+
+type integrationAgentOperation struct {
+	externals *integrationExternals
+	execution core.AgentMessageExecution
+}
+
+func (o integrationAgentOperation) Harness() string { return "codex" }
+func (o integrationAgentOperation) Submit(_ context.Context, run core.AgentRun, input string) (core.HarnessBinding, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	status := o.externals.turnStatus
+	if status == "" {
+		status = "running"
+	}
+	if run.ThreadID == "" {
+		if len(o.externals.turns) == 0 {
+			turn := core.HarnessTurn{ID: "integration-turn-" + o.execution.Message.ID, Status: status}
+			o.externals.submitted = append(o.externals.submitted, o.execution.Message.Sequence)
+			o.externals.inputs = append(o.externals.inputs, input)
+			o.externals.turns = append(o.externals.turns, turn)
+		}
+		return core.HarnessBinding{Harness: "codex", ThreadID: "integration-thread-" + o.execution.Job.ID, Turn: o.externals.turns[0]}, nil
+	}
+	turn := core.HarnessTurn{ID: "integration-turn-" + o.execution.Message.ID, Status: status}
+	o.externals.submitted = append(o.externals.submitted, o.execution.Message.Sequence)
+	o.externals.inputs = append(o.externals.inputs, input)
+	o.externals.turns = append(o.externals.turns, turn)
+	return core.HarnessBinding{Harness: "codex", ThreadID: run.ThreadID, Turn: turn}, nil
+}
+func (o integrationAgentOperation) Recover(_ context.Context, _ core.AgentRun) (core.HarnessBinding, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	if len(o.externals.turns) == 0 {
+		return core.HarnessBinding{}, nil
+	}
+	return core.HarnessBinding{Harness: "codex", ThreadID: "integration-thread-" + o.execution.Job.ID, Turn: o.externals.turns[len(o.externals.turns)-1]}, nil
+}
+func (o integrationAgentOperation) History(_ context.Context, run core.AgentRun) (core.HarnessHistory, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	threadID := run.ThreadID
+	if threadID == "" {
+		threadID = "integration-thread-" + o.execution.Job.ID
+	}
+	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: append([]core.HarnessTurn(nil), o.externals.turns...)}, nil
+}
 
 func (e *integrationExternals) effect(kind core.ActionKind) error {
 	e.mu.Lock()
@@ -2927,43 +2983,10 @@ func (e *integrationExternals) RepositoryRestore(context.Context, core.Job, core
 func (e *integrationExternals) RouteCreate(context.Context, core.Job, core.Sandbox, core.Route) error {
 	return e.effect(core.ActionRouteCreate)
 }
-func (e *integrationExternals) AgentInitialTurn(_ context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.turns) == 0 {
-		status := e.turnStatus
-		if status == "" {
-			status = "running"
-		}
-		turn := core.HarnessTurn{ID: "integration-turn-" + delivery.Message.ID, Status: status}
-		e.submitted = append(e.submitted, delivery.Message.Sequence)
-		e.inputs = append(e.inputs, input)
-		e.turns = append(e.turns, turn)
-	}
-	return core.HarnessBinding{Harness: "codex", ThreadID: "integration-thread-" + job.ID, Turn: e.turns[0]}, nil
-}
-func (e *integrationExternals) AgentInitialTurns(_ context.Context, job core.Job, _ string) (core.HarnessHistory, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return core.HarnessHistory{Harness: "codex", ThreadID: "integration-thread-" + job.ID, Turns: append([]core.HarnessTurn(nil), e.turns...)}, nil
-}
-func (e *integrationExternals) AgentTurns(_ context.Context, _ core.Job, _ string, threadID string) (core.HarnessHistory, error) {
+func (e *integrationExternals) SteerHistory(_ context.Context, _ core.Job, _ string, threadID string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: append([]core.HarnessTurn(nil), e.turns...)}, nil
-}
-func (e *integrationExternals) AgentSubmit(_ context.Context, _ core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	status := e.turnStatus
-	if status == "" {
-		status = "running"
-	}
-	turn := core.HarnessTurn{ID: "integration-turn-" + delivery.Message.ID, Status: status}
-	e.submitted = append(e.submitted, delivery.Message.Sequence)
-	e.inputs = append(e.inputs, input)
-	e.turns = append(e.turns, turn)
-	return core.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: turn}, nil
 }
 func (e *integrationExternals) AgentSteer(_ context.Context, _ core.Job, delivery core.Delivery) (string, error) {
 	e.mu.Lock()
@@ -3030,8 +3053,8 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{}
-	strategies := &countingCodingPromptStrategies{codingPromptStrategies: codingPromptStrategies{store: store}}
-	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+	agents := &countingCodingAgentExecution{codingAgentExecution: codingAgentExecution{store: store, externals: externals}}
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentExecution(agents)
 	staleTaskName := "stale-provider-effect-v1"
 	client.MustRegister(absurd.Task(staleTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if err := service.ReconcileJobAgent(taskCtx, job.ID); err == nil {
@@ -3060,8 +3083,8 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 	if got := externals.effectKinds(); len(got) != 0 {
 		t.Fatalf("unattached stale task mutated provider: %v", got)
 	}
-	if strategies.selections != 0 {
-		t.Fatalf("unattached stale task invoked Agent selector %d times", strategies.selections)
+	if agents.selections != 0 {
+		t.Fatalf("unattached stale task invoked Agent selector %d times", agents.selections)
 	}
 	unchanged, err := store.AgentMessageExecution(ctx, follow.ID)
 	if err != nil || unchanged.AgentRun.ThreadID != "" {

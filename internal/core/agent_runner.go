@@ -19,12 +19,8 @@ type agentRunContract struct {
 	reachBarrier func(context.Context, string, Delivery) error
 	delivery     Delivery
 	run          AgentRun
-	harness      string
-
-	submitNew   func(context.Context, AgentRun) (HarnessBinding, error)
-	submitBound func(context.Context, AgentRun) (HarnessBinding, error)
-	recover     func(context.Context, AgentRun) (HarnessBinding, error)
-	history     func(context.Context, AgentRun) (HarnessHistory, error)
+	operation    AgentRunOperation
+	input        string
 
 	beforeRecord   func(context.Context) error
 	onReadError    func(context.Context, string, error)
@@ -32,9 +28,8 @@ type agentRunContract struct {
 	onRecoverError func(context.Context, AgentRun, error) error
 	onNoSubmit     func(context.Context, AgentRun) (HarnessTurn, error)
 
-	bindUnsupportedTurn bool
-	settleOnly          bool
-	label               string
+	settleOnly bool
+	label      string
 }
 
 func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
@@ -42,16 +37,6 @@ func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 		c.label = "harness"
 	}
 	run := c.run
-	if run.Harness != "" && c.harness != "" && run.Harness != c.harness {
-		reason := fmt.Sprintf("%s AgentRun is bound to harness %s, not %s", c.label, run.Harness, c.harness)
-		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
-	}
-	if run.Harness == "" {
-		run.Harness = c.harness
-	}
-	if run.Harness == "" {
-		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness", c.label)
-	}
 	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
 		status := run.TurnOutcome
 		if status == "" {
@@ -59,8 +44,19 @@ func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 		}
 		return HarnessTurn{ID: run.TurnID, Status: status}, nil
 	}
-	if run.State == AgentRunCompleted && c.history == nil {
-		return HarnessTurn{ID: run.TurnID, Status: run.TurnOutcome}, nil
+	if c.operation == nil {
+		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no Harness operation", c.label)
+	}
+	harness := c.operation.Harness()
+	if run.Harness != "" && harness != "" && run.Harness != harness {
+		reason := fmt.Sprintf("%s AgentRun is bound to harness %s, not %s", c.label, run.Harness, harness)
+		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
+	}
+	if run.Harness == "" {
+		run.Harness = harness
+	}
+	if run.Harness == "" {
+		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness", c.label)
 	}
 	if run.State == AgentRunCompleted {
 		return c.completedTurn(ctx, run)
@@ -84,20 +80,20 @@ func (c agentRunContract) execute(ctx context.Context) (HarnessTurn, error) {
 			reason := c.label + " AgentRun without a thread has a nonempty turn baseline"
 			return HarnessTurn{}, c.markUncertain(ctx, run.ID, reason)
 		}
-		if preparedBeforeCall && c.recover != nil {
+		if preparedBeforeCall {
 			return c.recoverAndSettle(ctx, run)
 		}
 		if c.settleOnly {
 			return HarnessTurn{}, fmt.Errorf("%s AgentRun has no recovery operation", c.label)
 		}
-		return c.submitAndSettle(ctx, run, c.submitNew)
+		return c.submitAndSettle(ctx, run)
 	}
 
 	return c.inspectAndSettle(ctx, run)
 }
 
 func (c agentRunContract) completedTurn(ctx context.Context, run AgentRun) (HarnessTurn, error) {
-	history, err := c.history(ctx, run)
+	history, err := c.operation.History(ctx, run)
 	if err != nil {
 		c.recordReadError(ctx, run.ID, err)
 		return HarnessTurn{}, err
@@ -114,7 +110,7 @@ func (c agentRunContract) completedTurn(ctx context.Context, run AgentRun) (Harn
 }
 
 func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (HarnessTurn, error) {
-	binding, err := c.recover(ctx, run)
+	binding, err := c.operation.Recover(ctx, run)
 	if err != nil {
 		if c.onRecoverError != nil {
 			return HarnessTurn{}, c.onRecoverError(ctx, run, err)
@@ -126,7 +122,7 @@ func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (H
 		if c.settleOnly {
 			return HarnessTurn{}, fmt.Errorf("%s recovery returned no accepted mutation proof", c.label)
 		}
-		return c.submitAndSettle(ctx, run, c.submitNew)
+		return c.submitAndSettle(ctx, run)
 	}
 	if err := c.validateBinding(run, binding, false); err != nil {
 		return HarnessTurn{}, c.recordUncertainError(ctx, run.ID, err)
@@ -135,7 +131,7 @@ func (c agentRunContract) recoverAndSettle(ctx context.Context, run AgentRun) (H
 }
 
 func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (HarnessTurn, error) {
-	history, err := c.history(ctx, run)
+	history, err := c.operation.History(ctx, run)
 	if err != nil {
 		c.recordReadError(ctx, run.ID, err)
 		return HarnessTurn{}, err
@@ -163,34 +159,21 @@ func (c agentRunContract) inspectAndSettle(ctx context.Context, run AgentRun) (H
 		if c.settleOnly && c.onNoSubmit != nil {
 			return c.onNoSubmit(ctx, run)
 		}
-		if c.submitBound == nil {
-			return HarnessTurn{}, fmt.Errorf("%s thread exists but its prepared turn was not submitted", c.label)
-		}
-		return c.submitAndSettle(ctx, run, c.submitBound)
+		return c.submitAndSettle(ctx, run)
 	case "uncertain":
-		if reconciliation.Turn.ID != "" && c.bindUnsupportedTurn {
-			binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn}
-			if err := c.durableBind(ctx, run, binding); err != nil {
-				return HarnessTurn{}, err
-			}
-			return reconciliation.Turn, nil
-		}
 		return HarnessTurn{}, c.markUncertain(ctx, run.ID, reconciliation.Reason)
 	default:
 		return c.bindAndSettle(ctx, run, HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn})
 	}
 }
 
-func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, submit func(context.Context, AgentRun) (HarnessBinding, error)) (HarnessTurn, error) {
-	if submit == nil {
-		return HarnessTurn{}, fmt.Errorf("%s AgentRun has no harness submission operation", c.label)
-	}
+func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun) (HarnessTurn, error) {
 	if err := c.reach(ctx, BarrierBeforeSubmit); err != nil {
 		return HarnessTurn{}, err
 	}
-	binding, err := submit(ctx, run)
+	binding, err := c.operation.Submit(ctx, run, c.input)
 	if err != nil {
-		if run.ThreadID != "" && c.history != nil {
+		if run.ThreadID != "" {
 			if reconciled, ok, reconcileErr := c.reconcileLostSubmission(ctx, run, err); ok || reconcileErr != nil {
 				return reconciled, reconcileErr
 			}
@@ -210,7 +193,7 @@ func (c agentRunContract) submitAndSettle(ctx context.Context, run AgentRun, sub
 }
 
 func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run AgentRun, submitErr error) (HarnessTurn, bool, error) {
-	history, err := c.history(ctx, run)
+	history, err := c.operation.History(ctx, run)
 	if err != nil {
 		reason := c.label + " submission is genuinely uncertain: " + submitErr.Error() + "; history inspection failed: " + err.Error()
 		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reason)
@@ -223,13 +206,6 @@ func (c agentRunContract) reconcileLostSubmission(ctx context.Context, run Agent
 	case "no-submit":
 		return HarnessTurn{}, false, nil
 	case "uncertain":
-		if reconciliation.Turn.ID != "" && c.bindUnsupportedTurn {
-			if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {
-				return HarnessTurn{}, true, err
-			}
-			binding := HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: reconciliation.Turn}
-			return reconciliation.Turn, true, c.durableBind(ctx, run, binding)
-		}
 		return HarnessTurn{}, true, c.markUncertain(ctx, run.ID, reconciliation.Reason)
 	default:
 		if err := c.reach(ctx, BarrierAfterSubmitBeforeBind); err != nil {

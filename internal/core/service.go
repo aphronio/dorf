@@ -32,13 +32,9 @@ type ExecutionStore interface {
 }
 
 type Externals interface {
-	Harness() string
 	SandboxCreate(context.Context, Job, Sandbox) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
-	AgentInitialTurn(context.Context, Job, Delivery, string) (HarnessBinding, error)
-	AgentInitialTurns(context.Context, Job, string) (HarnessHistory, error)
-	AgentTurns(context.Context, Job, string, string) (HarnessHistory, error)
-	AgentSubmit(context.Context, Job, Delivery, string) (HarnessBinding, error)
+	SteerHistory(context.Context, Job, string, string) (HarnessHistory, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
@@ -49,20 +45,20 @@ type FaultBarrier interface {
 	ReachWorkflow(context.Context, string, string, string) error
 }
 
-// AgentHarnessStrategy is a cohesive adapter selected once from authoritative
-// facts. Core owns its prepare/recover/submit/observe/bind state machine; the
-// strategy owns only workflow-specific Harness translation and validation.
-type AgentHarnessStrategy interface {
+// AgentRunOperation is the internal adapter operation for one authoritative
+// Message execution. Core alone owns lifecycle mode and recovery ordering; the
+// operation translates the already-bound run to its selected Harness.
+type AgentRunOperation interface {
 	Harness() string
-	SubmitNew(context.Context, AgentRun) (HarnessBinding, error)
+	Submit(context.Context, AgentRun, string) (HarnessBinding, error)
 	Recover(context.Context, AgentRun) (HarnessBinding, error)
 	History(context.Context, AgentRun) (HarnessHistory, error)
 }
 
-type AgentStrategyResolver interface {
+type AgentExecutionResolver interface {
 	SelectAgentMessage(context.Context, string) (*AgentMessageWork, error)
 	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
-	ResolveAgentHarnessStrategy(context.Context, AgentMessageExecution) (AgentHarnessStrategy, error)
+	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
 }
 
 const (
@@ -81,11 +77,11 @@ type ExecutionService struct {
 	externals  Externals
 	barrier    FaultBarrier
 	claimCheck func(context.Context) error
-	strategies AgentStrategyResolver
+	agents     AgentExecutionResolver
 }
 
-func (s ExecutionService) WithAgentStrategies(strategies AgentStrategyResolver) ExecutionService {
-	s.strategies = strategies
+func (s ExecutionService) WithAgentExecution(agents AgentExecutionResolver) ExecutionService {
+	s.agents = agents
 	return s
 }
 
@@ -170,10 +166,10 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 		if !attachedJob.AdmissionOpen || attachedJob.CleanupState != CleanupPending {
 			return fmt.Errorf("current task cannot reconcile an Agent Message outside an open Job")
 		}
-		if s.strategies == nil {
-			return fmt.Errorf("Agent strategy resolution is not configured")
+		if s.agents == nil {
+			return fmt.Errorf("Agent execution resolution is not configured")
 		}
-		selected, err := s.strategies.SelectAgentMessage(ctx, attachedJob.ID)
+		selected, err := s.agents.SelectAgentMessage(ctx, attachedJob.ID)
 		if err != nil || selected == nil {
 			return err
 		}
@@ -192,25 +188,12 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 		if authoritative.Job.CurrentTaskID != attachedJob.CurrentTaskID || !authoritative.Job.AdmissionOpen || authoritative.Job.CleanupState != CleanupPending {
 			return fmt.Errorf("Message %s changed exact current open Job authority", messageID)
 		}
-		runner, err := s.strategies.ResolveAgentHarnessStrategy(ctx, authoritative)
-		if err != nil {
-			return err
-		}
-		delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
-		run := authoritative.AgentRun
-		if runner != nil {
-			if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-				return nil
-			}
-			_, err := s.executeAgentStrategy(ctx, delivery, runner)
-			return err
-		}
-		input, err := s.strategies.ResolveAgentPrompt(ctx, authoritative)
+		input, err := s.agents.ResolveAgentPrompt(ctx, authoritative)
 		if err != nil {
 			return err
 		}
 		if input == "" {
-			return fmt.Errorf("Message %s strategy returned empty agent input", messageID)
+			return fmt.Errorf("Message %s resolved empty agent input", messageID)
 		}
 		// Prompt eligibility may durably adopt an early queued follow onto the
 		// now-authoritative prior Thread. Discard the pre-resolution aggregate so
@@ -220,22 +203,26 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 			return err
 		}
 		if authoritative.Job.ID != jobID || authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
-			return fmt.Errorf("Message %s changed authoritative Job or Sandbox during strategy resolution", messageID)
+			return fmt.Errorf("Message %s changed authoritative Job or Sandbox during input resolution", messageID)
 		}
-		delivery = Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
-		run = authoritative.AgentRun
+		delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
+		run := authoritative.AgentRun
+		operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
+		if err != nil {
+			return err
+		}
 		if run.State == AgentRunCompleted {
-			_, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
+			_, err := s.executeAgentRun(ctx, delivery, operation, "")
 			return err
 		}
 		if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
 			return nil
 		}
 		if run.State == AgentRunActive {
-			_, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
+			_, err := s.executeAgentRun(ctx, delivery, operation, "")
 			return err
 		}
-		if err := s.deliver(ctx, authoritative.Job, delivery, input); err != nil {
+		if err := s.deliver(ctx, authoritative.Job, delivery, operation, input); err != nil {
 			return err
 		}
 		settled, err := s.store.AgentMessageExecution(ctx, messageID)
@@ -243,7 +230,11 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 			return err
 		}
 		if settled.AgentRun.State == AgentRunCompleted {
-			_, err := s.observeAgentRunTurn(ctx, settled.Job, settled.AgentRun, settled.AgentRun.Role)
+			settledOperation, resolveErr := s.agents.ResolveAgentRunOperation(ctx, settled)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			_, err := s.executeAgentRun(ctx, Delivery{Message: settled.Message, AgentRun: settled.AgentRun}, settledOperation, "")
 			return err
 		}
 		return nil
@@ -271,19 +262,17 @@ func (s ExecutionService) ObserveSettledAgentMessage(ctx context.Context, jobID,
 	if run.State != AgentRunCompleted || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
 		return MessageResult{}, fmt.Errorf("Message %s has no settled exact Harness Turn", messageID)
 	}
-	if s.strategies == nil {
-		return MessageResult{}, fmt.Errorf("Agent strategy resolution is not configured")
+	if s.agents == nil {
+		return MessageResult{}, fmt.Errorf("Agent execution resolution is not configured")
 	}
-	runner, err := s.strategies.ResolveAgentHarnessStrategy(ctx, authoritative)
+	operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
 	if err != nil {
 		return MessageResult{}, err
 	}
-	var history HarnessHistory
-	if runner != nil {
-		history, err = runner.History(ctx, run)
-	} else {
-		history, err = s.externals.AgentTurns(ctx, authoritative.Job, run.SandboxID, run.ThreadID)
+	if operation == nil {
+		return MessageResult{}, fmt.Errorf("Message %s has no resolved Agent Harness operation", messageID)
 	}
+	history, err := operation.History(ctx, run)
 	if err != nil {
 		return MessageResult{}, err
 	}
@@ -308,11 +297,10 @@ func terminalMessageResult(messageID string, turn HarnessTurn, fallback AgentRun
 	return result
 }
 
-func (s ExecutionService) executeAgentStrategy(ctx context.Context, delivery Delivery, strategy AgentHarnessStrategy) (HarnessTurn, error) {
+func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery, operation AgentRunOperation, input string) (HarnessTurn, error) {
 	contract := agentRunContract{
 		store: s.store, reachBarrier: s.reach, delivery: delivery, run: delivery.AgentRun,
-		harness: strategy.Harness(), label: "harness",
-		submitNew: strategy.SubmitNew, recover: strategy.Recover, history: strategy.History,
+		operation: operation, input: input, label: "harness",
 		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
 			_ = s.agentRunAttention(ctx, runID, "Harness history is unavailable: "+err.Error())
@@ -340,91 +328,17 @@ func (s ExecutionService) executeAgentStrategy(ctx context.Context, delivery Del
 	return contract.execute(ctx)
 }
 
-func (s ExecutionService) deliver(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) deliver(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery, input)
+		return s.deliverSteer(ctx, job, delivery, operation, input)
 	}
-	return s.deliverAgentRun(ctx, job, delivery, input)
-}
-
-func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery Delivery, input string) error {
-	run := delivery.AgentRun
-	contract := agentRunContract{
-		store:               s.store,
-		reachBarrier:        s.reach,
-		delivery:            delivery,
-		run:                 run,
-		harness:             s.externals.Harness(),
-		label:               "harness",
-		bindUnsupportedTurn: true,
-		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			delivery.AgentRun = run
-			return s.externals.AgentInitialTurn(ctx, job, delivery, input)
-		},
-		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
-			history, err := s.externals.AgentInitialTurns(ctx, job, run.SandboxID)
-			if err != nil || history.ThreadID == "" || len(history.Turns) == 0 {
-				return HarnessBinding{}, err
-			}
-			return HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: history.Turns[len(history.Turns)-1]}, nil
-		},
-		submitBound: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			delivery.AgentRun = run
-			return s.externals.AgentSubmit(ctx, job, delivery, input)
-		},
-		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
-		},
-		beforeRecord: s.requireClaim,
-		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
-		},
-		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
-			var definite interface{ DefiniteNoSubmit() bool }
-			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if failErr := s.failAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-					return HarnessTurn{}, failErr
-				}
-			}
-			if attentionNeeded(err) {
-				if uncertainErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
-					return HarnessTurn{}, uncertainErr
-				}
-			}
-			return HarnessTurn{}, err
-		},
-	}
-	_, err := contract.execute(ctx)
+	_, err := s.executeAgentRun(ctx, delivery, operation, input)
 	return err
 }
 
-func (s ExecutionService) observeAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
-	if run.JobID != job.ID || run.Role != role || run.ThreadID == "" || run.TurnID == "" {
-		return HarnessTurn{}, fmt.Errorf("AgentRun %s is not an exact bound %s Turn for Job %s", run.ID, role, job.ID)
-	}
-	contract := agentRunContract{
-		store:   s.store,
-		run:     run,
-		harness: s.externals.Harness(),
-		label:   "harness",
-		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
-		},
-		beforeRecord: s.requireClaim,
-		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
-		},
-	}
-	turn, err := contract.execute(ctx)
-	if err != nil {
-		return HarnessTurn{}, err
-	}
-	return turn, nil
-}
-
-func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
 	run := delivery.AgentRun
-	history, err := s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
+	history, err := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 	if err != nil {
 		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
 		return err
@@ -438,7 +352,8 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
 			return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 		}
-		return s.deliverAgentRun(ctx, job, delivery, input)
+		_, err := s.executeAgentRun(ctx, delivery, operation, input)
+		return err
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -455,7 +370,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 	}
 	acceptedTurnID, err := s.externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observedHistory, inspectErr := s.externals.AgentTurns(ctx, job, run.SandboxID, run.ThreadID)
+		observedHistory, inspectErr := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 		if inspectErr != nil {
 			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
 			return s.uncertainAgentRun(ctx, run.ID, reason)
@@ -469,7 +384,8 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
 				return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 			}
-			return s.deliverAgentRun(ctx, job, delivery, input)
+			_, fallbackErr := s.executeAgentRun(ctx, delivery, operation, input)
+			return fallbackErr
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -610,23 +526,20 @@ func (s ExecutionService) reconcileHarnessMutations(ctx context.Context, job Job
 func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution AgentMessageExecution) error {
 	delivery := Delivery{Message: execution.Message, AgentRun: execution.AgentRun}
 	run := execution.AgentRun
-	var runner AgentHarnessStrategy
-	if s.strategies != nil {
-		var err error
-		runner, err = s.strategies.ResolveAgentHarnessStrategy(ctx, execution)
-		if err != nil {
-			return cleanupBlocked(delivery, "resolve exact Harness recovery strategy: "+err.Error())
-		}
+	if s.agents == nil {
+		return cleanupBlocked(delivery, "Agent execution resolution is not configured")
+	}
+	operation, err := s.agents.ResolveAgentRunOperation(ctx, execution)
+	if err != nil {
+		return cleanupBlocked(delivery, "resolve exact Harness operation: "+err.Error())
+	}
+	if operation == nil {
+		return cleanupBlocked(delivery, "resolve exact Harness operation: no operation returned")
 	}
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	history := func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-		if runner != nil {
-			return runner.History(ctx, run)
-		}
-		return s.externals.AgentTurns(ctx, execution.Job, run.SandboxID, run.ThreadID)
-	}
+	history := operation.History
 	var inspected *HarnessHistory
 	if delivery.Message.Intent == MessageSteer && (run.TurnID == "" || run.TurnID == delivery.Message.TargetTurnID) {
 		observed, err := history(ctx, run)
@@ -655,30 +568,22 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 			return s.retainCleanupMutation(ctx, delivery, "unsupported steer recovery classification")
 		}
 	}
-	contractHistory := history
-	if inspected != nil {
-		contractHistory = func(context.Context, AgentRun) (HarnessHistory, error) { return *inspected, nil }
-	}
-	recover := func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-		if runner != nil {
-			return runner.Recover(ctx, run)
-		}
-		observed, err := s.externals.AgentInitialTurns(ctx, execution.Job, run.SandboxID)
+	contractOperation := agentRunHistoryOperation{AgentRunOperation: operation, observed: inspected}
+	if run.ThreadID == "" && run.BaselineRecorded {
+		initial, err := operation.History(ctx, run)
 		if err != nil {
-			return HarnessBinding{}, err
+			return s.retainCleanupMutation(ctx, delivery, "initial Harness recovery is unavailable: "+err.Error())
 		}
-		if len(observed.Turns) != 1 {
-			return HarnessBinding{}, fmt.Errorf("initial Harness recovery returned %d turns, not one exact accepted mutation", len(observed.Turns))
+		if len(initial.Turns) != 1 {
+			return s.retainCleanupMutation(ctx, delivery, fmt.Sprintf("initial Harness recovery returned %d turns, not one exact accepted mutation", len(initial.Turns)))
 		}
-		return HarnessBinding{Harness: observed.Harness, ThreadID: observed.ThreadID, Turn: observed.Turns[0]}, nil
-	}
-	harness := s.externals.Harness()
-	if runner != nil {
-		harness = runner.Harness()
+		binding := HarnessBinding{Harness: initial.Harness, ThreadID: initial.ThreadID, Turn: initial.Turns[0]}
+		contractOperation.recovered = &binding
 	}
 	contract := agentRunContract{
-		store: s.store, delivery: delivery, run: run, harness: harness, label: "cleanup harness",
-		recover: recover, history: contractHistory, beforeRecord: s.requireClaim, settleOnly: true,
+		store: s.store, delivery: delivery, run: run,
+		operation: contractOperation,
+		label:     "cleanup harness", beforeRecord: s.requireClaim, settleOnly: true,
 		onNoSubmit: func(ctx context.Context, run AgentRun) (HarnessTurn, error) {
 			if err := s.failAgentRun(ctx, run.ID, "cleanup closed delivery after exact Harness history proved no turn was submitted"); err != nil {
 				return HarnessTurn{}, err
@@ -694,6 +599,26 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted Harness mutation remains active"}
 	}
 	return nil
+}
+
+type agentRunHistoryOperation struct {
+	AgentRunOperation
+	observed  *HarnessHistory
+	recovered *HarnessBinding
+}
+
+func (o agentRunHistoryOperation) History(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+	if o.observed != nil {
+		return *o.observed, nil
+	}
+	return o.AgentRunOperation.History(ctx, run)
+}
+
+func (o agentRunHistoryOperation) Recover(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+	if o.recovered != nil {
+		return *o.recovered, nil
+	}
+	return o.AgentRunOperation.Recover(ctx, run)
 }
 
 func (s ExecutionService) retainCleanupMutation(ctx context.Context, delivery Delivery, reason string) error {

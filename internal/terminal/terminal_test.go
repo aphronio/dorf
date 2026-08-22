@@ -167,17 +167,20 @@ func TestHarnessObservationNeverFallsBackFromExactSandbox(t *testing.T) {
 		return provider.Ownership{}, fmt.Errorf("stop after ownership resolution")
 	}}
 	job := core.Job{ID: "job-exact-sandbox"}
-	for _, observe := range []func() error{
-		func() error {
-			_, err := externals.AgentInitialTurns(context.Background(), job, "sandbox-initial")
-			return err
-		},
-		func() error {
-			_, err := externals.AgentTurns(context.Background(), job, "sandbox-history", "thread-1")
-			return err
-		},
+	for _, test := range []struct {
+		sandboxID string
+		threadID  string
+	}{
+		{sandboxID: "sandbox-initial"},
+		{sandboxID: "sandbox-history", threadID: "thread-1"},
 	} {
-		if err := observe(); err == nil {
+		run := core.AgentRun{ID: "run-1", JobID: job.ID, SandboxID: test.sandboxID, ThreadID: test.threadID}
+		execution := core.AgentMessageExecution{Job: job, AgentRun: run, Sandbox: core.Sandbox{ID: test.sandboxID, JobID: job.ID}}
+		operation, err := NewAgentRunOperation(externals, execution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := operation.History(context.Background(), run); err == nil {
 			t.Fatal("observation continued after ownership resolution failure")
 		}
 	}

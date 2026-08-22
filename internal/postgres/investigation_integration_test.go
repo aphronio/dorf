@@ -147,14 +147,16 @@ func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) 
 type investigationExternals struct {
 	core.Externals
 	mu      sync.Mutex
-	job     core.Job
 	turn    core.HarnessTurn
 	report  []byte
 	submits int
 	effects []core.ActionKind
 }
 
-type investigationAgentStrategies struct{ store postgres.Store }
+type investigationAgentExecution struct {
+	store     postgres.Store
+	externals *investigationExternals
+}
 
 type investigationMessageAdmissions struct{ store postgres.Store }
 
@@ -162,11 +164,11 @@ func (a investigationMessageAdmissions) AdmitAgentMessage(ctx context.Context, i
 	return a.store.AdmitInvestigationMessageResult(ctx, input)
 }
 
-func (s investigationAgentStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+func (s investigationAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	return investigation.SelectAgentMessage(ctx, s.store, jobID)
 }
 
-func (s investigationAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+func (s investigationAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
 	if err != nil {
 		return "", err
@@ -174,11 +176,59 @@ func (s investigationAgentStrategies) ResolveAgentPrompt(ctx context.Context, ex
 	return investigation.AgentPrompt(source, execution.Message.Input), nil
 }
 
-func (investigationAgentStrategies) ResolveAgentHarnessStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return nil, nil
+func (s investigationAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	return investigationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
-func (*investigationExternals) Harness() string { return "codex" }
+type investigationAgentOperation struct {
+	externals *investigationExternals
+	execution core.AgentMessageExecution
+}
+
+func (o investigationAgentOperation) Harness() string { return "codex" }
+func (o investigationAgentOperation) Submit(_ context.Context, run core.AgentRun, _ string) (core.HarnessBinding, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	if run.ThreadID == "" {
+		o.externals.turn = core.HarnessTurn{ID: "turn-" + run.ID, Status: "completed", Output: "Investigation complete."}
+		return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + o.execution.Job.ID, Turn: o.externals.turn}, nil
+	}
+	if run.ThreadID != "thread-"+o.execution.Job.ID {
+		return core.HarnessBinding{}, fmt.Errorf("follow-up did not reuse the investigator Thread")
+	}
+	o.externals.submits++
+	output := "Investigation complete."
+	if o.externals.submits == 1 {
+		o.externals.report = []byte("# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n")
+	} else {
+		o.externals.report = []byte("# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n")
+		output = "Investigation revised."
+	}
+	o.externals.turn = core.HarnessTurn{ID: "turn-" + run.ID, Status: "completed", Output: output}
+	return core.HarnessBinding{Harness: "codex", ThreadID: run.ThreadID, Turn: o.externals.turn}, nil
+}
+func (o investigationAgentOperation) Recover(_ context.Context, _ core.AgentRun) (core.HarnessBinding, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	if o.externals.turn.ID == "" {
+		return core.HarnessBinding{}, nil
+	}
+	return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + o.execution.Job.ID, Turn: o.externals.turn}, nil
+}
+func (o investigationAgentOperation) History(_ context.Context, run core.AgentRun) (core.HarnessHistory, error) {
+	o.externals.mu.Lock()
+	defer o.externals.mu.Unlock()
+	threadID := run.ThreadID
+	if threadID == "" {
+		threadID = "thread-" + o.execution.Job.ID
+	}
+	turns := []core.HarnessTurn(nil)
+	if o.externals.turn.ID != "" {
+		turns = append(turns, o.externals.turn)
+	}
+	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: turns}, nil
+}
+
 func (e *investigationExternals) effect(kind core.ActionKind) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -206,36 +256,7 @@ func (e *investigationExternals) RouteRevoke(context.Context, core.Job, core.San
 func (e *investigationExternals) SandboxDelete(context.Context, core.Job, core.Sandbox) error {
 	return e.effect(core.ActionSandboxDelete)
 }
-func (e *investigationExternals) AgentInitialTurn(_ context.Context, job core.Job, delivery core.Delivery, _ string) (core.HarnessBinding, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.job = job
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: "Investigation complete."}
-	return core.HarnessBinding{Harness: "codex", ThreadID: "thread-" + job.ID, Turn: e.turn}, nil
-}
-func (e *investigationExternals) AgentInitialTurns(context.Context, core.Job, string) (core.HarnessHistory, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return core.HarnessHistory{Harness: "codex", ThreadID: "thread-" + e.job.ID, Turns: []core.HarnessTurn{e.turn}}, nil
-}
-func (e *investigationExternals) AgentSubmit(_ context.Context, job core.Job, delivery core.Delivery, _ string) (core.HarnessBinding, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if delivery.AgentRun.ThreadID != "thread-"+job.ID {
-		return core.HarnessBinding{}, fmt.Errorf("follow-up did not reuse the investigator Thread")
-	}
-	e.submits++
-	output := "Investigation complete."
-	if e.submits == 1 {
-		e.report = []byte("# Finding\n\nThe explicit coordinator is in `internal/investigation/coordinator.go`.\n")
-	} else {
-		e.report = []byte("# Revised finding\n\nThe follow-up is grounded in `internal/investigation/coordinator.go`.\n")
-		output = "Investigation revised."
-	}
-	e.turn = core.HarnessTurn{ID: "turn-" + delivery.AgentRun.ID, Status: "completed", Output: output}
-	return core.HarnessBinding{Harness: "codex", ThreadID: delivery.AgentRun.ThreadID, Turn: e.turn}, nil
-}
-func (e *investigationExternals) AgentTurns(_ context.Context, job core.Job, _ string, threadID string) (core.HarnessHistory, error) {
+func (e *investigationExternals) SteerHistory(_ context.Context, _ core.Job, _ string, threadID string) (core.HarnessHistory, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return core.HarnessHistory{Harness: "codex", ThreadID: threadID, Turns: []core.HarnessTurn{e.turn}}, nil
@@ -266,7 +287,7 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	}
 	externals := &investigationExternals{}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(investigationAgentStrategies{store: store})
+		WithAgentExecution(investigationAgentExecution{store: store, externals: externals})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
 	service := investigation.NewService(workspaceExecutor, externals, records)
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}

@@ -295,36 +295,12 @@ func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.S
 	return nil
 }
 
-func (e Externals) AgentInitialTurn(ctx context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
-	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	return e.Agent.StartInitialTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
-}
-
-func (e Externals) AgentInitialTurns(ctx context.Context, _ core.Job, sandboxID string) (core.HarnessHistory, error) {
-	owner, err := e.owner(ctx, sandboxID)
-	if err != nil {
-		return core.HarnessHistory{}, err
-	}
-	return e.Agent.ReadInitialTurns(ctx, owner, e.Sandbox.Workspace())
-}
-
-func (e Externals) AgentTurns(ctx context.Context, _ core.Job, sandboxID, threadID string) (core.HarnessHistory, error) {
+func (e Externals) SteerHistory(ctx context.Context, _ core.Job, sandboxID, threadID string) (core.HarnessHistory, error) {
 	owner, err := e.owner(ctx, sandboxID)
 	if err != nil {
 		return core.HarnessHistory{}, err
 	}
 	return e.Agent.ReadTurns(ctx, owner, threadID)
-}
-
-func (e Externals) AgentSubmit(ctx context.Context, job core.Job, delivery core.Delivery, input string) (core.HarnessBinding, error) {
-	owner, err := e.owner(ctx, delivery.AgentRun.SandboxID)
-	if err != nil {
-		return core.HarnessBinding{}, err
-	}
-	return e.Agent.StartTurn(ctx, owner, e.Sandbox.Workspace(), delivery.AgentRun.ThreadID, delivery.AgentRun.ID, input, job.Model, job.ReasoningEffort)
 }
 
 func (e Externals) AgentSteer(ctx context.Context, job core.Job, delivery core.Delivery) (string, error) {
