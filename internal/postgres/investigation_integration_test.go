@@ -181,6 +181,12 @@ type investigationExternals struct {
 
 type investigationAgentStrategies struct{ store postgres.Store }
 
+type investigationMessageAdmissions struct{ store postgres.Store }
+
+func (a investigationMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+	return a.store.AdmitInvestigationMessageResult(ctx, input)
+}
+
 func (s investigationAgentStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
 	return investigation.SelectAgentMessage(ctx, s.store, jobID)
 }
@@ -256,8 +262,8 @@ func (*investigationExternals) RepositoryRevision(_ context.Context, _ core.Job,
 	return gitworkspace.Observation{ComparisonBase: revision, Revision: revision, Tree: strings.Repeat("c", 40), StartedAt: now, FinishedAt: now}, nil
 }
 
-func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *testing.T) {
-	_, store, client := testDatabase(t)
+func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *testing.T) {
+	_, store, _ := testDatabase(t)
 	ctx := context.Background()
 	records := blob.Store{Root: t.TempDir()}
 	retained, err := records.Put([]byte("retained repository input"))
@@ -269,16 +275,23 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		WithAgentStrategies(investigationAgentStrategies{store: store})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
 	service := investigation.NewService(workspaceExecutor, externals, records)
-	application := core.Application{
-		Store: store, Tasks: client,
-		SandboxRuntimes: integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: "incus"}},
+	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
+	resolver := integrationRuntimeResolver{
+		execution: execution, profile: runtimeProfile,
+		investigationRuntime: investigation.Runtime{Profile: runtimeProfile, Agent: execution, Investigation: service},
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	job, created, err := store.AdmitInvestigation(ctx, investigation.Admission{
+	client := newFaultClient(t, store, "dorf_investigation_idle_"+suffix)
+	application := core.Application{
+		Store: store, Tasks: client, AgentMessages: investigationMessageAdmissions{store: store},
+		SandboxRuntimes: resolver, CleanupRuntimes: resolver,
+	}
+	application.RegisterCleanup()
+	investigation.Register(application, store, resolver)
+	job, created, err := investigation.Admit(ctx, store, application, providerCheck{}, runtimeProfile, investigation.Admission{
 		JobAdmission: core.JobAdmission{
 			AdmissionKey: "investigation-terminal-" + suffix,
-			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
-			Goal: "Find one concrete simplification.", SandboxProfile: "incus",
+			Goal:         "Find one concrete simplification.", SandboxProfile: "incus",
 			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
 		},
 		Source: investigation.Source{
@@ -289,51 +302,26 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
 	}
-	taskName := "test-codebase-investigation-" + suffix
-	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		handle, err := application.OpenJob(taskCtx, params.JobID)
-		if err != nil {
-			return core.TaskResultV1{}, err
+	settleNextDraft := func(worker *absurd.Client, workerID string, want int) []investigation.Draft {
+		t.Helper()
+		// The first activation submits the Turn and durably suspends for the
+		// one-second active observation interval. The second observes the
+		// completed Turn, records its typed Draft, and enters the open idle wait.
+		if err := worker.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: workerID, BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+			t.Fatal(err)
 		}
-		for {
-			if err := execution.ReconcileJobAgent(taskCtx, params.JobID); err != nil {
-				return core.TaskResultV1{}, err
-			}
-			work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
-			if err != nil {
-				return core.TaskResultV1{}, err
-			}
-			if work.Kind == investigation.WorkWaitAgent {
-				continue
-			}
-			if work.Kind != investigation.WorkWaitInput {
-				return core.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
-			}
-			return core.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
+		time.Sleep(1100 * time.Millisecond)
+		if err := worker.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: workerID, BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+			t.Fatal(err)
 		}
-	}))
-	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName})
-	if err != nil {
-		t.Fatal(err)
+		drafts, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
+		if err != nil || len(drafts) != want {
+			t.Fatalf("Drafts=%#v want=%d err=%v", drafts, want, err)
+		}
+		return drafts
 	}
-	if err := store.AttachJobTask(ctx, job.ID, job.CurrentTaskID, spawned.TaskID, taskName); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.CancelTask(context.Background(), client.QueueName(), spawned.TaskID) })
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-terminal", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
-		t.Fatal(err)
-	}
-	externals.mu.Lock()
-	effects := append([]core.ActionKind(nil), externals.effects...)
-	externals.mu.Unlock()
+	drafts := settleNextDraft(client, "investigation-terminal", 1)
 	wantEffects := []core.ActionKind{core.ActionSandboxCreate, investigation.ActionRepositoryRestore, core.ActionRouteCreate}
-	if !slices.Equal(effects, wantEffects) {
-		t.Fatalf("effects=%v want=%v", effects, wantEffects)
-	}
-	drafts, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
-	if err != nil || len(drafts) != 1 {
-		t.Fatalf("Drafts=%#v err=%v", drafts, err)
-	}
 	if !strings.Contains(drafts[0].Content, "# Finding") {
 		t.Fatalf("typed Draft content=%q", drafts[0].Content)
 	}
@@ -343,51 +331,58 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
-		t.Fatalf("Job did not remain open for follow-up or cleanup: %#v err=%v", job, err)
+		t.Fatalf("Job did not remain open while it had no current workflow operation: %#v err=%v", job, err)
 	}
-	if _, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "dogfood-follow-up", Input: "Check whether the recommendation still holds after the recent workflow changes."}); err != nil || !created {
-		t.Fatalf("follow-up created=%v err=%v", created, err)
+	attachments, err := store.JobTasks(ctx, job.ID)
+	if err != nil || len(attachments) != 1 || attachments[0].TaskID != job.CurrentTaskID || attachments[0].TaskName != investigation.TaskName {
+		t.Fatalf("open-idle execution owner=%#v Job=%#v err=%v", attachments, job, err)
 	}
-	revisionTaskName := taskName + "-follow-up"
-	client.MustRegister(absurd.Task(revisionTaskName, func(taskCtx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		handle, err := application.OpenJob(taskCtx, params.JobID)
-		if err != nil {
-			return core.TaskResultV1{}, err
-		}
-		for {
-			if err := execution.ReconcileJobAgent(taskCtx, params.JobID); err != nil {
-				return core.TaskResultV1{}, err
-			}
-			work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
-			if err != nil {
-				return core.TaskResultV1{}, err
-			}
-			if work.Kind == investigation.WorkWaitAgent {
-				continue
-			}
-			if work.Kind != investigation.WorkWaitInput {
-				return core.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
-			}
-			return core.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
-		}
-	}))
-	revisionTask, err := client.Spawn(ctx, revisionTaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: revisionTaskName})
+	idleTaskID := job.CurrentTaskID
+	idleTask, err := client.FetchTaskResult(ctx, client.QueueName(), idleTaskID)
+	if err != nil || idleTask == nil || idleTask.State != absurd.TaskSleeping {
+		t.Fatalf("open-idle Absurd task=%#v err=%v", idleTask, err)
+	}
+
+	// A fresh client with an empty in-memory registry simulates the worker
+	// process restarting while the durable task is idle in Absurd.
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := absurd.New(absurd.Options{DB: store.DB, QueueName: client.QueueName()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AttachJobTask(ctx, job.ID, spawned.TaskID, revisionTask.TaskID, revisionTaskName); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = restarted.Close() })
+	restartedApplication := core.Application{
+		Store: store, Tasks: restarted, AgentMessages: investigationMessageAdmissions{store: store},
+		SandboxRuntimes: resolver, CleanupRuntimes: resolver,
 	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-follow-up", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
-		t.Fatal(err)
-	}
-	drafts, err = store.CodebaseInvestigationDrafts(ctx, job.ID)
-	if err != nil || len(drafts) != 2 {
-		t.Fatalf("revised Drafts=%#v err=%v", drafts, err)
-	}
-	handle, err := application.OpenJob(ctx, job.ID)
+	restartedApplication.RegisterCleanup()
+	investigation.Register(restartedApplication, store, resolver)
+	handle, err := restartedApplication.OpenJob(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	sandbox, err := handle.DefaultSandbox(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := sandbox.Agent().Message(ctx, "dogfood-follow-up", "Check whether the recommendation still holds after the recent workflow changes.")
+	if err != nil || !receipt.Created || receipt.Sequence != 2 {
+		t.Fatalf("follow-up receipt=%#v err=%v", receipt, err)
+	}
+	drafts = settleNextDraft(restarted, "investigation-restarted", 2)
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 2 || deliveries[0].AgentRun.ThreadID == "" || deliveries[1].AgentRun.ThreadID != deliveries[0].AgentRun.ThreadID || deliveries[1].AgentRun.TurnID == deliveries[0].AgentRun.TurnID {
+		t.Fatalf("same-Thread resumed deliveries=%#v err=%v", deliveries, err)
+	}
+	afterFollow, err := store.Job(ctx, job.ID)
+	if err != nil || afterFollow.CurrentTaskID != idleTaskID {
+		t.Fatalf("follow-up replaced durable execution owner: Job=%#v err=%v", afterFollow, err)
+	}
+	attachments, err = store.JobTasks(ctx, job.ID)
+	if err != nil || len(attachments) != 1 {
+		t.Fatalf("follow-up created a duplicate task attachment: %#v err=%v", attachments, err)
 	}
 	if err := handle.RequestCleanup(ctx); err != nil {
 		t.Fatal(err)
@@ -399,7 +394,7 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if cleaning.AdmissionOpen || cleaning.CleanupState != core.CleanupScheduled {
 		t.Fatalf("explicit cleanup did not close admission and schedule release: %#v", cleaning)
 	}
-	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-cleanup", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+	if err := restarted.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "investigation-cleanup", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
 	cleaned, err := store.Job(ctx, job.ID)
@@ -407,7 +402,14 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatalf("cleaned Job=%#v err=%v", cleaned, err)
 	}
 	afterCleanup, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
-	if err != nil || len(afterCleanup) != 2 || afterCleanup[0] != drafts[0] {
+	if err != nil || !slices.Equal(afterCleanup, drafts) {
 		t.Fatalf("typed Drafts did not survive cleanup: %#v err=%v", afterCleanup, err)
+	}
+	externals.mu.Lock()
+	effects := append([]core.ActionKind(nil), externals.effects...)
+	externals.mu.Unlock()
+	wantEffects = append(wantEffects, core.ActionRouteRevoke, core.ActionSandboxDelete)
+	if !slices.Equal(effects, wantEffects) {
+		t.Fatalf("effects after cleanup=%v want=%v", effects, wantEffects)
 	}
 }

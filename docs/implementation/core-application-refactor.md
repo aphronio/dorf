@@ -194,7 +194,8 @@ Cleanup must close admission and win safely against concurrent input according t
 rules.
 
 Prove idle persistence, later follow resumption on the same Thread, steer during active work, restart
-while idle, concurrent Message/cleanup fencing, and no polling or duplicate task attachment. Reach a
+while idle, concurrent Message/cleanup fencing, bounded lost-wake reload without a separate or busy
+poller, and no duplicate task attachment. Reach a
 live Job that becomes idle, receives a later follow, exposes its typed workflow result, and then
 cleans up. Delete workflow wait operations, phase-like projections, and tests that assert their
 existence rather than observable idleness.

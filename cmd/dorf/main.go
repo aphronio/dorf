@@ -1251,7 +1251,11 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), snapshot.Source.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
-	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
+	currentWork := string(work.Kind)
+	if currentWork == "" {
+		currentWork = "none"
+	}
+	fmt.Fprintf(stdout, "  current work: %s", currentWork)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
 	}

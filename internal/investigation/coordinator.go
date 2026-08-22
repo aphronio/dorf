@@ -19,7 +19,6 @@ const (
 	WorkAction      WorkKind = "action"
 	WorkWaitAgent   WorkKind = "wait-agent"
 	WorkRecordDraft WorkKind = "record-draft"
-	WorkWaitInput   WorkKind = "wait-client-input"
 )
 
 type Work struct {
@@ -31,6 +30,9 @@ type Work struct {
 }
 
 func (w Work) Description() string {
+	if w.Kind == "" {
+		return "No current workflow operation"
+	}
 	definition := WorkflowDefinition()
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
@@ -153,7 +155,7 @@ func (s Snapshot) Project() Work {
 	}
 	for _, draft := range s.Drafts {
 		if draft.MessageID == s.Message.MessageID {
-			return Work{Kind: WorkWaitInput, FactID: draft.MessageID, Detail: "send a follow-up or request cleanup"}
+			return Work{}
 		}
 	}
 	if s.Job.WorkflowAttentionSource == s.Message.MessageID && s.Job.WorkflowAttention != "" {
@@ -214,7 +216,7 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 		}
 		work := snapshot.Project()
 		switch work.Kind {
-		case WorkComplete, WorkAttention, WorkWaitInput:
+		case "", WorkComplete, WorkAttention:
 			return work, nil
 		case WorkAction:
 			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)

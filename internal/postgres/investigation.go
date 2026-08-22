@@ -37,7 +37,7 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 		return admittedAgentRun{}, err
 	}
 	if latest.State != core.AgentRunCompleted || latest.DraftAgentRunID == "" || latest.Harness == "" || latest.ThreadID == "" {
-		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only after its latest completed run has a retained draft")
 	}
 	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
 	if err != nil {

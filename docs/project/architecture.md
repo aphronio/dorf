@@ -70,9 +70,11 @@ current execution task; task names are observations, not hard-coded Job phases. 
 off to another task without adding another task-ID column or changing retry semantics.
 
 Each workflow has one readable coordinator over its natural facts. It asks what work is currently
-missing, performs one bounded operation, records the resulting fact, reloads, and continues or waits.
-Execution and human inspection derive from the same authoritative facts. Dorf does not persist a
-second program counter merely to describe what those facts already imply.
+missing, performs one bounded operation, records the resulting fact, reloads, and continues, stops
+for attention or completion, or returns no current operation. An open Job with no eligible operation
+keeps its current attached task in an Absurd wait; idleness is not a workflow operation or persisted
+status. Execution and human inspection derive from the same authoritative facts. Dorf does not
+persist a second program counter merely to describe what those facts already imply.
 
 The coordinator is ordinary Go, not a reusable graph interpreter. Absurd supplies durable tasks,
 steps, events, retries, waits, claims, heartbeats, and cancellation. Dorf does not rebuild those
@@ -94,7 +96,9 @@ Thread reuse choice. The same key and request return the same Message; changing 
 conflicts; a different key may admit identical text. Sending through the Agent handle defaults to
 follow, which preserves FIFO order. Steer is a distinct explicit mode targeting active work and
 remains observable as such. Wake events make work eligible; they do not replace durable delivery
-facts.
+facts. A later Message wakes the Job's existing execution task rather than attaching a task for that
+Message. A bounded reload of durable Message facts covers a missing wake hint, and an executor
+restart reclaims the same task attachment.
 
 An AgentRun is Core's internal durable recovery fact for one bounded delivery of one Message to an
 agent in a named Role and capability envelope. It retains the exact Harness, Thread, Turn,

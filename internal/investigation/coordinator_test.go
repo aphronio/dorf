@@ -36,10 +36,9 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	if work := snapshot.Project(); work.Kind != WorkRecordDraft || work.FactID != message.MessageID {
 		t.Fatalf("completed Message work=%#v", work)
 	}
-	draft := Draft{JobID: job.ID, MessageID: message.MessageID, AgentRunID: "agent-run-draft", Content: "draft\n"}
-	snapshot.Drafts = []Draft{draft}
-	if work := snapshot.Project(); work.Kind != WorkWaitInput || work.FactID != draft.MessageID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
-		t.Fatalf("waiting work=%#v", work)
+	snapshot.Drafts = []Draft{{JobID: job.ID, MessageID: message.MessageID, AgentRunID: "agent-run-draft", Content: "draft\n"}}
+	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
+		t.Fatalf("open Job with retained draft projected workflow work=%#v", work)
 	}
 	snapshot.Job.AdmissionOpen = false
 	if work := snapshot.Project(); work.Kind != WorkComplete {
@@ -51,13 +50,13 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if TaskName != "dorf-codebase-investigation-v2" || TaskKey("job-1") != "codebase-investigation:v2:job-1" {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
-	options := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
-	if options.StepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" || options.Timeout != time.Second {
-		t.Fatalf("active investigator wake=%#v", options)
+	active := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
+	if active.Timeout != time.Second || active.StepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" {
+		t.Fatalf("active investigator wake=%#v", active)
 	}
-	options = wakeOptions(Work{Kind: WorkWaitInput}, 3)
-	if options.StepName != "dorf/investigation-wake/v2/00000000000000000003" || options.Timeout != idleMessagePollInterval {
-		t.Fatalf("idle Message wake=%#v", options)
+	idle := wakeOptions(Work{}, 3)
+	if idle.Timeout != 30*time.Second || idle.StepName != "dorf/investigation-wake/v2/00000000000000000003" {
+		t.Fatalf("open-idle Message wake=%#v", idle)
 	}
 }
 
@@ -148,9 +147,6 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 
 func TestPresentationUsesOptionalCopyWithReadableFallbacks(t *testing.T) {
 	definition := WorkflowDefinition()
-	if got := definition.OperationLabel(string(WorkWaitInput), "Wait"); got != "Waiting for follow-up or cleanup" {
-		t.Fatalf("operation label=%q", got)
-	}
 	if got := definition.OperationLabel("custom-operation", "Custom operation"); got != "Custom operation" {
 		t.Fatalf("operation fallback=%q", got)
 	}

@@ -56,6 +56,9 @@ typed workflow result or Proposal, attention, and cleanup facts.
   `dorf inspect --follow JOB_ID` when the human wants a live view.
 - Send later input with `dorf message --job JOB_ID --id REQUEST_ID --input-file FILE`. Use
   `--intent steer` only when the human explicitly wants to redirect active work.
+- An open Job may report `current work: none` after producing its latest typed result. This is
+  ordinary idleness: send a later follow with `dorf message`; do not retry or create a replacement
+  Job merely to resume it.
 - When inspection reports attention, repair the reported cause and use `dorf retry JOB_ID`. Retry
   delegates eligibility to the same durable task; it is not a request to create a replacement Job.
 - Retrieve one caller-known Sandbox file before cleanup with

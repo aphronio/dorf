@@ -26,8 +26,6 @@ func (Definition) OperationLabel(kind, fallback string) string {
 		return "Complete"
 	case WorkAttention:
 		return "Needs attention"
-	case WorkWaitInput:
-		return "Waiting for follow-up or cleanup"
 	default:
 		return fallback
 	}
