@@ -136,8 +136,12 @@ with the same proven behavior is an improvement.
 
 Test substantial product decisions, plausible regressions, and rare high-impact invariants such as
 authority, concurrency, idempotency, recovery, and cleanup. Prefer behavior through the public
-boundary and fault injection over tests coupled to database rows or private functions. Delete tests
-with superseded behavior.
+boundary and fault injection over tests coupled to database rows or private functions. Keep the
+smallest strong proof at the boundary that owns each invariant. Avoid tests that merely freeze a
+helper call graph, callback wiring, duplicated validation branches, generated implementation shape,
+or speculative combinations with no credible failure. When an implementation is consolidated,
+delete superseded tests instead of porting them line for line; retain the fault, concurrency, and
+workflow-policy cases that would catch a real regression.
 
 Agents run deterministic tests locally for fast feedback before pushing. CI independently repeats
 the portable unit and PostgreSQL integration suites so merge confidence does not depend on one
