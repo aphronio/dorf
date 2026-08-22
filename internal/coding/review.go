@@ -38,7 +38,11 @@ func (s Service) recordReviewPolicy(ctx context.Context, record ReviewPlanRecord
 	return s.store.RecordReviewPolicy(ctx, record)
 }
 
-func (s Service) RecordReviewResult(ctx context.Context, job Job, messageID string, result core.MessageResult) error {
+func (s Service) RecordReviewResult(ctx context.Context, job Job, messageID string) error {
+	result, err := s.ObserveSettledAgentMessage(ctx, job.ID, messageID)
+	if err != nil {
+		return err
+	}
 	run, err := s.store.ReviewRun(ctx, core.AgentRunID(messageID))
 	if err != nil {
 		return err

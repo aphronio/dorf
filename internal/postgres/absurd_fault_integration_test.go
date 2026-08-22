@@ -14,7 +14,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
-	profileapp "github.com/aphronio/dorf/internal/profile"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
@@ -485,7 +484,7 @@ func (e *blockingAgentExternals) startCount() int {
 	return e.starts
 }
 
-func TestAgentHandleClaimExpirySerializesReplacementAndRecoversLostSubmitAck(t *testing.T) {
+func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmitAck(t *testing.T) {
 	_, store, defaultClient := testDatabase(t)
 	defaultClient.Close()
 	ctx := context.Background()
@@ -504,9 +503,7 @@ func TestAgentHandleClaimExpirySerializesReplacementAndRecoversLostSubmitAck(t *
 		attempts:             make(chan string, 2),
 	}
 	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).
-		WithAgentStrategies(codingPromptStrategies{store: store})
-	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
-	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
+		WithAgentStrategies(resultBoundaryPromptStrategies{fixed: &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)}})
 	taskName := "dorf-agent-fence-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ faultActionParams) (faultActionResultV1, error) {
 		task, ok := absurd.TaskFromContext(taskCtx)
@@ -514,15 +511,10 @@ func TestAgentHandleClaimExpirySerializesReplacementAndRecoversLostSubmitAck(t *
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		externals.attempts <- task.RunID()
-		handle, err := application.OpenJob(taskCtx, job.ID)
-		if err != nil {
+		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 			return faultActionResultV1{}, err
 		}
-		sandbox, err := handle.DefaultSandbox(taskCtx)
-		if err != nil {
-			return faultActionResultV1{}, err
-		}
-		result, err := sandbox.Agent().Reconcile(taskCtx, messageID)
+		result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, messageID)
 		if err != nil {
 			return faultActionResultV1{}, err
 		}

@@ -220,8 +220,9 @@ type MessageResult struct {
 
 func (r MessageResult) Terminal() bool { return r.Outcome != "" }
 
-// AgentMessageWork is the opaque workflow-facing fact that one exact Message
-// in one exact Sandbox still needs Core reconciliation.
+// AgentMessageWork is the opaque static-composition result that one exact
+// Message in one exact Sandbox still needs Core reconciliation. Core consumes
+// it inside the Job fence; workflow coordinators never receive it.
 type AgentMessageWork struct {
 	MessageID string `json:"message_id"`
 	SandboxID string `json:"sandbox_id"`

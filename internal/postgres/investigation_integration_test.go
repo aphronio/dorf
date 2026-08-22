@@ -192,6 +192,10 @@ type investigationExternals struct {
 
 type investigationAgentStrategies struct{ store postgres.Store }
 
+func (s investigationAgentStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+	return investigation.SelectAgentMessage(ctx, s.store, jobID)
+}
+
 func (s investigationAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
 	if err != nil {
@@ -201,10 +205,6 @@ func (s investigationAgentStrategies) ResolveAgentPrompt(ctx context.Context, ex
 }
 
 func (investigationAgentStrategies) ResolveAgentHarnessStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return nil, nil
-}
-
-func (investigationAgentStrategies) ResolveCleanupAgentStrategy(context.Context, core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
 	return nil, nil
 }
 
@@ -306,14 +306,22 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
-		if err != nil {
-			return core.TaskResultV1{}, err
+		for {
+			if err := execution.ReconcileJobAgent(taskCtx, params.JobID); err != nil {
+				return core.TaskResultV1{}, err
+			}
+			work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
+			if err != nil {
+				return core.TaskResultV1{}, err
+			}
+			if work.Kind == investigation.WorkWaitAgent {
+				continue
+			}
+			if work.Kind != investigation.WorkWaitInput {
+				return core.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
+			}
+			return core.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
 		}
-		if work.Kind != investigation.WorkWaitInput {
-			return core.TaskResultV1{}, fmt.Errorf("investigation stopped at %s: %s", work.Kind, work.Detail)
-		}
-		return core.TaskResultV1{JobID: params.JobID, Outcome: "draft-ready"}, nil
 	}))
 	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName})
 	if err != nil {
@@ -366,14 +374,22 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		if err != nil {
 			return core.TaskResultV1{}, err
 		}
-		work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
-		if err != nil {
-			return core.TaskResultV1{}, err
+		for {
+			if err := execution.ReconcileJobAgent(taskCtx, params.JobID); err != nil {
+				return core.TaskResultV1{}, err
+			}
+			work, err := investigation.Run(taskCtx, handle, service, store, params.JobID)
+			if err != nil {
+				return core.TaskResultV1{}, err
+			}
+			if work.Kind == investigation.WorkWaitAgent {
+				continue
+			}
+			if work.Kind != investigation.WorkWaitInput {
+				return core.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
+			}
+			return core.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
 		}
-		if work.Kind != investigation.WorkWaitInput {
-			return core.TaskResultV1{}, fmt.Errorf("follow-up stopped at %s: %s", work.Kind, work.Detail)
-		}
-		return core.TaskResultV1{JobID: params.JobID, Outcome: "revised-draft-ready"}, nil
 	}))
 	revisionTask, err := client.Spawn(ctx, revisionTaskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: revisionTaskName})
 	if err != nil {

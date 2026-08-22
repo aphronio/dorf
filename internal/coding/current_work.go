@@ -19,8 +19,8 @@ const (
 	WorkComplete        WorkKind = "complete"
 	WorkAttention       WorkKind = "attention"
 	WorkAction          WorkKind = "action"
-	WorkRunReviewer     WorkKind = "run-reviewer"
-	WorkAgentMessage    WorkKind = "reconcile-agent-message"
+	WorkWaitAgent       WorkKind = "wait-agent"
+	WorkRecordReview    WorkKind = "record-review-feedback"
 	WorkObserveRevision WorkKind = "observe-revision"
 	WorkChooseReview    WorkKind = "choose-review"
 	WorkPublishProposal WorkKind = "publish-proposal"
@@ -44,11 +44,11 @@ func (w Work) Description() string {
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
-	if w.Kind == WorkAgentMessage {
-		return definition.AgentRoleLabel("implement") + " working"
+	if w.Kind == WorkWaitAgent {
+		return "Awaiting Agent result"
 	}
-	if w.Kind == WorkRunReviewer {
-		return "Reviewer running"
+	if w.Kind == WorkRecordReview {
+		return "Record reviewer feedback"
 	}
 	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
@@ -58,18 +58,17 @@ func (w Work) Description() string {
 // database read. The reads are not a database transaction; every operation
 // still revalidates its owning fact before recording an effect.
 type Snapshot struct {
-	Job          Job
-	Sandboxes    []core.Sandbox
-	MainSandbox  core.Sandbox
-	Actions      []core.Action
-	AgentMessage *core.AgentMessageWork
-	Messages     []MessageRecord
-	ReviewRuns   []ReviewRunView
-	Revisions    []Revision
-	Evidence     []core.Evidence
-	ReviewPlans  []ReviewPlanRecord
-	Proposal     *Proposal
-	Outcome      *Outcome
+	Job         Job
+	Sandboxes   []core.Sandbox
+	MainSandbox core.Sandbox
+	Actions     []core.Action
+	Messages    []MessageRecord
+	ReviewRuns  []ReviewRunView
+	Revisions   []Revision
+	Evidence    []core.Evidence
+	ReviewPlans []ReviewPlanRecord
+	Proposal    *Proposal
+	Outcome     *Outcome
 }
 
 // Projection is a disposable explanation derived from one Snapshot. It is
@@ -152,13 +151,45 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.Outcome == nil && snapshot.Job.AdmissionOpen {
-		snapshot.AgentMessage, err = store.CodingAgentMessage(ctx, jobID)
-		if err != nil {
-			return snapshot, err
+	return snapshot, nil
+}
+
+// SelectAgentMessage is coding's static, workflow-owned eligibility policy.
+// Core calls it under the Job fence before the typed coordinator evaluates
+// facts; callers never receive the selected Message or its lifecycle result.
+func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.AgentMessageWork, error) {
+	f, err := LoadSnapshot(ctx, store, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if f.Outcome != nil || !f.Job.AdmissionOpen || !codingPrerequisitesComplete(f) ||
+		f.Proposal == nil && publicationPending(f.Actions, f.Job.Revision) {
+		return nil, nil
+	}
+	plan := f.currentReviewPlan()
+	if plan != nil {
+		byRole := make(map[string]ReviewRunView, len(f.ReviewRuns))
+		for _, run := range f.currentReviewRuns() {
+			byRole[run.Role] = run
+		}
+		for _, role := range plan.Plan.Roles {
+			run, ok := byRole[string(role)]
+			if !ok {
+				return nil, nil
+			}
+			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
+				continue
+			}
+			if run.Attention != "" || run.Outcome != "" || run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID ||
+				!actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) ||
+				!actionSucceeded(f.Actions, ActionReviewCheckout, run.Sandbox.ID) ||
+				!actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
+				return nil, nil
+			}
+			return &core.AgentMessageWork{MessageID: run.MessageID, SandboxID: run.Sandbox.ID}, nil
 		}
 	}
-	return snapshot, nil
+	return store.CodingAgentMessage(ctx, jobID)
 }
 
 func (s Snapshot) currentReviewPlan() *ReviewPlanRecord {
@@ -234,8 +265,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		return work(WorkPublishProposal, f.Job.Revision, publicationDetail(f, "reconcile started publication"))
 	}
 
-	// Once ReviewPolicy selected exact reviewers, complete their independent
-	// AgentRuns before consuming the feedback Messages they produce.
+	// Once ReviewPolicy selected exact reviewers, wait for Core reconciliation
+	// and then consume their feedback as a typed workflow fact.
 	plan := f.currentReviewPlan()
 	if plan != nil {
 		byRole := make(map[string]ReviewRunView, len(reviewRuns))
@@ -245,7 +276,7 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		for _, role := range plan.Plan.Roles {
 			run, ok := byRole[string(role)]
 			if !ok {
-				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no AgentRun", role))
+				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no durable execution", role))
 			}
 			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
 				continue
@@ -268,23 +299,24 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 			if !actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
 			}
-			return Work{Kind: WorkRunReviewer, Revision: f.Job.Revision, FactID: run.MessageID, Scope: run.Sandbox.ID, Detail: string(role)}
+			if run.Outcome == "completed" {
+				return work(WorkRecordReview, run.MessageID, string(role))
+			}
+			return work(WorkWaitAgent, run.MessageID, "awaiting "+string(role)+" reviewer result")
 		}
 	}
 
-	// Workflows select only the exact Message and Sandbox. Core owns whether
-	// this cycle submits, steers, recovers, or observes the internal AgentRun.
-	if f.AgentMessage != nil {
-		return Work{Kind: WorkAgentMessage, Revision: f.Job.Revision, FactID: f.AgentMessage.MessageID, Scope: f.AgentMessage.SandboxID}
-	}
 	latestInput, latestTurnStart := latestImplementationRuns(f)
+	if latestInput != nil && latestInput.Outcome == "" && latestInput.Attention == "" {
+		return work(WorkWaitAgent, latestInput.Message.ID, "awaiting implementation result")
+	}
 	if latestInput != nil && latestInput.Outcome != "completed" {
 		return work(WorkAttention, latestInput.Message.ID, attentionDetail(f.Job, latestInput.Message.ID, messageAttention(latestInput.Message.ID, latestInput.Outcome, latestInput.Attention)))
 	}
+	if latestTurnStart != nil && latestTurnStart.Outcome == "" && latestTurnStart.Attention == "" {
+		return work(WorkWaitAgent, latestTurnStart.Message.ID, "awaiting implementation result")
+	}
 	if latestTurnStart != nil && latestTurnStart.Outcome != "completed" {
-		// A pending or submitting Run without a delivery candidate cannot be
-		// executed safely. In particular, submission must be reconciled rather
-		// than letting later workflow decisions race its harness mutation.
 		return work(WorkAttention, latestTurnStart.Message.ID, attentionDetail(f.Job, latestTurnStart.Message.ID, messageAttention(latestTurnStart.Message.ID, latestTurnStart.Outcome, latestTurnStart.Attention)))
 	}
 
@@ -405,7 +437,7 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *Message
 // unchangedAttention distinguishes an intentionally adjudicated review or
 // Proposal feedback batch from an initial request or reviewer response
 // that returned without fixing anything. Equality is already carried by the
-// AgentRun input Revision and its git-revision Evidence.
+// accepted input Revision and its git-revision Evidence.
 func unchangedAttention(f Snapshot) (string, string) {
 	sequences := make(map[string]int64, len(f.Messages))
 	producers := make(map[string]MessageRecord, len(f.Messages))

@@ -62,7 +62,6 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		reviewer.Sandbox = core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID}
 		facts.ReviewRuns = []ReviewRunView{reviewer}
 		facts.Sandboxes = append(facts.Sandboxes, reviewer.Sandbox)
-		facts.AgentMessage = &core.AgentMessageWork{MessageID: "message-implement-2", SandboxID: facts.MainSandbox.ID}
 		steps := []struct {
 			work   WorkKind
 			action core.ActionKind
@@ -79,8 +78,13 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 			}
 			facts.Actions = append(facts.Actions, core.Action{ID: wantID, JobID: facts.Job.ID, Kind: step.action, State: core.ActionSucceeded, Scope: reviewer.Sandbox.ID})
 		}
-		if got := decideCurrentWork(facts); got.Kind != WorkRunReviewer || got.FactID != reviewer.MessageID || got.Scope != reviewer.Sandbox.ID {
+		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != reviewer.MessageID {
 			t.Fatalf("CurrentWork = %#v, want selected reviewer after its exact Actions", got)
+		}
+		reviewer.Outcome = "completed"
+		facts.ReviewRuns = []ReviewRunView{reviewer}
+		if got := decideCurrentWork(facts); got.Kind != WorkRecordReview || got.FactID != reviewer.MessageID {
+			t.Fatalf("CurrentWork = %#v, want typed review feedback recording", got)
 		}
 	})
 
@@ -111,20 +115,20 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		reviewer := ReviewRunView{ID: reviewerID, JobID: facts.Job.ID, MessageID: requestID, InputRevision: facts.Job.Revision, Role: string(policy.RoleGeneral), Outcome: "completed", Capability: ReviewReadOnlyCapability, SandboxID: ReviewSandboxName(facts.Job.ID, reviewerID)}
 		feedback := core.Message{ID: core.MessageID(facts.Job.ID, core.MessageFromAgent, reviewerID), JobID: facts.Job.ID, FromKind: core.MessageFromAgent, FromID: reviewerID, Sequence: 2, Intent: core.MessageFollow}
 		facts.ReviewRuns = []ReviewRunView{reviewer}
-		facts.Messages = []MessageRecord{factMessage(feedback, core.AgentRun{ID: core.AgentRunID(feedback.ID), MessageID: feedback.ID, Role: "implement"})}
+		facts.Messages = []MessageRecord{factMessage(feedback, core.AgentRun{ID: core.AgentRunID(feedback.ID), MessageID: feedback.ID, Role: "implement", SandboxID: facts.MainSandbox.ID})}
 		facts.Sandboxes = append(facts.Sandboxes, core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID})
-		facts.AgentMessage = &core.AgentMessageWork{MessageID: feedback.ID, SandboxID: facts.MainSandbox.ID}
-		if got := decideCurrentWork(facts); got.Kind != WorkAgentMessage || got.FactID != feedback.ID {
-			t.Fatalf("CurrentWork = %#v, want ordinary feedback Message delivery", got)
+		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != feedback.ID {
+			t.Fatalf("CurrentWork = %#v, want ordinary feedback Message wait", got)
 		}
 	})
 
 	t.Run("message precedes Git observation", func(t *testing.T) {
 		facts := readyFacts()
 		facts.ReviewPlans = nil
-		facts.AgentMessage = &core.AgentMessageWork{MessageID: "message-implement-2", SandboxID: facts.MainSandbox.ID}
-		if got := decideCurrentWork(facts); got.Kind != WorkAgentMessage || got.FactID != "message-implement-2" {
-			t.Fatalf("CurrentWork = %#v, want Message delivery", got)
+		message := core.Message{ID: "message-implement-2", JobID: facts.Job.ID, Sequence: 2, Intent: core.MessageFollow}
+		facts.Messages = []MessageRecord{factMessage(message, core.AgentRun{ID: core.AgentRunID(message.ID), MessageID: message.ID, Role: "implement", SandboxID: facts.MainSandbox.ID})}
+		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != "message-implement-2" {
+			t.Fatalf("CurrentWork = %#v, want active Message wait", got)
 		}
 	})
 
@@ -134,9 +138,8 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		message := core.Message{ID: "message-2", JobID: facts.Job.ID, Sequence: 2, Intent: core.MessageFollow}
 		run := core.AgentRun{ID: core.AgentRunID(message.ID), JobID: facts.Job.ID, MessageID: message.ID, Role: "implement", State: core.AgentRunSubmitting}
 		facts.Messages = []MessageRecord{factMessage(message, run)}
-		facts.AgentMessage = &core.AgentMessageWork{MessageID: message.ID, SandboxID: facts.MainSandbox.ID}
-		if got := decideCurrentWork(facts); got.Kind != WorkAgentMessage || got.FactID != message.ID {
-			t.Fatalf("CurrentWork = %#v, want submitting Follow reconciliation", got)
+		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != message.ID {
+			t.Fatalf("CurrentWork = %#v, want submitting Follow wait", got)
 		}
 	})
 
@@ -146,7 +149,8 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 			core.Action{Kind: ActionRepositoryPush, State: core.ActionUnsettled, Scope: facts.Job.Revision},
 			core.Action{Kind: ActionGitHubPullRequest, State: core.ActionUnsettled, Scope: facts.Job.Revision},
 		)
-		facts.AgentMessage = &core.AgentMessageWork{MessageID: "message-implement-2", SandboxID: facts.MainSandbox.ID}
+		message := core.Message{ID: "message-implement-2", JobID: facts.Job.ID, Sequence: 2, Intent: core.MessageFollow}
+		facts.Messages = []MessageRecord{factMessage(message, core.AgentRun{ID: core.AgentRunID(message.ID), MessageID: message.ID, Role: "implement", SandboxID: facts.MainSandbox.ID})}
 		if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
 			t.Fatalf("CurrentWork = %#v, want started publication reconciliation", got)
 		}
@@ -300,7 +304,7 @@ func TestLatestImplementationMessageCannotFallThrough(t *testing.T) {
 		observed  bool
 		want      WorkKind
 	}{
-		{name: "nonterminal without reconcile candidate", want: WorkAttention},
+		{name: "nonterminal waits for opaque Core cycle", want: WorkWaitAgent},
 		{name: "durable attention", attention: "accepted mutation is uncertain", want: WorkAttention},
 		{name: "failed", outcome: "failed", want: WorkAttention},
 		{name: "interrupted", outcome: "interrupted", want: WorkAttention},

@@ -14,11 +14,12 @@ import (
 type WorkKind string
 
 const (
-	WorkComplete     WorkKind = "complete"
-	WorkAttention    WorkKind = "attention"
-	WorkAction       WorkKind = "action"
-	WorkAgentMessage WorkKind = "reconcile-agent-message"
-	WorkWaitInput    WorkKind = "wait-client-input"
+	WorkComplete    WorkKind = "complete"
+	WorkAttention   WorkKind = "attention"
+	WorkAction      WorkKind = "action"
+	WorkWaitAgent   WorkKind = "wait-agent"
+	WorkRecordDraft WorkKind = "record-draft"
+	WorkWaitInput   WorkKind = "wait-client-input"
 )
 
 type Work struct {
@@ -34,8 +35,8 @@ func (w Work) Description() string {
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
-	if w.Kind == WorkAgentMessage {
-		return definition.AgentRoleLabel("investigate") + " working"
+	if w.Kind == WorkWaitAgent {
+		return "Awaiting investigator result"
 	}
 	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
@@ -44,10 +45,19 @@ type Snapshot struct {
 	Job         core.Job
 	MainSandbox core.Sandbox
 	Actions     []core.Action
-	Messages    []core.AgentMessageWork
-	Message     core.AgentMessageWork
+	Messages    []MessageRecord
+	Message     MessageRecord
 	Drafts      []Draft
 	Source      Source
+}
+
+// MessageRecord is investigation's read-only projection of an admitted
+// investigator Message. Core owns its hidden AgentRun and Harness lifecycle.
+type MessageRecord struct {
+	MessageID string
+	SandboxID string
+	Outcome   string
+	Attention string
 }
 
 func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, error) {
@@ -149,7 +159,51 @@ func (s Snapshot) Project() Work {
 	if s.Job.WorkflowAttentionSource == s.Message.MessageID && s.Job.WorkflowAttention != "" {
 		return Work{Kind: WorkAttention, FactID: s.Message.MessageID, Detail: s.Job.WorkflowAttention}
 	}
-	return Work{Kind: WorkAgentMessage, FactID: s.Message.MessageID, Scope: s.Message.SandboxID}
+	if s.Message.Attention != "" || s.Message.Outcome != "" && s.Message.Outcome != "completed" {
+		return Work{Kind: WorkAttention, FactID: s.Message.MessageID, Detail: messageAttention(s.Message)}
+	}
+	if s.Message.Outcome == "completed" {
+		return Work{Kind: WorkRecordDraft, FactID: s.Message.MessageID}
+	}
+	return Work{Kind: WorkWaitAgent, FactID: s.Message.MessageID, Detail: "awaiting investigator result"}
+}
+
+func messageAttention(message MessageRecord) string {
+	if message.Attention != "" {
+		return message.Attention
+	}
+	return "investigator Harness work ended with outcome " + message.Outcome
+}
+
+// SelectAgentMessage is investigation's static eligibility policy. Core calls
+// it under the Job fence before the typed coordinator observes workflow facts.
+func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.AgentMessageWork, error) {
+	snapshot, err := LoadSnapshot(ctx, store, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if !snapshot.Job.AdmissionOpen ||
+		!investigationActionSucceeded(snapshot.Actions, core.ActionSandboxCreate, snapshot.MainSandbox.ID) ||
+		!investigationActionSucceeded(snapshot.Actions, core.ActionRouteCreate, snapshot.MainSandbox.ID) {
+		return nil, nil
+	}
+	materialization := gitworkspace.ActionRepositoryClone
+	if snapshot.Source.Kind == SourceGitBundle {
+		materialization = ActionRepositoryRestore
+	}
+	if !investigationActionSucceeded(snapshot.Actions, materialization, snapshot.MainSandbox.ID) ||
+		snapshot.Message.Outcome != "" || snapshot.Message.Attention != "" {
+		return nil, nil
+	}
+	for _, draft := range snapshot.Drafts {
+		if draft.MessageID == snapshot.Message.MessageID {
+			return nil, nil
+		}
+	}
+	if snapshot.Message.MessageID == "" || snapshot.Message.SandboxID != snapshot.MainSandbox.ID {
+		return nil, nil
+	}
+	return &core.AgentMessageWork{MessageID: snapshot.Message.MessageID, SandboxID: snapshot.Message.SandboxID}, nil
 }
 
 func Run(ctx context.Context, custody core.JobHandle, service Service, store Store, jobID string) (Work, error) {
@@ -164,28 +218,12 @@ func Run(ctx context.Context, custody core.JobHandle, service Service, store Sto
 			return work, nil
 		case WorkAction:
 			err = runInvestigationAction(ctx, custody, service, store, snapshot, work)
-		case WorkAgentMessage:
-			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
-			if openErr != nil {
-				return work, openErr
-			}
-			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
-			if reconcileErr != nil {
-				return work, reconcileErr
-			}
-			if !result.Terminal() {
-				return work, nil
-			}
-			if result.Outcome != "completed" {
-				detail := "investigator Harness work ended with outcome " + result.Outcome
-				if attentionErr := store.SetWorkflowAttention(ctx, snapshot.Job.ID, work.FactID, detail); attentionErr != nil {
-					return work, attentionErr
-				}
-				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
-			}
+		case WorkRecordDraft:
 			err = absurdruntime.RunFactStep(ctx, "dorf/investigation-draft/v2/"+work.FactID, work.FactID, func(workCtx context.Context) error {
-				return recordInvestigationDraft(workCtx, service, store, snapshot, result)
+				return recordInvestigationDraft(workCtx, service, store, snapshot)
 			})
+		case WorkWaitAgent:
+			return work, nil
 		default:
 			return Work{}, fmt.Errorf("unsupported codebase-investigation work %q", work.Kind)
 		}
@@ -256,7 +294,11 @@ type investigationContractError string
 
 func (e investigationContractError) Error() string { return string(e) }
 
-func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot, result core.MessageResult) error {
+func recordInvestigationDraft(ctx context.Context, service Service, store Store, snapshot Snapshot) error {
+	result, err := service.ObserveSettledAgentMessage(ctx, snapshot.Job.ID, snapshot.Message.MessageID)
+	if err != nil {
+		return err
+	}
 	if result.MessageID != snapshot.Message.MessageID || result.Outcome != "completed" {
 		return investigationContractError("investigator did not return an exact completed Harness Turn")
 	}

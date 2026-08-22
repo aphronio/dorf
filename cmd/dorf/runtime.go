@@ -72,6 +72,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
 	return coding.Runtime{
 		Profile: resolved.Profile,
+		Agent:   resolved.Execution,
 		Coding:  codingService,
 		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
@@ -98,7 +99,7 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
 	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot})
-	return investigation.Runtime{Profile: resolved.Profile, Investigation: service}, nil
+	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
@@ -159,6 +160,21 @@ type workflowAgentStrategies struct {
 	externals terminal.Externals
 }
 
+func (s workflowAgentStrategies) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+	job, err := s.store.Job(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		return coding.SelectAgentMessage(ctx, s.store, jobID)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		return investigation.SelectAgentMessage(ctx, s.store, jobID)
+	default:
+		return nil, fmt.Errorf("Job %s has no statically composed Agent Message selector", jobID)
+	}
+}
+
 func (s workflowAgentStrategies) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	switch {
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
@@ -184,17 +200,10 @@ func (s workflowAgentStrategies) ResolveAgentPrompt(ctx context.Context, executi
 	}
 }
 
+// ResolveAgentHarnessStrategy is shared by ordinary reconciliation and cleanup
+// recovery. Cleanup never asks for a prompt, so open-admission eligibility
+// remains confined to ResolveAgentPrompt.
 func (s workflowAgentStrategies) ResolveAgentHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return s.resolveHarnessStrategy(ctx, execution)
-}
-
-// Cleanup resolves only the Harness adapter. It intentionally never calls
-// ResolveAgentPrompt, whose workflow eligibility checks require open admission.
-func (s workflowAgentStrategies) ResolveCleanupAgentStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
-	return s.resolveHarnessStrategy(ctx, execution)
-}
-
-func (s workflowAgentStrategies) resolveHarnessStrategy(ctx context.Context, execution core.AgentMessageExecution) (core.AgentHarnessStrategy, error) {
 	switch {
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
 		strategy, err := coding.NewReviewAgentStrategy(ctx, s.store, s.externals, execution)

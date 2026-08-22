@@ -238,7 +238,8 @@ func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID str
 }
 
 const listCodebaseInvestigationMessages = `-- name: ListCodebaseInvestigationMessages :many
-select m.id as message_id,ar.sandbox_id
+select m.id as message_id,ar.sandbox_id,ar.state,
+       coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.attention,'') as attention
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1 and ar.role='investigate'
@@ -246,8 +247,11 @@ order by m.sequence
 `
 
 type ListCodebaseInvestigationMessagesRow struct {
-	MessageID string
-	SandboxID string
+	MessageID   string
+	SandboxID   string
+	State       core.AgentRunState
+	TurnOutcome string
+	Attention   string
 }
 
 func (q *Queries) ListCodebaseInvestigationMessages(ctx context.Context, jobID string) ([]ListCodebaseInvestigationMessagesRow, error) {
@@ -259,7 +263,13 @@ func (q *Queries) ListCodebaseInvestigationMessages(ctx context.Context, jobID s
 	var items []ListCodebaseInvestigationMessagesRow
 	for rows.Next() {
 		var i ListCodebaseInvestigationMessagesRow
-		if err := rows.Scan(&i.MessageID, &i.SandboxID); err != nil {
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.SandboxID,
+			&i.State,
+			&i.TurnOutcome,
+			&i.Attention,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

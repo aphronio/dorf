@@ -20,7 +20,7 @@ type Store interface {
 	Sandboxes(context.Context, string) ([]core.Sandbox, error)
 	Actions(context.Context, string) ([]core.Action, error)
 	CodebaseInvestigationDrafts(context.Context, string) ([]Draft, error)
-	CodebaseInvestigationMessages(context.Context, string) ([]core.AgentMessageWork, error)
+	CodebaseInvestigationMessages(context.Context, string) ([]MessageRecord, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
 	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
 	RecordCodebaseInvestigationDraft(context.Context, string, core.Artifact) (Draft, bool, error)

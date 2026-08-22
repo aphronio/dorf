@@ -130,37 +130,6 @@ func TestAgentRunReconcilesLostBoundSubmissionAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestAgentRunClaimLossAfterSubmissionDoesNotDurablyBind(t *testing.T) {
-	claimLost := errors.New("claim lost")
-	store := &agentRunTestStore{run: AgentRun{ID: "run-1", Harness: "codex", ThreadID: "thread-1", State: AgentRunPending}}
-	claimChecks := 0
-	contract := agentRunContract{
-		store: store,
-		run:   store.run,
-		submitBound: func(context.Context, AgentRun) (HarnessBinding, error) {
-			return HarnessBinding{Harness: "codex", ThreadID: "thread-1", Turn: HarnessTurn{ID: "turn-1", Status: "running"}}, nil
-		},
-		history: func(context.Context, AgentRun) (HarnessHistory, error) {
-			return HarnessHistory{Harness: "codex", ThreadID: "thread-1"}, nil
-		},
-		beforeRecord: func(context.Context) error {
-			claimChecks++
-			if claimChecks > 1 {
-				return claimLost
-			}
-			return nil
-		},
-	}
-
-	_, err := contract.execute(context.Background())
-	if !errors.Is(err, claimLost) {
-		t.Fatalf("execute error = %v", err)
-	}
-	if store.run.TurnID != "" || store.run.State != AgentRunSubmitting {
-		t.Fatalf("claim loss durably bound submitted turn: %#v", store.run)
-	}
-}
-
 func TestAgentRunClaimLossBeforeBaselineDoesNotPrepareOrSubmit(t *testing.T) {
 	claimLost := errors.New("claim lost")
 	store := &agentRunTestStore{run: AgentRun{ID: "run-1", State: AgentRunPending}}

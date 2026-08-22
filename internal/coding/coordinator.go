@@ -18,7 +18,7 @@ type CodingExecution interface {
 	BlobStore() blob.Store
 	ObserveRevision(context.Context, Job, string) error
 	PlanReview(context.Context, Job) error
-	RecordReviewResult(context.Context, Job, string, core.MessageResult) error
+	RecordReviewResult(context.Context, Job, string) error
 	ExecuteReviewCheckout(context.Context, Job, string, core.Action) error
 }
 
@@ -49,48 +49,12 @@ func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution
 		switch work.Kind {
 		case WorkAction:
 			err = runSandboxAction(ctx, custody, service, store, job, snapshot, work)
-		case WorkRunReviewer:
-			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
-			if openErr != nil {
-				return work, openErr
-			}
-			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
-			if reconcileErr != nil {
-				return work, reconcileErr
-			}
-			if !result.Terminal() {
-				return work, nil
-			}
-			if result.Outcome != "completed" {
-				detail := "review Harness work ended with outcome " + result.Outcome
-				if attentionErr := store.SetWorkflowAttention(ctx, job.ID, work.FactID, detail); attentionErr != nil {
-					return work, attentionErr
-				}
-				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
-			}
+		case WorkRecordReview:
 			err = absurdruntime.RunFactStep(ctx, "dorf/review-feedback/v1/"+work.FactID, work.FactID, func(workCtx context.Context) error {
-				return service.RecordReviewResult(workCtx, job, work.FactID, result)
+				return service.RecordReviewResult(workCtx, job, work.FactID)
 			})
-		case WorkAgentMessage:
-			sandbox, openErr := custody.Sandbox(ctx, work.Scope)
-			if openErr != nil {
-				return work, openErr
-			}
-			result, reconcileErr := sandbox.Agent().Reconcile(ctx, work.FactID)
-			if reconcileErr != nil {
-				return work, reconcileErr
-			}
-			if !result.Terminal() {
-				return work, nil
-			}
-			if result.Outcome != "completed" {
-				detail := "implementation Harness work ended with outcome " + result.Outcome
-				if attentionErr := store.SetWorkflowAttention(ctx, job.ID, work.FactID, detail); attentionErr != nil {
-					return work, attentionErr
-				}
-				return Work{Kind: WorkAttention, FactID: work.FactID, Detail: detail}, nil
-			}
-			continue
+		case WorkWaitAgent:
+			return work, nil
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
 		case WorkChooseReview:

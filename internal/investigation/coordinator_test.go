@@ -14,8 +14,8 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := core.Job{ID: "job-1", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
-	message := core.AgentMessageWork{MessageID: "message-1", SandboxID: sandbox.ID}
-	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Messages: []core.AgentMessageWork{message}, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
+	message := MessageRecord{MessageID: "message-1", SandboxID: sandbox.ID}
+	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Messages: []MessageRecord{message}, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	for _, want := range steps {
@@ -28,8 +28,13 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		}
 		snapshot.Actions = append(snapshot.Actions, core.Action{Kind: want, Scope: sandbox.ID, State: core.ActionSucceeded})
 	}
-	if work := snapshot.Project(); work.Kind != WorkAgentMessage || work.FactID != message.MessageID || work.Scope != sandbox.ID {
+	if work := snapshot.Project(); work.Kind != WorkWaitAgent || work.FactID != message.MessageID {
 		t.Fatalf("Agent Message work=%#v", work)
+	}
+	snapshot.Message.Outcome = "completed"
+	snapshot.Messages[0].Outcome = "completed"
+	if work := snapshot.Project(); work.Kind != WorkRecordDraft || work.FactID != message.MessageID {
+		t.Fatalf("completed Message work=%#v", work)
 	}
 	draft := Draft{JobID: job.ID, MessageID: message.MessageID, ArtifactID: "artifact-draft"}
 	snapshot.Drafts = []Draft{draft}
@@ -46,7 +51,7 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if TaskName != "dorf-codebase-investigation-v2" || TaskKey("job-1") != "codebase-investigation:v2:job-1" {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
-	options := wakeOptions(Work{Kind: WorkAgentMessage, FactID: "message-1"}, 2)
+	options := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
 	if options.StepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" || options.Timeout != time.Second {
 		t.Fatalf("active investigator wake=%#v", options)
 	}
@@ -63,8 +68,8 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
 		Source:   Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
-		Messages: []core.AgentMessageWork{{MessageID: "message-local", SandboxID: sandbox.ID}},
-		Message:  core.AgentMessageWork{MessageID: "message-local", SandboxID: sandbox.ID},
+		Messages: []MessageRecord{{MessageID: "message-local", SandboxID: sandbox.ID}},
+		Message:  MessageRecord{MessageID: "message-local", SandboxID: sandbox.ID},
 		Actions:  []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
 	}
 	work := snapshot.Project()
@@ -82,8 +87,8 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
 		Source:   Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
-		Messages: []core.AgentMessageWork{{MessageID: "message-attention", SandboxID: sandbox.ID}},
-		Message:  core.AgentMessageWork{MessageID: "message-attention", SandboxID: sandbox.ID},
+		Messages: []MessageRecord{{MessageID: "message-attention", SandboxID: sandbox.ID}},
+		Message:  MessageRecord{MessageID: "message-attention", SandboxID: sandbox.ID},
 	}
 	work := snapshot.Project()
 	if work.Kind != WorkAttention || work.FactID != source || work.Detail != job.WorkflowAttention {

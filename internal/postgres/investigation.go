@@ -61,14 +61,14 @@ func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([
 	return drafts, nil
 }
 
-func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) ([]core.AgentMessageWork, error) {
+func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) ([]investigation.MessageRecord, error) {
 	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationMessages(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	work := make([]core.AgentMessageWork, 0, len(rows))
+	work := make([]investigation.MessageRecord, 0, len(rows))
 	for _, row := range rows {
-		work = append(work, core.AgentMessageWork{MessageID: row.MessageID, SandboxID: row.SandboxID})
+		work = append(work, investigation.MessageRecord{MessageID: row.MessageID, SandboxID: row.SandboxID, Outcome: agentRunOutcome(row.State, row.TurnOutcome), Attention: row.Attention})
 	}
 	return work, nil
 }

@@ -23,7 +23,8 @@ where d.job_id=sqlc.arg(job_id)
 order by m.sequence,d.artifact_id;
 
 -- name: ListCodebaseInvestigationMessages :many
-select m.id as message_id,ar.sandbox_id
+select m.id as message_id,ar.sandbox_id,ar.state,
+       coalesce(ar.turn_outcome,'') as turn_outcome,coalesce(ar.attention,'') as attention
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=sqlc.arg(job_id) and ar.role='investigate'

@@ -59,9 +59,9 @@ type AgentHarnessStrategy interface {
 }
 
 type AgentStrategyResolver interface {
+	SelectAgentMessage(context.Context, string) (*AgentMessageWork, error)
 	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
 	ResolveAgentHarnessStrategy(context.Context, AgentMessageExecution) (AgentHarnessStrategy, error)
-	ResolveCleanupAgentStrategy(context.Context, AgentMessageExecution) (AgentHarnessStrategy, error)
 }
 
 const (
@@ -155,22 +155,34 @@ func (s ExecutionService) reachWorkflow(ctx context.Context, point, jobID, ident
 	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-// ReconcileAgentMessage performs one bounded execution/recovery cycle from a
-// stable Job, Message, and Sandbox identities. Every execution fact is loaded
-// while the Job effect fence is held, independently of the expiring Absurd
-// claim.
-func (s ExecutionService) ReconcileAgentMessage(ctx context.Context, jobID, messageID, sandboxID string) (MessageResult, error) {
-	if jobID == "" || messageID == "" || sandboxID == "" {
-		return MessageResult{}, fmt.Errorf("Agent reconciliation requires exact Job, Message, and Sandbox identities")
+// ReconcileJobAgent advances at most one Message chosen by the statically
+// composed workflow selector. Core keeps Message, Sandbox, AgentRun, and
+// Harness lifecycle identities inside the Job fence.
+func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("Agent reconciliation requires an exact Job identity")
 	}
-	result := MessageResult{MessageID: messageID}
-	err := s.store.WithJobFence(ctx, jobID, func() error {
+	return s.store.WithJobFence(ctx, jobID, func() error {
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-		task, ok := absurd.TaskFromContext(ctx)
-		if !ok {
-			return absurd.ErrNoTaskContext
+		attachedJob, err := exactCurrentAttachedTask(ctx, s.store, jobID, "")
+		if err != nil {
+			return err
+		}
+		if !attachedJob.AdmissionOpen || attachedJob.CleanupState != CleanupPending {
+			return fmt.Errorf("current task cannot reconcile an Agent Message outside an open Job")
+		}
+		if s.strategies == nil {
+			return fmt.Errorf("Agent strategy resolution is not configured")
+		}
+		selected, err := s.strategies.SelectAgentMessage(ctx, attachedJob.ID)
+		if err != nil || selected == nil {
+			return err
+		}
+		messageID, sandboxID := selected.MessageID, selected.SandboxID
+		if messageID == "" || sandboxID == "" {
+			return fmt.Errorf("Agent selector returned an incomplete Message identity")
 		}
 		authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
 		if err != nil {
@@ -180,25 +192,8 @@ func (s ExecutionService) ReconcileAgentMessage(ctx context.Context, jobID, mess
 			authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
 			return fmt.Errorf("Message %s does not belong to the exact bound Job Sandbox", messageID)
 		}
-		if !authoritative.Job.AdmissionOpen || authoritative.Job.CleanupState != CleanupPending || authoritative.Job.CurrentTaskID != task.TaskID() {
-			return fmt.Errorf("task %s cannot reconcile Message %s outside the exact current open Job attachment", task.TaskID(), messageID)
-		}
-		attachments, err := s.store.JobTasks(ctx, authoritative.Job.ID)
-		if err != nil {
-			return err
-		}
-		attached := false
-		for _, attachment := range attachments {
-			if attachment.TaskID == task.TaskID() && attachment.TaskName == task.TaskName() {
-				attached = true
-				break
-			}
-		}
-		if !attached {
-			return fmt.Errorf("task %s has no exact durable Job attachment for Message %s", task.TaskID(), messageID)
-		}
-		if s.strategies == nil {
-			return fmt.Errorf("Agent strategy resolution is not configured")
+		if authoritative.Job.CurrentTaskID != attachedJob.CurrentTaskID || !authoritative.Job.AdmissionOpen || authoritative.Job.CleanupState != CleanupPending {
+			return fmt.Errorf("Message %s changed exact current open Job authority", messageID)
 		}
 		runner, err := s.strategies.ResolveAgentHarnessStrategy(ctx, authoritative)
 		if err != nil {
@@ -208,20 +203,10 @@ func (s ExecutionService) ReconcileAgentMessage(ctx context.Context, jobID, mess
 		run := authoritative.AgentRun
 		if runner != nil {
 			if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-				result.Outcome = run.TurnOutcome
-				if result.Outcome == "" {
-					result.Outcome = string(run.State)
-				}
 				return nil
 			}
-			turn, err := s.executeAgentStrategy(ctx, delivery, runner)
-			if err != nil {
-				return err
-			}
-			if turn.Terminal() {
-				result.Outcome, result.Output = turn.Status, turn.Output
-			}
-			return nil
+			_, err := s.executeAgentStrategy(ctx, delivery, runner)
+			return err
 		}
 		input, err := s.strategies.ResolveAgentPrompt(ctx, authoritative)
 		if err != nil {
@@ -243,31 +228,15 @@ func (s ExecutionService) ReconcileAgentMessage(ctx context.Context, jobID, mess
 		delivery = Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
 		run = authoritative.AgentRun
 		if run.State == AgentRunCompleted {
-			turn, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
-			if err != nil {
-				return err
-			}
-			if turn.Terminal() {
-				result.Outcome, result.Output = turn.Status, turn.Output
-			}
-			return nil
+			_, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
+			return err
 		}
 		if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
-			result.Outcome = run.TurnOutcome
-			if result.Outcome == "" {
-				result.Outcome = string(run.State)
-			}
 			return nil
 		}
 		if run.State == AgentRunActive {
-			turn, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
-			if err != nil {
-				return err
-			}
-			if turn.Terminal() {
-				result.Outcome, result.Output = turn.Status, turn.Output
-			}
-			return nil
+			_, err := s.observeAgentRunTurn(ctx, authoritative.Job, run, run.Role)
+			return err
 		}
 		if err := s.deliver(ctx, authoritative.Job, delivery, input); err != nil {
 			return err
@@ -277,22 +246,69 @@ func (s ExecutionService) ReconcileAgentMessage(ctx context.Context, jobID, mess
 			return err
 		}
 		if settled.AgentRun.State == AgentRunCompleted {
-			turn, err := s.observeAgentRunTurn(ctx, settled.Job, settled.AgentRun, settled.AgentRun.Role)
-			if err != nil {
-				return err
-			}
-			if turn.Terminal() {
-				result.Outcome, result.Output = turn.Status, turn.Output
-			}
-		} else if settled.AgentRun.State == AgentRunFailed || settled.AgentRun.State == AgentRunInterrupted {
-			result.Outcome = settled.AgentRun.TurnOutcome
-			if result.Outcome == "" {
-				result.Outcome = string(settled.AgentRun.State)
-			}
+			_, err := s.observeAgentRunTurn(ctx, settled.Job, settled.AgentRun, settled.AgentRun.Role)
+			return err
 		}
 		return nil
 	})
-	return result, err
+}
+
+// ObserveSettledAgentMessage reads the exact Harness Turn needed by typed
+// workflow evaluation after Core has durably settled its Message. It never
+// prepares, submits, steers, binds, or otherwise mutates AgentRun lifecycle.
+func (s ExecutionService) ObserveSettledAgentMessage(ctx context.Context, jobID, messageID string) (MessageResult, error) {
+	if jobID == "" || messageID == "" {
+		return MessageResult{}, fmt.Errorf("settled Agent observation requires exact Job and Message identities")
+	}
+	authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	if authoritative.Job.ID != jobID || authoritative.Message.JobID != jobID || authoritative.AgentRun.JobID != jobID {
+		return MessageResult{}, fmt.Errorf("Message %s does not belong to Job %s", messageID, jobID)
+	}
+	run := authoritative.AgentRun
+	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
+		return terminalMessageResult(messageID, HarnessTurn{ID: run.TurnID, Status: run.TurnOutcome}, run.State), nil
+	}
+	if run.State != AgentRunCompleted || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
+		return MessageResult{}, fmt.Errorf("Message %s has no settled exact Harness Turn", messageID)
+	}
+	if s.strategies == nil {
+		return MessageResult{}, fmt.Errorf("Agent strategy resolution is not configured")
+	}
+	runner, err := s.strategies.ResolveAgentHarnessStrategy(ctx, authoritative)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	var history HarnessHistory
+	if runner != nil {
+		history, err = runner.History(ctx, run)
+	} else {
+		history, err = s.externals.AgentTurns(ctx, authoritative.Job, run.SandboxID, run.ThreadID)
+	}
+	if err != nil {
+		return MessageResult{}, err
+	}
+	if history.Harness != run.Harness || history.ThreadID != run.ThreadID {
+		return MessageResult{}, fmt.Errorf("Message %s Harness history conflicts with its durable binding", messageID)
+	}
+	for _, turn := range history.Turns {
+		if turn.ID == run.TurnID {
+			return terminalMessageResult(messageID, turn, run.State), nil
+		}
+	}
+	return MessageResult{}, fmt.Errorf("Message %s settled Turn is missing from Harness history", messageID)
+}
+
+func terminalMessageResult(messageID string, turn HarnessTurn, fallback AgentRunState) MessageResult {
+	result := MessageResult{MessageID: messageID}
+	if turn.Terminal() {
+		result.Outcome, result.Output = turn.Status, turn.Output
+	} else if fallback == AgentRunFailed || fallback == AgentRunInterrupted {
+		result.Outcome = string(fallback)
+	}
+	return result
 }
 
 func (s ExecutionService) executeAgentStrategy(ctx context.Context, delivery Delivery, strategy AgentHarnessStrategy) (HarnessTurn, error) {
@@ -548,27 +564,14 @@ func (s ExecutionService) requireCleanupTask(ctx context.Context, jobID string) 
 	if err := s.requireClaim(ctx); err != nil {
 		return err
 	}
-	task, ok := absurd.TaskFromContext(ctx)
-	if !ok {
-		return absurd.ErrNoTaskContext
-	}
-	job, err := s.store.Job(ctx, jobID)
+	job, err := exactCurrentAttachedTask(ctx, s.store, jobID, CleanupTaskName)
 	if err != nil {
 		return err
 	}
-	if task.TaskName() != CleanupTaskName || job.CurrentTaskID != task.TaskID() {
-		return fmt.Errorf("task %s is not the exact current cleanup attachment for Job %s", task.TaskID(), jobID)
+	if job.AdmissionOpen || (job.CleanupState != CleanupRequested && job.CleanupState != CleanupScheduled) {
+		return fmt.Errorf("cleanup task cannot act before cleanup is requested for Job %s", jobID)
 	}
-	attachments, err := s.store.JobTasks(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	for _, attachment := range attachments {
-		if attachment.TaskID == task.TaskID() && attachment.TaskName == CleanupTaskName {
-			return nil
-		}
-	}
-	return fmt.Errorf("task %s has no exact durable cleanup attachment for Job %s", task.TaskID(), jobID)
+	return nil
 }
 
 func (s ExecutionService) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
@@ -613,7 +616,7 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 	var runner AgentHarnessStrategy
 	if s.strategies != nil {
 		var err error
-		runner, err = s.strategies.ResolveCleanupAgentStrategy(ctx, execution)
+		runner, err = s.strategies.ResolveAgentHarnessStrategy(ctx, execution)
 		if err != nil {
 			return cleanupBlocked(delivery, "resolve exact Harness recovery strategy: "+err.Error())
 		}

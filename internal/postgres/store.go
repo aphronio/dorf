@@ -715,8 +715,11 @@ func agentRunOutcome(state core.AgentRunState, outcome string) string {
 	if state != core.AgentRunCompleted && state != core.AgentRunFailed && state != core.AgentRunInterrupted {
 		return ""
 	}
-	if outcome != "" {
+	if outcome == "completed" || outcome == "failed" || outcome == "interrupted" {
 		return outcome
+	}
+	if state == core.AgentRunCompleted {
+		return ""
 	}
 	return string(state)
 }

@@ -263,28 +263,50 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, ex
 
 func (a Application) verifyCurrentTask(ctx context.Context, jobID, taskName string) error {
 	return a.Store.WithJobFence(ctx, jobID, func() error {
-		task, ok := absurd.TaskFromContext(ctx)
-		if !ok {
-			return absurd.ErrNoTaskContext
-		}
-		job, err := a.Store.Job(ctx, jobID)
+		job, err := exactCurrentAttachedTask(ctx, a.Store, jobID, taskName)
 		if err != nil {
 			return err
 		}
-		if !job.AdmissionOpen || job.CleanupState != CleanupPending || job.CurrentTaskID != task.TaskID() {
-			return fmt.Errorf("task %s is not the exact current open Job attachment", task.TaskID())
+		if !job.AdmissionOpen || job.CleanupState != CleanupPending {
+			return fmt.Errorf("task %s is not the exact current open Job attachment", job.CurrentTaskID)
 		}
-		attachments, err := a.Store.JobTasks(ctx, jobID)
-		if err != nil {
-			return err
-		}
-		for _, attachment := range attachments {
-			if attachment.TaskID == task.TaskID() && attachment.TaskName == taskName {
-				return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
-			}
-		}
-		return fmt.Errorf("task %s has no exact durable Job attachment", task.TaskID())
+		return nil
 	})
+}
+
+type currentTaskStore interface {
+	Job(context.Context, string) (Job, error)
+	JobTasks(context.Context, string) ([]JobTask, error)
+}
+
+// exactCurrentAttachedTask is the one authority check shared by Core's Job
+// effects. It proves that the running Absurd task is both the Job's current
+// task and the exact durably attached task name.
+func exactCurrentAttachedTask(ctx context.Context, store currentTaskStore, jobID, taskName string) (Job, error) {
+	task, ok := absurd.TaskFromContext(ctx)
+	if !ok {
+		return Job{}, absurd.ErrNoTaskContext
+	}
+	if taskName == "" {
+		taskName = task.TaskName()
+	}
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	if task.TaskName() != taskName || job.CurrentTaskID != task.TaskID() {
+		return Job{}, fmt.Errorf("task %s is not the exact current %s attachment for Job %s", task.TaskID(), taskName, jobID)
+	}
+	attachments, err := store.JobTasks(ctx, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	for _, attachment := range attachments {
+		if attachment.TaskID == task.TaskID() && attachment.TaskName == taskName {
+			return job, verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
+		}
+	}
+	return Job{}, fmt.Errorf("task %s has no exact durable %s attachment for Job %s", task.TaskID(), taskName, jobID)
 }
 
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {

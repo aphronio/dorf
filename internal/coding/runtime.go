@@ -26,6 +26,7 @@ type ProviderChecker interface {
 
 type Runtime struct {
 	Profile  profile.Runtime
+	Agent    core.AgentReconciliation
 	Coding   CodingExecution
 	Proposal ProposalRuntime
 }
@@ -53,6 +54,15 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			proposal.PollInterval = 30 * time.Second
 		}
 		for {
+			if runtime.Agent == nil {
+				return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
+			}
+			if err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, params.JobID, err); stopped {
+					return result, stopErr
+				}
+				return core.TaskResultV1{}, err
+			}
 			work, err := RunJob(ctx, jobHandle, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
@@ -132,7 +142,7 @@ func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) 
 	case WorkObserveProposal:
 		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
 		options.Timeout = proposalPollInterval
-	case WorkAgentMessage, WorkRunReviewer:
+	case WorkWaitAgent:
 		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}

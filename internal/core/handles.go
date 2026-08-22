@@ -219,34 +219,6 @@ func (h AgentHandle) Message(ctx context.Context, key, input string, options ...
 	return receipt, nil
 }
 
-// Reconcile advances one already-admitted Message through the Harness using
-// only stable Message and exact Sandbox identities. It performs one bounded
-// recovery cycle and never changes Message admission.
-func (h AgentHandle) Reconcile(ctx context.Context, messageID string) (MessageResult, error) {
-	if h.application == nil || h.application.Store == nil || h.jobID == "" || h.sandboxID == "" {
-		return MessageResult{}, fmt.Errorf("Agent handle is not bound to a Job Sandbox")
-	}
-	messageID = strings.TrimSpace(messageID)
-	if messageID == "" {
-		return MessageResult{}, fmt.Errorf("Agent reconciliation requires a durable Message identity")
-	}
-	if h.application.SandboxRuntimes == nil {
-		return MessageResult{}, fmt.Errorf("Sandbox runtime resolution is not configured")
-	}
-	job, err := h.application.Store.Job(ctx, h.jobID)
-	if err != nil {
-		return MessageResult{}, err
-	}
-	runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.SandboxProfile)
-	if err != nil {
-		return MessageResult{}, fmt.Errorf("resolve Sandbox runtime for profile %q: %w", job.SandboxProfile, err)
-	}
-	if runtime.Execution == nil || strings.TrimSpace(runtime.SandboxProfile) != job.SandboxProfile {
-		return MessageResult{}, fmt.Errorf("Sandbox runtime does not match Job profile %q", job.SandboxProfile)
-	}
-	return runtime.Execution.ReconcileAgentMessage(ctx, h.jobID, messageID, h.sandboxID)
-}
-
 func (h JobHandle) executeSandboxEnsure(ctx context.Context, job Job, owned Sandbox, action Action) error {
 	if h.application.SandboxRuntimes == nil {
 		return fmt.Errorf("Sandbox runtime resolution is not configured")
