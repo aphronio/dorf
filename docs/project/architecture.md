@@ -44,7 +44,6 @@ Adapters translate existing authorities; they do not invent another workflow.
 | Agent transcript, tool items, Thread, Turn, and native history | The selected Harness |
 | Mutable files, running processes, and local tool output | A Job-owned Sandbox |
 | External objects and their mutable state | Their external authority, such as GitHub or another service |
-| Named deliverables | Job-owned Artifact records whose bytes live in the content-addressed blob store |
 | Retained observed proof | Evidence linked to the fact it proves; bytes use the same content-addressed blob store |
 
 The same mutable fact must not be mirrored into multiple authorities. Read models may project facts
@@ -52,7 +51,7 @@ for inspection, but they are disposable and rebuildable. Agent prose and workflo
 or results; Evidence proves only what Dorf or an adapter actually observed.
 
 Resource ownership follows lifetime. A Job is the aggregate owner of every Sandbox allocated for
-it and every Artifact retained from its work. A Sandbox owns or deterministically identifies its
+it. A Sandbox owns or deterministically identifies its
 scoped provider route and injected authority. AgentRuns use a Sandbox but never own it; they remain
 internal durable recovery facts rather than caller-coordinated resources. Cleanup begins at the Job
 and reconciles resources against their external authorities before declaring them removed, but only
@@ -104,7 +103,7 @@ transcript and workspace details remain behind their adapters. Retrying uncertai
 reconciles the same AgentRun; it does not silently create another judgment attempt.
 
 An Agent handle is bound to one exact Job-owned Sandbox. Submission, history reconciliation, wait,
-steer, and Artifact collection through that handle cannot fall back to another Sandbox in the Job.
+and steer through that handle cannot fall back to another Sandbox in the Job.
 
 Once a Turn is durably bound as active, Core's read-only Harness observation remains separate from
 Message delivery. Internal delivery reconciliation alternates observation with an interruptible
@@ -127,20 +126,18 @@ Core exposes settled agent work through the Agent application handle; a workflow
 relevant domain results and records natural typed facts. Generic result strings, arbitrary metadata
 bags, and copied external state are not substitutes for domain records.
 
-### Artifacts, Evidence, and inspection
+### Workspace files, Evidence, and inspection
 
-Artifacts are immutable named deliverables owned by a Job. Each AgentRun receives a dedicated
-run-owned artifact directory in the Sandbox working area, isolated from any workflow-managed source
-checkout. Core automatically retains files placed there as Job Artifacts and records their producing
-AgentRun as provenance. A durable collection obligation exists no later than terminal Harness
-observation becomes visible to cleanup. Terminal Harness observation does not settle collection;
-cleanup may be requested, but Core may neither revoke the route nor delete the Sandbox until every
-run's collection obligation has a durable settled receipt. Settlement means Artifact metadata and
-bytes are durable, or that the eventual bounded collection contract has durably recorded its empty,
-invalid, or failed result. A consumer-specific typed result may point to one or more Artifacts, while
-clients discover them by Job and retrieve exact bytes by Artifact ID. Artifact metadata is durable
-PostgreSQL state; bytes live in the deployment-owned content-addressed blob store and survive
-Sandbox cleanup. Artifact content may contain claims and is not its own proof.
+`SandboxHandle.ReadFile` returns the exact bytes of one caller-named, clean workspace-relative
+regular file from that exact Job-owned Sandbox. Core checks Job and Sandbox ownership, executes the
+read under the Job cleanup fence, and rejects traversal, symlinks, and resolved paths outside the
+workspace. It does not add listing, discovery, stat, glob, archive, batch, or directory-download
+APIs; a workflow that needs discovery may compose the existing Sandbox command operation before
+requesting exact files. Core does not interpret, discover, or retain agent-authored files. A caller
+or workflow must read any files it needs before requesting cleanup; the request closes reads and
+Sandbox deletion makes those files unavailable. The current operation returns the whole file in
+memory without an invented size policy; a streaming contract remains unearned. Durable typed
+results remain owned by the workflow that understands them.
 
 Evidence is immutable observed proof linked to the supported fact it proves, currently an AgentRun,
 Action, or Revision. Its validity follows the claim it supports: a coding Revision change may
@@ -156,7 +153,7 @@ into Dorf's product history.
 
 Core retains only execution facts whose authority and recovery meaning survive removal of client or
 workflow policy: durable identity, accepted input order, internal AgentRuns, Sandbox ownership,
-stable external effects, Job-owned Artifact and Evidence custody, recovery, caller-requested
+stable external effects, Evidence custody, recovery, caller-requested
 attention, and caller-requested cleanup.
 
 Client- and workflow-specific inputs, results, external authorities, and terminal meaning remain in

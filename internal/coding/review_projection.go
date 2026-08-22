@@ -55,7 +55,7 @@ type ReviewRunView struct {
 	Sandbox         core.Sandbox `json:"sandbox"`
 }
 
-type reviewObservationArtifact struct {
+type reviewObservationPayload struct {
 	AgentRunID  string                    `json:"agent_run_id"`
 	Revision    string                    `json:"revision"`
 	Role        string                    `json:"role"`

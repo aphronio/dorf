@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -262,7 +261,6 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			execution := core.NewExecutionService(
 				store,
 				faultActionExternals{effect: effect, runID: runID},
-				blob.Store{},
 				nil,
 				func(claimCtx context.Context) error {
 					err := absurdruntime.RequireClaim(claimCtx)
@@ -502,7 +500,7 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 		release:              make(chan struct{}),
 		attempts:             make(chan string, 2),
 	}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentStrategies(resultBoundaryPromptStrategies{fixed: &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)}})
 	taskName := "dorf-agent-fence-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ faultActionParams) (faultActionResultV1, error) {

@@ -11,7 +11,7 @@ Install and operate Dorf on this machine by following docs/agent-guide.md. Coord
 dorf CLI instead of configuring its database, containers, Sandboxes, Gateway, or tunnels by hand.
 Pause for every password, secret, browser authorization, or consequential provider choice. Never
 read, print, or copy credentials into chat. Finish by reporting only observed readiness, Job,
-Artifact or Proposal, attention, and cleanup facts.
+typed workflow result or Proposal, attention, and cleanup facts.
 ```
 
 ## Installation protocol
@@ -58,8 +58,10 @@ Artifact or Proposal, attention, and cleanup facts.
   `--intent steer` only when the human explicitly wants to redirect active work.
 - When inspection reports attention, repair the reported cause and use `dorf retry JOB_ID`. Retry
   delegates eligibility to the same durable task; it is not a request to create a replacement Job.
-- Discover deliverables with `dorf artifact list JOB_ID` and retrieve exact bytes with
-  `dorf artifact get ARTIFACT_ID`. Never treat agent prose alone as verification.
+- Retrieve one caller-known Sandbox file before cleanup with
+  `dorf sandbox file get JOB_ID RELATIVE_PATH --output DESTINATION`. Add
+  `--sandbox SANDBOX_ID` for a named Sandbox; the default is the Job's default Sandbox. Never treat
+  agent prose alone as verification.
 - Request `dorf cleanup JOB_ID` only when the workflow or human has decided that its resources may
   be released. Outcome and cleanup are separate facts.
 
@@ -75,7 +77,7 @@ At handback, report:
 - installed Dorf version and selected Sandbox profile and AI connection;
 - readiness checks that are actually `ready`;
 - Job ID and current work or attention, if a Job was admitted;
-- retained Artifact ID or Proposal URL, when present; and
+- typed workflow result or Proposal URL, when present; and
 - cleanup state.
 
 Do not say installation, work, or cleanup succeeded merely because a command was started. Use the

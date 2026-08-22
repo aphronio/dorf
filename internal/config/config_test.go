@@ -77,7 +77,7 @@ func TestLoadKeepsOnlyE2BCredentialInHostConfiguration(t *testing.T) {
 	}
 }
 
-func TestLoadUsesNeutralBlobStoreForEvidenceAndArtifacts(t *testing.T) {
+func TestLoadUsesNeutralBlobStoreForEvidenceAndRetainedInputs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")

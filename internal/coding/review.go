@@ -134,14 +134,14 @@ func (s Service) reviewEvidence(run ReviewRunView, checkout ReviewCheckoutObserv
 	if started.IsZero() || finished.IsZero() || started.After(finished) {
 		return core.Evidence{}, fmt.Errorf("review AgentRun %s has no stable bounded timing", run.ID)
 	}
-	artifact, err := json.Marshal(reviewObservationArtifact{
+	payload, err := json.Marshal(reviewObservationPayload{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome, Checkout: checkout,
 	})
 	if err != nil {
 		return core.Evidence{}, err
 	}
-	stored, err := s.blobs.Put(artifact)
+	stored, err := s.blobs.Put(payload)
 	if err != nil {
 		return core.Evidence{}, err
 	}

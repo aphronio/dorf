@@ -3,9 +3,108 @@ package core
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type handleTestFileReader struct {
+	read func(context.Context, Job, Sandbox, string) ([]byte, error)
+}
+
+func (r handleTestFileReader) ReadSandboxFile(ctx context.Context, job Job, sandbox Sandbox, path string) ([]byte, error) {
+	return r.read(ctx, job, sandbox, path)
+}
+
+type handleTestRuntimeResolver struct{ files SandboxFileReader }
+
+func (r handleTestRuntimeResolver) ResolveSandbox(_ context.Context, profile string) (SandboxRuntime, error) {
+	return SandboxRuntime{Files: r.files, SandboxProfile: profile}, nil
+}
+
+func TestSandboxHandleReadFileReturnsExactRepeatedBytesAndEnforcesOwnership(t *testing.T) {
+	job := Job{ID: "job-files", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-files", JobID: job.ID}
+	other := Sandbox{ID: "sandbox-other", JobID: job.ID}
+	reader := handleTestFileReader{read: func(_ context.Context, _ Job, gotSandbox Sandbox, _ string) ([]byte, error) {
+		return []byte(gotSandbox.ID), nil
+	}}
+	store := handleTestStore{job: job, sandboxes: map[string]Sandbox{owned.ID: owned, other.ID: other}}
+	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
+	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	got, err := handle.ReadFile(context.Background(), "result.txt")
+	if err != nil || string(got) != owned.ID {
+		t.Fatalf("owned Sandbox read=%q err=%v", got, err)
+	}
+	got, err = application.jobHandle(job.ID).sandboxHandle(other.ID).ReadFile(context.Background(), "result.txt")
+	if err != nil || string(got) != other.ID {
+		t.Fatalf("same-Job other-Sandbox read=%q err=%v", got, err)
+	}
+	closed := store
+	closed.job.AdmissionOpen = false
+	closedApplication := Application{Store: closed, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
+	got, err = closedApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt")
+	if err != nil || string(got) != owned.ID {
+		t.Fatalf("closed-admission read=%q err=%v", got, err)
+	}
+	foreign := handleTestStore{job: job, sandbox: Sandbox{ID: owned.ID, JobID: "job-foreign"}}
+	foreignApplication := Application{Store: foreign, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
+	if _, err := foreignApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "does not belong") {
+		t.Fatalf("foreign Sandbox read error=%v", err)
+	}
+	cleaning := store
+	cleaning.job.AdmissionOpen, cleaning.job.CleanupState = false, CleanupRequested
+	cleaningApplication := Application{Store: cleaning, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
+	if _, err := cleaningApplication.jobHandle(job.ID).sandboxHandle(owned.ID).ReadFile(context.Background(), "result.txt"); err == nil || !strings.Contains(err.Error(), "after cleanup begins") {
+		t.Fatalf("cleanup read error=%v", err)
+	}
+}
+
+func TestSandboxHandleReadFileHoldsCleanupFence(t *testing.T) {
+	job := Job{ID: "job-fence", SandboxProfile: "profile", AdmissionOpen: true, CleanupState: CleanupPending}
+	owned := Sandbox{ID: "sandbox-fence", JobID: job.ID}
+	fence := &sync.Mutex{}
+	arrived := make(chan struct{}, 2)
+	cleanupEntered := make(chan struct{})
+	store := handleTestStore{job: job, sandbox: owned, cleanupEntered: cleanupEntered, withFence: func(run func() error) error {
+		arrived <- struct{}{}
+		fence.Lock()
+		defer fence.Unlock()
+		return run()
+	}}
+	started, release := make(chan struct{}), make(chan struct{})
+	reader := handleTestFileReader{read: func(context.Context, Job, Sandbox, string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte("retained by caller"), nil
+	}}
+	application := Application{Store: store, SandboxRuntimes: handleTestRuntimeResolver{files: reader}}
+	handle := application.jobHandle(job.ID).sandboxHandle(owned.ID)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := handle.ReadFile(context.Background(), "result.txt")
+		readDone <- err
+	}()
+	<-started
+	<-arrived
+	cleanupDone := make(chan error, 1)
+	go func() {
+		cleanupDone <- store.WithJobFence(context.Background(), job.ID, func() error { return store.RequestCleanup(context.Background(), job.ID) })
+	}()
+	<-arrived
+	select {
+	case <-cleanupEntered:
+		t.Fatal("cleanup crossed active read fence")
+	default:
+	}
+	close(release)
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-cleanupDone; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAgentMessageDefaultsFollowAndBindsExactSandbox(t *testing.T) {
 	admittedAt := time.Now().UTC()
@@ -81,22 +180,44 @@ func (a handleTestAdmissions) AdmitAgentMessage(ctx context.Context, input Messa
 	return a.admit(ctx, input)
 }
 
-type handleTestStore struct{}
+type handleTestStore struct {
+	job            Job
+	sandbox        Sandbox
+	sandboxes      map[string]Sandbox
+	withFence      func(func() error) error
+	cleanupEntered chan struct{}
+}
 
-func (handleTestStore) Job(context.Context, string) (Job, error)         { return Job{}, nil }
-func (handleTestStore) Sandbox(context.Context, string) (Sandbox, error) { return Sandbox{}, nil }
+func (s handleTestStore) Job(context.Context, string) (Job, error) {
+	return s.job, nil
+}
+func (s handleTestStore) Sandbox(_ context.Context, id string) (Sandbox, error) {
+	if s.sandboxes != nil {
+		return s.sandboxes[id], nil
+	}
+	return s.sandbox, nil
+}
 func (handleTestStore) EnsureSandbox(context.Context, string, string) (Sandbox, error) {
 	return Sandbox{}, nil
 }
 func (handleTestStore) JobTasks(context.Context, string) ([]JobTask, error) { return nil, nil }
 func (handleTestStore) CleanupRequests(context.Context) ([]string, error)   { return nil, nil }
-func (handleTestStore) WithJobFence(_ context.Context, _ string, run func() error) error {
+
+func (s handleTestStore) WithJobFence(_ context.Context, _ string, run func() error) error {
+	if s.withFence != nil {
+		return s.withFence(run)
+	}
 	return run()
 }
 func (handleTestStore) AttachJobTask(context.Context, string, string, string, string) error {
 	return nil
 }
-func (handleTestStore) RequestCleanup(context.Context, string) error { return nil }
+func (s handleTestStore) RequestCleanup(context.Context, string) error {
+	if s.cleanupEntered != nil {
+		close(s.cleanupEntered)
+	}
+	return nil
+}
 func (handleTestStore) AttachCleanupTask(context.Context, string, string, string, string) error {
 	return nil
 }

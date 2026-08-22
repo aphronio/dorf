@@ -71,6 +71,9 @@ type verificationSandbox struct {
 	presentErr          error
 	putCall             int
 	putErr              error
+	readCall            int
+	readResult          []byte
+	readErr             error
 	execResult          provider.Result
 	execErr             error
 }
@@ -102,6 +105,16 @@ func (s *verificationSandbox) PutFile(context.Context, provider.Ownership, strin
 	s.putCall++
 	return s.putErr
 }
+func (s *verificationSandbox) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
+	s.readCall++
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	if s.readResult != nil {
+		return append([]byte(nil), s.readResult...), nil
+	}
+	return []byte{'d', 0, 'o', 'r', 'f', 0xff, '\n'}, nil
+}
 func (s *verificationSandbox) Exec(context.Context, provider.Ownership, []byte, ...string) (provider.Result, error) {
 	return s.execResult, s.execErr
 }
@@ -122,8 +135,22 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 || runtime.present {
+	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 2 || runtime.readCall != 1 || runtime.deleteCall != 1 || runtime.present {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
+	}
+}
+
+func TestVerifyBaseRejectsFailedOrInexactFileReadProbe(t *testing.T) {
+	for _, runtime := range []*verificationSandbox{
+		{readErr: errors.New("read failed")},
+		{readResult: []byte("changed")},
+	} {
+		store := newVerificationStore()
+		store.profile.Artifact = "exact-artifact"
+		runtime.execResult = provider.Result{Stdout: "codex 1.2.3\n"}
+		if _, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil || runtime.deleteCall != 1 || runtime.present {
+			t.Fatalf("runtime=%#v err=%v", runtime, err)
+		}
 	}
 }
 
@@ -138,7 +165,7 @@ func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !profile.BaseVerified() || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 {
+	if !profile.BaseVerified() || runtime.createCall != 1 || runtime.putCall != 2 || runtime.readCall != 1 || runtime.deleteCall != 1 {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
 	}
 	if !store.verification.AttemptedAt.After(previous) || store.verification.HarnessVersion != "codex fresh" || store.verification.OwnershipNonce != "fresh-nonce" {

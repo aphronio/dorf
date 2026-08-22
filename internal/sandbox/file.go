@@ -3,11 +3,65 @@ package sandbox
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// ValidateWorkspaceRelativePath accepts one exact Linux path beneath a
+// Sandbox workspace. Discovery and directory semantics remain ordinary Exec
+// concerns rather than growing this one-file API.
+func ValidateWorkspaceRelativePath(relativePath string) error {
+	if relativePath == "" || strings.IndexByte(relativePath, 0) >= 0 || path.IsAbs(relativePath) || path.Clean(relativePath) != relativePath || relativePath == "." || relativePath == ".." || strings.HasPrefix(relativePath, "../") {
+		return fmt.Errorf("Sandbox file path must be a clean workspace-relative file path")
+	}
+	return nil
+}
+
+// ReadFileViaExec returns exact regular-file bytes while refusing symlinks or
+// any resolved path outside the canonical Sandbox workspace.
+func ReadFileViaExec(ctx context.Context, owner Ownership, workspace, relativePath string, exec ExecFunc) ([]byte, error) {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" || !path.IsAbs(workspace) || path.Clean(workspace) != workspace || workspace == "/" {
+		return nil, fmt.Errorf("Sandbox workspace must be a clean absolute path")
+	}
+	if err := ValidateWorkspaceRelativePath(relativePath); err != nil {
+		return nil, err
+	}
+	if exec == nil {
+		return nil, fmt.Errorf("Sandbox file transport is not configured")
+	}
+	script := `set -eu
+workspace=$1 relative=$2
+root=$(realpath -e -- "$workspace")
+test -d "$root" && test ! -L "$workspace"
+target="$root/$relative"
+test -f "$target" && test ! -L "$target"
+exec 3< "$target"
+test -f /proc/self/fd/3
+resolved=$(realpath -e -- /proc/self/fd/3)
+test "$resolved" = "$target"
+base64 -w0 <&3`
+	result, err := exec(ctx, owner, nil, "bash", "-c", script, "dorf-read-file", workspace, relativePath)
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		detail := strings.TrimSpace(result.Stderr)
+		if detail == "" {
+			detail = fmt.Sprintf("exit %d", result.ExitCode)
+		}
+		return nil, fmt.Errorf("read regular Sandbox workspace file %q: %s", relativePath, detail)
+	}
+	contents, err := base64.StdEncoding.Strict().DecodeString(result.Stdout)
+	if err != nil {
+		return nil, fmt.Errorf("decode exact Sandbox workspace file %q: %w", relativePath, err)
+	}
+	return contents, nil
+}
 
 // ExecFunc is the bounded command transport used by provider adapters that do
 // not expose a stronger native file API.

@@ -165,17 +165,17 @@ func verifyGitRevisionObservation(job Job, message MessageRecord, records []core
 	if err != nil {
 		return fmt.Errorf("immutable Evidence blob is unavailable or invalid: %w", err)
 	}
-	var artifact gitworkspace.Observation
+	var observation gitworkspace.Observation
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&artifact); err != nil {
-		return fmt.Errorf("observation artifact is invalid: %w", err)
+	if err := decoder.Decode(&observation); err != nil {
+		return fmt.Errorf("observation payload is invalid: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("observation artifact has trailing content")
+		return fmt.Errorf("observation payload has trailing content")
 	}
-	if artifact.ComparisonBase != message.InputRevision || artifact.Revision != job.Revision || artifact.Branch != job.Branch || !fullGitObjectID(artifact.Tree) || !artifact.StartedAt.Equal(observed.StartedAt) || !artifact.FinishedAt.Equal(observed.FinishedAt) {
-		return fmt.Errorf("observation artifact does not match its AgentRun, branch, timing, and exact Revision")
+	if observation.ComparisonBase != message.InputRevision || observation.Revision != job.Revision || observation.Branch != job.Branch || !fullGitObjectID(observation.Tree) || !observation.StartedAt.Equal(observed.StartedAt) || !observation.FinishedAt.Equal(observed.FinishedAt) {
+		return fmt.Errorf("observation payload does not match its AgentRun, branch, timing, and exact Revision")
 	}
 	return nil
 }
@@ -200,24 +200,24 @@ func VerifyReviewRunEvidence(run ReviewRunView, records []core.Evidence, blobs b
 	if err != nil {
 		return fmt.Errorf("observed blob is unavailable or invalid: %v", err)
 	}
-	var artifact reviewObservationArtifact
+	var observation reviewObservationPayload
 	decoder := json.NewDecoder(bytes.NewReader(observedBytes))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&artifact); err != nil {
-		return fmt.Errorf("observed artifact is invalid: %v", err)
+	if err := decoder.Decode(&observation); err != nil {
+		return fmt.Errorf("observed payload is invalid: %v", err)
 	} else if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("observed artifact has trailing content")
+		return fmt.Errorf("observed payload has trailing content")
 	}
-	expected := reviewObservationArtifact{
+	expected := reviewObservationPayload{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome,
-		Checkout: artifact.Checkout,
+		Checkout: observation.Checkout,
 	}
-	if artifact.Checkout.Revision != run.InputRevision || !fullGitObjectID(artifact.Checkout.Tree) {
-		return fmt.Errorf("observed artifact has no exact Revision checkout identity")
+	if observation.Checkout.Revision != run.InputRevision || !fullGitObjectID(observation.Checkout.Tree) {
+		return fmt.Errorf("observed payload has no exact Revision checkout identity")
 	}
-	if artifact != expected {
-		return fmt.Errorf("observed artifact differs from harness AgentRun facts")
+	if observation != expected {
+		return fmt.Errorf("observed payload differs from harness AgentRun facts")
 	}
 	return nil
 }

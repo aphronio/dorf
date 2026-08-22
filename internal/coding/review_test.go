@@ -109,12 +109,12 @@ func TestReviewEvidenceObservesAgentRunAndExactCheckoutTreeWithoutCopyingFeedbac
 	if err != nil {
 		t.Fatal(err)
 	}
-	var artifact reviewObservationArtifact
-	if err := json.Unmarshal(contents, &artifact); err != nil {
+	var observation reviewObservationPayload
+	if err := json.Unmarshal(contents, &observation); err != nil {
 		t.Fatal(err)
 	}
-	want := reviewObservationArtifact{AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome, Checkout: post}
-	if artifact != want {
-		t.Fatalf("review observation = %#v, want %#v", artifact, want)
+	want := reviewObservationPayload{AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability, Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome, Checkout: post}
+	if observation != want {
+		t.Fatalf("review observation = %#v, want %#v", observation, want)
 	}
 }

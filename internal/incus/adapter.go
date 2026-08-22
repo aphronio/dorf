@@ -50,6 +50,13 @@ func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destinat
 	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
 }
 
+func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
+	if err := a.Sandbox.AttestOwnership(ctx, owner); err != nil {
+		return nil, err
+	}
+	return provider.ReadFileViaExec(ctx, owner, a.Workspace(), relativePath, a.Exec)
+}
+
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
 	return a.Sandbox.Exec(ctx, owner.SandboxID, input, args...)
 }

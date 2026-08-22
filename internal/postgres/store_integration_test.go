@@ -174,11 +174,11 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
-	investigationService := investigation.NewService(workspaceExecutor, store, externals, blob.Store{})
+	investigationService := investigation.NewService(workspaceExecutor, externals, blob.Store{})
 	resolver := integrationRuntimeResolver{
 		execution:            execution,
 		profile:              runtimeProfile,
@@ -269,7 +269,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	externals := &blockingCreateExternals{
 		integrationExternals: &integrationExternals{}, entered: make(chan struct{}), release: make(chan struct{}),
 	}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentStrategies(codingPromptStrategies{store: store})
 	workspace := gitworkspace.NewExecutor(execution, externals)
 	service := coding.NewService(workspace, store, externals, blob.Store{}, absurdruntime.RequireClaim)
@@ -336,7 +336,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	}
 
 	loserExternals := &integrationExternals{}
-	loserExecution := core.NewExecutionService(store, loserExternals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	loserExecution := core.NewExecutionService(store, loserExternals, nil, absurdruntime.RequireClaim)
 	loserWorkspace := gitworkspace.NewExecutor(loserExecution, loserExternals)
 	loserService := coding.NewService(loserWorkspace, store, loserExternals, blob.Store{}, absurdruntime.RequireClaim)
 	loserResolver := integrationRuntimeResolver{
@@ -904,7 +904,7 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 	}
 
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: targetTurnID, Status: "inProgress"}}}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentStrategies(resultBoundaryPromptStrategies{store: store})
 	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
@@ -1200,7 +1200,7 @@ func TestEarlyCodingFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 	}
 
 	externals := &integrationExternals{turnStatus: "completed"}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentStrategies(codingPromptStrategies{store: store})
 	taskName := "dorf-early-follow-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
@@ -1723,7 +1723,7 @@ func TestReviewAgentStrategyRequiresExactNamedSandboxForSubmitAndRecovery(t *tes
 
 			externals := &reviewStrategyIntegrationExternals{integrationExternals: &integrationExternals{}}
 			strategies := &reviewStrategyIntegrationResolver{store: store, externals: externals, messageID: run.MessageID}
-			execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+			execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
 			taskName := "dorf-review-named-sandbox-proof-v1"
 			client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 				strategies.sandboxID = core.MainSandboxName(job.ID)
@@ -2020,7 +2020,7 @@ func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {
 	}
 
 	externals := &integrationExternals{}
-	execution := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
 	profile := profileapp.Runtime{SandboxProfile: job.SandboxProfile}
 	resolver := integrationRuntimeResolver{execution: execution, profile: profile}
 	client := newFaultClient(t, store, "dorf-handle-sandbox-identity-"+job.ID)
@@ -2082,7 +2082,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	ctx := context.Background()
 	sandboxID := core.MainSandboxName(job.ID)
 	externals := &integrationExternals{}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
 	create, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionSandboxCreate)
 	if err != nil {
 		t.Fatal(err)
@@ -2120,7 +2120,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	}
 
 	barrier := &failOnceWorkflowBarrier{point: core.BarrierSandboxCreated}
-	recovery := core.NewExecutionService(store, externals, blob.Store{}, barrier, absurdruntime.RequireClaim)
+	recovery := core.NewExecutionService(store, externals, barrier, absurdruntime.RequireClaim)
 	recoveryTaskName := "lost-provider-receipt-v1"
 	client.MustRegister(absurd.Task(recoveryTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if err := recovery.ExecuteSandboxAction(taskCtx, job.ID, create.ID); err != nil {
@@ -2166,7 +2166,7 @@ func TestSandboxDeleteBeforeRevokeHasZeroProviderEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
 	client := newFaultClient(t, store, "dorf-delete-before-revoke-"+job.ID)
 	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		cleaning, err := store.Job(taskCtx, job.ID)
@@ -2247,7 +2247,7 @@ func TestCleanupOnlyObservesAcceptedSteerAndBlocksDestructiveActions(t *testing.
 	externals := &integrationExternals{turns: []core.HarnessTurn{{
 		ID: targetTurnID, Status: "inProgress", AcceptedMessageIDs: []string{steerDelivery.AgentRun.ID},
 	}}}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
 	client := newFaultClient(t, store, "dorf-cleanup-accepted-steer-"+job.ID)
 	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if _, _, err := service.PrepareCleanup(taskCtx, job.ID); err == nil || !strings.Contains(err.Error(), "remain") {
@@ -2332,7 +2332,7 @@ func TestClosedAdmissionCleanupRecoversOrdinaryCodingRunWithoutExecutionEligibil
 	}
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: turnID, Status: "completed"}}}
 	strategies := &cleanupOnlyAgentStrategies{}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
 	client := newFaultClient(t, store, "dorf-cleanup-ordinary-closed-"+job.ID)
 	client.MustRegister(absurd.Task(core.CleanupTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		cleaning, sandboxes, err := service.PrepareCleanup(taskCtx, job.ID)
@@ -2847,7 +2847,7 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 	}
 	externals := &integrationExternals{}
 	strategies := &countingCodingPromptStrategies{codingPromptStrategies: codingPromptStrategies{store: store}}
-	service := core.NewExecutionService(store, externals, blob.Store{}, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentStrategies(strategies)
 	staleTaskName := "stale-provider-effect-v1"
 	client.MustRegister(absurd.Task(staleTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		if err := service.ReconcileJobAgent(taskCtx, job.ID); err == nil {

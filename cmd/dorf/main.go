@@ -104,8 +104,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		defer client.Close()
 		return retry(ctx, store, client, args[1:], stdout, stderr)
-	case "artifact":
-		return artifactCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	case "inspect":
 		client, err := absurdClient(db)
 		if err != nil {
@@ -130,6 +128,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
+	case "sandbox":
+		runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client}
+		core := coreApplication(store, client)
+		core.SandboxRuntimes = runtimes
+		return sandboxCommand(ctx, core, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, args[1:], stdout, stderr)
 	case "abandon":
@@ -1226,13 +1229,6 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	if err != nil {
 		return err
 	}
-	artifacts, err := store.Artifacts(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if artifacts == nil {
-		artifacts = []core.Artifact{}
-	}
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
@@ -1245,7 +1241,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	if jsonOutput {
 		return writeJSON(stdout, map[string]any{
-			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts, "artifacts": artifacts,
+			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
 			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
@@ -1273,8 +1269,10 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return nil
 	}
 	latest := snapshot.Drafts[len(snapshot.Drafts)-1]
-	fmt.Fprintf(stdout, "  latest draft: created-at=%s Artifact=%s\n", latest.CreatedAt.Format(time.RFC3339Nano), latest.ArtifactID)
-	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", latest.ArtifactID)
+	fmt.Fprintf(stdout, "  latest draft: created-at=%s\n%s", latest.CreatedAt.Format(time.RFC3339Nano), latest.Content)
+	if !strings.HasSuffix(latest.Content, "\n") {
+		fmt.Fprintln(stdout)
+	}
 	if job.AdmissionOpen && job.CleanupState == core.CleanupPending {
 		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
 		fmt.Fprintf(stdout, "  release resources: dorf cleanup %s\n", job.ID)
@@ -1571,6 +1569,6 @@ func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution t
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

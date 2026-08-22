@@ -82,7 +82,7 @@ func investigationHistory(snapshot investigation.Snapshot, deliveries []core.Del
 		addAgentRunHistory(&entries, definition, delivery)
 	}
 	for _, draft := range snapshot.Drafts {
-		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready · "+draft.ArtifactID)
+		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready")
 	}
 	return sortedHistory(entries)
 }

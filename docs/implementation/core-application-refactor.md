@@ -20,7 +20,7 @@ application.Admit(ctx, complete-core-intent) -> Job
 job.EnsureSandbox(ctx[, sandbox-name]) -> Sandbox
 sandbox.Agent() -> Agent
 agent.Message(send-key, text[, Steer])
-job.Artifacts
+sandbox.ReadFile(workspace-relative-path)
 job.RequestCleanup
 ```
 
@@ -28,7 +28,7 @@ job.RequestCleanup
   the durable Job handle. Workflow-specific typed input remains owned by its module rather than
   becoming optional Core fields or a generic payload. The concrete transaction composition is an
   implementation seam for the first slice, not a workflow-author burden.
-- `Job` is the durable aggregate and owner of every Sandbox and retained Artifact.
+- `Job` is the durable aggregate and owner of every Sandbox.
 - `EnsureSandbox` reconciles one Job-owned Sandbox using the verified profile pinned when the Job is
   admitted. Default and named Sandbox behavior is validated during the first slice rather than
   frozen as an option syntax here.
@@ -44,11 +44,9 @@ job.RequestCleanup
 - `AgentRun` remains the internal durable recovery record for exactly one Message delivery, including
   its Harness, Thread, Turn, role/capability envelope, and uncertain-submission reconciliation. An
   ordinary workflow author does not create, bind, poll, or interpret AgentRuns directly.
-- Each AgentRun has a run-owned artifact directory in the Sandbox working area, isolated from any
-  workflow-managed source checkout. Content placed there is automatically retained into immutable
-  Job-owned Artifacts. Collection has durable settlement and must reconcile before the Sandbox may
-  be cleaned up. `job.Artifacts` discovers retained deliverables; exact bytes remain available after
-  cleanup.
+- `Sandbox.ReadFile` returns the exact bytes of one clean workspace-relative regular file from that
+  exact Job-owned Sandbox while cleanup remains pending. A caller or workflow knows the path and
+  reads it before requesting cleanup; Core does not discover, interpret, or retain outputs.
 - `job.RequestCleanup` records caller policy. Core reconciles route revocation and Sandbox deletion;
   it does not decide when cleanup should be requested.
 - An open Job may be idle without a workflow-owned `WaitForInput` operation. Durable Message
@@ -67,15 +65,15 @@ registry, plugin contract, public network API, or language SDK.
 - Every Message send has a caller-retained per-send idempotency key. An exact retry returns the same
   durable input; changing any part of its complete admitted request conflicts; a different key may
   admit identical text.
-- A Sandbox Agent handle is bound to that exact Sandbox for submission, history reconciliation,
-  waiting, steering, and Artifact collection. It never falls back to the Job's default Sandbox.
+- A Sandbox handle is bound to that exact Sandbox for file reads, and its Agent handle is bound for
+  submission, history reconciliation, waiting, and steering. Neither falls back to the Job's
+  default Sandbox.
 - Follow order remains Job-local FIFO. A steer remains explicit, targeted, observable priority input.
 - Harness Threads and Turns remain Harness authority. Provider locators, command transports, and
   workspace paths remain adapter-private.
-- Artifact metadata and immutable bytes are deployment-owned and survive Sandbox cleanup. Artifact
-  prose or bytes are not Evidence merely because Core retained them.
-- Terminal Harness observation and Artifact collection settle independently. Cleanup must reconcile
-  every terminal run's collection obligation before it can revoke the route or delete the Sandbox.
+- Sandbox file reads are live operations against Sandbox authority, execute under the Job cleanup
+  fence, and become unavailable after cleanup. Workflow-owned typed results provide durability when
+  the workflow needs it; file content is not Evidence merely because a caller read it.
 - Cleanup is explicit, idempotent, retryable, ordered route-before-Sandbox, and visibly incomplete or
   failed until external authority confirms release.
 - PostgreSQL owns Dorf product facts; Absurd owns task claims, retries, waits, wake events, and
@@ -95,8 +93,8 @@ registry, plugin contract, public network API, or language SDK.
   Worker, conversation, phase, wait, or status primitive around it.
 - Do not make idle input a workflow phase or require every workflow to spell a `WaitForInput` step.
   Internal Absurd waits remain execution mechanics, not workflow meaning.
-- Do not make automatic Artifact retention depend on workflow-specific copy code, treat Artifacts as
-  Evidence, or allow Sandbox cleanup to race ahead of required retention.
+- Do not make Core discover, interpret, or retain generic output files, inject output conventions
+  into stock agent behavior, or add listing, batch, archive, or directory-download file APIs.
 - Do not mirror lifecycle state beside settled Actions, provider identity in Core, mutable state in
   two authorities, or adapter-private workspace paths in durable records.
 - Do not preserve internal package shapes, compatibility facades, dual paths, old schemas, or coupled
@@ -162,30 +160,27 @@ and revision policy outside the convenience handle, behind narrow module composi
 
 Prove follow, active-turn steer, terminal-target fallback, concurrent admission, uncertain submission,
 process restart, and no duplicate Turn. Exercise two named Sandboxes in one Job and prove that
-submission, lost-ack recovery, steer, wait, and Artifact provenance stay bound to the selected one;
+submission, lost-ack recovery, steer, wait, and file reads stay bound to the selected one;
 replaying its Message key through the other must conflict. Reach a live initial Message, follow, and
 active steer through one supported Harness. Delete ordinary authoring access to prepare/bind/poll
 AgentRun operations and any duplicate delivery façade after all call sites move.
 
-### 3. Automatic workspace Artifact retention
+### 3. Exact caller-selected Sandbox file reads
 
-**Seam discovery:** Trace current workspace conventions, provider file operations, AgentRun terminal
-observation, blob retention, Artifact insertion/list/get, limits and path validation, failure recovery,
-and cleanup admission. Identify any workflow-owned draft-copy behavior that is actually generic
-retention versus workflow-specific interpretation or naming.
+**Seam discovery:** Trace current workspace conventions, provider command transports, exact Sandbox
+ownership, cleanup fencing, and callers that already know a produced file path. Keep file discovery
+and interpretation at the calling workflow or client boundary.
 
-Give each AgentRun one adapter-projected artifact directory outside any workflow-managed checkout
-and make its retention a recoverable part of completing the high-level Message operation. Create the
-durable collection obligation no later than terminal observation becomes visible to cleanup; cleanup
-must reconcile it to a durable settled receipt before route revocation or Sandbox deletion. Retain
-immutable content under the owning Job and expose discovery through `job.Artifacts`; keep typed
-workflow results as optional references to Artifact IDs rather than Core meaning.
+Expose one provider-neutral `Sandbox.ReadFile` operation for a clean workspace-relative regular
+file. Preserve exact arbitrary bytes through provider transports, reject traversal, symlinks, and
+resolved escapes, and perform the read under the same Job fence as cleanup. Multiple files are
+repeated calls; discovery uses the existing Sandbox command seam rather than another filesystem API.
 
-Prove empty, single, multiple, retry-after-partial-retention, invalid-entry, duplicate-content, and
-cleanup-race behavior with exact bytes retrievable after cleanup. Reach a live agent-written Artifact,
-destroy its Sandbox, and retrieve identical bytes. Delete workflow-specific transfer plumbing only
-where the new generic contract fully replaces it; retain domain-specific draft/source semantics in
-their owning modules.
+Prove exact text and binary bytes, repeated reads, cross-Job and cross-Sandbox refusal, path escape
+refusal, the read-versus-cleanup fence, and unavailability after cleanup. Reach a live caller-known
+file, retrieve it exactly before cleanup, clean up the Sandbox, and prove a later read fails. Remove
+the generic Artifact domain, storage, and CLI; retain only workflow-owned typed result facts and
+existing blob custody for Evidence and retained Git input.
 
 ### 4. Open-idle Job and input resumption
 
@@ -200,7 +195,7 @@ rules.
 
 Prove idle persistence, later follow resumption on the same Thread, steer during active work, restart
 while idle, concurrent Message/cleanup fencing, and no polling or duplicate task attachment. Reach a
-live Job that becomes idle, receives a later follow, produces another retained Artifact, and then
+live Job that becomes idle, receives a later follow, exposes its typed workflow result, and then
 cleans up. Delete workflow wait operations, phase-like projections, and tests that assert their
 existence rather than observable idleness.
 
@@ -210,7 +205,7 @@ existence rather than observable idleness.
 human-attention boundaries, GitHub Actions/observations, typed workflow facts, and their imports of
 Core internals. Mark every place physical reuse is being mistaken for Core ownership.
 
-Move consumers to static, typed composition over Job, Sandbox, Agent, Artifact, and cleanup
+Move consumers to static, typed composition over Job, Sandbox, Agent, exact file reads, and cleanup
 capabilities. Message remains immutable input or an admission receipt returned through the Agent
 handle, not a separate lifecycle interface. A repository module owns exact checkout/observation;
 coding owns revision, review, proposal, and outcome policy; HITL remains client/workflow interaction
@@ -230,7 +225,7 @@ and recovery behavior with the same authoritative facts, not old type names.
 
 Make the smallest final corrections required by live evidence. Update the existing operator
 authority and Agent Guide in the implementing slice when setup, profile readiness, Job operation,
-Messages, retry, Artifacts, or cleanup UX changed. Do not preserve temporary adapters to make the
+Messages, retry, file retrieval, or cleanup UX changed. Do not preserve temporary adapters to make the
 diff easier to merge.
 
 Prove the complete target below, run the full repository contract, regenerate/check SQL when its
@@ -252,9 +247,10 @@ Before the refactor is complete, an earned trusted-client or transport slice mus
 direct Job without workflow identity through the Core application path; slice 1 deliberately does
 not manufacture that caller or its scheduling authority.
 At least one run must become open and idle, accept a follow on its continuing Thread, accept an active
-steer without a duplicate Turn, automatically retain an agent-written Artifact, survive controller
+steer without a duplicate Turn, expose a caller-known agent-written file through an exact read before
+cleanup, survive controller
 restart or forced executor loss at an AgentRun reconciliation boundary, accept an explicit cleanup
-request, confirm route and Sandbox absence, and retrieve identical Artifact bytes afterward. The
+request, confirm route and Sandbox absence, and prove the file is unavailable afterward. The
 coding and investigation workflows must also retain their existing real terminal behavior through
 module composition over the same Core path. This is a refactor proof, not permission to add another
 provider, Harness, workflow, or public surface.
@@ -268,7 +264,8 @@ Locked for this refactor:
   PostgreSQL or Absurd to workflow authors.
 - Message sends use a caller-retained per-send idempotency key; default intent is follow and steer is
   explicit.
-- The AgentRun's isolated artifact directory is automatically retained as Job Artifacts.
+- A Sandbox exposes one exact caller-selected regular-file read while cleanup remains pending; Core
+  does not prescribe an output directory or retain generic outputs.
 - Cleanup is requested by a client/workflow and executed by Core.
 - Open idleness does not require a workflow-owned wait step.
 - Workflow/domain modules compose over Core; no DSL, registry, plugin contract, or public SDK is in
@@ -282,11 +279,9 @@ Working assumptions to validate during seam discovery:
   Agent row.
 - The Job's admitted profile applies to every Sandbox in this refactor; independently selecting a
   profile per named Sandbox is a future contract, not an implied option.
-- Automatic retention is part of AgentRun reconciliation and therefore resumes idempotently after
-  process loss. A durable collection receipt, or an equivalent natural fact, must distinguish a
-  terminal Harness Turn from settled Artifact collection, and cleanup cannot bypass it.
-- Artifact path, naming, collision, quota, invalid-entry, and failed-AgentRun rules should reuse an
-  existing authoritative contract where one exists. They are not silently invented by an adapter.
+- File reads use the exact Job-owned Sandbox and the Job cleanup fence. They reject traversal,
+  symlinks, resolved workspace escapes, directories, and non-regular entries without inventing a
+  broader output policy.
 - Removing workflow `WaitForInput` does not remove Absurd's internal durable wait/wake mechanics or
   change workflow-owned attention semantics.
 
@@ -295,8 +290,8 @@ Working assumptions to validate during seam discovery:
 Stop the affected slice and ask the user before implementation diverges when discovery indicates:
 
 - the locked call shape cannot preserve current recovery, authority, or supported profile behavior;
-- automatic Artifact retention needs a user-visible policy choice about paths, names, collisions,
-  quotas, failed runs, or cleanup ordering that no accepted authority resolves;
+- exact file reads cannot preserve arbitrary bytes, Sandbox ownership, or the cleanup fence through
+  a supported provider transport;
 - a proposed durable fact interprets workflow result, acceptance, rejection, human judgment,
   cross-Job composition, or cleanup timing;
 - a supported Harness cannot fit the hidden AgentRun boundary, or a provider cannot preserve

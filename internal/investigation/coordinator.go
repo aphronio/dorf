@@ -153,7 +153,7 @@ func (s Snapshot) Project() Work {
 	}
 	for _, draft := range s.Drafts {
 		if draft.MessageID == s.Message.MessageID {
-			return Work{Kind: WorkWaitInput, FactID: draft.ArtifactID, Detail: "send a follow-up or request cleanup"}
+			return Work{Kind: WorkWaitInput, FactID: draft.MessageID, Detail: "send a follow-up or request cleanup"}
 		}
 	}
 	if s.Job.WorkflowAttentionSource == s.Message.MessageID && s.Job.WorkflowAttention != "" {
@@ -309,16 +309,7 @@ func recordInvestigationDraft(ctx context.Context, service Service, store Store,
 	if err := service.VerifyRepositoryUnchanged(ctx, snapshot.Job, snapshot.Source.Revision); err != nil {
 		return investigationContractError("investigator changed or dirtied the admitted checkout: " + err.Error())
 	}
-	blob, err := service.BlobStore().Put([]byte(report))
-	if err != nil {
-		return err
-	}
-	artifact := core.Artifact{
-		JobID:  snapshot.Job.ID,
-		Digest: blob.Digest, ByteSize: blob.ByteSize, MediaType: "text/markdown",
-		Producer: "dorf-codebase-investigation",
-	}
-	_, _, err = store.RecordCodebaseInvestigationDraft(ctx, result.MessageID, artifact)
+	_, _, err = store.RecordCodebaseInvestigationDraft(ctx, result.MessageID, report)
 	return err
 }
 

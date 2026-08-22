@@ -23,7 +23,7 @@ type Store interface {
 	CodebaseInvestigationMessages(context.Context, string) ([]MessageRecord, error)
 	SetWorkflowAttention(context.Context, string, string, string) error
 	GetOrCreateSandboxAction(context.Context, string, core.ActionKind) (core.Action, error)
-	RecordCodebaseInvestigationDraft(context.Context, string, core.Artifact) (Draft, bool, error)
+	RecordCodebaseInvestigationDraft(context.Context, string, string) (Draft, bool, error)
 }
 
 type Externals interface {
@@ -48,16 +48,13 @@ func (s Service) VerifyRepositoryUnchanged(ctx context.Context, job core.Job, re
 // materialization owned only by codebase-investigation.
 type Service struct {
 	gitworkspace.Execution
-	store     Store
 	externals Externals
 	blobs     blob.Store
 }
 
-func NewService(execution gitworkspace.Execution, store Store, externals Externals, blobs blob.Store) Service {
-	return Service{Execution: execution, store: store, externals: externals, blobs: blobs}
+func NewService(execution gitworkspace.Execution, externals Externals, blobs blob.Store) Service {
+	return Service{Execution: execution, externals: externals, blobs: blobs}
 }
-
-func (s Service) BlobStore() blob.Store { return s.blobs }
 
 // ExecuteRepositoryRestore reconciles a retained exact repository input and
 // records the same scoped Action only after the provider checkout converges.

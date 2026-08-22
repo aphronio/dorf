@@ -36,7 +36,7 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 	if err != nil {
 		return admittedAgentRun{}, err
 	}
-	if latest.State != core.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
+	if latest.State != core.AgentRunCompleted || latest.DraftAgentRunID == "" || latest.Harness == "" || latest.ThreadID == "" {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
 	}
 	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
@@ -56,7 +56,7 @@ func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([
 	}
 	drafts := make([]investigation.Draft, 0, len(rows))
 	for _, row := range rows {
-		drafts = append(drafts, investigation.Draft{JobID: row.JobID, MessageID: row.MessageID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
+		drafts = append(drafts, investigation.Draft{JobID: row.JobID, MessageID: row.MessageID, AgentRunID: row.AgentRunID, Content: row.Content, CreatedAt: timeValue(row.FinishedAt).UTC()})
 	}
 	return drafts, nil
 }
@@ -106,32 +106,17 @@ func (s Store) ValidateInvestigationAgentMessage(ctx context.Context, execution 
 	return fmt.Errorf("Message %s is no longer eligible for investigation Agent reconciliation", execution.Message.ID)
 }
 
-func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, messageID string, artifact core.Artifact) (investigation.Draft, bool, error) {
-	if strings.TrimSpace(messageID) == "" {
-		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft requires its durable Message identity")
+func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, messageID, content string) (investigation.Draft, bool, error) {
+	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(content) == "" {
+		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft requires a Message and nonblank Markdown")
 	}
 	queries := dbsql.New(s.DB)
 	message, err := queries.GetMessage(ctx, messageID)
 	if err != nil {
 		return investigation.Draft{}, false, err
 	}
-	if artifact.JobID != message.JobID {
-		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft Message belongs to a different Job")
-	}
-	artifact.Name = investigation.DraftArtifactName(message.Sequence)
-	artifact.ID = core.ArtifactID(artifact.JobID, artifact.Name)
-	if strings.TrimSpace(artifact.JobID) == "" || !strings.HasPrefix(artifact.Name, "report-") || !strings.HasSuffix(artifact.Name, ".md") ||
-		artifact.MediaType != "text/markdown" ||
-		artifact.Producer != "dorf-codebase-investigation" || artifact.Digest == "" || artifact.ByteSize <= 0 {
-		return investigation.Draft{}, false, fmt.Errorf("codebase-investigation draft lacks its exact Markdown Artifact")
-	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, messageID)
 	if err != nil {
-		return investigation.Draft{}, false, err
-	}
-	artifact.AgentRunID = runRow.ID
-	artifact.CreatedAt = timeValue(runRow.FinishedAt)
-	if err := validateInvestigationDraft(artifact); err != nil {
 		return investigation.Draft{}, false, err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -140,7 +125,7 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, messageID s
 	}
 	defer tx.Rollback()
 	queries = dbsql.New(s.DB).WithTx(tx)
-	run, err := queries.GetCodebaseInvestigationRunForUpdate(ctx, dbsql.GetCodebaseInvestigationRunForUpdateParams{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID})
+	run, err := queries.GetCodebaseInvestigationRunForUpdate(ctx, dbsql.GetCodebaseInvestigationRunForUpdateParams{JobID: message.JobID, AgentRunID: runRow.ID})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return investigation.Draft{}, false, ErrNotFound
@@ -152,50 +137,31 @@ func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, messageID s
 		!run.StartedAt.Valid || !run.FinishedAt.Valid {
 		return investigation.Draft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")
 	}
-	drafts, err := queries.ListCodebaseInvestigationDrafts(ctx, artifact.JobID)
+	drafts, err := queries.ListCodebaseInvestigationDrafts(ctx, message.JobID)
 	if err != nil {
 		return investigation.Draft{}, false, err
 	}
 	for _, row := range drafts {
-		if row.AgentRunID != artifact.AgentRunID {
+		if row.AgentRunID != runRow.ID {
 			continue
 		}
-		existing := investigation.Draft{JobID: row.JobID, MessageID: messageID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
-		if existing.ArtifactID != artifact.ID {
-			return investigation.Draft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", artifact.AgentRunID)
-		}
-		if err := insertArtifact(ctx, tx, artifact); err != nil {
-			return investigation.Draft{}, false, err
+		existing := investigation.Draft{JobID: row.JobID, MessageID: row.MessageID, AgentRunID: row.AgentRunID, Content: row.Content, CreatedAt: timeValue(row.FinishedAt).UTC()}
+		if existing.Content != content {
+			return investigation.Draft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", runRow.ID)
 		}
 		return existing, false, nil
 	}
 	if !run.AdmissionOpen || run.CleanupState != core.CleanupPending {
 		return investigation.Draft{}, false, fmt.Errorf("investigation draft cannot be recorded after admission closes or cleanup begins")
 	}
-	if !artifact.CreatedAt.Equal(run.FinishedAt.Time) {
-		return investigation.Draft{}, false, fmt.Errorf("investigation draft timing conflicts with its completed AgentRun")
-	}
-	if err := insertArtifact(ctx, tx, artifact); err != nil {
-		return investigation.Draft{}, false, err
-	}
+	createdAt := run.FinishedAt.Time.UTC()
 	if err := expectOneRows(queries.InsertCodebaseInvestigationDraft(ctx, dbsql.InsertCodebaseInvestigationDraftParams{
-		JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID,
+		JobID: message.JobID, AgentRunID: runRow.ID, Content: content,
 	})); err != nil {
 		return investigation.Draft{}, false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return investigation.Draft{}, false, err
 	}
-	stored := investigation.Draft{JobID: artifact.JobID, MessageID: messageID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
-	return stored, true, nil
-}
-
-func validateInvestigationDraft(artifact core.Artifact) error {
-	if strings.TrimSpace(artifact.JobID) == "" || strings.TrimSpace(artifact.AgentRunID) == "" ||
-		!strings.HasPrefix(artifact.Name, "report-") || !strings.HasSuffix(artifact.Name, ".md") ||
-		artifact.ID != core.ArtifactID(artifact.JobID, artifact.Name) || artifact.MediaType != "text/markdown" ||
-		artifact.Producer != "dorf-codebase-investigation" || artifact.Digest == "" || artifact.ByteSize <= 0 || artifact.CreatedAt.IsZero() {
-		return fmt.Errorf("codebase-investigation draft lacks its exact Markdown Artifact")
-	}
-	return nil
+	return investigation.Draft{JobID: message.JobID, MessageID: messageID, AgentRunID: runRow.ID, Content: content, CreatedAt: createdAt}, true, nil
 }

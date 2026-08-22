@@ -14,13 +14,12 @@ from dorf.codebase_investigation_sources s
 where s.job_id=sqlc.arg(job_id);
 
 -- name: ListCodebaseInvestigationDrafts :many
-select d.job_id,d.agent_run_id,ar.message_id,d.artifact_id,a.created_at
+select d.job_id,d.agent_run_id,ar.message_id,d.content,ar.finished_at
 from dorf.codebase_investigation_drafts d
-join dorf.artifacts a on a.job_id=d.job_id and a.id=d.artifact_id
 join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
 join dorf.job_messages m on m.id=ar.message_id
 where d.job_id=sqlc.arg(job_id)
-order by m.sequence,d.artifact_id;
+order by m.sequence,d.agent_run_id;
 
 -- name: ListCodebaseInvestigationMessages :many
 select m.id as message_id,ar.sandbox_id,ar.state,
@@ -45,16 +44,16 @@ for update of j,ar;
 
 -- name: InsertCodebaseInvestigationDraft :execrows
 insert into dorf.codebase_investigation_drafts(
-    job_id,agent_run_id,artifact_id
+    job_id,agent_run_id,content
 ) values(
-    sqlc.arg(job_id),sqlc.arg(agent_run_id),sqlc.arg(artifact_id)
+    sqlc.arg(job_id),sqlc.arg(agent_run_id),sqlc.arg(content)
 )
 on conflict(job_id,agent_run_id) do nothing;
 
 -- name: GetLatestInvestigationRunAndDraft :one
 select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
        coalesce(ar.thread_id,'') as thread_id,ar.state,
-       coalesce(d.artifact_id,'') as artifact_id
+       coalesce(d.agent_run_id,'') as draft_agent_run_id
 from dorf.agent_runs ar
 join dorf.job_messages m on m.id=ar.message_id
 left join dorf.codebase_investigation_drafts d

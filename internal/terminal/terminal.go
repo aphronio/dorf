@@ -23,6 +23,13 @@ type Externals struct {
 
 func (e Externals) Harness() string { return e.Agent.Name() }
 
+func (e Externals) ReadSandboxFile(ctx context.Context, job core.Job, owned core.Sandbox, relativePath string) ([]byte, error) {
+	if owned.JobID != job.ID {
+		return nil, fmt.Errorf("Sandbox file read requires the exact Job owner")
+	}
+	return e.Sandbox.ReadFile(ctx, ownershipMetadata(owned), relativePath)
+}
+
 func (e Externals) gitWorkspace() gitworkspace.Workspace {
 	return gitworkspace.Workspace{Sandbox: e.Sandbox, Workspace: e.Sandbox.Workspace()}
 }

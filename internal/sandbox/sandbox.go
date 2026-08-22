@@ -66,6 +66,7 @@ type Sandbox interface {
 	DeleteOwned(context.Context, Ownership) error
 	AttestReview(context.Context, Ownership, ReviewMetadata) error
 	PutFile(context.Context, Ownership, string, []byte) error
+	ReadFile(context.Context, Ownership, string) ([]byte, error)
 	Exec(context.Context, Ownership, []byte, ...string) (Result, error)
 	Endpoint(context.Context, Ownership, int) (Endpoint, error)
 	ProviderRouteURL(context.Context, string) (string, error)

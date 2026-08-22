@@ -100,11 +100,11 @@ func (s Service) ObserveRevision(ctx context.Context, job Job, messageID string)
 	}
 	observation.StartedAt = observation.StartedAt.UTC().Truncate(time.Microsecond)
 	observation.FinishedAt = observation.FinishedAt.UTC().Truncate(time.Microsecond)
-	artifact, err := json.Marshal(observation)
+	payload, err := json.Marshal(observation)
 	if err != nil {
 		return err
 	}
-	evidenceRecord, err := s.retainEvidence(producer.ProducerID, "git-revision", "", producer.ProducerID, observation.Revision, observation.StartedAt, observation.FinishedAt, artifact)
+	evidenceRecord, err := s.retainEvidence(producer.ProducerID, "git-revision", "", producer.ProducerID, observation.Revision, observation.StartedAt, observation.FinishedAt, payload)
 	if err != nil {
 		return err
 	}

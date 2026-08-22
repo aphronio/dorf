@@ -1,7 +1,6 @@
 package postgres_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -82,9 +81,9 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 	if err != nil || len(otherDeliveries) != 1 {
 		t.Fatalf("other deliveries=%#v err=%v", otherDeliveries, err)
 	}
-	if _, err := store.DB.ExecContext(ctx, `insert into dorf.artifacts(id,job_id,name,digest,byte_size,media_type,producer,agent_run_id,created_at) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		"artifact-cross-job", job.ID, "cross-job.txt", strings.Repeat("f", 64), 1, "text/plain", "test", otherDeliveries[0].AgentRun.ID, time.Now().UTC()); err == nil {
-		t.Fatal("Artifact accepted an AgentRun owned by another Job")
+	if _, err := store.DB.ExecContext(ctx, `insert into dorf.codebase_investigation_drafts(job_id,agent_run_id,content) values($1,$2,$3)`,
+		job.ID, otherDeliveries[0].AgentRun.ID, "foreign draft"); err == nil {
+		t.Fatal("investigation Draft accepted an AgentRun owned by another Job")
 	}
 	if err := store.PrepareAgentRun(ctx, run.ID, "codex", ""); err != nil {
 		t.Fatal(err)
@@ -97,29 +96,21 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	run = deliveries[0].AgentRun
-	name := investigation.DraftArtifactName(1)
-	artifact := core.Artifact{
-		ID: core.ArtifactID(job.ID, name), JobID: job.ID,
-		Name: name, Digest: strings.Repeat("b", 64), ByteSize: 16,
-		MediaType: "text/markdown", Producer: "dorf-codebase-investigation",
-		CreatedAt: run.FinishedAt,
-	}
-	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, artifact)
-	if err != nil || !created || stored.JobID != artifact.JobID || stored.ArtifactID != artifact.ID || !stored.CreatedAt.Equal(artifact.CreatedAt) {
+	draftContent := "# First finding\n"
+	stored, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, draftContent)
+	if err != nil || !created || stored.JobID != job.ID || stored.MessageID != deliveries[0].Message.ID || stored.AgentRunID != run.ID || stored.Content != draftContent || !stored.CreatedAt.Equal(run.FinishedAt) {
 		t.Fatalf("Draft=%#v created=%v err=%v", stored, created, err)
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen {
 		t.Fatalf("draft prematurely closed Job=%#v err=%v", job, err)
 	}
-	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, artifact)
+	replayed, created, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, draftContent)
 	if err != nil || created || replayed != stored {
 		t.Fatalf("idempotent Draft=%#v created=%v err=%v", replayed, created, err)
 	}
-	changedArtifact := artifact
-	changedArtifact.Digest = strings.Repeat("c", 64)
-	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, changedArtifact); err == nil || !strings.Contains(err.Error(), "immutable retained metadata") {
-		t.Fatalf("changed Artifact replay error=%v", err)
+	if _, _, err := store.RecordCodebaseInvestigationDraft(ctx, deliveries[0].Message.ID, "# Changed finding\n"); err == nil || !strings.Contains(err.Error(), "different immutable investigation draft") {
+		t.Fatalf("changed Draft replay error=%v", err)
 	}
 	follow, created, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
 	if err != nil || !created || follow.Sequence != 2 {
@@ -141,9 +132,7 @@ func TestPostgresCodebaseInvestigationIdentityDraftsAndFollowUps(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondRun = deliveries[1].AgentRun
-	secondName := investigation.DraftArtifactName(2)
-	secondArtifact := core.Artifact{ID: core.ArtifactID(job.ID, secondName), JobID: job.ID, Name: secondName, Digest: strings.Repeat("d", 64), ByteSize: 24, MediaType: "text/markdown", Producer: "dorf-codebase-investigation", AgentRunID: secondRun.ID, CreatedAt: secondRun.FinishedAt}
-	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, follow.ID, secondArtifact); err != nil || !created {
+	if _, created, err := store.RecordCodebaseInvestigationDraft(ctx, follow.ID, "# Second finding\n"); err != nil || !created {
 		t.Fatalf("second draft created=%v err=%v", created, err)
 	}
 	job, err = store.Job(ctx, job.ID)
@@ -276,10 +265,10 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 		t.Fatal(err)
 	}
 	externals := &investigationExternals{}
-	execution := core.NewExecutionService(store, externals, records, nil, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentStrategies(investigationAgentStrategies{store: store})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals)
-	service := investigation.NewService(workspaceExecutor, store, externals, records)
+	service := investigation.NewService(workspaceExecutor, externals, records)
 	application := core.Application{
 		Store: store, Tasks: client,
 		SandboxRuntimes: integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: "incus"}},
@@ -345,21 +334,12 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || len(drafts) != 1 {
 		t.Fatalf("Drafts=%#v err=%v", drafts, err)
 	}
-	artifacts, err := store.Artifacts(ctx, job.ID)
-	if err != nil || len(artifacts) != 1 || artifacts[0].ID != drafts[0].ArtifactID || artifacts[0].Name != investigation.DraftArtifactName(1) {
-		t.Fatalf("Artifacts=%#v err=%v", artifacts, err)
-	}
-	contents, err := records.ReadVerified(artifacts[0].Digest, artifacts[0].ByteSize)
-	if err != nil || !strings.Contains(string(contents), "# Finding") {
-		t.Fatalf("report=%q err=%v", contents, err)
+	if !strings.Contains(drafts[0].Content, "# Finding") {
+		t.Fatalf("typed Draft content=%q", drafts[0].Content)
 	}
 	allEvidence, err := store.Evidence(ctx, job.ID)
 	if err != nil || len(allEvidence) != 0 {
 		t.Fatalf("agent prose was recorded as Evidence: %#v err=%v", allEvidence, err)
-	}
-	artifact, err := store.Artifact(ctx, drafts[0].ArtifactID)
-	if err != nil || artifact != artifacts[0] {
-		t.Fatalf("Artifact=%#v err=%v want=%#v", artifact, err, artifacts[0])
 	}
 	job, err = store.Job(ctx, job.ID)
 	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
@@ -426,12 +406,8 @@ func TestPostgresCodebaseInvestigationWaitsForClientCleanupAndRetainsDrafts(t *t
 	if err != nil || cleaned.CleanupState != core.CleanupComplete {
 		t.Fatalf("cleaned Job=%#v err=%v", cleaned, err)
 	}
-	afterCleanup, err := store.Artifact(ctx, drafts[0].ArtifactID)
-	if err != nil || afterCleanup != artifact {
-		t.Fatalf("Artifact did not survive cleanup: %#v err=%v", afterCleanup, err)
-	}
-	afterCleanupContents, err := records.ReadVerified(afterCleanup.Digest, afterCleanup.ByteSize)
-	if err != nil || !bytes.Equal(afterCleanupContents, contents) {
-		t.Fatalf("Artifact bytes did not survive cleanup: %q err=%v", afterCleanupContents, err)
+	afterCleanup, err := store.CodebaseInvestigationDrafts(ctx, job.ID)
+	if err != nil || len(afterCleanup) != 2 || afterCleanup[0] != drafts[0] {
+		t.Fatalf("typed Drafts did not survive cleanup: %#v err=%v", afterCleanup, err)
 	}
 }

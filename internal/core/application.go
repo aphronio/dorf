@@ -36,7 +36,12 @@ type CleanupRuntimeResolver interface {
 
 type SandboxRuntime struct {
 	Execution      Execution
+	Files          SandboxFileReader
 	SandboxProfile string
+}
+
+type SandboxFileReader interface {
+	ReadSandboxFile(context.Context, Job, Sandbox, string) ([]byte, error)
 }
 
 type SandboxRuntimeResolver interface {

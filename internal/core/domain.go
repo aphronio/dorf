@@ -65,7 +65,7 @@ type SandboxProvider string
 const (
 	SandboxProviderIncus SandboxProvider = "incus"
 	SandboxProviderE2B   SandboxProvider = "e2b"
-	BaseProfileContract                  = "base-1"
+	BaseProfileContract                  = "base-2"
 )
 
 // SandboxProfile is one named provider, artifact, and Harness definition
@@ -262,21 +262,6 @@ type Evidence struct {
 	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
-// Artifact is one immutable, named deliverable produced by a workflow. Its
-// bytes live in the deployment-owned content-addressed store; this record is
-// the durable Job-scoped identity used for discovery and retrieval.
-type Artifact struct {
-	ID         string    `json:"id"`
-	JobID      string    `json:"job_id"`
-	Name       string    `json:"name"`
-	Digest     string    `json:"digest"`
-	ByteSize   int64     `json:"byte_size"`
-	MediaType  string    `json:"media_type"`
-	Producer   string    `json:"producer"`
-	AgentRunID string    `json:"agent_run_id"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
 type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
@@ -318,10 +303,6 @@ func MessageID(jobID string, fromKind MessageFromKind, fromID string) string {
 
 func AgentRunID(messageID string) string {
 	return "agent-run-" + digest(messageID, 24)
-}
-
-func ArtifactID(jobID, name string) string {
-	return "artifact-" + digest(jobID+"\x00"+name, 24)
 }
 
 const DefaultSandbox = "default"

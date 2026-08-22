@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -79,7 +78,6 @@ type ExecutionService struct {
 	store      ExecutionStore
 	externals  Externals
 	barrier    FaultBarrier
-	blobs      blob.Store
 	claimCheck func(context.Context) error
 	strategies AgentStrategyResolver
 }
@@ -89,17 +87,14 @@ func (s ExecutionService) WithAgentStrategies(strategies AgentStrategyResolver) 
 	return s
 }
 
-func NewExecutionService(store ExecutionStore, externals Externals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
+func NewExecutionService(store ExecutionStore, externals Externals, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
 	return ExecutionService{
 		store:      store,
 		externals:  externals,
 		barrier:    barrier,
-		blobs:      records,
 		claimCheck: claimCheck,
 	}
 }
-
-func (s ExecutionService) BlobStore() blob.Store { return s.blobs }
 
 func (s ExecutionService) requireClaim(ctx context.Context) error {
 	if s.claimCheck == nil {

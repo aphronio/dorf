@@ -36,9 +36,9 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	if work := snapshot.Project(); work.Kind != WorkRecordDraft || work.FactID != message.MessageID {
 		t.Fatalf("completed Message work=%#v", work)
 	}
-	draft := Draft{JobID: job.ID, MessageID: message.MessageID, ArtifactID: "artifact-draft"}
+	draft := Draft{JobID: job.ID, MessageID: message.MessageID, AgentRunID: "agent-run-draft", Content: "draft\n"}
 	snapshot.Drafts = []Draft{draft}
-	if work := snapshot.Project(); work.Kind != WorkWaitInput || work.FactID != draft.ArtifactID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
+	if work := snapshot.Project(); work.Kind != WorkWaitInput || work.FactID != draft.MessageID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
 		t.Fatalf("waiting work=%#v", work)
 	}
 	snapshot.Job.AdmissionOpen = false

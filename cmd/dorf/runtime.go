@@ -52,6 +52,7 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string)
 	}
 	return core.SandboxRuntime{
 		Execution:      resolved.Execution,
+		Files:          resolved.Externals,
 		SandboxProfile: resolved.Profile.SandboxProfile,
 	}, nil
 }
@@ -98,7 +99,7 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 		return investigation.Runtime{}, err
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, resolved.Externals)
-	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot})
+	service := investigation.NewService(workspaceExecutor, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot})
 	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 
@@ -142,7 +143,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string, re
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim).
+	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
 		WithAgentStrategies(workflowAgentStrategies{store: r.store, externals: externals})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},

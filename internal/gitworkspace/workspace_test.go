@@ -108,6 +108,9 @@ func (localSandbox) AttestReview(context.Context, provider.Ownership, provider.R
 func (localSandbox) PutFile(_ context.Context, _ provider.Ownership, path string, contents []byte) error {
 	return os.WriteFile(path, contents, 0o600)
 }
+func (s localSandbox) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
+	return provider.ReadFileViaExec(ctx, owner, s.Workspace(), relativePath, s.Exec)
+}
 func (localSandbox) Endpoint(context.Context, provider.Ownership, int) (provider.Endpoint, error) {
 	return provider.Endpoint{}, nil
 }

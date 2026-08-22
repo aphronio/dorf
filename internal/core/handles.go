@@ -64,6 +64,45 @@ func (h SandboxHandle) Agent() AgentHandle {
 	return AgentHandle{jobID: h.jobID, sandboxID: h.id, application: h.application}
 }
 
+// ReadFile returns the exact bytes of one regular workspace-relative file
+// while holding the Job resource fence. Core does not discover, interpret, or
+// retain the file; callers must read what they need before requesting cleanup.
+func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byte, error) {
+	if h.application == nil || h.application.Store == nil || h.application.SandboxRuntimes == nil || h.jobID == "" || h.id == "" {
+		return nil, fmt.Errorf("Sandbox handle is not bound to Core file access")
+	}
+	if err := provider.ValidateWorkspaceRelativePath(relativePath); err != nil {
+		return nil, err
+	}
+	var contents []byte
+	err := h.application.Store.WithJobFence(ctx, h.jobID, func() error {
+		job, err := h.application.Store.Job(ctx, h.jobID)
+		if err != nil {
+			return err
+		}
+		if job.CleanupState != CleanupPending {
+			return fmt.Errorf("Job %s workspace files are unavailable after cleanup begins", job.ID)
+		}
+		owned, err := h.application.Store.Sandbox(ctx, h.id)
+		if err != nil {
+			return err
+		}
+		if owned.JobID != job.ID || owned.ID != h.id {
+			return fmt.Errorf("Sandbox %s does not belong to Job %s", h.id, job.ID)
+		}
+		runtime, err := h.application.SandboxRuntimes.ResolveSandbox(ctx, job.SandboxProfile)
+		if err != nil {
+			return fmt.Errorf("resolve Sandbox profile %q for file read: %w", job.SandboxProfile, err)
+		}
+		if runtime.SandboxProfile != job.SandboxProfile || runtime.Files == nil {
+			return fmt.Errorf("Sandbox runtime does not provide file access for Job profile %q", job.SandboxProfile)
+		}
+		contents, err = runtime.Files.ReadSandboxFile(ctx, job, owned, relativePath)
+		return err
+	})
+	return contents, err
+}
+
 func (a Application) OpenJob(ctx context.Context, id string) (JobHandle, error) {
 	id = strings.TrimSpace(id)
 	job, err := a.Store.Job(ctx, id)

@@ -132,7 +132,7 @@ func gitObservationEvidence(t *testing.T, store blob.Store, job Job, message Mes
 
 func reviewObservationEvidence(t *testing.T, store blob.Store, run ReviewRunView, checkout ReviewCheckoutObservation) core.Evidence {
 	t.Helper()
-	contents, err := json.Marshal(reviewObservationArtifact{
+	contents, err := json.Marshal(reviewObservationPayload{
 		AgentRunID: run.ID, Revision: run.InputRevision, Role: run.Role, Capability: run.Capability,
 		Harness: run.Harness, ThreadID: run.ThreadID, TurnID: run.TurnID, TurnOutcome: run.Outcome, Checkout: checkout,
 	})

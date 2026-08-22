@@ -8,7 +8,6 @@ package dbsql
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/aphronio/dorf/internal/core"
 )
@@ -102,7 +101,7 @@ func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID stri
 const getLatestInvestigationRunAndDraft = `-- name: GetLatestInvestigationRunAndDraft :one
 select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
        coalesce(ar.thread_id,'') as thread_id,ar.state,
-       coalesce(d.artifact_id,'') as artifact_id
+       coalesce(d.agent_run_id,'') as draft_agent_run_id
 from dorf.agent_runs ar
 join dorf.job_messages m on m.id=ar.message_id
 left join dorf.codebase_investigation_drafts d
@@ -113,11 +112,11 @@ limit 1
 `
 
 type GetLatestInvestigationRunAndDraftRow struct {
-	AgentRunID string
-	Harness    string
-	ThreadID   string
-	State      core.AgentRunState
-	ArtifactID string
+	AgentRunID      string
+	Harness         string
+	ThreadID        string
+	State           core.AgentRunState
+	DraftAgentRunID string
 }
 
 func (q *Queries) GetLatestInvestigationRunAndDraft(ctx context.Context, jobID string) (GetLatestInvestigationRunAndDraftRow, error) {
@@ -128,14 +127,14 @@ func (q *Queries) GetLatestInvestigationRunAndDraft(ctx context.Context, jobID s
 		&i.Harness,
 		&i.ThreadID,
 		&i.State,
-		&i.ArtifactID,
+		&i.DraftAgentRunID,
 	)
 	return i, err
 }
 
 const insertCodebaseInvestigationDraft = `-- name: InsertCodebaseInvestigationDraft :execrows
 insert into dorf.codebase_investigation_drafts(
-    job_id,agent_run_id,artifact_id
+    job_id,agent_run_id,content
 ) values(
     $1,$2,$3
 )
@@ -145,11 +144,11 @@ on conflict(job_id,agent_run_id) do nothing
 type InsertCodebaseInvestigationDraftParams struct {
 	JobID      string
 	AgentRunID string
-	ArtifactID string
+	Content    string
 }
 
 func (q *Queries) InsertCodebaseInvestigationDraft(ctx context.Context, arg InsertCodebaseInvestigationDraftParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDraft, arg.JobID, arg.AgentRunID, arg.ArtifactID)
+	result, err := q.db.ExecContext(ctx, insertCodebaseInvestigationDraft, arg.JobID, arg.AgentRunID, arg.Content)
 	if err != nil {
 		return 0, err
 	}
@@ -191,21 +190,20 @@ func (q *Queries) InsertCodebaseInvestigationSource(ctx context.Context, arg Ins
 }
 
 const listCodebaseInvestigationDrafts = `-- name: ListCodebaseInvestigationDrafts :many
-select d.job_id,d.agent_run_id,ar.message_id,d.artifact_id,a.created_at
+select d.job_id,d.agent_run_id,ar.message_id,d.content,ar.finished_at
 from dorf.codebase_investigation_drafts d
-join dorf.artifacts a on a.job_id=d.job_id and a.id=d.artifact_id
 join dorf.agent_runs ar on ar.job_id=d.job_id and ar.id=d.agent_run_id
 join dorf.job_messages m on m.id=ar.message_id
 where d.job_id=$1
-order by m.sequence,d.artifact_id
+order by m.sequence,d.agent_run_id
 `
 
 type ListCodebaseInvestigationDraftsRow struct {
 	JobID      string
 	AgentRunID string
 	MessageID  string
-	ArtifactID string
-	CreatedAt  time.Time
+	Content    string
+	FinishedAt sql.NullTime
 }
 
 func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]ListCodebaseInvestigationDraftsRow, error) {
@@ -221,8 +219,8 @@ func (q *Queries) ListCodebaseInvestigationDrafts(ctx context.Context, jobID str
 			&i.JobID,
 			&i.AgentRunID,
 			&i.MessageID,
-			&i.ArtifactID,
-			&i.CreatedAt,
+			&i.Content,
+			&i.FinishedAt,
 		); err != nil {
 			return nil, err
 		}

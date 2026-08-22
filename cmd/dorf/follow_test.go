@@ -178,7 +178,7 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 			Kind: core.ActionSandboxCreate, State: core.ActionSucceeded,
 			CreatedAt: base.Add(time.Minute), SettledAt: base.Add(2 * time.Minute),
 		}},
-		Drafts: []investigation.Draft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
+		Drafts: []investigation.Draft{{MessageID: "message-draft", AgentRunID: "agent-run-draft", Content: "draft\n", CreatedAt: base.Add(9 * time.Minute)}},
 	}
 	deliveries := []core.Delivery{{AgentRun: core.AgentRun{
 		Role: "investigate", State: core.AgentRunCompleted,
