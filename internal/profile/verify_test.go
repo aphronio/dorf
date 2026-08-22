@@ -17,6 +17,9 @@ type verificationStore struct {
 	verification core.ProfileVerification
 	errorDetail  string
 	cleanupErr   error
+	lockErr      error
+	lockCalls    int
+	beginCalls   int
 }
 
 func newVerificationStore() *verificationStore {
@@ -29,7 +32,16 @@ func newVerificationStore() *verificationStore {
 	}
 }
 
+func (s *verificationStore) WithSandboxProfileVerification(ctx context.Context, _ string, work func(context.Context) error) error {
+	s.lockCalls++
+	if s.lockErr != nil {
+		return s.lockErr
+	}
+	return work(ctx)
+}
+
 func (s *verificationStore) BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error) {
+	s.beginCalls++
 	if !s.verification.ProbeCompletedAt.IsZero() && !s.verification.CleanedAt.IsZero() {
 		s.verification = core.ProfileVerification{
 			ProfileName: s.profile.Name, ContractVersion: core.BaseProfileContract,
@@ -38,6 +50,19 @@ func (s *verificationStore) BeginSandboxProfileVerification(context.Context, str
 	}
 	s.profile.Verification = &s.verification
 	return s.profile, s.verification, nil
+}
+
+func TestVerifyBaseRefusesBeforeBeginningWithoutExclusiveOwnership(t *testing.T) {
+	store := newVerificationStore()
+	store.lockErr = errors.New("Sandbox profile verification is already running")
+	runtimeBuilt := false
+	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) {
+		runtimeBuilt = true
+		return &verificationSandbox{}, nil
+	}, store.profile.Name)
+	if err == nil || !strings.Contains(err.Error(), "already running") || store.lockCalls != 1 || store.beginCalls != 0 || runtimeBuilt {
+		t.Fatalf("lock calls=%d begin calls=%d runtime built=%v err=%v", store.lockCalls, store.beginCalls, runtimeBuilt, err)
+	}
 }
 func (s *verificationStore) RecordSandboxProfileProbe(_ context.Context, verification core.ProfileVerification, version string) error {
 	s.verification = verification

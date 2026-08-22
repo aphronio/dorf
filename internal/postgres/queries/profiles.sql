@@ -55,7 +55,7 @@ from dorf.sandbox_profiles p
 join dorf.sandbox_profile_verifications v on v.profile_name=p.name
 where p.name=sqlc.arg(name) and v.contract_version=sqlc.arg(contract_version)
   and v.probe_completed_at is not null and v.cleaned_at is not null and v.last_error is null
-for key share of p;
+for key share of p,v;
 
 -- name: LockSandboxProfile :one
 select name,provider,harness,artifact,

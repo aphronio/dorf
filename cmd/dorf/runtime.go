@@ -35,7 +35,7 @@ type profileRuntimeResolver struct {
 }
 
 func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (core.CleanupRuntime, error) {
-	resolved, err := r.resolveBase(ctx, name, false)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return core.CleanupRuntime{}, err
 	}
@@ -46,7 +46,7 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 }
 
 func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string) (core.SandboxRuntime, error) {
-	resolved, err := r.resolveBase(ctx, name, true)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return core.SandboxRuntime{}, err
 	}
@@ -58,7 +58,7 @@ func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string)
 }
 
 func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (coding.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name, true)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return coding.Runtime{}, err
 	}
@@ -94,7 +94,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 }
 
 func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name, true)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
@@ -111,13 +111,14 @@ type resolvedBaseRuntime struct {
 	Ownership func(context.Context, string) (provider.Ownership, error)
 }
 
-func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string, requireVerified bool) (resolvedBaseRuntime, error) {
+// Runtime resolution is downstream of Job admission. The Job's immutable
+// reference to this definition remains usable while a later verification
+// receipt is unsettled or failed; only new admission and default selection
+// consult that live eligibility receipt.
+func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (resolvedBaseRuntime, error) {
 	profile, err := r.store.SandboxProfile(ctx, name)
 	if err != nil {
 		return resolvedBaseRuntime{}, err
-	}
-	if requireVerified && !profile.BaseVerified() {
-		return resolvedBaseRuntime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, core.BaseProfileContract)
 	}
 	sandbox, err := sandboxForProfile(r.cfg, profile)
 	if err != nil {

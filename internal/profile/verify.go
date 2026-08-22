@@ -13,6 +13,7 @@ import (
 )
 
 type Store interface {
+	WithSandboxProfileVerification(context.Context, string, func(context.Context) error) error
 	BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error)
 	RecordSandboxProfileProbe(context.Context, core.ProfileVerification, string) error
 	RecordSandboxProfileVerificationCleanup(context.Context, core.ProfileVerification) error
@@ -28,6 +29,16 @@ type RuntimeFactory func(core.SandboxProfile) (provider.Sandbox, error)
 // settled verification; a retry of an interrupted attempt reuses its durable
 // ownership identity.
 func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
+	var verified core.SandboxProfile
+	err := store.WithSandboxProfileVerification(ctx, name, func(ctx context.Context) error {
+		var err error
+		verified, err = verifyBaseExclusive(ctx, store, runtimeForProfile, name)
+		return err
+	})
+	return verified, err
+}
+
+func verifyBaseExclusive(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
 	profile, verification, err := store.BeginSandboxProfileVerification(ctx, name)
 	if err != nil {
 		return core.SandboxProfile{}, err

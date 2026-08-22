@@ -595,6 +595,150 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 }
 
+func TestSandboxProfileVerificationHasOneOwnerAndReleasesAfterCrash(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	name := fmt.Sprintf("verify-owner-%d", time.Now().UnixNano())
+	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("d", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type verificationResult struct {
+		verification core.ProfileVerification
+		err          error
+	}
+	entered := make(chan verificationResult, 1)
+	release := make(chan struct{})
+	firstDone := make(chan verificationResult, 1)
+	go func() {
+		var attempt core.ProfileVerification
+		err := store.WithSandboxProfileVerification(ctx, name, func(ctx context.Context) error {
+			_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+			if err != nil {
+				entered <- verificationResult{err: err}
+				return err
+			}
+			attempt = verification
+			entered <- verificationResult{verification: verification}
+			<-release
+			return errors.New("verification worker stopped")
+		})
+		firstDone <- verificationResult{verification: attempt, err: err}
+	}()
+	started := <-entered
+	if started.err != nil {
+		close(release)
+		t.Fatal(started.err)
+	}
+	first := started.verification
+	contenderRan := false
+	if err := store.WithSandboxProfileVerification(ctx, name, func(context.Context) error {
+		contenderRan = true
+		return nil
+	}); err == nil || !strings.Contains(err.Error(), "already running") || contenderRan {
+		close(release)
+		t.Fatalf("concurrent verification ran=%v err=%v", contenderRan, err)
+	}
+
+	close(release)
+	stopped := <-firstDone
+	if stopped.err == nil || !strings.Contains(stopped.err.Error(), "worker stopped") || stopped.verification != first {
+		t.Fatalf("stopped verification=%#v err=%v", stopped.verification, stopped.err)
+	}
+
+	var resumed core.ProfileVerification
+	if err := store.WithSandboxProfileVerification(ctx, name, func(ctx context.Context) error {
+		_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+		if err != nil {
+			return err
+		}
+		resumed = verification
+		if verification.ProfileName != first.ProfileName || verification.ContractVersion != first.ContractVersion || verification.SandboxID != first.SandboxID || verification.OwnershipNonce != first.OwnershipNonce {
+			return fmt.Errorf("resumed a different verification attempt: first=%#v resumed=%#v", first, verification)
+		}
+		if err := store.RecordSandboxProfileProbe(ctx, verification, "codex resumed"); err != nil {
+			return err
+		}
+		return store.RecordSandboxProfileVerificationCleanup(ctx, verification)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := codingJobInput("verification-fence-"+name, "wait for the exact profile proof", strings.Repeat("a", 40), "dorf/verification-fence")
+	input.SandboxProfile = name
+	job, created, err := store.AdmitCoding(ctx, input)
+	if err != nil || !created || job.SandboxProfile != name || resumed.OwnershipNonce != first.OwnershipNonce {
+		t.Fatalf("admission after resumed verification Job=%#v created=%v resumed=%#v err=%v", job, created, resumed, err)
+	}
+}
+
+func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T) {
+	db, store, _ := testDatabase(t)
+	ctx := context.Background()
+	name := fmt.Sprintf("verify-serial-%d", time.Now().UnixNano())
+	if _, _, err := store.CreateSandboxProfile(ctx, core.SandboxProfile{
+		Name: name, Provider: core.SandboxProviderIncus, Harness: "codex", Artifact: strings.Repeat("f", 64),
+		IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, verification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err == nil {
+		err = store.RecordSandboxProfileProbe(ctx, verification, "codex serial")
+	}
+	if err == nil {
+		err = store.RecordSandboxProfileVerificationCleanup(ctx, verification)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transition, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transition.Rollback()
+	var locked string
+	if err := transition.QueryRowContext(ctx, `select name from dorf.sandbox_profiles where name=$1 for update`, name).Scan(&locked); err != nil || locked != name {
+		t.Fatalf("lock profile=%q err=%v", locked, err)
+	}
+	input := codingJobInput("verification-serialization-"+name, "serialize against verification", strings.Repeat("a", 40), "dorf/verification-serialization")
+	input.SandboxProfile = name
+	type admissionResult struct {
+		created bool
+		err     error
+	}
+	started := make(chan struct{})
+	admitted := make(chan admissionResult, 1)
+	go func() {
+		close(started)
+		_, created, err := store.AdmitCoding(ctx, input)
+		admitted <- admissionResult{created: created, err: err}
+	}()
+	<-started
+	select {
+	case result := <-admitted:
+		t.Fatalf("admission crossed the locked verification transition: %#v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := transition.ExecContext(ctx, `delete from dorf.sandbox_profile_verifications where profile_name=$1`, name); err != nil {
+		t.Fatal(err)
+	}
+	nonce := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	if _, err := transition.ExecContext(ctx, `insert into dorf.sandbox_profile_verifications(profile_name,contract_version,sandbox_id,ownership_nonce) values($1,$2,$3,$4)`, name, core.BaseProfileContract, "transition-"+name, nonce); err != nil {
+		t.Fatal(err)
+	}
+	if err := transition.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	result := <-admitted
+	if result.created || result.err == nil || !strings.Contains(result.err.Error(), core.BaseProfileContract) {
+		t.Fatalf("admission after verification transition=%#v", result)
+	}
+}
+
 func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T) {
 	db, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -643,8 +787,43 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
-	if _, _, err := store.BeginSandboxProfileVerification(ctx, name); err == nil || !strings.Contains(err.Error(), "incomplete cleanup") {
-		t.Fatalf("in-use profile started fresh verification: %v", err)
+	reverifying, activeVerification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil || reverifying.BaseVerified() || activeVerification.OwnershipNonce == refreshedVerification.OwnershipNonce {
+		t.Fatalf("active Job fresh verification profile=%#v receipt=%#v err=%v", reverifying, activeVerification, err)
+	}
+	replayed, created, err := store.AdmitCoding(ctx, input)
+	if err != nil || created || replayed.ID != job.ID {
+		t.Fatalf("existing admission replay during verification Job=%#v created=%v err=%v", replayed, created, err)
+	}
+	fenced := input
+	fenced.AdmissionKey += "-during-reverify"
+	fenced.Branch += "-during-reverify"
+	if _, _, err := store.AdmitCoding(ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+		t.Fatalf("new Job admitted through unsettled verification: %v", err)
+	}
+	verificationFailure := errors.New("transient verification failure")
+	if err := store.RecordSandboxProfileVerificationError(ctx, activeVerification, verificationFailure); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, activeVerification); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AdmitCoding(ctx, fenced); err == nil || !strings.Contains(err.Error(), core.BaseProfileContract) {
+		t.Fatalf("new Job admitted through failed verification: %v", err)
+	}
+	_, retryVerification, err := store.BeginSandboxProfileVerification(ctx, name)
+	if err != nil || retryVerification.OwnershipNonce != activeVerification.OwnershipNonce || !retryVerification.ProbeCompletedAt.IsZero() || !retryVerification.CleanedAt.IsZero() || retryVerification.LastError != "" {
+		t.Fatalf("verification retry receipt=%#v err=%v", retryVerification, err)
+	}
+	if err := store.RecordSandboxProfileProbe(ctx, retryVerification, "pi 0.52.5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSandboxProfileVerificationCleanup(ctx, retryVerification); err != nil {
+		t.Fatal(err)
+	}
+	admittedAfterRetry, created, err := store.AdmitCoding(ctx, fenced)
+	if err != nil || !created || admittedAfterRetry.SandboxProfile != name {
+		t.Fatalf("admission after verification retry Job=%#v created=%v err=%v", admittedAfterRetry, created, err)
 	}
 	sameGateway := profile.E2BGatewayURL
 	unchanged, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &sameGateway})
@@ -655,8 +834,12 @@ func TestSandboxProfilesAreVerifiedDefaultedAndImmutableWhileInUse(t *testing.T)
 	if _, _, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway}); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("in-use profile update error=%v", err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id=$1`, job.ID); err != nil {
+	result, err := db.ExecContext(ctx, `update dorf.jobs set admission_open=false,cleanup_state='complete',cleaned_at=clock_timestamp() where id in ($1,$2)`, job.ID, admittedAfterRetry.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 2 {
+		t.Fatalf("complete profile Jobs rows=%d err=%v", rows, err)
 	}
 	changed, updated, err := store.UpdateSandboxProfile(ctx, name, postgres.SandboxProfilePatch{E2BGatewayURL: &changedGateway})
 	if err != nil || !updated {
