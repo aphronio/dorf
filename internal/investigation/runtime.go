@@ -132,8 +132,6 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 }
 
 func Admit(ctx context.Context, store Store, application core.Application, providers ProviderChecker, runtime profile.Runtime, input Admission) (core.Job, bool, error) {
-	input.Workflow = Workflow
-	input.WorkflowRevision = WorkflowRevision
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
 		exists, err := store.JobExists(ctx, core.JobID(key))

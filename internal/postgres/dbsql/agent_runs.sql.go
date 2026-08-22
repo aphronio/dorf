@@ -372,41 +372,6 @@ func (q *Queries) InsertImplementationAgentRun(ctx context.Context, arg InsertIm
 	return result.RowsAffected()
 }
 
-const insertInvestigationAgentRun = `-- name: InsertInvestigationAgentRun :execrows
-insert into dorf.agent_runs(
-    id,job_id,message_id,role,state,input_revision,capability,sandbox_id
-)
-select $1,j.id,$2,'investigate','pending',
-       $3,'repository-read-report',$4
-from dorf.jobs j
-where j.id=$5
-  and j.workflow_name='codebase-investigation'
-  and j.workflow_revision='2'
-on conflict do nothing
-`
-
-type InsertInvestigationAgentRunParams struct {
-	ID            string
-	MessageID     string
-	InputRevision sql.NullString
-	SandboxID     string
-	JobID         string
-}
-
-func (q *Queries) InsertInvestigationAgentRun(ctx context.Context, arg InsertInvestigationAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertInvestigationAgentRun,
-		arg.ID,
-		arg.MessageID,
-		arg.InputRevision,
-		arg.SandboxID,
-		arg.JobID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const interruptAgentRun = `-- name: InterruptAgentRun :execrows
 update dorf.agent_runs
 set state='interrupted',

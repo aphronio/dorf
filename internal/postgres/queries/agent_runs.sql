@@ -14,18 +14,6 @@ left join lateral (
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
--- name: InsertInvestigationAgentRun :execrows
-insert into dorf.agent_runs(
-    id,job_id,message_id,role,state,input_revision,capability,sandbox_id
-)
-select sqlc.arg(id),j.id,sqlc.arg(message_id),'investigate','pending',
-       sqlc.arg(input_revision),'repository-read-report',sqlc.arg(sandbox_id)
-from dorf.jobs j
-where j.id=sqlc.arg(job_id)
-  and j.workflow_name='codebase-investigation'
-  and j.workflow_revision='2'
-on conflict do nothing;
-
 -- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
     id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
