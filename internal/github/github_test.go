@@ -38,6 +38,16 @@ func TestAuthorityRequiresCanonicalRepositoryInstallationBaseAndDistinctHead(t *
 	}
 }
 
+func TestVerifyPermissionFloorIsLeastPrivilegeAndOpenToNativeNames(t *testing.T) {
+	permissions, err := verifyPermissions(map[string]string{"custom_permission": "read"}, true)
+	if err != nil || len(permissions) != 3 || permissions["metadata"] != "read" || permissions["contents"] != "read" || permissions["custom_permission"] != "read" {
+		t.Fatalf("permissions=%v err=%v", permissions, err)
+	}
+	if _, err := verifyPermissions(map[string]string{"custom_permission": "admin"}, false); err == nil {
+		t.Fatal("unsupported level accepted")
+	}
+}
+
 func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -45,12 +55,10 @@ func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *test
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
-	metadataPath, keyPath := filepath.Join(directory, "config.json"), filepath.Join(directory, "private-key.pem")
-	if err := os.WriteFile(metadataPath, []byte(`{"app_id":"7"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	credentialsPath := filepath.Join(directory, "credentials.json")
 	encoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	if err := os.WriteFile(keyPath, encoded, 0o600); err != nil {
+	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(encoded)})
+	if err := os.WriteFile(credentialsPath, bundle, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -70,12 +78,12 @@ func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *test
 		_, _ = w.Write([]byte(`{"token":"ephemeral-installation-token","expires_at":"2026-08-08T12:55:00Z","permissions":{"contents":"write"},"repositories":[{"full_name":"aphronio/dorf"}]}`))
 	}))
 	defer server.Close()
-	client := Client{APIURL: server.URL, HTTP: server.Client(), Metadata: metadataPath, PrivateKey: keyPath, Now: func() time.Time { return now }}
+	client := Client{APIURL: server.URL, HTTP: server.Client(), Credentials: credentialsPath, Now: func() time.Time { return now }}
 	token, err := client.PushToken(context.Background(), Authority{"aphronio/dorf", "42"})
 	if err != nil || token != "ephemeral-installation-token" {
 		t.Fatalf("token=%q err=%v", token, err)
 	}
-	if err := os.Chmod(keyPath, 0o644); err != nil {
+	if err := os.Chmod(credentialsPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.PushToken(context.Background(), Authority{"aphronio/dorf", "42"}); err == nil {

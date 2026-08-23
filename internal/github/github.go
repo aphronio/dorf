@@ -16,7 +16,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"regexp"
 	"strconv"
@@ -29,6 +28,7 @@ const apiVersion = "2022-11-28"
 var (
 	canonicalRepository = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$`)
 	installationID      = regexp.MustCompile(`^[1-9][0-9]*$`)
+	permissionName      = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
 type Authority struct {
@@ -137,12 +137,11 @@ func (c Client) CreateIssueComment(ctx context.Context, authority Authority, num
 }
 
 type Client struct {
-	APIURL     string
-	Metadata   string
-	PrivateKey string
-	HTTP       *http.Client
-	Now        func() time.Time
-	Mint       func(context.Context, Authority, string, string) (string, error)
+	APIURL      string
+	Credentials string
+	HTTP        *http.Client
+	Now         func() time.Time
+	Mint        func(context.Context, Authority, string, string) (string, error)
 }
 
 func ValidateAuthority(cloneURL, repository, installation, base, head string) error {
@@ -205,6 +204,10 @@ func (c Client) RemoteHead(ctx context.Context, authority Authority, branch stri
 	if err != nil {
 		return "", false, err
 	}
+	return c.remoteHead(ctx, token, authority, branch)
+}
+
+func (c Client) remoteHead(ctx context.Context, token string, authority Authority, branch string) (string, bool, error) {
 	var payload struct {
 		Object struct {
 			SHA string `json:"sha"`
@@ -225,6 +228,58 @@ func (c Client) RemoteHead(ctx context.Context, authority Authority, branch stri
 
 func (c Client) PushToken(ctx context.Context, authority Authority) (string, error) {
 	return c.mint(ctx, authority, "contents", "write")
+}
+
+// Verify proves exact repository and installation authority at the caller's
+// explicit native GitHub permission floor. A base branch is optional.
+func (c Client) Verify(ctx context.Context, authority Authority, base string, requested map[string]string) (string, map[string]string, error) {
+	if !canonicalRepository.MatchString(authority.Repository) {
+		return "", nil, fmt.Errorf("canonical GitHub repository must be lower-case owner/repository")
+	}
+	if !installationID.MatchString(authority.InstallationID) {
+		return "", nil, fmt.Errorf("GitHub App installation identity must be a positive decimal integer")
+	}
+	permissions, err := verifyPermissions(requested, base != "")
+	if err != nil {
+		return "", nil, err
+	}
+	if base != "" {
+		if err := validateBranch(base); err != nil {
+			return "", nil, fmt.Errorf("invalid explicit GitHub base branch: %w", err)
+		}
+	}
+	token, err := c.mintInstallationTokenPermissions(ctx, authority, permissions)
+	if err != nil {
+		return "", nil, err
+	}
+	if base == "" {
+		return "", permissions, nil
+	}
+	revision, exists, err := c.remoteHead(ctx, token, authority, base)
+	if err != nil {
+		return "", nil, err
+	}
+	if !exists {
+		return "", nil, fmt.Errorf("GitHub base branch %q was not found in %s through installation %s", base, authority.Repository, authority.InstallationID)
+	}
+	return revision, permissions, nil
+}
+
+func verifyPermissions(requested map[string]string, needsContents bool) (map[string]string, error) {
+	permissions := make(map[string]string, len(requested)+2)
+	for name, level := range requested {
+		if !permissionName.MatchString(name) || (level != "read" && level != "write") {
+			return nil, fmt.Errorf("unsupported GitHub permission requirement %s:%s", name, level)
+		}
+		permissions[name] = level
+	}
+	if !permissionAtLeast(permissions["metadata"], "read") {
+		permissions["metadata"] = "read"
+	}
+	if needsContents && !permissionAtLeast(permissions["contents"], "read") {
+		permissions["contents"] = "read"
+	}
+	return permissions, nil
 }
 
 func (c Client) PullRequests(ctx context.Context, authority Authority, owner, head string) ([]PullRequest, error) {
@@ -335,22 +390,24 @@ func (c Client) mint(ctx context.Context, authority Authority, permission, level
 }
 
 func (c Client) mintInstallationToken(ctx context.Context, authority Authority, permission, level string) (string, error) {
-	metadata, err := os.ReadFile(c.Metadata)
+	return c.mintInstallationTokenPermissions(ctx, authority, map[string]string{permission: level})
+}
+
+func (c Client) mintInstallationTokenPermissions(ctx context.Context, authority Authority, permissions map[string]string) (string, error) {
+	credentials, err := readProtectedFile(c.Credentials, "GitHub credentials")
 	if err != nil {
-		return "", fmt.Errorf("read GitHub App control-plane metadata: %w", err)
+		return "", err
 	}
-	var config struct {
-		AppID string `json:"app_id"`
+	var bundle credentialBundle
+	if err := json.Unmarshal(credentials, &bundle); err != nil || !installationID.MatchString(bundle.AppID) || bundle.PrivateKey == "" {
+		return "", fmt.Errorf("GitHub credential bundle is invalid")
 	}
-	if err := json.Unmarshal(metadata, &config); err != nil || !installationID.MatchString(config.AppID) {
-		return "", fmt.Errorf("GitHub App control-plane metadata has no valid app_id")
-	}
-	jwt, err := appJWT(config.AppID, c.PrivateKey, c.now())
+	jwt, err := appJWT(bundle.AppID, []byte(bundle.PrivateKey), c.now())
 	if err != nil {
 		return "", err
 	}
 	repositoryName := strings.SplitN(authority.Repository, "/", 2)[1]
-	body := map[string]any{"repositories": []string{repositoryName}, "permissions": map[string]string{permission: level}}
+	body := map[string]any{"repositories": []string{repositoryName}, "permissions": permissions}
 	var response struct {
 		Token        string            `json:"token"`
 		ExpiresAt    string            `json:"expires_at"`
@@ -365,10 +422,34 @@ func (c Client) mintInstallationToken(ctx context.Context, authority Authority, 
 	}
 	expiresAt, expiryErr := time.Parse(time.RFC3339, response.ExpiresAt)
 	now := c.now()
-	if response.Token == "" || expiryErr != nil || !expiresAt.After(now) || expiresAt.After(now.Add(65*time.Minute)) || !permissionAtLeast(response.Permissions[permission], level) || len(response.Repositories) != 1 || strings.ToLower(response.Repositories[0].FullName) != authority.Repository {
-		return "", fmt.Errorf("GitHub App token did not prove the exact repository and minimum %s:%s permission", permission, level)
+	validPermissions := true
+	for permission, level := range permissions {
+		validPermissions = validPermissions && permissionAtLeast(response.Permissions[permission], level)
+	}
+	if response.Token == "" || expiryErr != nil || !expiresAt.After(now) || expiresAt.After(now.Add(65*time.Minute)) || !validPermissions || len(response.Repositories) != 1 || strings.ToLower(response.Repositories[0].FullName) != authority.Repository {
+		return "", fmt.Errorf("GitHub App token did not prove the exact repository and required permissions")
 	}
 	return response.Token, nil
+}
+
+func (c Client) verifyAppIdentity(ctx context.Context, appID string, key []byte) error {
+	if !installationID.MatchString(appID) {
+		return fmt.Errorf("GitHub App ID must be a positive decimal integer")
+	}
+	jwt, err := appJWT(appID, key, c.now())
+	if err != nil {
+		return err
+	}
+	var payload struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := c.request(ctx, jwt, http.MethodGet, "/app", nil, &payload); err != nil {
+		return fmt.Errorf("verify GitHub App identity: %w", err)
+	}
+	if payload.ID < 1 || strconv.FormatInt(payload.ID, 10) != appID {
+		return fmt.Errorf("GitHub App private key does not prove App ID %s", appID)
+	}
+	return nil
 }
 
 func (c Client) request(ctx context.Context, token, method, endpoint string, body any, output any) (int, error) {
@@ -425,31 +506,10 @@ func (c Client) request(ctx context.Context, token, method, endpoint string, bod
 	return response.StatusCode, nil
 }
 
-func appJWT(appID, keyPath string, now time.Time) (string, error) {
-	info, err := os.Lstat(keyPath)
+func appJWT(appID string, keyPEM []byte, now time.Time) (string, error) {
+	key, err := parsePrivateKey(keyPEM)
 	if err != nil {
-		return "", fmt.Errorf("inspect GitHub App private key: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("GitHub App private key must be a regular control-plane file with no group or other permissions")
-	}
-	contents, err := os.ReadFile(keyPath)
-	if err != nil {
-		return "", fmt.Errorf("read GitHub App private key: %w", err)
-	}
-	block, _ := pem.Decode(contents)
-	if block == nil {
-		return "", fmt.Errorf("GitHub App private key is not PEM")
-	}
-	var key *rsa.PrivateKey
-	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err == nil {
-		key, _ = parsed.(*rsa.PrivateKey)
-	} else if parsedPKCS1, pkcs1Err := x509.ParsePKCS1PrivateKey(block.Bytes); pkcs1Err == nil {
-		key = parsedPKCS1
-	}
-	if key == nil {
-		return "", fmt.Errorf("GitHub App private key is not RSA")
+		return "", err
 	}
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
 	payload, _ := json.Marshal(map[string]any{"iat": now.Unix() - 60, "exp": now.Unix() + 540, "iss": appID})
@@ -460,6 +520,34 @@ func appJWT(appID, keyPath string, now time.Time) (string, error) {
 		return "", fmt.Errorf("sign GitHub App JWT: %w", err)
 	}
 	return signing + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+}
+
+func canonicalPrivateKey(contents []byte) ([]byte, error) {
+	key, err := parsePrivateKey(contents)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("encode GitHub App private key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}), nil
+}
+
+func parsePrivateKey(contents []byte) (*rsa.PrivateKey, error) {
+	block, rest := pem.Decode(contents)
+	if block == nil || strings.TrimSpace(string(rest)) != "" || (block.Type != "PRIVATE KEY" && block.Type != "RSA PRIVATE KEY") {
+		return nil, fmt.Errorf("GitHub App private key must contain exactly one RSA PEM block")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	key, _ := parsed.(*rsa.PrivateKey)
+	if err != nil {
+		key, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+	}
+	if err != nil || key == nil || key.Validate() != nil {
+		return nil, fmt.Errorf("GitHub App private key is not valid RSA")
+	}
+	return key, nil
 }
 
 func permissionAtLeast(got, want string) bool {

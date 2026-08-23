@@ -2415,3 +2415,28 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Proof:** Unit and PostgreSQL coverage preserve prompt ownership, completed-run follow admission,
   same-Thread distinct Turns, open-idle task recovery, explicit cleanup ordering, exact pre-cleanup
   file reads, and post-cleanup unavailability while deleting all Draft persistence.
+
+## D093 — GitHub authentication is an optional deployment integration
+
+- **Status:** Accepted module boundary refinement — 2026-08-23
+- **Decision:** Refine D015's coding-branch authentication framing into one optional GitHub
+  integration composed beside Core. The deployment owns one protected GitHub App credential bundle
+  and uses it to mint short-lived repository-scoped tokens. `dorf setup` remains the shared
+  control-plane foundation; GitHub credentials are installed separately. A workflow or trusted
+  direct client supplies the exact repository, installation, base when needed, and native permission
+  floor for each use. Core and Sandbox profiles receive no GitHub knowledge or ambient authority.
+- **Verification:** Integration setup proves that the protected private key belongs to the declared
+  App before atomically installing or explicitly replacing the bundle. Per-use verification proves
+  the named installation can access the exact repository with the requested native permissions;
+  metadata read is always included, and naming a base also proves contents read and resolves its
+  exact Revision. The current coding workflow requires contents write, issues read, pull-requests
+  write, and an exact base. Plain Git access to public or retained input needs no GitHub App.
+- **Authority:** This does not move repository authority into deployment configuration. D060 remains
+  the coding Job authority for its immutable repository, installation, base, and head. Another
+  workflow or direct client owns its own accepted per-use scope while reusing the same integration.
+- **Why:** GitHub authentication and token minting are useful outside one native workflow, but are
+  not generic execution custody. Separating deployment credentials from consumer scope makes the
+  reuse explicit without leaking GitHub into Core or treating global setup as workflow setup.
+- **Reconsider when:** Multiple App identities per deployment are required, another source host
+  earns a common integration contract, or a real consumer needs authority that cannot be expressed
+  as an exact repository, installation, and native permission floor.

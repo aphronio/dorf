@@ -8,31 +8,29 @@ import (
 	"time"
 )
 
-func TestLoadUsesSetupOwnedXDGAppJSON(t *testing.T) {
+func TestLoadUsesOneSetupOwnedGitHubCredentialBundle(t *testing.T) {
 	configHome := t.TempDir()
-	metadata := filepath.Join(configHome, "dorf", "github-app", "app.json")
-	if err := os.MkdirAll(filepath.Dir(metadata), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(metadata, []byte(`{"app_id":"7","installation_id":"42"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
-	t.Setenv("DORF_GITHUB_APP_METADATA", "")
-	t.Setenv("DORF_GITHUB_APP_PRIVATE_KEY", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(configHome, "dorf", "github-app", "app.json"); cfg.GitHubMetadata != want {
-		t.Fatalf("GitHub metadata=%q want setup authority %q", cfg.GitHubMetadata, want)
+	if want := filepath.Join(configHome, "dorf", "integrations", "github", "credentials.json"); cfg.GitHubCredentials != want {
+		t.Fatalf("GitHub credentials=%q want=%q", cfg.GitHubCredentials, want)
 	}
-	if contents, err := os.ReadFile(cfg.GitHubMetadata); err != nil || !strings.Contains(string(contents), `"app_id":"7"`) {
-		t.Fatalf("configured app.json contents=%q err=%v", contents, err)
+}
+
+func TestLoadRejectsRelativeGitHubCredentialsAndInexactAPIURL(t *testing.T) {
+	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
+	t.Setenv("DORF_GITHUB_CREDENTIALS", "relative-github/credentials.json")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must be an absolute") {
+		t.Fatalf("relative credential error=%v", err)
 	}
-	if want := filepath.Join(configHome, "dorf", "github-app", "private-key.pem"); cfg.GitHubPrivateKey != want {
-		t.Fatalf("GitHub private key=%q want %q", cfg.GitHubPrivateKey, want)
+	t.Setenv("DORF_GITHUB_CREDENTIALS", filepath.Join(t.TempDir(), "credentials.json"))
+	t.Setenv("DORF_GITHUB_API_URL", "https://example.test/api?")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "exact HTTPS URL") {
+		t.Fatalf("inexact API URL error=%v", err)
 	}
 }
 

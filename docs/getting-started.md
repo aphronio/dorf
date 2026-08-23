@@ -71,22 +71,42 @@ The separate `profile` and `provider` commands remain available for custom artif
 operations. Their exact-artifact, credential, and route boundaries are described by the
 [release process](releasing.md) and [Provider Gateway](project/provider-gateway.md).
 
-## 2. Prove GitHub and repository authority
+## 2. Set up the optional GitHub integration
 
-Configure a GitHub App with metadata-read, issues-read, contents-write, and pull-requests-write
-access to the selected repository. Keep its metadata and private key at the paths reported by
-`dorf doctor`, or set `DORF_GITHUB_APP_METADATA` and `DORF_GITHUB_APP_PRIVATE_KEY`.
+Skip this section when a client or workflow needs only plain Git access, such as cloning a public
+repository or consuming retained Git input. A GitHub App is required for authenticated GitHub API
+or repository operations.
+
+Create or reuse a GitHub App, install it on only the repositories this deployment may use, and
+download a private key. Protect the downloaded file, then install its App identity as the
+deployment's one GitHub credential bundle:
 
 ```bash
-dorf doctor \
-  --profile local-codex \
-  --repo https://github.com/OWNER/REPOSITORY.git \
-  --github-repo OWNER/REPOSITORY \
-  --github-installation INSTALLATION_ID \
-  --base main
+chmod 600 /protected/path/github-app.private-key.pem
+dorf integration github setup \
+  --app-id APP_ID \
+  --private-key /protected/path/github-app.private-key.pem
 ```
 
-Every failed fact includes a remediation.
+Setup proves that the key belongs to the declared App and installs a protected copy in deployment
+configuration. Repeating the same setup converges; replacing a different identity requires explicit
+interactive approval or `--yes`.
+
+Each workflow or direct client then proves only the GitHub authority it will use. The current coding
+workflow needs an exact base plus contents-write, issues-read, and pull-requests-write:
+
+```bash
+dorf integration github verify \
+  --repo OWNER/REPOSITORY \
+  --installation INSTALLATION_ID \
+  --base main \
+  --require contents:write \
+  --require issues:read \
+  --require pull_requests:write
+```
+
+Metadata-read is implicit. Supplying `--base` also requires contents-read and proves the branch's
+exact Revision. Other consumers should omit the base or permissions they do not need.
 
 ## 3. Run a coding Job
 
