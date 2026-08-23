@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="assets/cover.png">
+  <img alt="Workers continuing their jobs inside isolated Rooms in the Dorf village" src="assets/cover.gif">
+</picture>
+
 # Dorf
 
 **Dorf is the open-source control plane for running agent harnesses on infrastructure you control.**
