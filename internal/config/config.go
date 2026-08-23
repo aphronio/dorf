@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,18 +18,17 @@ const (
 )
 
 type Config struct {
-	DatabaseURL      string
-	DatabaseExternal bool
-	DeploymentPath   string
-	GatewayStatePath string
-	Workspace        string
-	AppServerPort    int
-	TurnTimeout      time.Duration
-	BlobRoot         string
-	GitHubMetadata   string
-	GitHubPrivateKey string
-	GitHubAPIURL     string
-	E2BAPIKey        string
+	DatabaseURL       string
+	DatabaseExternal  bool
+	DeploymentPath    string
+	GatewayStatePath  string
+	Workspace         string
+	AppServerPort     int
+	TurnTimeout       time.Duration
+	BlobRoot          string
+	GitHubCredentials string
+	GitHubAPIURL      string
+	E2BAPIKey         string
 }
 
 func Load() (Config, error) {
@@ -38,16 +38,15 @@ func Load() (Config, error) {
 	}
 	deploymentPath := deployment.Path(home)
 	cfg := Config{
-		DeploymentPath:   deploymentPath,
-		GatewayStatePath: value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
-		Workspace:        "/workspace/job",
-		AppServerPort:    4500,
-		TurnTimeout:      45 * time.Minute,
-		BlobRoot:         value("DORF_BLOB_ROOT", filepath.Join(home, ".local", "state", "dorf", "blobs")),
-		GitHubMetadata:   value("DORF_GITHUB_APP_METADATA", filepath.Join(configHome(home), "dorf", "github-app", "app.json")),
-		GitHubPrivateKey: value("DORF_GITHUB_APP_PRIVATE_KEY", filepath.Join(configHome(home), "dorf", "github-app", "private-key.pem")),
-		GitHubAPIURL:     value("DORF_GITHUB_API_URL", "https://api.github.com"),
-		E2BAPIKey:        strings.TrimSpace(os.Getenv("E2B_API_KEY")),
+		DeploymentPath:    deploymentPath,
+		GatewayStatePath:  value("DORF_PROVIDER_GATEWAY_STATE", filepath.Join(dataHome(home), "dorf", "provider-gateway")),
+		Workspace:         "/workspace/job",
+		AppServerPort:     4500,
+		TurnTimeout:       45 * time.Minute,
+		BlobRoot:          value("DORF_BLOB_ROOT", filepath.Join(home, ".local", "state", "dorf", "blobs")),
+		GitHubCredentials: value("DORF_GITHUB_CREDENTIALS", filepath.Join(configHome(home), "dorf", "integrations", "github", "credentials.json")),
+		GitHubAPIURL:      value("DORF_GITHUB_API_URL", "https://api.github.com"),
+		E2BAPIKey:         strings.TrimSpace(os.Getenv("E2B_API_KEY")),
 	}
 	if raw := strings.TrimSpace(os.Getenv("DORF_DATABASE_URL")); raw != "" {
 		cfg.DatabaseURL = raw
@@ -72,6 +71,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("resolve Provider Gateway state locator: %w", err)
 	}
 	cfg.GatewayStatePath = filepath.Clean(cfg.GatewayStatePath)
+	if !filepath.IsAbs(cfg.GitHubCredentials) {
+		return Config{}, fmt.Errorf("DORF_GITHUB_CREDENTIALS must be an absolute deployment-owned path")
+	}
+	cfg.GitHubCredentials = filepath.Clean(cfg.GitHubCredentials)
+	githubAPI, parseErr := url.Parse(cfg.GitHubAPIURL)
+	if parseErr != nil || githubAPI.Scheme != "https" || githubAPI.Host == "" || githubAPI.User != nil || githubAPI.RawQuery != "" || githubAPI.ForceQuery || githubAPI.Fragment != "" || githubAPI.Opaque != "" {
+		return Config{}, fmt.Errorf("DORF_GITHUB_API_URL must be an exact HTTPS URL without user info, query, or fragment")
+	}
 	if !filepath.IsAbs(cfg.BlobRoot) {
 		return Config{}, fmt.Errorf("DORF_BLOB_ROOT must be an absolute deployment-owned path")
 	}

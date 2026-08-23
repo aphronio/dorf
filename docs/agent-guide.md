@@ -43,7 +43,10 @@ attention, caller-requested output, and cleanup facts.
    dorf doctor --profile PROFILE
    ```
 
-   A repository Job needs the additional GitHub authority checks documented in Getting started.
+   When the requested operation needs an optional external integration, use that integration's
+   setup and verification commands after the shared foundation is ready. Let the human supply its
+   credentials and approve its exact authority; do not treat optional integration setup as part of
+   `dorf setup` or a Sandbox profile.
 
 ## Operating protocol
 

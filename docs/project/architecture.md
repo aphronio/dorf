@@ -190,6 +190,13 @@ in the [North Star](north-star.md), while concrete behavior lives in code and it
 Git, coding, GitHub, publication, and human-in-the-loop behavior are workflow/module/client policy.
 They may use the Sandbox and Agent handles but are not Core capabilities or provider behavior.
 
+Reusable external-authority integrations are deployment modules composed beside Core. The GitHub
+integration owns one optional deployment App credential bundle, verifies per-use repository,
+installation, base-branch, and permission authority, and mints short-lived repository-scoped tokens.
+The workflow or direct client supplies that per-use scope; Core and Sandbox profiles know nothing
+about GitHub. Plain Git access, including public clones and retained Git input, does not require the
+GitHub integration.
+
 ## Failure and code evolution
 
 - **Process loss:** Absurd makes unfinished work eligible elsewhere; Dorf reconciles Actions and

@@ -77,6 +77,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if args[0] == "setup" {
 		return setupCommand(ctx, cfg, args[1:], stdout, stderr)
 	}
+	if args[0] == "integration" {
+		return integrationCommand(ctx, cfg, args[1:], stdout, stderr)
+	}
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return fmt.Errorf("PostgreSQL is not configured; run dorf setup")
 	}
@@ -136,7 +139,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "cleanup":
 		return cleanup(ctx, store, client, args[1:], stdout, stderr)
 	case "abandon":
-		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
+		githubClient := githubapi.Client{APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials}
 		return abandon(ctx, store, client, githubClient, args[1:], stdout)
 	default:
 		return usage(stderr)
@@ -840,10 +843,6 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	set.SetOutput(stderr)
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
-	cloneURL := set.String("repo", "", "managed GitHub clone URL")
-	githubRepository := set.String("github-repo", "", "canonical lower-case owner/repository")
-	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
-	base := set.String("base", "", "explicit GitHub base branch")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -857,32 +856,6 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	}
 	checks := doctor.Run(ctx, db, cfg, profile, selectedConnection)
 	checks = appendProfileVerificationCheck(checks, profile)
-	githubValues := []string{*cloneURL, *githubRepository, *githubInstallation, *base}
-	wantsGitHub := false
-	completeGitHub := true
-	for _, value := range githubValues {
-		wantsGitHub = wantsGitHub || strings.TrimSpace(value) != ""
-		completeGitHub = completeGitHub && strings.TrimSpace(value) != ""
-	}
-	if wantsGitHub {
-		check := doctor.Check{Name: "github-repository-authority", Status: "failed"}
-		if !completeGitHub {
-			check.Detail = "--repo, --github-repo, --github-installation, and --base are required together"
-		} else if validateErr := githubapi.ValidateAuthority(*cloneURL, *githubRepository, *githubInstallation, *base, "dorf/readiness-probe"); validateErr != nil {
-			check.Detail = validateErr.Error()
-		} else {
-			client := githubapi.Client{APIURL: cfg.GitHubAPIURL, Metadata: cfg.GitHubMetadata, PrivateKey: cfg.GitHubPrivateKey}
-			_, exists, authorityErr := client.RemoteHead(ctx, githubapi.Authority{Repository: *githubRepository, InstallationID: *githubInstallation}, *base)
-			if authorityErr != nil {
-				check.Detail = authorityErr.Error() + "; install the Dorf GitHub App for this repository with contents and pull-request authority"
-			} else if !exists {
-				check.Detail = "base branch was not found through the configured GitHub App"
-			} else {
-				check.Status, check.Detail = "ready", "ready"
-			}
-		}
-		checks = append(checks, check)
-	}
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(checks); err != nil {
@@ -1579,6 +1552,6 @@ func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution t
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|integration|migrate|doctor|provider|profile|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

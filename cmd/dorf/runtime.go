@@ -64,7 +64,7 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}
 	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
 	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
-	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
+	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
 		Repository: publication.GitRepository{Sandbox: resolved.Sandbox, Workspace: r.cfg.Workspace, Ownership: resolved.Ownership},
