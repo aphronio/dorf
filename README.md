@@ -3,11 +3,11 @@
   <img alt="Workers continuing their jobs inside isolated Rooms in the Dorf village" src="assets/cover.gif">
 </picture>
 
+<p align="center"><strong>Your agents. Your infrastructure. One API.</strong></p>
+
 # Dorf
 
 **Dorf is the open-source control plane for running agent harnesses on infrastructure you control.**
-
-Your agents. Your infrastructure. One API.
 
 Dorf's direction is to carry a supported agent setup into compatible isolated infrastructure
 without rebuilding it in a new agent framework. Dorf keeps custody of controlled execution,
