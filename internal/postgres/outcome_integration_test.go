@@ -82,10 +82,10 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	if err != nil || created || got != stored {
 		t.Fatalf("idempotent Outcome=%#v created=%v err=%v", got, created, err)
 	}
-	if _, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || created {
-		t.Fatalf("post-abandon Message created=%v err=%v", created, err)
+	if admitted, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || admitted.Created {
+		t.Fatalf("post-abandon Message admitted=%#v err=%v", admitted, err)
 	}
-	if err := store.CloseAdmissionForCleanup(context.Background(), job.ID); err != nil {
+	if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
 		t.Fatalf("cleanup close after abandonment: %v", err)
 	}
 }
@@ -127,15 +127,15 @@ func TestPostgresPreProposalAbandonmentAndPublicationIntentSerializeToOneWinner(
 func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	job, proposal := preparePublishedOutcomeJob(t, store, "active-abandon")
-	message, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
-		JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "active-before-abandon",
+	message, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "active-before-abandon",
 		Input: "continue working before the explicit stop",
 	})
-	if err != nil || !created {
-		t.Fatalf("Message=%#v created=%v err=%v", message, created, err)
+	if err != nil || !message.Created {
+		t.Fatalf("Message=%#v err=%v", message, err)
 	}
-	delivery, err := store.NextDelivery(context.Background(), job.ID)
-	if err != nil || delivery == nil || delivery.Message.ID != message.ID {
+	delivery, err := codingDelivery(context.Background(), store, job.ID)
+	if err != nil || delivery == nil || delivery.Message.ID != message.Message.ID {
 		t.Fatalf("delivery=%#v err=%v", delivery, err)
 	}
 	if err := store.PrepareAgentRun(context.Background(), delivery.AgentRun.ID, "codex", "turn-before-abandon"); err != nil {
@@ -188,11 +188,11 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, created, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
-			JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "github-comment-race",
+		admitted, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{
+			JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "github-comment-race",
 			Input: "Please explain the tradeoff without changing code.", Intent: core.MessageFollow,
 		})
-		results <- result{kind: "message", created: created, err: err}
+		results <- result{kind: "message", created: admitted.Created, err: err}
 	}()
 	go func() {
 		defer wg.Done()
@@ -230,12 +230,12 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	threadID := "thread-" + job.ID
 	priorTurnID := "turn-" + job.ID
 
-	follow, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
-	if err != nil || !created {
-		t.Fatalf("follow=%#v created=%v err=%v", follow, created, err)
+	follow, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
+	if err != nil || !follow.Created {
+		t.Fatalf("follow=%#v err=%v", follow, err)
 	}
-	target, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || target == nil || target.Message.ID != follow.ID {
+	target, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || target == nil || target.Message.ID != follow.Message.ID {
 		t.Fatalf("target delivery=%#v err=%v", target, err)
 	}
 	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", priorTurnID); err != nil {
@@ -245,15 +245,15 @@ func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
 		t.Fatal(err)
 	}
-	steer, created, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
-	if err != nil || !created {
-		t.Fatalf("steer=%#v created=%v err=%v", steer, created, err)
+	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
+	if err != nil || !steer.Created {
+		t.Fatalf("steer=%#v err=%v", steer, err)
 	}
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	fallback, err := store.NextDelivery(ctx, job.ID)
-	if err != nil || fallback == nil || fallback.Message.ID != steer.ID {
+	fallback, err := codingDelivery(ctx, store, job.ID)
+	if err != nil || fallback == nil || fallback.Message.ID != steer.Message.ID {
 		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
 	}
 	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {

@@ -1,28 +1,17 @@
 -- name: InsertImplementationAgentRun :execrows
-insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,sandbox_id)
-select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending',sqlc.arg(sandbox_id)
+insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,input_revision,sandbox_id)
+select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending',sqlc.arg(input_revision),sqlc.arg(sandbox_id)
 from dorf.jobs j
 left join lateral (
     select ar.harness,ar.thread_id
     from dorf.agent_runs ar
     left join dorf.job_messages m on m.id=ar.message_id
-    where ar.job_id=j.id and ar.role='implement' and ar.thread_id is not null
+    where ar.job_id=j.id and ar.sandbox_id=sqlc.arg(sandbox_id)
+      and ar.role='implement' and ar.thread_id is not null
     order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
     limit 1
 ) prior on true
 where j.id=sqlc.arg(job_id)
-on conflict do nothing;
-
--- name: InsertInvestigationAgentRun :execrows
-insert into dorf.agent_runs(
-    id,job_id,message_id,role,state,input_revision,capability,sandbox_id
-)
-select sqlc.arg(id),j.id,sqlc.arg(message_id),'investigate','pending',
-       sqlc.arg(input_revision),'repository-read-report',sqlc.arg(sandbox_id)
-from dorf.jobs j
-where j.id=sqlc.arg(job_id)
-  and j.workflow_name='codebase-investigation'
-  and j.workflow_revision='2'
 on conflict do nothing;
 
 -- name: InsertAdmittedAgentRun :execrows
@@ -39,21 +28,40 @@ on conflict do nothing;
 select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
 from dorf.agent_runs ar
 left join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=sqlc.arg(job_id) and ar.role='implement' and ar.thread_id is not null
+where ar.job_id=sqlc.arg(job_id) and ar.role='implement'
+  and ar.sandbox_id=sqlc.arg(sandbox_id) and ar.thread_id is not null
 order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
 limit 1;
+
+-- name: BindPendingCodingMessageToPriorThread :execrows
+with prior as (
+    select prior_run.harness,prior_run.thread_id
+    from dorf.agent_runs current_run
+    join dorf.job_messages current_message on current_message.id=current_run.message_id
+    join dorf.job_messages prior_message on prior_message.job_id=current_message.job_id
+      and prior_message.sequence<current_message.sequence
+    join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
+    where current_run.message_id=sqlc.arg(message_id)
+      and prior_run.role='implement' and prior_run.sandbox_id=current_run.sandbox_id
+      and prior_run.harness is not null and prior_run.thread_id is not null and prior_run.turn_id is not null
+      and (prior_message.delivery_intent='follow' or prior_run.turn_id<>prior_message.steer_target_turn_id)
+    order by prior_message.sequence desc
+    limit 1
+)
+update dorf.agent_runs current_run
+set harness=prior.harness,thread_id=prior.thread_id
+from prior
+where current_run.message_id=sqlc.arg(message_id)
+  and current_run.state='pending' and current_run.baseline_turn_id is null
+  and current_run.thread_id is null
+  and (current_run.harness is null or current_run.harness=prior.harness);
 
 -- name: ListImplementationThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
-where job_id=sqlc.arg(job_id) and role='implement' and thread_id is not null
+where job_id=sqlc.arg(job_id) and sandbox_id=sqlc.arg(sandbox_id)
+  and role='implement' and thread_id is not null
 order by id;
-
--- name: ImplementationThreadExists :one
-select exists(
-    select 1 from dorf.agent_runs
-    where role='implement' and harness=sqlc.arg(harness) and thread_id=sqlc.arg(thread_id)
-);
 
 -- name: GetAgentRunByMessage :one
 select id,job_id,message_id,state,
@@ -62,18 +70,13 @@ select id,job_id,message_id,state,
        coalesce(baseline_turn_id,'') as baseline_turn_id,
        coalesce(turn_id,'') as turn_id,coalesce(turn_outcome,'') as turn_outcome,
        coalesce(attention,'') as attention,role,coalesce(input_revision,'') as input_revision,
-       coalesce(sandbox_id,'') as sandbox_id
+       coalesce(capability,'') as capability,coalesce(sandbox_id,'') as sandbox_id,
+       coalesce(submission_nonce,'') as submission_nonce,started_at,finished_at
 from dorf.agent_runs
 where message_id=sqlc.arg(message_id)::text;
 
--- name: BindImplementationInputRevision :execrows
-update dorf.agent_runs
-set input_revision=coalesce(input_revision,sqlc.arg(input_revision))
-where id=sqlc.arg(run_id) and role='implement' and state='pending'
-  and (input_revision is null or input_revision=sqlc.arg(input_revision));
-
 -- name: GetAgentRunForBinding :one
-select job_id,role,state,coalesce(harness,'') as harness,
+select job_id,sandbox_id,role,state,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,coalesce(turn_id,'') as turn_id,
        coalesce(turn_outcome,'') as turn_outcome
 from dorf.agent_runs
@@ -158,20 +161,11 @@ update dorf.agent_runs
 set attention=sqlc.arg(reason)
 where id=sqlc.arg(run_id);
 
--- name: GetHarnessMutationDelivery :one
-select m.id as message_id,m.job_id,m.from_kind,m.from_id,m.sequence,m.input,m.admitted_at,
-       m.delivery_intent,coalesce(m.steer_target_turn_id,'') as steer_target_turn_id,
-       ar.id as agent_run_id,ar.job_id as agent_run_job_id,
-       ar.message_id as agent_run_message_id,ar.state,
-       coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id,
-       (ar.baseline_turn_id is not null)::boolean as baseline_recorded,
-       coalesce(ar.baseline_turn_id,'') as baseline_turn_id,
-       coalesce(ar.turn_id,'') as turn_id,coalesce(ar.turn_outcome,'') as turn_outcome,
-       coalesce(ar.attention,'') as attention,ar.role,
-       coalesce(ar.input_revision,'') as input_revision
+-- name: ListUnsettledAgentMessages :many
+select m.id as message_id,ar.sandbox_id
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=sqlc.arg(job_id) and ar.state in ('submitting','active','uncertain')
-  and ar.role in ('implement','investigate')
-order by m.sequence
-limit 1;
+where m.job_id=sqlc.arg(job_id)
+  and (ar.state in ('submitting','active','uncertain')
+       or (ar.baseline_turn_id is not null and ar.state not in ('completed','failed','interrupted')))
+order by m.sequence,ar.id;

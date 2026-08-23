@@ -2,9 +2,11 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -18,7 +20,7 @@ type cleanupTarget struct {
 // RegisterCleanup installs the Core-owned resource cleanup task.
 func (a Application) RegisterCleanup() {
 	a.Tasks.MustRegister(absurd.Task(CleanupTaskName, func(ctx context.Context, params JobTaskParams) (TaskResultV1, error) {
-		if err := a.VerifyAttachedTask(ctx, params.JobID, CleanupTaskName); err != nil {
+		if err := a.VerifyAttachedTask(ctx, params.JobID, CleanupTaskName, params.PreviousTaskID); err != nil {
 			return TaskResultV1{}, err
 		}
 		job, err := a.Store.Job(ctx, params.JobID)
@@ -73,9 +75,27 @@ func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, st
 }
 
 func (a Application) runCleanup(ctx context.Context, service CleanupExecution, jobID string) error {
-	job, sandboxes, err := service.PrepareCleanup(ctx, jobID)
-	if err != nil {
-		return err
+	var job Job
+	var sandboxes []Sandbox
+	for {
+		var err error
+		job, sandboxes, err = service.PrepareCleanup(ctx, jobID)
+		if err == nil {
+			break
+		}
+		var active cleanupStillActive
+		if !errors.As(err, &active) {
+			return err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if job.CleanupState == CleanupComplete {
 		return nil
@@ -87,18 +107,8 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	}
 
 	for _, target := range cleanupTargets(sandboxes) {
-		action, err := a.Store.GetOrCreateSandboxAction(ctx, target.Sandbox.ID, target.Kind)
-		if err != nil {
-			return err
-		}
-		if action.State == ActionSucceeded {
-			continue
-		}
-
 		detail := fmt.Sprintf("reconciling %s for Sandbox %s", target.Kind, target.Sandbox.ID)
-		err = absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-			return service.ExecuteSandboxAction(workCtx, job, target.Sandbox, action)
-		})
+		err := service.ExecuteSandboxAction(ctx, job.ID, target.Sandbox.ID, target.Kind)
 		if err != nil {
 			_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 			return fmt.Errorf("reconcile %s for Sandbox %s: %w", target.Kind, target.Sandbox.ID, err)
@@ -106,7 +116,7 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 	}
 
 	detail := "verifying no owned resource or non-cleanup Job claim remains unsettled"
-	if err := a.Store.CompleteCleanup(ctx, jobID); err != nil {
+	if err := service.CompleteCleanup(ctx, jobID); err != nil {
 		_ = a.Store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
 	}

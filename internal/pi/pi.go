@@ -170,11 +170,20 @@ func (a Agent) RecoverStrictReviewTurn(ctx context.Context, owner provider.Owner
 	return core.HarnessBinding{Harness: Harness, ThreadID: owner.SandboxID, Turn: history.Turns[len(history.Turns)-1]}, nil
 }
 
-func (a Agent) WaitStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (core.HarnessBinding, error) {
+func (a Agent) ReadStrictReviewTurn(ctx context.Context, owner provider.Ownership, _ string, review provider.ReviewMetadata, threadID, turnID, _ string, _, _, _ string) (core.HarnessBinding, error) {
 	if err := a.Sandbox.AttestReview(ctx, owner, review); err != nil {
 		return core.HarnessBinding{}, err
 	}
-	return a.WaitTurn(ctx, owner, threadID, turnID)
+	history, err := a.readHistory(ctx, owner, threadID, true)
+	if err != nil {
+		return core.HarnessBinding{}, err
+	}
+	for _, turn := range history.Turns {
+		if turn.ID == turnID {
+			return core.HarnessBinding{Harness: Harness, ThreadID: threadID, Turn: turn}, nil
+		}
+	}
+	return core.HarnessBinding{}, fmt.Errorf("Pi Thread %s has no Turn %s", threadID, turnID)
 }
 
 func (a Agent) latestBinding(ctx context.Context, owner provider.Ownership, threadID string) (core.HarnessBinding, error) {

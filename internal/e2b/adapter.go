@@ -145,6 +145,10 @@ func (a Adapter) PutFile(ctx context.Context, owner provider.Ownership, destinat
 	return provider.PutFileViaExec(ctx, owner, destination, contents, a.Exec)
 }
 
+func (a Adapter) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
+	return provider.ReadFileViaExec(ctx, owner, a.Workspace(), relativePath, a.Exec)
+}
+
 func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byte, args ...string) (provider.Result, error) {
 	owned, err := a.Client.FindOwned(ctx, e2bOwnership(owner))
 	if err != nil {
@@ -163,9 +167,13 @@ func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byt
 	}
 	var stdout, stderr bytes.Buffer
 	result, execErr := executor.Exec(ctx, ExecRequest{Argv: append([]string(nil), args...), Stdin: input, ProcessTimeout: a.Config.ProcessTimeout, Stdout: &stdout, Stderr: &stderr})
-	observed := provider.Result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: int(result.ExitCode)}
+	return providerExecResult(result, stdout.String(), stderr.String(), execErr)
+}
+
+func providerExecResult(result ExecResult, stdout, stderr string, execErr error) (provider.Result, error) {
+	observed := provider.Result{Stdout: stdout, Stderr: stderr, ExitCode: int(result.ExitCode)}
 	var exit *ExitError
-	if errors.As(execErr, &exit) {
+	if errors.As(execErr, &exit) && exit.Result.Exited && exit.Result.RemoteError == "" {
 		return observed, nil
 	}
 	return observed, execErr

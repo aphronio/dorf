@@ -19,20 +19,17 @@ const (
 	WorkComplete        WorkKind = "complete"
 	WorkAttention       WorkKind = "attention"
 	WorkAction          WorkKind = "action"
-	WorkRunReviewer     WorkKind = "run-reviewer"
-	WorkDeliverMessage  WorkKind = "deliver-message"
-	WorkObserveAgent    WorkKind = "observe-agent-run"
+	WorkWaitAgent       WorkKind = "wait-agent"
+	WorkRecordReview    WorkKind = "record-review-feedback"
 	WorkObserveRevision WorkKind = "observe-revision"
 	WorkChooseReview    WorkKind = "choose-review"
 	WorkPublishProposal WorkKind = "publish-proposal"
 	WorkObserveProposal WorkKind = "observe-proposal"
 )
 
-// Work names the natural fact which owns the next operation. FactID is an
-// Action, AgentRun, Revision, Proposal, or Outcome identity as
-// appropriate. Scope names the concrete resource only when an Action needs
-// one. Work is useful for explanation and exact execution, but deliberately
-// not durable.
+// Work names the natural fact which owns the next operation. FactID and Scope
+// identify that fact and its concrete resource when required. Work is useful
+// for explanation and exact execution, but deliberately not durable.
 type Work struct {
 	Kind       WorkKind        `json:"kind"`
 	Revision   string          `json:"revision,omitempty"`
@@ -47,14 +44,11 @@ func (w Work) Description() string {
 	if w.Kind == WorkAction {
 		return definition.ActionLabel(w.ActionKind)
 	}
-	if w.Kind == WorkObserveAgent {
-		return definition.AgentRoleLabel("implement") + " running"
+	if w.Kind == WorkWaitAgent {
+		return "Awaiting Agent result"
 	}
-	if w.Kind == WorkDeliverMessage {
-		return "Delivering Message to " + lowerFirst(definition.AgentRoleLabel("implement"))
-	}
-	if w.Kind == WorkRunReviewer {
-		return "Reviewer running"
+	if w.Kind == WorkRecordReview {
+		return "Record reviewer feedback"
 	}
 	return definition.OperationLabel(string(w.Kind), humanizeIdentifier(string(w.Kind)))
 }
@@ -68,8 +62,8 @@ type Snapshot struct {
 	Sandboxes   []core.Sandbox
 	MainSandbox core.Sandbox
 	Actions     []core.Action
-	Delivery    *core.Delivery
-	Deliveries  []core.Delivery
+	Messages    []MessageRecord
+	ReviewRuns  []ReviewRunView
 	Revisions   []Revision
 	Evidence    []core.Evidence
 	ReviewPlans []ReviewPlanRecord
@@ -88,12 +82,9 @@ type Projection struct {
 // publication starts, its admitted input boundary is retained so a later
 // accepted Message cannot strand reconciliation.
 func (s Snapshot) Project(evidenceStore blob.Store) (Projection, error) {
-	deliveries := PublicationDeliveries(s.Deliveries, publicationIntentAt(s.Actions, s.Job.Revision))
-	reviewRuns, err := s.currentReviewRuns()
-	if err != nil {
-		return Projection{}, err
-	}
-	readiness := AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, deliveries)
+	messages := PublicationMessages(s.Messages, publicationIntentAt(s.Actions, s.Job.Revision))
+	reviewRuns := s.currentReviewRuns()
+	readiness := AssessReviewReadiness(s.Job, s.Evidence, evidenceStore, s.currentReviewPlan(), reviewRuns, messages)
 	work := decideCurrentWorkWithReviewRuns(s, reviewRuns)
 	if work.Kind == WorkPublishProposal && !readiness.Ready {
 		work.Kind = WorkAttention
@@ -136,7 +127,7 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Deliveries, err = store.Deliveries(ctx, jobID)
+	snapshot.Messages, snapshot.ReviewRuns, err = store.CodingMessages(ctx, jobID)
 	if err != nil {
 		return snapshot, err
 	}
@@ -160,13 +151,45 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.Outcome == nil && snapshot.Job.AdmissionOpen {
-		snapshot.Delivery, err = store.DeliveryCandidate(ctx, jobID)
-		if err != nil {
-			return snapshot, err
+	return snapshot, nil
+}
+
+// SelectAgentMessage is coding's static, workflow-owned eligibility policy.
+// Core calls it under the Job fence before the typed coordinator evaluates
+// facts; callers never receive the selected Message or its lifecycle result.
+func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.AgentMessageWork, error) {
+	f, err := LoadSnapshot(ctx, store, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if f.Outcome != nil || !f.Job.AdmissionOpen || !codingPrerequisitesComplete(f) ||
+		f.Proposal == nil && publicationPending(f.Actions, f.Job.Revision) {
+		return nil, nil
+	}
+	plan := f.currentReviewPlan()
+	if plan != nil {
+		byRole := make(map[string]ReviewRunView, len(f.ReviewRuns))
+		for _, run := range f.currentReviewRuns() {
+			byRole[run.Role] = run
+		}
+		for _, role := range plan.Plan.Roles {
+			run, ok := byRole[string(role)]
+			if !ok {
+				return nil, nil
+			}
+			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
+				continue
+			}
+			if run.Attention != "" || run.Outcome != "" || run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID ||
+				!actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) ||
+				!actionSucceeded(f.Actions, ActionReviewCheckout, run.Sandbox.ID) ||
+				!actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
+				return nil, nil
+			}
+			return &core.AgentMessageWork{MessageID: run.MessageID, SandboxID: run.Sandbox.ID}, nil
 		}
 	}
-	return snapshot, nil
+	return store.CodingAgentMessage(ctx, jobID)
 }
 
 func (s Snapshot) currentReviewPlan() *ReviewPlanRecord {
@@ -178,18 +201,14 @@ func (s Snapshot) currentReviewPlan() *ReviewPlanRecord {
 	return nil
 }
 
-func (s Snapshot) currentReviewRuns() ([]ReviewRunView, error) {
-	all, err := ReviewRuns(s.Deliveries, s.Sandboxes)
-	if err != nil {
-		return nil, err
-	}
-	runs := make([]ReviewRunView, 0, len(all))
-	for _, run := range all {
+func (s Snapshot) currentReviewRuns() []ReviewRunView {
+	runs := make([]ReviewRunView, 0, len(s.ReviewRuns))
+	for _, run := range s.ReviewRuns {
 		if run.InputRevision == s.Job.Revision {
 			runs = append(runs, run)
 		}
 	}
-	return runs, nil
+	return runs
 }
 
 func codingPrerequisitesComplete(f Snapshot) bool {
@@ -202,11 +221,7 @@ func codingPrerequisitesComplete(f Snapshot) bool {
 // Its order is the dependency chain; do not replace it with a generic graph,
 // registry, persisted projection, or database-side workflow interpreter.
 func decideCurrentWork(f Snapshot) Work {
-	reviewRuns, err := f.currentReviewRuns()
-	if err != nil {
-		return Work{Kind: WorkAttention, Revision: f.Job.Revision, FactID: f.Job.Revision, Detail: err.Error()}
-	}
-	return decideCurrentWorkWithReviewRuns(f, reviewRuns)
+	return decideCurrentWorkWithReviewRuns(f, f.currentReviewRuns())
 }
 
 func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Work {
@@ -232,8 +247,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		return work(WorkComplete, f.Job.ID, "admission closed")
 	}
 
-	// Infrastructure is a fixed prerequisite chain owned by the Job's main
-	// Sandbox. Missing Actions are created only when RunJob executes this work.
+	// Infrastructure is a fixed prerequisite chain. Sandbox-create truthfully
+	// projects Core custody; the workflow never executes its provider mutation.
 	if !actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
 		return actionWork(core.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}
@@ -250,8 +265,8 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		return work(WorkPublishProposal, f.Job.Revision, publicationDetail(f, "reconcile started publication"))
 	}
 
-	// Once ReviewPolicy selected exact reviewers, complete their independent
-	// AgentRuns before consuming the feedback Messages they produce.
+	// Once ReviewPolicy selected exact reviewers, wait for Core reconciliation
+	// and then consume their feedback as a typed workflow fact.
 	plan := f.currentReviewPlan()
 	if plan != nil {
 		byRole := make(map[string]ReviewRunView, len(reviewRuns))
@@ -261,13 +276,16 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 		for _, role := range plan.Plan.Roles {
 			run, ok := byRole[string(role)]
 			if !ok {
-				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no AgentRun", role))
+				return work(WorkAttention, f.Job.Revision, fmt.Sprintf("selected reviewer %s has no durable execution", role))
 			}
-			if reviewFeedbackReturned(f.Deliveries, f.Job.ID, run.ID) {
+			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
 				continue
 			}
-			if run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted || run.State == core.AgentRunUncertain {
-				return work(WorkAttention, run.ID, attentionDetail(f.Job, run.ID, agentRunAttention(run.AgentRun)))
+			if f.Job.WorkflowAttentionSource == run.MessageID && f.Job.WorkflowAttention != "" {
+				return work(WorkAttention, run.MessageID, f.Job.WorkflowAttention)
+			}
+			if run.Attention != "" || run.Outcome != "" && run.Outcome != "completed" {
+				return work(WorkAttention, run.MessageID, attentionDetail(f.Job, run.MessageID, messageAttention(run.MessageID, run.Outcome, run.Attention)))
 			}
 			if run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID {
 				return work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role))
@@ -281,48 +299,34 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 			if !actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
 			}
-			return work(WorkRunReviewer, run.ID, string(role))
+			if run.Outcome == "completed" {
+				return work(WorkRecordReview, run.MessageID, string(role))
+			}
+			return work(WorkWaitAgent, run.MessageID, "awaiting "+string(role)+" reviewer result")
 		}
 	}
 
-	// Messages share one implementation lane: steers may target the active
-	// Turn; turn-starting follows remain FIFO. DeliveryCandidate is read-only.
-	if f.Delivery != nil {
-		run := f.Delivery.AgentRun
-		if run.State == core.AgentRunFailed || run.State == core.AgentRunInterrupted || run.State == core.AgentRunUncertain {
-			return work(WorkAttention, run.ID, attentionDetail(f.Job, run.ID, agentRunAttention(run)))
-		}
-		return work(WorkDeliverMessage, run.ID, fmt.Sprintf("Message %d", f.Delivery.Message.Sequence))
-	}
 	latestInput, latestTurnStart := latestImplementationRuns(f)
-	if latestInput != nil && latestInput.State != core.AgentRunCompleted {
-		if latestTurnStart != nil && latestInput.ID == latestTurnStart.ID && latestInput.State == core.AgentRunActive {
-			// The active turn-starting input is observed below. A later unsettled
-			// steer remains attention unless it is selected for delivery above.
-		} else {
-			// A failed steer may have no Turn identity when its terminal-target
-			// fallback failed before binding. It is still the latest accepted input
-			// and must not be skipped in favor of an older observed Turn.
-			return work(WorkAttention, latestInput.ID, attentionDetail(f.Job, latestInput.ID, agentRunAttention(*latestInput)))
-		}
+	if latestInput != nil && latestInput.Outcome == "" && latestInput.Attention == "" {
+		return work(WorkWaitAgent, latestInput.Message.ID, "awaiting implementation result")
 	}
-	if latestTurnStart != nil && latestTurnStart.State != core.AgentRunCompleted {
-		if latestTurnStart.State == core.AgentRunActive {
-			return work(WorkObserveAgent, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, ""))
-		}
-		// A pending or submitting Run without a delivery candidate cannot be
-		// executed safely. In particular, submission must be reconciled rather
-		// than letting later workflow decisions race its harness mutation.
-		return work(WorkAttention, latestTurnStart.ID, attentionDetail(f.Job, latestTurnStart.ID, agentRunAttention(*latestTurnStart)))
+	if latestInput != nil && latestInput.Outcome != "completed" {
+		return work(WorkAttention, latestInput.Message.ID, attentionDetail(f.Job, latestInput.Message.ID, messageAttention(latestInput.Message.ID, latestInput.Outcome, latestInput.Attention)))
+	}
+	if latestTurnStart != nil && latestTurnStart.Outcome == "" && latestTurnStart.Attention == "" {
+		return work(WorkWaitAgent, latestTurnStart.Message.ID, "awaiting implementation result")
+	}
+	if latestTurnStart != nil && latestTurnStart.Outcome != "completed" {
+		return work(WorkAttention, latestTurnStart.Message.ID, attentionDetail(f.Job, latestTurnStart.Message.ID, messageAttention(latestTurnStart.Message.ID, latestTurnStart.Outcome, latestTurnStart.Attention)))
 	}
 
 	// A completed implementation Turn is not a Git fact. Its immutable
 	// git-revision Evidence is the recovery boundary, even when HEAD is unchanged.
 	if candidate := revisionCandidate(f, latestTurnStart); candidate != nil {
 		if candidate.InputRevision != f.Job.Revision {
-			return work(WorkAttention, candidate.ID, fmt.Sprintf("AgentRun input Revision %s does not match current Revision %s", candidate.InputRevision, f.Job.Revision))
+			return work(WorkAttention, candidate.Message.ID, fmt.Sprintf("Message input Revision %s does not match current Revision %s", candidate.InputRevision, f.Job.Revision))
 		}
-		return work(WorkObserveRevision, candidate.ID, attentionDetail(f.Job, candidate.ID, ""))
+		return work(WorkObserveRevision, candidate.Message.ID, attentionDetail(f.Job, candidate.Message.ID, ""))
 	}
 	if id, detail := unchangedAttention(f); id != "" {
 		return work(WorkAttention, id, detail)
@@ -344,10 +348,10 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 	return work(WorkPublishProposal, f.Job.Revision, "")
 }
 
-func reviewFeedbackReturned(deliveries []core.Delivery, jobID, runID string) bool {
+func reviewFeedbackReturned(messages []MessageRecord, jobID, runID string) bool {
 	expectedID := core.MessageID(jobID, core.MessageFromAgent, runID)
-	for _, delivery := range deliveries {
-		message := delivery.Message
+	for _, record := range messages {
+		message := record.Message
 		if message.ID == expectedID && message.JobID == jobID && message.FromKind == core.MessageFromAgent && message.FromID == runID && message.Intent == core.MessageFollow {
 			return true
 		}
@@ -391,41 +395,40 @@ func attentionDetail(job Job, source, fallback string) string {
 	return fallback
 }
 
-func agentRunAttention(run core.AgentRun) string {
-	if run.Attention != "" {
-		return run.Attention
+func messageAttention(messageID, outcome, attention string) string {
+	if attention != "" {
+		return attention
 	}
-	return fmt.Sprintf("AgentRun %s is %s", run.ID, run.State)
+	if outcome != "" {
+		return fmt.Sprintf("Message %s ended with outcome %s", messageID, outcome)
+	}
+	return fmt.Sprintf("Message %s still needs reconciliation", messageID)
 }
 
-func revisionCandidate(f Snapshot, latestTurnStart *core.AgentRun) *core.AgentRun {
+func revisionCandidate(f Snapshot, latestTurnStart *MessageRecord) *MessageRecord {
 	observed := make(map[string]bool)
 	for _, record := range f.Evidence {
 		if record.Kind == "git-revision" {
 			observed[record.AgentRunID] = true
 		}
 	}
-	if latestTurnStart == nil || latestTurnStart.State != core.AgentRunCompleted || observed[latestTurnStart.ID] {
+	if latestTurnStart == nil || latestTurnStart.Outcome != "completed" || observed[latestTurnStart.ProducerID] {
 		return nil
 	}
 	return latestTurnStart
 }
 
-func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *core.AgentRun) {
+func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *MessageRecord) {
 	var latestInputSequence int64
 	var latestTurnStartSequence int64
-	for i := range f.Deliveries {
-		delivery := &f.Deliveries[i]
-		run := &delivery.AgentRun
-		message := delivery.Message
-		if run.Role != "implement" || message.ID != run.MessageID {
-			continue
-		}
+	for i := range f.Messages {
+		record := &f.Messages[i]
+		message := record.Message
 		if latestInput == nil || message.Sequence >= latestInputSequence {
-			latestInput, latestInputSequence = run, message.Sequence
+			latestInput, latestInputSequence = record, message.Sequence
 		}
-		if StartsImplementationTurn(message, *run) && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
-			latestTurnStart, latestTurnStartSequence = run, message.Sequence
+		if record.StartsTurn && (latestTurnStart == nil || message.Sequence >= latestTurnStartSequence) {
+			latestTurnStart, latestTurnStartSequence = record, message.Sequence
 		}
 	}
 	return latestInput, latestTurnStart
@@ -434,38 +437,33 @@ func latestImplementationRuns(f Snapshot) (latestInput, latestTurnStart *core.Ag
 // unchangedAttention distinguishes an intentionally adjudicated review or
 // Proposal feedback batch from an initial request or reviewer response
 // that returned without fixing anything. Equality is already carried by the
-// AgentRun input Revision and its git-revision Evidence.
+// accepted input Revision and its git-revision Evidence.
 func unchangedAttention(f Snapshot) (string, string) {
-	sequences := make(map[string]int64, len(f.Deliveries))
-	runs := make(map[string]core.AgentRun, len(f.Deliveries))
-	implementationMessages := make(map[string]bool)
-	for _, delivery := range f.Deliveries {
-		run := delivery.AgentRun
-		sequences[delivery.Message.ID] = delivery.Message.Sequence
-		runs[run.ID] = run
-		if run.Role == "implement" {
-			implementationMessages[run.MessageID] = true
-		}
+	sequences := make(map[string]int64, len(f.Messages))
+	producers := make(map[string]MessageRecord, len(f.Messages))
+	for _, message := range f.Messages {
+		sequences[message.Message.ID] = message.Message.Sequence
+		producers[message.ProducerID] = message
 	}
 	type observation struct {
 		sequence int64
-		run      core.AgentRun
+		message  MessageRecord
 		evidence core.Evidence
 	}
 	var observations []observation
 	for _, record := range f.Evidence {
-		run, ok := runs[record.AgentRunID]
+		message, ok := producers[record.AgentRunID]
 		if !ok || record.Kind != "git-revision" {
 			continue
 		}
-		observations = append(observations, observation{sequences[run.MessageID], run, record})
+		observations = append(observations, observation{sequences[message.Message.ID], message, record})
 	}
 	if len(observations) == 0 {
 		return "", ""
 	}
 	sort.Slice(observations, func(i, j int) bool { return observations[i].sequence < observations[j].sequence })
 	last := observations[len(observations)-1]
-	if last.run.InputRevision == "" || last.run.InputRevision != last.evidence.Revision {
+	if last.message.InputRevision == "" || last.message.InputRevision != last.evidence.Revision {
 		return "", ""
 	}
 	var previous int64
@@ -473,15 +471,15 @@ func unchangedAttention(f Snapshot) (string, string) {
 		previous = observations[len(observations)-2].sequence
 	}
 	exactProposal := f.Proposal != nil && f.Proposal.ProposedRevision == f.Job.Revision
-	for _, delivery := range f.Deliveries {
-		message := delivery.Message
-		if message.Sequence <= previous || message.Sequence > last.sequence || !implementationMessages[message.ID] {
+	for _, record := range f.Messages {
+		message := record.Message
+		if message.Sequence <= previous || message.Sequence > last.sequence {
 			continue
 		}
 		if message.FromKind == core.MessageFromAgent || message.FromKind == core.MessageFromHuman && exactProposal {
 			continue
 		}
-		return last.run.ID, fmt.Sprintf("AgentRun %s handled Message %d without a new committed Revision", last.run.ID, message.Sequence)
+		return last.message.Message.ID, fmt.Sprintf("Message %s was handled without a new committed Revision", last.message.Message.ID)
 	}
 	return "", ""
 }

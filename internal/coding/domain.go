@@ -74,12 +74,8 @@ func ReviewPolicyAttentionSource(revision string) string {
 	return "review-policy:" + revision
 }
 
-func ReviewSandboxName(runID string) string {
-	return "dorf-review-" + codingDigest(runID, 20)
-}
-
-func ReviewControllerID(runID, sandboxName, ownershipNonce string) string {
-	return "review-controller-" + codingDigest(runID+"\x00"+sandboxName+"\x00"+ownershipNonce, 32)
+func ReviewSandboxName(jobID, runID string) string {
+	return core.NamedSandboxID(jobID, runID)
 }
 
 func codingDigest(value string, length int) string {

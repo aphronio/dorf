@@ -13,7 +13,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	githubapi "github.com/aphronio/dorf/internal/github"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres/dbsql"
@@ -27,6 +26,7 @@ var ErrNotFound = errors.New("Dorf Job not found")
 var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
 var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var sandboxName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,126}$`)
 
 const (
 	AbsurdReleaseCommit = "550d3b9e6f9382d96178de6ab8c90c7f8edf2227"
@@ -55,17 +55,6 @@ func (s Store) AbsurdReady(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("Absurd schema version is %q; Dorf requires 0.5.0", version)
 	}
 	return true, nil
-}
-
-type admissionInput struct {
-	core.JobAdmission
-	Repository          string
-	Revision            string
-	Branch              string
-	GitHubRepository    string
-	GitHubInstallation  string
-	BaseBranch          string
-	InvestigationSource investigation.Source
 }
 
 func (s Store) BootstrapAbsurd(ctx context.Context, schema []byte) error {
@@ -180,217 +169,6 @@ func (s Store) Migrate(ctx context.Context) error {
 
 func ValidRevision(value string) bool { return fullCommitOID.MatchString(value) }
 
-func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Job, bool, error) {
-	return s.admit(ctx, admissionInput{
-		JobAdmission: input.JobAdmission, Repository: input.Repository, Revision: input.Revision, Branch: input.Branch,
-		GitHubRepository: input.GitHubRepository, GitHubInstallation: input.GitHubInstallation, BaseBranch: input.BaseBranch,
-	})
-}
-
-func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
-	return s.admit(ctx, admissionInput{JobAdmission: input.JobAdmission, InvestigationSource: input.Source})
-}
-
-func (s Store) admit(ctx context.Context, input admissionInput) (core.Job, bool, error) {
-	input.AdmissionKey = strings.TrimSpace(input.AdmissionKey)
-	input.Workflow = core.WorkflowName(strings.TrimSpace(string(input.Workflow)))
-	input.WorkflowRevision = strings.TrimSpace(input.WorkflowRevision)
-	if input.Workflow == "" {
-		input.Workflow = coding.Workflow
-	}
-	if input.WorkflowRevision == "" && input.Workflow == coding.Workflow {
-		input.WorkflowRevision = coding.WorkflowRevision
-	}
-	input.Repository = strings.TrimSpace(input.Repository)
-	input.Revision = strings.TrimSpace(input.Revision)
-	input.Branch = strings.TrimSpace(input.Branch)
-	input.SandboxProfile = strings.TrimSpace(input.SandboxProfile)
-	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
-	input.Model = strings.TrimSpace(input.Model)
-	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
-	input.GitHubRepository = strings.TrimSpace(input.GitHubRepository)
-	input.GitHubInstallation = strings.TrimSpace(input.GitHubInstallation)
-	input.BaseBranch = strings.TrimSpace(input.BaseBranch)
-	input.InvestigationSource = normalizeInvestigationSource(input.InvestigationSource)
-	if input.AdmissionKey == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return core.Job{}, false, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, AI connection, and model")
-	}
-	switch input.Workflow {
-	case coding.Workflow:
-		if input.WorkflowRevision != coding.WorkflowRevision || input.Repository == "" || input.Branch == "" || input.GitHubRepository == "" || input.GitHubInstallation == "" || input.BaseBranch == "" || input.InvestigationSource != (investigation.Source{}) {
-			return core.Job{}, false, fmt.Errorf("coding-to-proposal admission requires workflow revision %s, canonical GitHub repository, installation, and explicit base branch", coding.WorkflowRevision)
-		}
-		if err := githubapi.ValidateAuthority(input.Repository, input.GitHubRepository, input.GitHubInstallation, input.BaseBranch, input.Branch); err != nil {
-			return core.Job{}, false, err
-		}
-	case investigation.Workflow:
-		if input.WorkflowRevision != investigation.WorkflowRevision {
-			return core.Job{}, false, fmt.Errorf("codebase-investigation admission requires workflow revision %s", investigation.WorkflowRevision)
-		}
-		if input.GitHubRepository != "" || input.GitHubInstallation != "" || input.BaseBranch != "" {
-			return core.Job{}, false, fmt.Errorf("codebase-investigation does not accept GitHub publication authority")
-		}
-		if err := validateInvestigationSource(input.InvestigationSource); err != nil {
-			return core.Job{}, false, err
-		}
-	default:
-		return core.Job{}, false, fmt.Errorf("unsupported workflow %q", input.Workflow)
-	}
-	revision := input.Revision
-	if input.Workflow == investigation.Workflow {
-		revision = input.InvestigationSource.Revision
-	}
-	if !ValidRevision(revision) {
-		return core.Job{}, false, fmt.Errorf("admitted revision must be a lowercase full commit OID (40 hex for SHA-1 or 64 hex for SHA-256)")
-	}
-	if input.ReasoningEffort != "low" && input.ReasoningEffort != "medium" && input.ReasoningEffort != "high" && input.ReasoningEffort != "xhigh" {
-		return core.Job{}, false, fmt.Errorf("reasoning effort must be low, medium, high, or xhigh")
-	}
-	id := core.JobID(input.AdmissionKey)
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	storedRow, err := queries.GetAdmittedJobForUpdate(ctx, input.AdmissionKey)
-	var rows int64
-	if errors.Is(err, sql.ErrNoRows) {
-		if _, err := queries.LockVerifiedSandboxProfileForAdmission(ctx, dbsql.LockVerifiedSandboxProfileForAdmissionParams{
-			Name: input.SandboxProfile, ContractVersion: core.BaseProfileContract,
-		}); errors.Is(err, sql.ErrNoRows) {
-			return core.Job{}, false, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", input.SandboxProfile, core.BaseProfileContract)
-		} else if err != nil {
-			return core.Job{}, false, err
-		}
-		rows, err = queries.InsertAdmittedJob(ctx, dbsql.InsertAdmittedJobParams{
-			ID: id, AdmissionKey: input.AdmissionKey, WorkflowName: input.Workflow, WorkflowRevision: input.WorkflowRevision,
-			Goal: input.Goal, SandboxProfile: input.SandboxProfile, ProviderConnection: input.ProviderConnection,
-			Model: input.Model, ReasoningEffort: input.ReasoningEffort,
-		})
-		if err != nil {
-			return core.Job{}, false, err
-		}
-		storedRow, err = queries.GetAdmittedJobForUpdate(ctx, input.AdmissionKey)
-	}
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	stored := admissionInput{JobAdmission: core.JobAdmission{
-		AdmissionKey: storedRow.AdmissionKey, Workflow: core.WorkflowName(storedRow.WorkflowName), WorkflowRevision: storedRow.WorkflowRevision,
-		Goal: storedRow.Goal, SandboxProfile: storedRow.SandboxProfile, ProviderConnection: storedRow.ProviderConnection,
-		Model: storedRow.Model, ReasoningEffort: storedRow.ReasoningEffort,
-	}}
-	expectedCore := input
-	expectedCore.Repository, expectedCore.Revision, expectedCore.Branch = "", "", ""
-	expectedCore.GitHubRepository, expectedCore.GitHubInstallation, expectedCore.BaseBranch = "", "", ""
-	expectedCore.InvestigationSource = investigation.Source{}
-	if storedRow.ID != id || stored != expectedCore {
-		return core.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
-	}
-	if input.Workflow == coding.Workflow {
-		if _, err := queries.InsertCodingToProposalInput(ctx, dbsql.InsertCodingToProposalInputParams{
-			JobID: id, Repository: input.Repository, StartingRevision: input.Revision, Revision: input.Revision,
-			Branch: input.Branch, GithubRepository: input.GitHubRepository,
-			GithubInstallationID: input.GitHubInstallation, BaseBranch: input.BaseBranch,
-		}); err != nil {
-			return core.Job{}, false, err
-		}
-		coding, err := queries.GetCodingToProposalInput(ctx, id)
-		if err != nil {
-			return core.Job{}, false, err
-		}
-		stored.Repository, stored.Revision, stored.Branch = coding.Repository, coding.StartingRevision, coding.Branch
-		stored.GitHubRepository, stored.GitHubInstallation, stored.BaseBranch = coding.GithubRepository, coding.GithubInstallationID, coding.BaseBranch
-	} else {
-		if _, err := queries.InsertCodebaseInvestigationSource(ctx, investigationSourceParams(id, input.InvestigationSource)); err != nil {
-			return core.Job{}, false, err
-		}
-		sourceRow, err := queries.GetCodebaseInvestigationSource(ctx, id)
-		if err != nil {
-			return core.Job{}, false, err
-		}
-		if sourceRow.JobID != id {
-			return core.Job{}, false, fmt.Errorf("codebase-investigation source conflicts with its exact Job")
-		}
-		stored.InvestigationSource = investigationSourceFromValues("", sourceRow.Kind, sourceRow.Repository, sourceRow.Revision, sourceRow.BundleDigest, sourceRow.BundleByteSize)
-	}
-	if stored != input {
-		return core.Job{}, false, fmt.Errorf("admission key %q is already bound to different complete Job input", input.AdmissionKey)
-	}
-	messageID := core.MessageID(id, "human", initialFromID)
-	if err := queries.InsertInitialMessage(ctx, dbsql.InsertInitialMessageParams{ID: messageID, JobID: id, FromID: initialFromID, Input: input.Goal}); err != nil {
-		return core.Job{}, false, err
-	}
-	initial, err := queries.GetMessageBySender(ctx, dbsql.GetMessageBySenderParams{JobID: id, FromKind: core.MessageFromHuman, FromID: initialFromID})
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	if initial.ID != messageID || initial.JobID != id || initial.FromKind != core.MessageFromHuman || initial.FromID != initialFromID ||
-		initial.Sequence != 1 || initial.Input != input.Goal || initial.DeliveryIntent != core.MessageFollow || initial.SteerTargetTurnID != "" {
-		return core.Job{}, false, fmt.Errorf("Job %s initial message conflicts with complete admission input", id)
-	}
-	runID := core.AgentRunID(initial.ID)
-	sandboxID := core.MainSandboxName(id)
-	ownerNonce, err := reviewNonce()
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	if err := expectOneRows(queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: sandboxID, JobID: id, OwnershipNonce: ownerNonce})); err != nil {
-		// A retry must retain the originally reserved ownership nonce.
-		if _, getErr := queries.GetSandbox(ctx, sandboxID); getErr != nil {
-			return core.Job{}, false, err
-		}
-	}
-	if input.Workflow == investigation.Workflow {
-		if _, err := queries.InsertInvestigationAgentRun(ctx, dbsql.InsertInvestigationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, InputRevision: nullableString(revision), SandboxID: sandboxID}); err != nil {
-			return core.Job{}, false, err
-		}
-	} else {
-		if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: id, MessageID: initial.ID, SandboxID: sandboxID}); err != nil {
-			return core.Job{}, false, err
-		}
-	}
-	if input.Workflow == coding.Workflow {
-		if err := queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: id, OID: input.Revision, Branch: input.Branch}); err != nil {
-			return core.Job{}, false, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return core.Job{}, false, err
-	}
-	job, err := s.Job(ctx, id)
-	return job, rows == 1, err
-}
-
-func normalizeInvestigationSource(source investigation.Source) investigation.Source {
-	source.JobID = ""
-	source.Kind = investigation.SourceKind(strings.TrimSpace(string(source.Kind)))
-	source.Repository = strings.TrimSpace(source.Repository)
-	source.Revision = strings.TrimSpace(source.Revision)
-	source.BundleDigest = strings.TrimSpace(source.BundleDigest)
-	return source
-}
-
-func validateInvestigationSource(source investigation.Source) error {
-	if !ValidRevision(source.Revision) {
-		return fmt.Errorf("codebase-investigation source requires a lowercase full commit OID")
-	}
-	switch source.Kind {
-	case investigation.SourceRemote:
-		if source.Repository == "" || source.BundleDigest != "" || source.BundleByteSize != 0 {
-			return fmt.Errorf("remote investigation source requires only a repository URL and exact Revision")
-		}
-	case investigation.SourceGitBundle:
-		if source.Repository != "" || !sha256Digest.MatchString(source.BundleDigest) || source.BundleByteSize <= 0 {
-			return fmt.Errorf("Git-bundle investigation source requires exact retained digest, byte size, and Revision")
-		}
-	default:
-		return fmt.Errorf("codebase-investigation requires a remote or git-bundle source")
-	}
-	return nil
-}
-
 func investigationSourceParams(jobID string, source investigation.Source) dbsql.InsertCodebaseInvestigationSourceParams {
 	return dbsql.InsertCodebaseInvestigationSourceParams{
 		JobID: jobID, Kind: string(source.Kind), Repository: source.Repository, Revision: source.Revision,
@@ -415,36 +193,37 @@ type admittedAgentRun struct {
 
 type messageAuthorizer func(context.Context, *dbsql.Queries, dbsql.GetJobAdmissionForUpdateRow, core.MessageAdmission) (admittedAgentRun, error)
 
-func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
+func (s Store) AdmitCodingMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, coding.Workflow, coding.WorkflowRevision, authorizeCodingMessage)
 }
 
-func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.Message, bool, error) {
+func (s Store) AdmitInvestigationMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return s.admitMessage(ctx, input, investigation.Workflow, investigation.WorkflowRevision, authorizeInvestigationMessage)
 }
 
-func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.Message, bool, error) {
+func (s Store) admitMessage(ctx context.Context, input core.MessageAdmission, workflow core.WorkflowName, revision string, authorize messageAuthorizer) (core.MessageAdmissionResult, error) {
 	input, err := normalizeMessage(input)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	defer tx.Rollback()
 	message, created, err := admitMessageTx(ctx, tx, input, workflow, revision, authorize)
 	if err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return core.Message{}, false, err
+		return core.MessageAdmissionResult{}, err
 	}
-	return message, created, nil
+	return core.MessageAdmissionResult{Message: message, SandboxID: input.SandboxID, Created: created}, nil
 }
 
 func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error) {
 	input.JobID = strings.TrimSpace(input.JobID)
+	input.SandboxID = strings.TrimSpace(input.SandboxID)
 	input.FromKind = core.MessageFromKind(strings.TrimSpace(string(input.FromKind)))
 	input.FromID = strings.TrimSpace(input.FromID)
 	if input.FromKind == "" {
@@ -453,8 +232,8 @@ func normalizeMessage(input core.MessageAdmission) (core.MessageAdmission, error
 	if input.Intent == "" {
 		input.Intent = core.MessageFollow
 	}
-	if input.JobID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
-		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, from ID, and complete input")
+	if input.JobID == "" || input.SandboxID == "" || input.FromID == "" || strings.TrimSpace(input.Input) == "" {
+		return core.MessageAdmission{}, fmt.Errorf("message admission requires Job ID, exact Sandbox ID, from ID, and complete input")
 	}
 	if input.FromKind != core.MessageFromHuman && input.FromKind != core.MessageFromAgent && input.FromKind != core.MessageFromWorkflow {
 		return core.MessageAdmission{}, fmt.Errorf("invalid message from kind")
@@ -490,6 +269,13 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 		if message.Input != input.Input || message.Intent != input.Intent {
 			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to different complete message input or delivery intent", input.FromKind, input.FromID)
 		}
+		run, runErr := queries.GetAgentRunByMessage(ctx, message.ID)
+		if runErr != nil {
+			return core.Message{}, false, fmt.Errorf("load durable AgentRun for Message replay: %w", runErr)
+		}
+		if run.JobID != input.JobID || run.MessageID != message.ID || run.SandboxID != input.SandboxID {
+			return core.Message{}, false, fmt.Errorf("sender %s/%q is already bound to a different complete Sandbox delivery request", input.FromKind, input.FromID)
+		}
 		return message, false, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -504,6 +290,9 @@ func admitMessageTx(ctx context.Context, tx *sql.Tx, input core.MessageAdmission
 	run, err := authorize(ctx, queries, job, input)
 	if err != nil {
 		return core.Message{}, false, err
+	}
+	if run.SandboxID != input.SandboxID {
+		return core.Message{}, false, fmt.Errorf("message authorization returned a foreign Sandbox delivery")
 	}
 	var message core.Message
 	message.TargetTurnID = run.TargetTurnID
@@ -685,6 +474,19 @@ func agentRunFromValues(id, jobID, messageID string, state core.AgentRunState, h
 	return core.AgentRun{ID: id, JobID: jobID, MessageID: messageID, Harness: harness, ThreadID: threadID, State: state, BaselineRecorded: baselineRecorded, BaselineTurnID: baselineTurnID, TurnID: turnID, TurnOutcome: turnOutcome, Attention: attention, Role: role, InputRevision: inputRevision}
 }
 
+func agentRunOutcome(state core.AgentRunState, outcome string) string {
+	if state != core.AgentRunCompleted && state != core.AgentRunFailed && state != core.AgentRunInterrupted {
+		return ""
+	}
+	if outcome == "completed" || outcome == "failed" || outcome == "interrupted" {
+		return outcome
+	}
+	if state == core.AgentRunCompleted {
+		return ""
+	}
+	return string(state)
+}
+
 func timeValue(value sql.NullTime) time.Time {
 	if !value.Valid {
 		return time.Time{}
@@ -692,7 +494,7 @@ func timeValue(value sql.NullTime) time.Time {
 	return value.Time
 }
 
-func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error {
+func (s Store) RequestCleanup(ctx context.Context, jobID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -702,14 +504,18 @@ func (s Store) CloseAdmissionForCleanup(ctx context.Context, jobID string) error
 	if _, err := queries.GetCleanupJobForUpdate(ctx, jobID); err != nil {
 		return err
 	}
-	closed, err := queries.CloseAdmissionForCleanup(ctx, jobID)
+	closed, err := queries.RequestCleanup(ctx, jobID)
 	if err != nil {
 		return err
 	}
 	if closed != 1 {
-		return fmt.Errorf("cleanup cannot close admission while a pull-request Action or Proposal lacks a recorded Outcome")
+		return fmt.Errorf("Job %s cannot record cleanup request from its current state", jobID)
 	}
 	return tx.Commit()
+}
+
+func (s Store) CleanupRequests(ctx context.Context) ([]string, error) {
+	return dbsql.New(s.DB).ListCleanupRequests(ctx)
 }
 
 func (s Store) AttachCleanupTask(ctx context.Context, jobID, expectedCurrentTaskID, taskID, taskName string) error {
@@ -724,6 +530,9 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 	if jobID == "" || taskID == "" || taskName == "" {
 		return fmt.Errorf("Job task attachment requires exact Job, task, and task-name identities")
 	}
+	if cleanup && taskName != core.CleanupTaskName {
+		return fmt.Errorf("Job cleanup task must use Core task name %s", core.CleanupTaskName)
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -733,6 +542,16 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 	current, err := queries.GetCurrentJobTaskForUpdate(ctx, jobID)
 	if err != nil {
 		return err
+	}
+	if cleanup {
+		if current.AdmissionOpen || (current.CleanupState != core.CleanupRequested && current.CleanupState != core.CleanupScheduled) {
+			return fmt.Errorf("Job %s cannot attach cleanup from state %s", jobID, current.CleanupState)
+		}
+		if current.CleanupState == core.CleanupScheduled && current.TaskID != taskID {
+			return fmt.Errorf("Job %s already has cleanup task %s", jobID, current.TaskID)
+		}
+	} else if !current.AdmissionOpen || current.CleanupState != core.CleanupPending {
+		return fmt.Errorf("Job %s cannot attach ordinary task after cleanup begins", jobID)
 	}
 	if current.TaskID == taskID {
 		if current.TaskName != taskName {
@@ -752,7 +571,7 @@ func (s Store) attachJobTask(ctx context.Context, jobID, expectedCurrentTaskID, 
 			return fmt.Errorf("Absurd task %s is already attached to another Job", taskID)
 		}
 	}
-	if cleanup {
+	if cleanup && current.CleanupState == core.CleanupRequested {
 		updated, err := queries.MarkCleanupScheduled(ctx, jobID)
 		if err != nil {
 			return err
@@ -787,7 +606,7 @@ func (s Store) Sandbox(ctx context.Context, id string) (core.Sandbox, error) {
 	if err != nil {
 		return core.Sandbox{}, err
 	}
-	return core.Sandbox{ID: row.ID, JobID: row.JobID, OwnershipNonce: row.OwnershipNonce}, nil
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
 }
 func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, error) {
 	rows, err := dbsql.New(s.DB).ListJobSandboxes(ctx, jobID)
@@ -796,9 +615,72 @@ func (s Store) Sandboxes(ctx context.Context, jobID string) ([]core.Sandbox, err
 	}
 	out := make([]core.Sandbox, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, OwnershipNonce: r.OwnershipNonce})
+		out = append(out, core.Sandbox{ID: r.ID, JobID: r.JobID, Name: r.Name, OwnershipNonce: r.OwnershipNonce})
 	}
 	return out, nil
+}
+
+// EnsureSandbox durably reserves one stable logical Sandbox identity. Provider
+// reconciliation is deliberately outside this transaction and is protected by
+// the Job effect fence plus the Sandbox's stable Action.
+func (s Store) EnsureSandbox(ctx context.Context, jobID, name string) (core.Sandbox, error) {
+	jobID = strings.TrimSpace(jobID)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = core.DefaultSandbox
+	}
+	if jobID == "" || !sandboxName.MatchString(name) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox ensure requires a Job and a lowercase name containing only letters, digits, and hyphens")
+	}
+	id := core.NamedSandboxID(jobID, name)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	job, err := queries.GetJobForSandboxEnsure(ctx, jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return core.Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		return core.Sandbox{}, fmt.Errorf("Job %s cannot admit Sandbox %q after cleanup begins", jobID, name)
+	}
+	row, err := queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+	if errors.Is(err, sql.ErrNoRows) {
+		foreign, foreignErr := queries.GetSandboxForUpdate(ctx, id)
+		if foreignErr == nil {
+			return core.Sandbox{}, fmt.Errorf("Sandbox identity %s is already owned by Job %s as name %q", id, foreign.JobID, foreign.Name)
+		}
+		if !errors.Is(foreignErr, sql.ErrNoRows) {
+			return core.Sandbox{}, foreignErr
+		}
+		nonce, nonceErr := reviewNonce()
+		if nonceErr != nil {
+			return core.Sandbox{}, nonceErr
+		}
+		inserted, insertErr := queries.ReserveSandbox(ctx, dbsql.ReserveSandboxParams{ID: id, JobID: jobID, Name: name, OwnershipNonce: nonce})
+		if insertErr != nil {
+			return core.Sandbox{}, insertErr
+		}
+		if inserted != 1 {
+			return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with an existing durable resource", name)
+		}
+		row, err = queries.GetJobSandboxByNameForUpdate(ctx, dbsql.GetJobSandboxByNameForUpdateParams{JobID: jobID, Name: name})
+	}
+	if err != nil {
+		return core.Sandbox{}, err
+	}
+	if row.ID != id || row.JobID != jobID || row.Name != name || !sha256Digest.MatchString(row.OwnershipNonce) {
+		return core.Sandbox{}, fmt.Errorf("Sandbox %q conflicts with its exact Job-owned identity", name)
+	}
+	if err := tx.Commit(); err != nil {
+		return core.Sandbox{}, err
+	}
+	return core.Sandbox{ID: row.ID, JobID: row.JobID, Name: row.Name, OwnershipNonce: row.OwnershipNonce}, nil
 }
 
 func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, error) {
@@ -825,6 +707,85 @@ func (s Store) Deliveries(ctx context.Context, jobID string) ([]core.Delivery, e
 		out = append(out, core.Delivery{Message: message, AgentRun: run})
 	}
 	return out, nil
+}
+
+// CodingMessages converts Core's internal delivery facts into the
+// coding-owned read projection. Ordinary workflow coordination never receives
+// raw AgentRun lifecycle state, Thread, or Turn identities.
+func (s Store) CodingMessages(ctx context.Context, jobID string) ([]coding.MessageRecord, []coding.ReviewRunView, error) {
+	deliveries, err := s.Deliveries(ctx, jobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	sandboxes, err := s.Sandboxes(ctx, jobID)
+	if err != nil {
+		return nil, nil, err
+	}
+	owned := make(map[string]core.Sandbox, len(sandboxes))
+	for _, sandbox := range sandboxes {
+		owned[sandbox.ID] = sandbox
+	}
+	messages := make([]coding.MessageRecord, 0, len(deliveries))
+	reviews := make([]coding.ReviewRunView, 0)
+	for _, delivery := range deliveries {
+		run, message := delivery.AgentRun, delivery.Message
+		outcome := agentRunOutcome(run.State, run.TurnOutcome)
+		if run.Role == "implement" {
+			messages = append(messages, coding.MessageRecord{
+				Message: message, SandboxID: run.SandboxID, InputRevision: run.InputRevision,
+				ProducerID: run.ID, Outcome: outcome, Attention: run.Attention,
+				StartsTurn: message.Intent == core.MessageFollow || message.Intent == core.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID,
+			})
+			continue
+		}
+		sandbox, ok := owned[run.SandboxID]
+		if !ok || sandbox.JobID != run.JobID {
+			return nil, nil, fmt.Errorf("review producer %s has no exact Job-owned Sandbox %s", run.ID, run.SandboxID)
+		}
+		reviews = append(reviews, coding.ReviewRunView{
+			ID: run.ID, JobID: run.JobID, MessageID: run.MessageID, Harness: run.Harness,
+			ThreadID: run.ThreadID, TurnID: run.TurnID, Outcome: outcome, Attention: run.Attention,
+			Role: run.Role, InputRevision: run.InputRevision, Capability: run.Capability,
+			SandboxID: run.SandboxID, SubmissionNonce: run.SubmissionNonce,
+			StartedAt: run.StartedAt, FinishedAt: run.FinishedAt, Request: message, Sandbox: sandbox,
+		})
+	}
+	return messages, reviews, nil
+}
+
+// AgentMessageExecution reloads the exact durable execution aggregate by the
+// stable Message identity. Callers that may touch the Harness invoke this only
+// while holding the owning Job's effect fence and discard earlier snapshots.
+func (s Store) AgentMessageExecution(ctx context.Context, messageID string) (core.AgentMessageExecution, error) {
+	queries := dbsql.New(s.DB)
+	messageRow, err := queries.GetMessage(ctx, messageID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	message := messageFromValues(messageRow.ID, messageRow.JobID, messageRow.FromKind, messageRow.FromID, messageRow.Sequence, messageRow.Input, messageRow.DeliveryIntent, messageRow.SteerTargetTurnID)
+	message.AdmittedAt = messageRow.AdmittedAt
+	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
+	if err != nil {
+		return core.AgentMessageExecution{}, fmt.Errorf("Message %s has no atomically admitted AgentRun: %w", message.ID, err)
+	}
+	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+	run.Capability = runRow.Capability
+	run.SandboxID = runRow.SandboxID
+	run.SubmissionNonce = runRow.SubmissionNonce
+	run.StartedAt = timeValue(runRow.StartedAt)
+	run.FinishedAt = timeValue(runRow.FinishedAt)
+	job, err := s.Job(ctx, message.JobID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	sandbox, err := s.Sandbox(ctx, run.SandboxID)
+	if err != nil {
+		return core.AgentMessageExecution{}, err
+	}
+	if run.MessageID != message.ID || run.JobID != job.ID || message.JobID != job.ID || sandbox.JobID != job.ID || run.SandboxID != sandbox.ID {
+		return core.AgentMessageExecution{}, fmt.Errorf("Message %s execution does not match its authoritative Job, AgentRun, and Sandbox", message.ID)
+	}
+	return core.AgentMessageExecution{Job: job, Message: message, AgentRun: run, Sandbox: sandbox}, nil
 }
 
 func (s Store) InterruptAgentRun(ctx context.Context, runID, reason string) error {
@@ -998,42 +959,11 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 	}
 	defer tx.Rollback()
 	queries := dbsql.New(s.DB).WithTx(tx)
-	completed, err := queries.GetActionByIDForUpdate(ctx, id)
+	completed, err := authorizeSandboxActionTx(ctx, queries, id, "", "", false)
 	if err != nil {
 		return err
 	}
-	if completed.State != core.ActionUnsettled && completed.State != core.ActionSucceeded {
-		return fmt.Errorf("Sandbox Action %s is %s, not unsettled or succeeded", id, completed.State)
-	}
-	kind, scope := completed.Kind, completed.ScopeKey
-	if scope == "" {
-		return fmt.Errorf("Sandbox Action %s has no exact Sandbox", id)
-	}
-	sandbox, err := queries.GetSandbox(ctx, scope)
-	if err != nil {
-		return err
-	}
-	if completed.ID != id || sandbox.JobID != completed.JobID || id != core.ScopedActionID(completed.JobID, kind, scope) {
-		return fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
-	}
-	if kind == core.ActionSandboxDelete {
-		revokedRow, getErr := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: completed.JobID, Kind: core.ActionRouteRevoke, ScopeKey: scope})
-		if errors.Is(getErr, sql.ErrNoRows) {
-			err = fmt.Errorf("Sandbox cleanup cannot complete before its exact route revoke Action succeeds")
-		} else if getErr != nil {
-			err = getErr
-		} else {
-			var revoked core.Action
-			revoked, err = exactScopedAction(revokedRow, completed.JobID, core.ActionRouteRevoke, scope)
-			if err == nil && revoked.State != core.ActionSucceeded {
-				err = fmt.Errorf("Sandbox cleanup cannot complete before its exact route revoke Action succeeds")
-			}
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if completed.State == core.ActionSucceeded {
+	if completed.Action.State == core.ActionSucceeded {
 		return tx.Commit()
 	}
 	if err := expectOneRows(queries.RecordSandboxActionSuccess(ctx, id)); err != nil {
@@ -1042,7 +972,105 @@ func (s Store) RecordSandboxActionSuccess(ctx context.Context, id string) error 
 	return tx.Commit()
 }
 
-func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, error) {
+// AuthorizeSandboxAction validates immutable ownership and cleanup
+// prerequisites before any provider mutation. In particular, external delete
+// is never attempted until route revocation is durably settled.
+func (s Store) AuthorizeSandboxAction(ctx context.Context, id, taskID, taskName string) (core.SandboxActionAuthorization, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	defer tx.Rollback()
+	queries := dbsql.New(tx)
+	authorized, err := authorizeSandboxActionTx(ctx, queries, id, strings.TrimSpace(taskID), strings.TrimSpace(taskName), true)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	return authorized, nil
+}
+
+func authorizeSandboxActionTx(ctx context.Context, queries *dbsql.Queries, id, taskID, taskName string, requireTask bool) (core.SandboxActionAuthorization, error) {
+	row, err := queries.GetActionByIDForUpdate(ctx, id)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if row.State != core.ActionUnsettled && row.State != core.ActionSucceeded {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s is %s, not unsettled or succeeded", id, row.State)
+	}
+	if row.ScopeKey == "" || row.ID != core.ScopedActionID(row.JobID, row.Kind, row.ScopeKey) {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	}
+	owned, err := queries.GetSandbox(ctx, row.ScopeKey)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if owned.JobID != row.JobID {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s conflicts with its exact Job and Sandbox", id)
+	}
+	job, err := queries.GetJobForSandboxActionAuthorization(ctx, row.JobID)
+	if err != nil {
+		return core.SandboxActionAuthorization{}, err
+	}
+	if requireTask && (taskID == "" || taskName == "" || job.CurrentTaskID != taskID || job.CurrentTaskName != taskName) {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s requires the exact current attached task", id)
+	}
+	cleanup := row.Kind == core.ActionRouteRevoke || row.Kind == core.ActionSandboxDelete
+	if cleanup {
+		if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled || requireTask && taskName != core.CleanupTaskName {
+			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup Action %s requires a durably scheduled cleanup", id)
+		}
+	} else if !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox Action %s cannot mutate provider after cleanup begins", id)
+	}
+	if row.Kind == core.ActionSandboxDelete {
+		revoked, err := queries.GetScopedAction(ctx, dbsql.GetScopedActionParams{JobID: row.JobID, Kind: core.ActionRouteRevoke, ScopeKey: row.ScopeKey})
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && revoked.State != core.ActionSucceeded) {
+			return core.SandboxActionAuthorization{}, fmt.Errorf("Sandbox cleanup cannot delete before its exact route revoke Action succeeds")
+		}
+		if err != nil {
+			return core.SandboxActionAuthorization{}, err
+		}
+	}
+	return core.SandboxActionAuthorization{
+		Job: core.Job{
+			ID: job.ID, AdmissionKey: job.AdmissionKey, Workflow: job.WorkflowName, WorkflowRevision: job.WorkflowRevision, Goal: job.Goal,
+			SandboxProfile: job.SandboxProfile, ProviderConnection: job.ProviderConnection, Model: job.Model, ReasoningEffort: job.ReasoningEffort,
+			AdmissionOpen: job.AdmissionOpen, CleanupState: job.CleanupState, CurrentTaskID: job.CurrentTaskID,
+			WorkflowAttention: job.WorkflowAttention, WorkflowAttentionSource: job.WorkflowAttentionSource,
+			WorkflowAttentionAt: timeValue(job.WorkflowAttentionAt), CleanupAttention: job.CleanupAttention,
+			AdmittedAt: job.AdmittedAt, CleanedAt: timeValue(job.CleanedAt),
+		},
+		Sandbox: core.Sandbox{ID: owned.ID, JobID: owned.JobID, Name: owned.Name, OwnershipNonce: owned.OwnershipNonce},
+		Action:  actionFromValues(row.ID, row.JobID, row.Kind, row.State, row.ScopeKey, row.CreatedAt, row.SettledAt),
+		TaskID:  job.CurrentTaskID, TaskName: job.CurrentTaskName,
+	}, nil
+}
+
+// CodingAgentMessage selects one opaque Message under the coding Job lock and
+// preserves the exact FIFO/steer, Revision, role, and shared-thread checks
+// required before Core may reconcile it.
+func (s Store) CodingAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+	return s.codingAgentMessage(ctx, jobID, "")
+}
+
+// ValidateCodingAgentMessage repeats selection from authoritative facts while
+// Core holds the Job effect fence. A stale workflow snapshot cannot mutate the
+// Harness after a different Message becomes eligible.
+func (s Store) ValidateCodingAgentMessage(ctx context.Context, execution core.AgentMessageExecution) error {
+	selected, err := s.codingAgentMessage(ctx, execution.Job.ID, execution.Message.ID)
+	if err != nil {
+		return err
+	}
+	if selected == nil || selected.MessageID != execution.Message.ID || selected.SandboxID != execution.Sandbox.ID {
+		return fmt.Errorf("Message %s is no longer the exact eligible coding Agent Message", execution.Message.ID)
+	}
+	return nil
+}
+
+func (s Store) codingAgentMessage(ctx context.Context, jobID, expectedMessageID string) (*core.AgentMessageWork, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1059,9 +1087,12 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 	// A steer is a distinct priority lane aimed at the active harness Turn. It may
 	// overtake older queued follow-ups; the immutable sequence still records
 	// admission order, while follow-up turn starts remain FIFO.
-	row, err := queries.NextDeliveryCandidate(ctx, jobID)
+	row, err := queries.NextCodingAgentMessage(ctx, jobID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+		if expectedMessageID != "" {
+			return nil, fmt.Errorf("Message %s is no longer eligible for coding Agent reconciliation", expectedMessageID)
+		}
+		return nil, tx.Commit()
 	}
 	if err != nil {
 		return nil, err
@@ -1070,28 +1101,42 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
 		Sequence: row.Sequence, Input: row.Input, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
 	}
-	runID := core.AgentRunID(message.ID)
-	if _, err := queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{ID: runID, JobID: jobID, MessageID: message.ID, SandboxID: core.MainSandboxName(jobID)}); err != nil {
-		return nil, err
-	}
 	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("delivery Message %s has no atomically admitted AgentRun: %w", message.ID, err)
 	}
 	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
 	run.SandboxID = runRow.SandboxID
+	if run.State == core.AgentRunPending && run.ThreadID == "" && message.Sequence > 1 {
+		if _, err := queries.BindPendingCodingMessageToPriorThread(ctx, message.ID); err != nil {
+			return nil, err
+		}
+		runRow, err = queries.GetAgentRunByMessage(ctx, message.ID)
+		if err != nil {
+			return nil, err
+		}
+		run = agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
+		run.SandboxID = runRow.SandboxID
+		if run.ThreadID == "" {
+			prior, priorErr := queries.GetLatestImplementationThreadBinding(ctx, dbsql.GetLatestImplementationThreadBindingParams{JobID: jobID, SandboxID: run.SandboxID})
+			if priorErr == nil && prior.ThreadID != "" {
+				return nil, fmt.Errorf("eligible coding follow Message %s did not adopt authoritative prior implementation Thread %s", message.ID, prior.ThreadID)
+			}
+			if priorErr != nil && !errors.Is(priorErr, sql.ErrNoRows) {
+				return nil, priorErr
+			}
+		}
+	}
 	if run.Role != "implement" {
 		return nil, fmt.Errorf("delivery candidate AgentRun %s has unsupported role %s", run.ID, run.Role)
 	}
-	if run.InputRevision == "" {
-		if err := expectOneRows(queries.BindImplementationInputRevision(ctx, dbsql.BindImplementationInputRevisionParams{InputRevision: sql.NullString{String: job.Revision, Valid: true}, RunID: run.ID})); err != nil {
-			return nil, err
-		}
-		run.InputRevision = job.Revision
-	} else if run.InputRevision != job.Revision && run.State == core.AgentRunPending {
+	if run.InputRevision != job.Revision && run.State == core.AgentRunPending {
 		return nil, fmt.Errorf("AgentRun %s input Revision %s conflicts with current Revision %s", run.ID, run.InputRevision, job.Revision)
 	}
-	bindings, err := queries.ListImplementationThreadBindings(ctx, jobID)
+	if run.SandboxID != core.MainSandboxName(jobID) {
+		return nil, fmt.Errorf("AgentRun %s is not bound to the exact coding Sandbox", run.ID)
+	}
+	bindings, err := queries.ListImplementationThreadBindings(ctx, dbsql.ListImplementationThreadBindingsParams{JobID: jobID, SandboxID: run.SandboxID})
 	if err != nil {
 		return nil, err
 	}
@@ -1104,31 +1149,10 @@ func (s Store) NextDelivery(ctx context.Context, jobID string) (*core.Delivery, 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &core.Delivery{Message: message, AgentRun: run}, nil
-}
-
-// DeliveryCandidate exposes the same FIFO/steer choice as NextDelivery without
-// binding the AgentRun or mutating any workflow fact.
-func (s Store) DeliveryCandidate(ctx context.Context, jobID string) (*core.Delivery, error) {
-	queries := dbsql.New(s.DB)
-	row, err := queries.NextDeliveryCandidate(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+	if expectedMessageID != "" && message.ID != expectedMessageID {
+		return nil, fmt.Errorf("Message %s is not the exact eligible coding Agent Message %s", expectedMessageID, message.ID)
 	}
-	if err != nil {
-		return nil, err
-	}
-	message := core.Message{
-		ID: row.ID, JobID: row.JobID, FromKind: core.MessageFromKind(row.FromKind), FromID: row.FromID,
-		Sequence: row.Sequence, Input: row.Input, Intent: core.MessageDeliveryIntent(row.DeliveryIntent), TargetTurnID: row.SteerTargetTurnID, AdmittedAt: row.AdmittedAt,
-	}
-	runRow, err := queries.GetAgentRunByMessage(ctx, message.ID)
-	if err != nil {
-		return nil, err
-	}
-	run := agentRunFromValues(runRow.ID, runRow.JobID, runRow.MessageID, runRow.State, runRow.Harness, runRow.ThreadID, runRow.BaselineRecorded, runRow.BaselineTurnID, runRow.TurnID, runRow.TurnOutcome, runRow.Attention, runRow.Role, runRow.InputRevision)
-	run.SandboxID = runRow.SandboxID
-	return &core.Delivery{Message: message, AgentRun: run}, nil
+	return &core.AgentMessageWork{MessageID: message.ID, SandboxID: run.SandboxID}, nil
 }
 
 func (s Store) PrepareAgentRun(ctx context.Context, runID, harness, baselineTurnID string) error {
@@ -1193,7 +1217,7 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 		return fmt.Errorf("AgentRun %s must be prepared before binding a harness Turn", runID)
 	}
 	if run.Role == "implement" {
-		bindings, err := queries.ListImplementationThreadBindings(ctx, run.JobID)
+		bindings, err := queries.ListImplementationThreadBindings(ctx, dbsql.ListImplementationThreadBindingsParams{JobID: run.JobID, SandboxID: run.SandboxID})
 		if err != nil {
 			return err
 		}
@@ -1201,14 +1225,6 @@ func (s Store) BindAgentRun(ctx context.Context, runID, harness, threadID, turnI
 			if binding.Harness.String != harness || binding.ThreadID.String != threadID {
 				return fmt.Errorf("AgentRun %s conflicts with Job %s implementation Thread", runID, run.JobID)
 			}
-		}
-	} else {
-		inherited, err := queries.ImplementationThreadExists(ctx, dbsql.ImplementationThreadExistsParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}})
-		if err != nil {
-			return err
-		}
-		if inherited {
-			return fmt.Errorf("review AgentRun %s cannot inherit an implementation Thread", runID)
 		}
 	}
 	if err := expectOneRows(queries.BindAgentRunIdentity(ctx, dbsql.BindAgentRunIdentityParams{Harness: sql.NullString{String: harness, Valid: true}, ThreadID: sql.NullString{String: threadID, Valid: true}, RunID: runID})); err != nil {
@@ -1258,20 +1274,16 @@ func (s Store) AgentRunAttention(ctx context.Context, runID, reason string) erro
 	return expectOneRows(dbsql.New(s.DB).SetAgentRunAttention(ctx, dbsql.SetAgentRunAttentionParams{Reason: sql.NullString{String: reason, Valid: true}, RunID: runID}))
 }
 
-func (s Store) HarnessMutationDelivery(ctx context.Context, jobID string) (*core.Delivery, error) {
-	row, err := dbsql.New(s.DB).GetHarnessMutationDelivery(ctx, jobID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+func (s Store) UnsettledAgentMessages(ctx context.Context, jobID string) ([]core.AgentMessageWork, error) {
+	rows, err := dbsql.New(s.DB).ListUnsettledAgentMessages(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	delivery := core.Delivery{
-		Message:  messageFromValues(row.MessageID, row.JobID, row.FromKind, row.FromID, row.Sequence, row.Input, row.DeliveryIntent, row.SteerTargetTurnID),
-		AgentRun: agentRunFromValues(row.AgentRunID, row.AgentRunJobID, row.AgentRunMessageID, row.State, row.Harness, row.ThreadID, row.BaselineRecorded, row.BaselineTurnID, row.TurnID, row.TurnOutcome, row.Attention, row.Role, row.InputRevision),
+	messages := make([]core.AgentMessageWork, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, core.AgentMessageWork{MessageID: row.MessageID, SandboxID: row.SandboxID})
 	}
-	delivery.Message.AdmittedAt = row.AdmittedAt
-	return &delivery, nil
+	return messages, nil
 }
 
 func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) error {
@@ -1282,7 +1294,7 @@ func (s Store) SetCleanupAttention(ctx context.Context, jobID, detail string) er
 	return expectOneRows(dbsql.New(s.DB).SetCleanupAttention(ctx, dbsql.SetCleanupAttentionParams{Detail: detail, JobID: jobID}))
 }
 
-func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
+func (s Store) CompleteCleanup(ctx context.Context, jobID, taskID string) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1293,11 +1305,21 @@ func (s Store) CompleteCleanup(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	if job.CurrentTaskID == "" || job.CurrentTaskID != strings.TrimSpace(taskID) {
+		return fmt.Errorf("cleanup cannot complete without ownership by the Job's current attached cleanup task")
+	}
+	tasks, err := queries.ListJobTasks(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if len(tasks) == 0 || tasks[len(tasks)-1].TaskID != taskID || tasks[len(tasks)-1].TaskName != core.CleanupTaskName {
+		return fmt.Errorf("cleanup cannot complete without the exact Core cleanup task attachment")
+	}
+	if !job.AdmissionOpen && job.CleanupState == core.CleanupComplete {
+		return tx.Commit()
+	}
 	if job.AdmissionOpen || job.CleanupState != core.CleanupScheduled {
 		return fmt.Errorf("cleanup cannot complete while admission or cleanup scheduling remains unsettled")
-	}
-	if job.CurrentTaskID == "" {
-		return fmt.Errorf("cleanup cannot complete without the Job's current attached execution task")
 	}
 	deliveries, err := queries.ListDeliveries(ctx, jobID)
 	if err != nil {

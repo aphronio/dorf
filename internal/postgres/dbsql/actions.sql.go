@@ -211,21 +211,25 @@ func (q *Queries) RecordSandboxActionSuccess(ctx context.Context, id string) (in
 }
 
 const reserveSandbox = `-- name: ReserveSandbox :execrows
-insert into dorf.sandboxes(id,job_id,ownership_nonce)
-values($1,$2,$3)
-on conflict(id) do update set id=dorf.sandboxes.id
-where dorf.sandboxes.job_id=excluded.job_id
-  and dorf.sandboxes.ownership_nonce=excluded.ownership_nonce
+insert into dorf.sandboxes(id,job_id,name,ownership_nonce)
+values($1,$2,$3,$4)
+on conflict do nothing
 `
 
 type ReserveSandboxParams struct {
 	ID             string
 	JobID          string
+	Name           string
 	OwnershipNonce string
 }
 
 func (q *Queries) ReserveSandbox(ctx context.Context, arg ReserveSandboxParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, reserveSandbox, arg.ID, arg.JobID, arg.OwnershipNonce)
+	result, err := q.db.ExecContext(ctx, reserveSandbox,
+		arg.ID,
+		arg.JobID,
+		arg.Name,
+		arg.OwnershipNonce,
+	)
 	if err != nil {
 		return 0, err
 	}

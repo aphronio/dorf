@@ -33,10 +33,15 @@ select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
        coalesce(thread_id,'') as thread_id,role
 from dorf.agent_runs
 where job_id=$1 and state='active' and turn_id is not null
-  and role='implement'
+  and role='implement' and sandbox_id=$2
 order by started_at,id
 limit 1
 `
+
+type GetActiveImplementationTurnParams struct {
+	JobID     string
+	SandboxID string
+}
 
 type GetActiveImplementationTurnRow struct {
 	TurnID   string
@@ -45,8 +50,8 @@ type GetActiveImplementationTurnRow struct {
 	Role     string
 }
 
-func (q *Queries) GetActiveImplementationTurn(ctx context.Context, jobID string) (GetActiveImplementationTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, jobID)
+func (q *Queries) GetActiveImplementationTurn(ctx context.Context, arg GetActiveImplementationTurnParams) (GetActiveImplementationTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, arg.JobID, arg.SandboxID)
 	var i GetActiveImplementationTurnRow
 	err := row.Scan(
 		&i.TurnID,
@@ -136,6 +141,42 @@ func (q *Queries) GetLatestTurnStartRun(ctx context.Context, jobID string) (GetL
 		&i.Role,
 		&i.InputRevision,
 		&i.Observed,
+	)
+	return i, err
+}
+
+const getMessage = `-- name: GetMessage :one
+select id,job_id,from_kind,from_id,sequence,input,delivery_intent,
+       coalesce(steer_target_turn_id,'') as steer_target_turn_id,admitted_at
+from dorf.job_messages
+where id=$1
+`
+
+type GetMessageRow struct {
+	ID                string
+	JobID             string
+	FromKind          core.MessageFromKind
+	FromID            string
+	Sequence          int64
+	Input             string
+	DeliveryIntent    core.MessageDeliveryIntent
+	SteerTargetTurnID string
+	AdmittedAt        time.Time
+}
+
+func (q *Queries) GetMessage(ctx context.Context, messageID string) (GetMessageRow, error) {
+	row := q.db.QueryRowContext(ctx, getMessage, messageID)
+	var i GetMessageRow
+	err := row.Scan(
+		&i.ID,
+		&i.JobID,
+		&i.FromKind,
+		&i.FromID,
+		&i.Sequence,
+		&i.Input,
+		&i.DeliveryIntent,
+		&i.SteerTargetTurnID,
+		&i.AdmittedAt,
 	)
 	return i, err
 }

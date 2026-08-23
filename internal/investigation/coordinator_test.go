@@ -14,9 +14,8 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	job := core.Job{ID: "job-1", Workflow: Workflow, WorkflowRevision: WorkflowRevision, AdmissionOpen: true}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
-	run := core.AgentRun{ID: "run-1", JobID: job.ID, Role: "investigate", State: core.AgentRunPending, SandboxID: sandbox.ID}
-	delivery := core.Delivery{Message: core.Message{Sequence: 1}, AgentRun: run}
-	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Deliveries: []core.Delivery{delivery}, Delivery: delivery, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
+	message := MessageRecord{MessageID: "message-1", SandboxID: sandbox.ID}
+	snapshot := Snapshot{Job: job, MainSandbox: sandbox, Message: message, Source: Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: revision}}
 
 	steps := []core.ActionKind{core.ActionSandboxCreate, gitworkspace.ActionRepositoryClone, core.ActionRouteCreate}
 	for _, want := range steps {
@@ -29,21 +28,16 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 		}
 		snapshot.Actions = append(snapshot.Actions, core.Action{Kind: want, Scope: sandbox.ID, State: core.ActionSucceeded})
 	}
-	if work := snapshot.Project(); work.Kind != WorkDeliver || work.FactID != run.ID {
-		t.Fatalf("delivery work=%#v", work)
+	if work := snapshot.Project(); work.Kind != WorkWaitAgent || work.FactID != message.MessageID {
+		t.Fatalf("Agent Message work=%#v", work)
 	}
-	snapshot.Delivery.AgentRun.State = core.AgentRunActive
-	if work := snapshot.Project(); work.Kind != WorkObserveAgent {
-		t.Fatalf("observation work=%#v", work)
+	snapshot.Message.Outcome = "completed"
+	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
+		t.Fatalf("open Job with completed investigator projected workflow work=%#v", work)
 	}
-	snapshot.Delivery.AgentRun.State = core.AgentRunCompleted
-	if work := snapshot.Project(); work.Kind != WorkRecordDraft {
-		t.Fatalf("draft work=%#v", work)
-	}
-	draft := Draft{JobID: job.ID, AgentRunID: run.ID, ArtifactID: "artifact-draft"}
-	snapshot.Drafts = []Draft{draft}
-	if work := snapshot.Project(); work.Kind != WorkWaitInput || work.FactID != draft.ArtifactID || !strings.Contains(work.Detail, "follow-up") || !strings.Contains(work.Detail, "cleanup") {
-		t.Fatalf("waiting work=%#v", work)
+	snapshot.Message = MessageRecord{}
+	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
+		t.Fatalf("open Job with no unsettled Message projected workflow work=%#v", work)
 	}
 	snapshot.Job.AdmissionOpen = false
 	if work := snapshot.Project(); work.Kind != WorkComplete {
@@ -55,9 +49,13 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if TaskName != "dorf-codebase-investigation-v2" || TaskKey("job-1") != "codebase-investigation:v2:job-1" {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
-	options := wakeOptions(Work{Kind: WorkObserveAgent, FactID: "run-1"}, 2)
-	if options.StepName != "dorf/investigation-agent-wake/v2/run-1/00000000000000000002" || options.Timeout != time.Second {
-		t.Fatalf("active investigator wake=%#v", options)
+	active := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
+	if active.Timeout != time.Second || active.StepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" {
+		t.Fatalf("active investigator wake=%#v", active)
+	}
+	idle := wakeOptions(Work{}, 3)
+	if idle.Timeout != 30*time.Second || idle.StepName != "dorf/investigation-wake/v2/00000000000000000003" {
+		t.Fatalf("open-idle Message wake=%#v", idle)
 	}
 }
 
@@ -67,9 +65,9 @@ func TestCodebaseInvestigationProjectsRetainedBundleRestore(t *testing.T) {
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
-		Delivery: core.Delivery{AgentRun: core.AgentRun{ID: "run-local", JobID: job.ID, Role: "investigate", State: core.AgentRunPending, SandboxID: sandbox.ID}},
-		Actions:  []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
+		Source:  Source{JobID: job.ID, Kind: SourceGitBundle, Revision: revision, BundleDigest: strings.Repeat("c", 64), BundleByteSize: 42},
+		Message: MessageRecord{MessageID: "message-local", SandboxID: sandbox.ID},
+		Actions: []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded}},
 	}
 	work := snapshot.Project()
 	if work.Kind != WorkAction || work.ActionKind != ActionRepositoryRestore || work.Description() != "Restoring retained repository" {
@@ -85,8 +83,8 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
 	snapshot := Snapshot{
 		Job: job, MainSandbox: sandbox,
-		Source:   Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
-		Delivery: core.Delivery{AgentRun: core.AgentRun{ID: "run-attention", JobID: job.ID, Role: "investigate", State: core.AgentRunPending, SandboxID: sandbox.ID}},
+		Source:  Source{JobID: job.ID, Kind: SourceRemote, Repository: "https://example.test/repo.git", Revision: strings.Repeat("a", 40)},
+		Message: MessageRecord{MessageID: "message-attention", SandboxID: sandbox.ID},
 	}
 	work := snapshot.Project()
 	if work.Kind != WorkAttention || work.FactID != source || work.Detail != job.WorkflowAttention {
@@ -94,40 +92,13 @@ func TestCodebaseInvestigationSurfacesSandboxActionAttention(t *testing.T) {
 	}
 }
 
-func TestInvestigationReportKeepsFlexibleMarkdown(t *testing.T) {
-	tests := []string{
-		"# Finding\n\nSee `internal/investigation/coordinator.go:54`.\n",
-		"No material issue was found.\n",
-	}
-	for _, test := range tests {
-		report, err := validateInvestigationReport(test)
-		if err != nil || report != test {
-			t.Fatalf("report=%q err=%v", report, err)
-		}
-	}
-	for _, invalid := range []string{"", " \n\t", strings.Repeat("x", (1<<20)+1)} {
-		if _, err := validateInvestigationReport(invalid); err == nil {
-			t.Fatalf("accepted invalid output %q", invalid)
-		}
-	}
-}
-
-func TestInvestigationAgentInputRequiresPortableRepositoryCitations(t *testing.T) {
+func TestInvestigationAgentPromptOwnsReportPathAndPortableCitations(t *testing.T) {
 	revision := strings.Repeat("a", 40)
-	input := investigationAgentInput(
-		Source{Revision: revision},
-		core.Delivery{Message: core.Message{Input: "Find one architectural weakness."}, AgentRun: core.AgentRun{Role: "investigate"}},
-	)
-	for _, required := range []string{
-		"current working directory is its root", "repository-relative paths with 1-based line numbers",
-		"<path>:<line> or <path>:<start>-<end>", "Do not include absolute Sandbox paths", revision,
-	} {
+	input := AgentPrompt(Source{Revision: revision}, "Find one architectural weakness.")
+	for _, required := range []string{ReportPath, revision, "complete Markdown report", "Replace its contents", "repository-relative paths", "1-based line numbers"} {
 		if !strings.Contains(input, required) {
 			t.Fatalf("investigation input lacks %q:\n%s", required, input)
 		}
-	}
-	if strings.Contains(input, "/workspace/job") {
-		t.Fatalf("investigation input contains a Dorf-specific path:\n%s", input)
 	}
 }
 
@@ -144,27 +115,5 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 	investigationDefinition := WorkflowDefinition()
 	if err := (profile.Runtime{SandboxProfile: "e2b"}).Require(investigationDefinition.Name, investigationDefinition.Revision, investigationDefinition.RequiredProviderCapabilities); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestPresentationUsesOptionalCopyWithReadableFallbacks(t *testing.T) {
-	definition := WorkflowDefinition()
-	if got := definition.OperationLabel(string(WorkWaitInput), "Wait"); got != "Waiting for follow-up or cleanup" {
-		t.Fatalf("operation label=%q", got)
-	}
-	if got := definition.OperationLabel("custom-operation", "Custom operation"); got != "Custom operation" {
-		t.Fatalf("operation fallback=%q", got)
-	}
-	if got := definition.AgentRoleLabel("investigate"); got != "Investigator" {
-		t.Fatalf("agent role label=%q", got)
-	}
-	if got := definition.AgentRoleLabel("security-review"); got != "Security review" {
-		t.Fatalf("agent role fallback=%q", got)
-	}
-	if got := definition.ResultLabel("investigation-draft"); got != "Investigation draft" {
-		t.Fatalf("result label=%q", got)
-	}
-	if got := definition.ResultLabel("architecture-note"); got != "Architecture note" {
-		t.Fatalf("result fallback=%q", got)
 	}
 }

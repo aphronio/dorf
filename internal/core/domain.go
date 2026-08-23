@@ -13,6 +13,7 @@ type CleanupState string
 
 const (
 	CleanupPending   CleanupState = "pending"
+	CleanupRequested CleanupState = "requested"
 	CleanupScheduled CleanupState = "scheduled"
 	CleanupComplete  CleanupState = "complete"
 )
@@ -64,7 +65,7 @@ type SandboxProvider string
 const (
 	SandboxProviderIncus SandboxProvider = "incus"
 	SandboxProviderE2B   SandboxProvider = "e2b"
-	BaseProfileContract                  = "base-1"
+	BaseProfileContract                  = "base-2"
 )
 
 // SandboxProfile is one named provider, artifact, and Harness definition
@@ -129,6 +130,7 @@ type Job struct {
 type Sandbox struct {
 	ID             string `json:"id"`
 	JobID          string `json:"job_id"`
+	Name           string `json:"name"`
 	OwnershipNonce string `json:"-"`
 }
 
@@ -197,6 +199,35 @@ type Delivery struct {
 	AgentRun AgentRun `json:"agent_run"`
 }
 
+// AgentMessageExecution is Core's authoritative private execution aggregate.
+// Consumers address work by Message identity; Core reloads the internal
+// AgentRun and exact Job-owned Sandbox before touching the Harness.
+type AgentMessageExecution struct {
+	Job      Job
+	Message  Message
+	AgentRun AgentRun
+	Sandbox  Sandbox
+}
+
+// MessageResult is the smallest consumer observation of one admitted Message.
+// An empty Outcome means that the Harness work has not reached a terminal
+// result yet. Harness Thread, Turn, and AgentRun identity remain internal.
+type MessageResult struct {
+	MessageID string `json:"message_id"`
+	Outcome   string `json:"outcome,omitempty"`
+	Output    string `json:"output,omitempty"`
+}
+
+func (r MessageResult) Terminal() bool { return r.Outcome != "" }
+
+// AgentMessageWork is the opaque static-composition result that one exact
+// Message in one exact Sandbox still needs Core reconciliation. Core consumes
+// it inside the Job fence; workflow coordinators never receive it.
+type AgentMessageWork struct {
+	MessageID string `json:"message_id"`
+	SandboxID string `json:"sandbox_id"`
+}
+
 type Action struct {
 	ID        string      `json:"id"`
 	JobID     string      `json:"job_id"`
@@ -205,6 +236,16 @@ type Action struct {
 	Scope     string      `json:"scope"`
 	CreatedAt time.Time   `json:"created_at,omitempty"`
 	SettledAt time.Time   `json:"settled_at,omitempty"`
+}
+
+// SandboxActionAuthorization is the authoritative persisted provider-effect
+// tuple, including the exact current Absurd task attachment.
+type SandboxActionAuthorization struct {
+	Job      Job
+	Sandbox  Sandbox
+	Action   Action
+	TaskID   string
+	TaskName string
 }
 
 type Evidence struct {
@@ -221,21 +262,6 @@ type Evidence struct {
 	FinishedAt time.Time `json:"finished_at,omitempty"`
 }
 
-// Artifact is one immutable, named deliverable produced by a workflow. Its
-// bytes live in the deployment-owned content-addressed store; this record is
-// the durable Job-scoped identity used for discovery and retrieval.
-type Artifact struct {
-	ID         string    `json:"id"`
-	JobID      string    `json:"job_id"`
-	Name       string    `json:"name"`
-	Digest     string    `json:"digest"`
-	ByteSize   int64     `json:"byte_size"`
-	MediaType  string    `json:"media_type"`
-	Producer   string    `json:"producer"`
-	AgentRunID string    `json:"agent_run_id"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
 type HarnessTurn struct {
 	ID                 string   `json:"id"`
 	Status             string   `json:"status"`
@@ -249,19 +275,16 @@ func (t HarnessTurn) Terminal() bool {
 }
 
 // HarnessBinding is the complete runner-neutral identity of one harness turn.
-// ControllerID is transient adapter ownership proof; Dorf does not persist it.
 type HarnessBinding struct {
-	Harness      string
-	ThreadID     string
-	Turn         HarnessTurn
-	ControllerID string
+	Harness  string
+	ThreadID string
+	Turn     HarnessTurn
 }
 
 type HarnessHistory struct {
-	Harness      string
-	ThreadID     string
-	Turns        []HarnessTurn
-	ControllerID string
+	Harness  string
+	ThreadID string
+	Turns    []HarnessTurn
 }
 
 type Reconciliation struct {
@@ -282,14 +305,20 @@ func AgentRunID(messageID string) string {
 	return "agent-run-" + digest(messageID, 24)
 }
 
-func ArtifactID(jobID, name string) string {
-	return "artifact-" + digest(jobID+"\x00"+name, 24)
-}
+const DefaultSandbox = "default"
 
 // MainSandboxName and ProviderRouteID are exact resource identities derived
-// before their external create effects.
+// before their external create effects. MainSandboxName remains the stable
+// identity of the Job's default Sandbox.
 func MainSandboxName(jobID string) string {
 	return "dorf-" + digest(jobID, 20)
+}
+
+func NamedSandboxID(jobID, name string) string {
+	if name == DefaultSandbox {
+		return MainSandboxName(jobID)
+	}
+	return "dorf-" + digest(jobID+"\x00sandbox\x00"+name, 20)
 }
 
 func ProviderRouteID(actionID string) string {

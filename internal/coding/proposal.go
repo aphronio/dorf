@@ -27,7 +27,7 @@ type ProposalOutcome interface {
 	Record(context.Context, string, OutcomeKind) (Outcome, bool, error)
 }
 
-type ProposalMessageAdmitter func(context.Context, string, string, string) (core.Message, bool, error)
+type ProposalMessageAdmitter func(context.Context, string, string, string) (core.MessageReceipt, error)
 
 // ProposalRuntime holds the coding proposal workflow's concrete dependencies.
 // The durable Job remains authoritative; GitHub only supplies observations.
@@ -100,11 +100,11 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("observe comments on exact GitHub pull request #%d: %w", proposal.Number, err)
 	}
-	deliveries, err := r.Store.Deliveries(ctx, jobID)
+	messages, _, err := r.Store.CodingMessages(ctx, jobID)
 	if err != nil {
 		return ProposalObservationResultV1{}, fmt.Errorf("load admitted Messages before observing GitHub comments: %w", err)
 	}
-	admitted := admittedGitHubComments(deliveries)
+	admitted := admittedGitHubComments(messages)
 	for _, comment := range comments {
 		if !trustedHumanComment(comment) {
 			continue
@@ -112,7 +112,7 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 		fromID := fmt.Sprintf("github-comment:%d", comment.ID)
 		delivery, exists := admitted[fromID]
 		if exists {
-			if delivery.AgentRun.State != core.AgentRunCompleted || hasFeedbackReply(comments, jobID, comment.ID) {
+			if delivery.Outcome != "completed" || hasFeedbackReply(comments, jobID, comment.ID) {
 				continue
 			}
 			if err := absurdruntime.RequireClaim(ctx); err != nil {
@@ -135,23 +135,23 @@ func (r ProposalRuntime) Observe(ctx context.Context, jobID, revision string) (P
 		if r.AdmitMessage == nil {
 			return ProposalObservationResultV1{}, fmt.Errorf("coding Message admission is not configured")
 		}
-		_, created, err := r.AdmitMessage(ctx, jobID, fromID, comment.Body)
+		receipt, err := r.AdmitMessage(ctx, jobID, fromID, comment.Body)
 		if err != nil {
 			return ProposalObservationResultV1{}, err
 		}
-		if created {
+		if receipt.Created {
 			result.NewMessages++
 		}
 	}
 	return result, nil
 }
 
-func admittedGitHubComments(deliveries []core.Delivery) map[string]core.Delivery {
-	admitted := make(map[string]core.Delivery)
-	for _, delivery := range deliveries {
-		message := delivery.Message
+func admittedGitHubComments(messages []MessageRecord) map[string]MessageRecord {
+	admitted := make(map[string]MessageRecord)
+	for _, record := range messages {
+		message := record.Message
 		if message.FromKind == core.MessageFromHuman && strings.HasPrefix(message.FromID, "github-comment:") {
-			admitted[message.FromID] = delivery
+			admitted[message.FromID] = record
 		}
 	}
 	return admitted

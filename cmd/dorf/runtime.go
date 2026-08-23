@@ -35,7 +35,7 @@ type profileRuntimeResolver struct {
 }
 
 func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string) (core.CleanupRuntime, error) {
-	resolved, err := r.resolveBase(ctx, name, false)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return core.CleanupRuntime{}, err
 	}
@@ -45,13 +45,25 @@ func (r profileRuntimeResolver) ResolveCleanup(ctx context.Context, name string)
 	}, nil
 }
 
+func (r profileRuntimeResolver) ResolveSandbox(ctx context.Context, name string) (core.SandboxRuntime, error) {
+	resolved, err := r.resolveBase(ctx, name)
+	if err != nil {
+		return core.SandboxRuntime{}, err
+	}
+	return core.SandboxRuntime{
+		Execution:      resolved.Execution,
+		Files:          resolved.Externals,
+		SandboxProfile: resolved.Profile.SandboxProfile,
+	}, nil
+}
+
 func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) (coding.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name, true)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return coding.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
+	codingService := coding.NewService(workspaceExecutor, r.store, resolved.Review, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
 	githubClient := githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Metadata: r.cfg.GitHubMetadata, PrivateKey: r.cfg.GitHubPrivateKey}
 	publicationService := publication.Service{
 		Store: r.store, GitHub: githubClient,
@@ -61,44 +73,54 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	outcomeService := (outcomeapp.Service{Store: r.store, GitHub: githubClient}).WithClaimCheck(absurdruntime.RequireClaim)
 	return coding.Runtime{
 		Profile: resolved.Profile,
+		Agent:   resolved.Execution,
 		Coding:  codingService,
 		Proposal: coding.ProposalRuntime{
 			Publication: publicationService, GitHub: githubClient,
 			Outcome: outcomeService, Store: r.store,
-			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.Message, bool, error) {
-				return coding.AdmitMessage(ctx, r.store, coreApplication(r.store, r.client), core.MessageAdmission{
-					JobID: jobID, FromKind: core.MessageFromHuman, FromID: fromID, Input: input, Intent: core.MessageFollow,
-				})
+			AdmitMessage: func(ctx context.Context, jobID, fromID, input string) (core.MessageReceipt, error) {
+				job, err := coreApplication(r.store, r.client).OpenJob(ctx, jobID)
+				if err != nil {
+					return core.MessageReceipt{}, err
+				}
+				sandbox, err := job.DefaultSandbox(ctx)
+				if err != nil {
+					return core.MessageReceipt{}, err
+				}
+				return sandbox.Agent().Message(ctx, fromID, input)
 			},
 		},
 	}, nil
 }
 
 func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
-	resolved, err := r.resolveBase(ctx, name, true)
+	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {
 		return investigation.Runtime{}, err
 	}
-	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, r.store, resolved.Externals, absurdruntime.RequireClaim)
-	service := investigation.NewService(workspaceExecutor, r.store, resolved.Externals, blob.Store{Root: r.cfg.BlobRoot}, absurdruntime.RequireClaim)
-	return investigation.Runtime{Profile: resolved.Profile, Investigation: service}, nil
+	workspaceExecutor := gitworkspace.NewExecutor(resolved.Execution, gitworkspace.Workspace{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}, resolved.Ownership)
+	restore := investigation.RetainedRestore{Transport: resolved.Sandbox, Workspace: resolved.Sandbox.Workspace()}
+	service := investigation.NewService(workspaceExecutor, restore, blob.Store{Root: r.cfg.BlobRoot})
+	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 
 type resolvedBaseRuntime struct {
 	Profile   profileapp.Runtime
 	Execution core.ExecutionService
 	Externals terminal.Externals
+	Review    coding.ReviewExecution
 	Sandbox   provider.Sandbox
 	Ownership func(context.Context, string) (provider.Ownership, error)
 }
 
-func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string, requireVerified bool) (resolvedBaseRuntime, error) {
+// Runtime resolution is downstream of Job admission. The Job's immutable
+// reference to this definition remains usable while a later verification
+// receipt is unsettled or failed; only new admission and default selection
+// consult that live eligibility receipt.
+func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (resolvedBaseRuntime, error) {
 	profile, err := r.store.SandboxProfile(ctx, name)
 	if err != nil {
 		return resolvedBaseRuntime{}, err
-	}
-	if requireVerified && !profile.BaseVerified() {
-		return resolvedBaseRuntime{}, fmt.Errorf("Sandbox profile %q has not completed Dorf %s verification and cleanup", profile.Name, core.BaseProfileContract)
 	}
 	sandbox, err := sandboxForProfile(r.cfg, profile)
 	if err != nil {
@@ -124,12 +146,88 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string, re
 		Sandbox: sandbox, Gateway: gateway.Gateway{StatePath: r.cfg.GatewayStatePath},
 		Agent: agent, Ownership: ownership,
 	}
-	execution := core.NewExecutionService(r.store, externals, blob.Store{Root: r.cfg.BlobRoot}, r.barrier, absurdruntime.RequireClaim)
+	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}
+	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
+		WithAgentExecution(workflowAgentExecution{store: r.store, externals: externals, review: review})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
-		Externals: externals, Sandbox: sandbox, Ownership: ownership,
+		Externals: externals, Review: review, Sandbox: sandbox, Ownership: ownership,
 	}, nil
+}
+
+// workflowAgentExecution is static deployment composition. It resolves the
+// prompt and one cohesive Harness operation from the pinned workflow; Core
+// never switches on workflow, Role, or review policy.
+type workflowAgentExecution struct {
+	store     postgres.Store
+	externals terminal.Externals
+	review    coding.ReviewExecution
+}
+
+func (s workflowAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
+	job, err := s.store.Job(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		return coding.SelectAgentMessage(ctx, s.store, jobID)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		return investigation.SelectAgentMessage(ctx, s.store, jobID)
+	default:
+		return nil, fmt.Errorf("Job %s has no statically composed Agent Message selector", jobID)
+	}
+}
+
+func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+	switch {
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
+		return execution.Message.Input, nil
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
+		if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
+			return "", err
+		}
+		job, err := s.store.CodingJob(ctx, execution.Job.ID)
+		if err != nil {
+			return "", err
+		}
+		return coding.AgentPrompt(job, execution.Message.Input), nil
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision:
+		source, err := s.store.CodebaseInvestigationSource(ctx, execution.Job.ID)
+		if err != nil {
+			return "", err
+		}
+		if execution.AgentRun.Role != investigation.InitialAgentRole || execution.AgentRun.Capability != investigation.InitialAgentCapability ||
+			execution.AgentRun.InputRevision != source.Revision || execution.AgentRun.SandboxID != core.MainSandboxName(execution.Job.ID) {
+			return "", fmt.Errorf("Message %s conflicts with the exact investigation Agent contract", execution.Message.ID)
+		}
+		return investigation.AgentPrompt(source, execution.Message.Input), nil
+	default:
+		return "", fmt.Errorf("Message %s has no statically composed ordinary Agent prompt", execution.Message.ID)
+	}
+}
+
+// ResolveAgentRunOperation is shared by reconciliation, settled observation,
+// and cleanup. Cleanup never asks for a prompt and the operation cannot choose
+// whether Core submits, recovers, or only observes.
+func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+	switch {
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
+		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.review, execution)
+		if err != nil {
+			return nil, err
+		}
+		return operation, nil
+	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
+		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
+		return operation, err
+	case execution.Job.Workflow == investigation.Workflow && execution.Job.WorkflowRevision == investigation.WorkflowRevision && execution.AgentRun.Role == investigation.InitialAgentRole:
+		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
+		return operation, err
+	default:
+		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness operation", execution.Message.ID)
+	}
 }
 
 func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {

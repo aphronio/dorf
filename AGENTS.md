@@ -35,7 +35,7 @@ requirements.
   agent context. Keep Dorf integration at the development-tooling seam and out of managed product
   code.
 - When installation, setup prompts, profile or AI connection readiness, Job operation,
-  Messages, retry, Artifacts, or cleanup UX changes, update its existing operator authority and the
+  Messages, retry, file retrieval, or cleanup UX changes, update its existing operator authority and the
   [Agent Guide](docs/agent-guide.md) in the same slice. Keep the guide concise and link to authority
   instead of copying detailed contracts into it.
 - For PostgreSQL changes, edit the schema and query sources rather than generated `dbsql` files;

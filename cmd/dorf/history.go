@@ -17,7 +17,6 @@ type workflowPresentation interface {
 	OperationLabel(string, string) string
 	ActionLabel(core.ActionKind) string
 	AgentRoleLabel(string) string
-	ResultLabel(string) string
 }
 
 // historyEntry is disposable human copy projected from durable product facts.
@@ -27,16 +26,16 @@ type historyEntry struct {
 	Text string
 }
 
-func workflowHistory(snapshot coding.Snapshot) []historyEntry {
+func workflowHistory(snapshot coding.Snapshot, deliveries []core.Delivery) []historyEntry {
 	definition := coding.WorkflowDefinition()
-	entries := commonHistory(snapshot.Job.Job, snapshot.Deliveries, snapshot.Actions)
+	entries := commonHistory(snapshot.Job.Job, deliveries, snapshot.Actions)
 	add := func(at time.Time, text string) { addHistoryEntry(&entries, at, text) }
 
-	for _, delivery := range snapshot.Deliveries {
+	for _, delivery := range deliveries {
 		message := delivery.Message
 		add(message.AdmittedAt, fmt.Sprintf("Message %d received from %s", message.Sequence, humanIdentifier(string(message.FromKind))))
 	}
-	for _, delivery := range snapshot.Deliveries {
+	for _, delivery := range deliveries {
 		addAgentRunHistory(&entries, definition, delivery)
 	}
 	for _, revision := range snapshot.Revisions {
@@ -72,17 +71,14 @@ func workflowHistory(snapshot coding.Snapshot) []historyEntry {
 	return sortedHistory(entries)
 }
 
-func investigationHistory(snapshot investigation.Snapshot) []historyEntry {
+func investigationHistory(snapshot investigation.Snapshot, deliveries []core.Delivery) []historyEntry {
 	definition := investigation.WorkflowDefinition()
-	entries := commonHistory(snapshot.Job, snapshot.Deliveries, snapshot.Actions)
-	for _, delivery := range snapshot.Deliveries {
+	entries := commonHistory(snapshot.Job, deliveries, snapshot.Actions)
+	for _, delivery := range deliveries {
 		if delivery.Message.Sequence > 1 {
 			addHistoryEntry(&entries, delivery.Message.AdmittedAt, fmt.Sprintf("Follow-up Message %d received", delivery.Message.Sequence))
 		}
 		addAgentRunHistory(&entries, definition, delivery)
-	}
-	for _, draft := range snapshot.Drafts {
-		addHistoryEntry(&entries, draft.CreatedAt, definition.ResultLabel("investigation-draft")+" ready · "+draft.ArtifactID)
 	}
 	return sortedHistory(entries)
 }
@@ -230,7 +226,7 @@ func sandboxHumanRole(job core.Job, runs []core.AgentRun, sandboxID string) stri
 		return "primary"
 	}
 	for _, run := range runs {
-		if run.SandboxID == sandboxID && sandboxID == coding.ReviewSandboxName(run.ID) {
+		if run.SandboxID == sandboxID && sandboxID == coding.ReviewSandboxName(job.ID, run.ID) {
 			return "reviewer"
 		}
 	}

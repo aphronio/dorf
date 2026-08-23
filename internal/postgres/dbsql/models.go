@@ -21,18 +21,6 @@ type DorfAction struct {
 	SettledAt sql.NullTime
 }
 
-type DorfArtifact struct {
-	ID         string
-	JobID      string
-	Name       string
-	Digest     string
-	ByteSize   int64
-	MediaType  string
-	Producer   string
-	AgentRunID string
-	CreatedAt  time.Time
-}
-
 // One exact-Revision GitHub proposal projection per Job
 type DorfGithubProposal struct {
 	JobID            string
@@ -75,6 +63,7 @@ type DorfReviewRunProjection struct {
 	RequestTargetTurnID   string
 	RequestAdmittedAt     time.Time
 	SandboxID             string
+	SandboxName           string
 	OwnershipNonce        string
 	SubmissionNonce       string
 }
@@ -83,5 +72,6 @@ type DorfReviewRunProjection struct {
 type DorfSandbox struct {
 	ID             string
 	JobID          string
+	Name           string
 	OwnershipNonce string
 }

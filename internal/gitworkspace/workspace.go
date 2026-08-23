@@ -12,8 +12,13 @@ import (
 	provider "github.com/aphronio/dorf/internal/sandbox"
 )
 
+type CommandTransport interface {
+	AttestOwnership(context.Context, provider.Ownership) error
+	Exec(context.Context, provider.Ownership, []byte, ...string) (provider.Result, error)
+}
+
 type Workspace struct {
-	Sandbox   provider.Sandbox
+	Transport CommandTransport
 	Workspace string
 }
 
@@ -26,15 +31,15 @@ func (e *AttentionError) AttentionNeeded() bool { return true }
 // Sandbox command boundary. Git behavior belongs to this Git workspace module,
 // not to Sandbox providers.
 func (m Workspace) ReconcileClone(ctx context.Context, owner provider.Ownership, remote, revision, branch string) error {
-	if err := m.Sandbox.AttestOwnership(ctx, owner); err != nil {
+	if err := m.Transport.AttestOwnership(ctx, owner); err != nil {
 		return err
 	}
-	gitDir, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "--git-dir")
+	gitDir, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "--git-dir")
 	if err != nil {
 		return err
 	}
 	if gitDir.ExitCode != 0 {
-		clone, err := m.Sandbox.Exec(ctx, owner, nil, "git", "clone", "--no-checkout", remote, m.Workspace)
+		clone, err := m.Transport.Exec(ctx, owner, nil, "git", "clone", "--no-checkout", remote, m.Workspace)
 		if err != nil {
 			return err
 		}
@@ -42,14 +47,14 @@ func (m Workspace) ReconcileClone(ctx context.Context, owner provider.Ownership,
 			return sandboxCommandFailure("clone repository", clone)
 		}
 	} else {
-		observed, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "remote", "get-url", "origin")
+		observed, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "remote", "get-url", "origin")
 		if err != nil {
 			return err
 		}
 		if observed.ExitCode != 0 || strings.TrimSpace(observed.Stdout) != remote {
 			return fmt.Errorf("existing Sandbox clone origin does not match admitted repository")
 		}
-		fetched, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "fetch", "--prune", "origin")
+		fetched, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "fetch", "--prune", "origin")
 		if err != nil {
 			return err
 		}
@@ -63,14 +68,14 @@ func (m Workspace) ReconcileClone(ctx context.Context, owner provider.Ownership,
 	} else {
 		checkoutArgs = append(checkoutArgs, "-B", branch, revision)
 	}
-	checkedOut, err := m.Sandbox.Exec(ctx, owner, nil, checkoutArgs...)
+	checkedOut, err := m.Transport.Exec(ctx, owner, nil, checkoutArgs...)
 	if err != nil {
 		return err
 	}
 	if checkedOut.ExitCode != 0 {
 		return sandboxCommandFailure("checkout admitted Revision", checkedOut)
 	}
-	head, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "HEAD")
+	head, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "rev-parse", "HEAD")
 	if err != nil {
 		return err
 	}
@@ -78,7 +83,7 @@ func (m Workspace) ReconcileClone(ctx context.Context, owner provider.Ownership,
 		return fmt.Errorf("Sandbox HEAD %q does not match admitted Revision %q", strings.TrimSpace(head.Stdout), revision)
 	}
 	for _, identity := range [][2]string{{"user.name", "Dorf Agent"}, {"user.email", "dorf-agent@localhost"}} {
-		configured, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "config", "--local", identity[0], identity[1])
+		configured, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "config", "--local", identity[0], identity[1])
 		if err != nil {
 			return err
 		}
@@ -104,7 +109,7 @@ func (m Workspace) ChangeFacts(ctx context.Context, owner provider.Ownership, ba
 	if err := m.validateGit(ctx, owner, revision); err != nil {
 		return policy.ChangeFacts{}, &AttentionError{Reason: err.Error()}
 	}
-	result, err := m.Sandbox.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "diff", "--name-only", "-z", baseRevision, revision, "--")
+	result, err := m.Transport.Exec(ctx, owner, nil, "git", "-C", m.Workspace, "diff", "--name-only", "-z", baseRevision, revision, "--")
 	if err != nil {
 		return policy.ChangeFacts{}, err
 	}
@@ -122,7 +127,7 @@ func (m Workspace) ObserveRevision(ctx context.Context, owner provider.Ownership
 	if !fullOID(comparisonBase) {
 		return Observation{}, fmt.Errorf("comparison base must be a full immutable Git Revision")
 	}
-	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
+	result, err := m.Transport.Exec(ctx, owner, nil, "bash", "-c", revisionObservationScript, "dorf-observe-revision", m.Workspace, branch, comparisonBase)
 	if err != nil {
 		return Observation{}, err
 	}
@@ -147,7 +152,7 @@ func (m Workspace) ObserveRevision(ctx context.Context, owner provider.Ownership
 
 func (m Workspace) validateGit(ctx context.Context, owner provider.Ownership, revision string) error {
 	script := "set -eu; cd \"$2\"; head=$(git rev-parse HEAD); test \"$head\" = \"$1\" || { echo \"HEAD=$head expected=$1\" >&2; exit 10; }; branch=$(git symbolic-ref --short HEAD); test -n \"$branch\" || { echo 'detached or unborn branch' >&2; exit 11; }; status=$(git status --porcelain=v1 --untracked-files=all); test -z \"$status\" || { echo \"dirty checkout: $status\" >&2; exit 12; }"
-	result, err := m.Sandbox.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
+	result, err := m.Transport.Exec(ctx, owner, nil, "bash", "-c", script, "dorf-git", revision, m.Workspace)
 	if err != nil {
 		return err
 	}

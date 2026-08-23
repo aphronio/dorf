@@ -3,6 +3,7 @@
 package profile
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 )
 
 type Store interface {
+	WithSandboxProfileVerification(context.Context, string, func(context.Context) error) error
 	BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error)
 	RecordSandboxProfileProbe(context.Context, core.ProfileVerification, string) error
 	RecordSandboxProfileVerificationCleanup(context.Context, core.ProfileVerification) error
@@ -22,11 +24,21 @@ type Store interface {
 type RuntimeFactory func(core.SandboxProfile) (provider.Sandbox, error)
 
 // VerifyBase reconciles one disposable provider resource, executes Dorf's
-// base-1 functional probe, and confirms exact deletion before the profile may
-// admit Jobs. Each explicit invocation starts a fresh attempt after any prior
+// current base-contract functional probe, and confirms exact deletion before
+// the profile may admit Jobs. Each explicit invocation starts a fresh attempt after any prior
 // settled verification; a retry of an interrupted attempt reuses its durable
 // ownership identity.
 func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
+	var verified core.SandboxProfile
+	err := store.WithSandboxProfileVerification(ctx, name, func(ctx context.Context) error {
+		var err error
+		verified, err = verifyBaseExclusive(ctx, store, runtimeForProfile, name)
+		return err
+	})
+	return verified, err
+}
+
+func verifyBaseExclusive(ctx context.Context, store Store, runtimeForProfile RuntimeFactory, name string) (core.SandboxProfile, error) {
 	profile, verification, err := store.BeginSandboxProfileVerification(ctx, name)
 	if err != nil {
 		return core.SandboxProfile{}, err
@@ -54,7 +66,20 @@ func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFacto
 		if err := runtime.PutFile(ctx, owner, putProbe, []byte("dorf-"+core.BaseProfileContract+"\n")); err != nil {
 			return core.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("run Dorf %s atomic file probe: %w", core.BaseProfileContract, err))
 		}
-		version, err := runBaseProbe(ctx, runtime, owner, profile.Harness, putProbe)
+		readProbeRelative := ".dorf-profile-read-file"
+		readProbe := runtime.Workspace() + "/" + readProbeRelative
+		readExpected := []byte{'d', 0, 'o', 'r', 'f', 0xff, '\n'}
+		if err := runtime.PutFile(ctx, owner, readProbe, readExpected); err != nil {
+			return core.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("prepare Dorf %s exact file-read probe: %w", core.BaseProfileContract, err))
+		}
+		readObserved, err := runtime.ReadFile(ctx, owner, readProbeRelative)
+		if err != nil {
+			return core.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("run Dorf %s exact file-read probe: %w", core.BaseProfileContract, err))
+		}
+		if !bytes.Equal(readObserved, readExpected) {
+			return core.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, fmt.Errorf("Dorf %s exact file-read probe returned different bytes", core.BaseProfileContract))
+		}
+		version, err := runBaseProbe(ctx, runtime, owner, profile.Harness, putProbe, readProbe)
 		if err != nil {
 			return core.SandboxProfile{}, failAndClean(ctx, store, runtime, verification, owner, err)
 		}
@@ -73,12 +98,13 @@ func VerifyBase(ctx context.Context, store Store, runtimeForProfile RuntimeFacto
 	return store.SandboxProfile(ctx, profile.Name)
 }
 
-func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, harness, putProbe string) (string, error) {
+func runBaseProbe(ctx context.Context, runtime provider.Sandbox, owner provider.Ownership, harness, putProbe, readProbe string) (string, error) {
 	script := `set -eu
 workspace=$1
 harness=$2
 put_probe=$3
 put_expected=$4
+read_probe=$5
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 test -d "$workspace" || fail "workspace does not exist: $workspace"
 test -w "$workspace" || fail "workspace is not writable: $workspace"
@@ -87,12 +113,13 @@ probe="$workspace/.dorf-profile-probe"
 rm -f -- "$probe"
 test "$(cat "$put_probe")" = "$put_expected" || fail "atomic file probe returned unexpected bytes"
 rm -f -- "$put_probe"
+rm -f -- "$read_probe"
 command -v bash >/dev/null || fail "required command is missing: bash"
 command -v git >/dev/null || fail "required command is missing: git"
 command -v rg >/dev/null || fail "required command is missing: rg"
 command -v "$harness" >/dev/null || fail "required Harness command is missing: $harness"
 "$harness" --version`
-	result, err := runtime.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-profile-"+core.BaseProfileContract, runtime.Workspace(), harness, putProbe, "dorf-"+core.BaseProfileContract)
+	result, err := runtime.Exec(ctx, owner, nil, "bash", "-lc", script, "dorf-profile-"+core.BaseProfileContract, runtime.Workspace(), harness, putProbe, "dorf-"+core.BaseProfileContract, readProbe)
 	if err != nil {
 		return "", fmt.Errorf("run Dorf %s profile probe: %w", core.BaseProfileContract, err)
 	}

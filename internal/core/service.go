@@ -5,14 +5,19 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/absurdruntime"
+	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
 type ExecutionStore interface {
 	Job(context.Context, string) (Job, error)
+	JobTasks(context.Context, string) ([]JobTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	Deliveries(context.Context, string) ([]Delivery, error)
+	AgentMessageExecution(context.Context, string) (AgentMessageExecution, error)
 	InterruptAgentRun(context.Context, string, string) error
+	WithJobFence(context.Context, string, func() error) error
+	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
@@ -20,20 +25,17 @@ type ExecutionStore interface {
 	FailAgentRun(context.Context, string, string) error
 	UncertainAgentRun(context.Context, string, string) error
 	AgentRunAttention(context.Context, string, string) error
-	HarnessMutationDelivery(context.Context, string) (*Delivery, error)
+	UnsettledAgentMessages(context.Context, string) ([]AgentMessageWork, error)
+	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
+	CompleteCleanup(context.Context, string, string) error
 	SetCleanupAttention(context.Context, string, string) error
 }
 
 type Externals interface {
-	Harness() string
 	SandboxCreate(context.Context, Job, Sandbox) error
 	RouteCreate(context.Context, Job, Sandbox, Route) error
-	AgentInitialTurn(context.Context, Job, Delivery, string) (HarnessBinding, error)
-	AgentInitialTurns(context.Context, Job) (HarnessHistory, error)
-	AgentTurns(context.Context, Job, string) (HarnessHistory, error)
-	AgentSubmit(context.Context, Job, Delivery, string) (HarnessBinding, error)
+	SteerHistory(context.Context, Job, string, string) (HarnessHistory, error)
 	AgentSteer(context.Context, Job, Delivery) (string, error)
-	AgentWait(context.Context, Job, string, string) (HarnessBinding, error)
 	RouteRevoke(context.Context, Job, Sandbox, Route) error
 	SandboxDelete(context.Context, Job, Sandbox) error
 }
@@ -43,12 +45,29 @@ type FaultBarrier interface {
 	ReachWorkflow(context.Context, string, string, string) error
 }
 
+// AgentRunOperation is the internal adapter operation for one authoritative
+// Message execution. Core alone owns lifecycle mode and recovery ordering; the
+// operation translates the already-bound run to its selected Harness.
+type AgentRunOperation interface {
+	Harness() string
+	Submit(context.Context, AgentRun, string) (HarnessBinding, error)
+	Recover(context.Context, AgentRun) (HarnessBinding, error)
+	History(context.Context, AgentRun) (HarnessHistory, error)
+}
+
+type AgentExecutionResolver interface {
+	SelectAgentMessage(context.Context, string) (*AgentMessageWork, error)
+	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
+	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
+}
+
 const (
 	BarrierBeforeSubmit          = "before-submit"
 	BarrierAfterSubmitBeforeBind = "after-submit-before-bind"
 	BarrierHarnessActive         = "harness-active"
 	BarrierPushAccepted          = "push-accepted-before-record"
 	BarrierPullRequestAccepted   = "pull-request-accepted-before-record"
+	BarrierSandboxCreated        = "sandbox-created-before-record"
 	BarrierRouteRevoked          = "route-revoked-before-record"
 	BarrierSandboxDeleted        = "sandbox-deleted-before-record"
 )
@@ -57,21 +76,23 @@ type ExecutionService struct {
 	store      ExecutionStore
 	externals  Externals
 	barrier    FaultBarrier
-	blobs      blob.Store
 	claimCheck func(context.Context) error
+	agents     AgentExecutionResolver
 }
 
-func NewExecutionService(store ExecutionStore, externals Externals, records blob.Store, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
+func (s ExecutionService) WithAgentExecution(agents AgentExecutionResolver) ExecutionService {
+	s.agents = agents
+	return s
+}
+
+func NewExecutionService(store ExecutionStore, externals Externals, barrier FaultBarrier, claimCheck func(context.Context) error) ExecutionService {
 	return ExecutionService{
 		store:      store,
 		externals:  externals,
 		barrier:    barrier,
-		blobs:      records,
 		claimCheck: claimCheck,
 	}
 }
-
-func (s ExecutionService) BlobStore() blob.Store { return s.blobs }
 
 func (s ExecutionService) requireClaim(ctx context.Context) error {
 	if s.claimCheck == nil {
@@ -127,93 +148,197 @@ func (s ExecutionService) reachWorkflow(ctx context.Context, point, jobID, ident
 	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-func (s ExecutionService) Deliver(ctx context.Context, job Job, delivery Delivery, input string) error {
-	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery, input)
+// ReconcileJobAgent advances at most one Message chosen by the statically
+// composed workflow selector. Core keeps Message, Sandbox, AgentRun, and
+// Harness lifecycle identities inside the Job fence.
+func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("Agent reconciliation requires an exact Job identity")
 	}
-	return s.deliverAgentRun(ctx, job, delivery, input)
+	return s.store.WithJobFence(ctx, jobID, func() error {
+		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		attachedJob, err := exactCurrentAttachedTask(ctx, s.store, jobID, "")
+		if err != nil {
+			return err
+		}
+		if !attachedJob.AdmissionOpen || attachedJob.CleanupState != CleanupPending {
+			return fmt.Errorf("current task cannot reconcile an Agent Message outside an open Job")
+		}
+		if s.agents == nil {
+			return fmt.Errorf("Agent execution resolution is not configured")
+		}
+		selected, err := s.agents.SelectAgentMessage(ctx, attachedJob.ID)
+		if err != nil || selected == nil {
+			return err
+		}
+		messageID, sandboxID := selected.MessageID, selected.SandboxID
+		if messageID == "" || sandboxID == "" {
+			return fmt.Errorf("Agent selector returned an incomplete Message identity")
+		}
+		authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
+		if err != nil {
+			return err
+		}
+		if authoritative.Job.ID != jobID || authoritative.Message.ID != messageID ||
+			authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
+			return fmt.Errorf("Message %s does not belong to the exact bound Job Sandbox", messageID)
+		}
+		if authoritative.Job.CurrentTaskID != attachedJob.CurrentTaskID || !authoritative.Job.AdmissionOpen || authoritative.Job.CleanupState != CleanupPending {
+			return fmt.Errorf("Message %s changed exact current open Job authority", messageID)
+		}
+		input, err := s.agents.ResolveAgentPrompt(ctx, authoritative)
+		if err != nil {
+			return err
+		}
+		if input == "" {
+			return fmt.Errorf("Message %s resolved empty agent input", messageID)
+		}
+		// Prompt eligibility may durably adopt an early queued follow onto the
+		// now-authoritative prior Thread. Discard the pre-resolution aggregate so
+		// bound submission can never fall back to initial recovery.
+		authoritative, err = s.store.AgentMessageExecution(ctx, messageID)
+		if err != nil {
+			return err
+		}
+		if authoritative.Job.ID != jobID || authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
+			return fmt.Errorf("Message %s changed authoritative Job or Sandbox during input resolution", messageID)
+		}
+		delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
+		run := authoritative.AgentRun
+		operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
+		if err != nil {
+			return err
+		}
+		if run.State == AgentRunCompleted {
+			_, err := s.executeAgentRun(ctx, delivery, operation, "")
+			return err
+		}
+		if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
+			return nil
+		}
+		if run.State == AgentRunActive {
+			_, err := s.executeAgentRun(ctx, delivery, operation, "")
+			return err
+		}
+		if err := s.deliver(ctx, authoritative.Job, delivery, operation, input); err != nil {
+			return err
+		}
+		settled, err := s.store.AgentMessageExecution(ctx, messageID)
+		if err != nil {
+			return err
+		}
+		if settled.AgentRun.State == AgentRunCompleted {
+			settledOperation, resolveErr := s.agents.ResolveAgentRunOperation(ctx, settled)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			_, err := s.executeAgentRun(ctx, Delivery{Message: settled.Message, AgentRun: settled.AgentRun}, settledOperation, "")
+			return err
+		}
+		return nil
+	})
 }
 
-func (s ExecutionService) deliverAgentRun(ctx context.Context, job Job, delivery Delivery, input string) error {
-	run := delivery.AgentRun
+// ObserveSettledAgentMessage reads the exact Harness Turn needed by typed
+// workflow evaluation after Core has durably settled its Message. It never
+// prepares, submits, steers, binds, or otherwise mutates AgentRun lifecycle.
+func (s ExecutionService) ObserveSettledAgentMessage(ctx context.Context, jobID, messageID string) (MessageResult, error) {
+	if jobID == "" || messageID == "" {
+		return MessageResult{}, fmt.Errorf("settled Agent observation requires exact Job and Message identities")
+	}
+	authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	if authoritative.Job.ID != jobID || authoritative.Message.JobID != jobID || authoritative.AgentRun.JobID != jobID {
+		return MessageResult{}, fmt.Errorf("Message %s does not belong to Job %s", messageID, jobID)
+	}
+	run := authoritative.AgentRun
+	if run.State == AgentRunFailed || run.State == AgentRunInterrupted {
+		return terminalMessageResult(messageID, HarnessTurn{ID: run.TurnID, Status: run.TurnOutcome}, run.State), nil
+	}
+	if run.State != AgentRunCompleted || run.Harness == "" || run.ThreadID == "" || run.TurnID == "" {
+		return MessageResult{}, fmt.Errorf("Message %s has no settled exact Harness Turn", messageID)
+	}
+	if s.agents == nil {
+		return MessageResult{}, fmt.Errorf("Agent execution resolution is not configured")
+	}
+	operation, err := s.agents.ResolveAgentRunOperation(ctx, authoritative)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	if operation == nil {
+		return MessageResult{}, fmt.Errorf("Message %s has no resolved Agent Harness operation", messageID)
+	}
+	history, err := operation.History(ctx, run)
+	if err != nil {
+		return MessageResult{}, err
+	}
+	if history.Harness != run.Harness || history.ThreadID != run.ThreadID {
+		return MessageResult{}, fmt.Errorf("Message %s Harness history conflicts with its durable binding", messageID)
+	}
+	for _, turn := range history.Turns {
+		if turn.ID == run.TurnID {
+			return terminalMessageResult(messageID, turn, run.State), nil
+		}
+	}
+	return MessageResult{}, fmt.Errorf("Message %s settled Turn is missing from Harness history", messageID)
+}
+
+func terminalMessageResult(messageID string, turn HarnessTurn, fallback AgentRunState) MessageResult {
+	result := MessageResult{MessageID: messageID}
+	if turn.Terminal() {
+		result.Outcome, result.Output = turn.Status, turn.Output
+	} else if fallback == AgentRunFailed || fallback == AgentRunInterrupted {
+		result.Outcome = string(fallback)
+	}
+	return result
+}
+
+func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery, operation AgentRunOperation, input string) (HarnessTurn, error) {
 	contract := agentRunContract{
-		store:               s.store,
-		reachBarrier:        s.reach,
-		delivery:            delivery,
-		run:                 run,
-		harness:             s.externals.Harness(),
-		label:               "harness",
-		bindUnsupportedTurn: true,
-		submitNew: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			delivery.AgentRun = run
-			return s.externals.AgentInitialTurn(ctx, job, delivery, input)
-		},
-		recover: func(ctx context.Context, _ AgentRun) (HarnessBinding, error) {
-			history, err := s.externals.AgentInitialTurns(ctx, job)
-			if err != nil || history.ThreadID == "" || len(history.Turns) == 0 {
-				return HarnessBinding{}, err
-			}
-			return HarnessBinding{Harness: history.Harness, ThreadID: history.ThreadID, Turn: history.Turns[len(history.Turns)-1], ControllerID: history.ControllerID}, nil
-		},
-		submitBound: func(ctx context.Context, run AgentRun) (HarnessBinding, error) {
-			delivery.AgentRun = run
-			return s.externals.AgentSubmit(ctx, job, delivery, input)
-		},
-		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.ThreadID)
-		},
+		store: s.store, reachBarrier: s.reach, delivery: delivery, run: delivery.AgentRun,
+		operation: operation, input: input, label: "harness",
 		beforeRecord: s.requireClaim,
 		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
+			_ = s.agentRunAttention(ctx, runID, "Harness history is unavailable: "+err.Error())
+		},
+		onRecoverError: func(ctx context.Context, run AgentRun, err error) error {
+			if persistErr := s.agentRunAttention(ctx, run.ID, "Harness recovery is unavailable: "+err.Error()); persistErr != nil {
+				return persistErr
+			}
+			return err
 		},
 		onSubmitError: func(ctx context.Context, run AgentRun, _ HarnessBinding, err error) (HarnessTurn, error) {
 			var definite interface{ DefiniteNoSubmit() bool }
 			if errors.As(err, &definite) && definite.DefiniteNoSubmit() {
-				if failErr := s.failAgentRun(ctx, run.ID, err.Error()); failErr != nil {
-					return HarnessTurn{}, failErr
+				if persistErr := s.failAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
+					return HarnessTurn{}, persistErr
 				}
+				return HarnessTurn{Status: "failed"}, nil
 			}
-			if attentionNeeded(err) {
-				if uncertainErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); uncertainErr != nil {
-					return HarnessTurn{}, uncertainErr
-				}
+			if persistErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
+				return HarnessTurn{}, persistErr
 			}
 			return HarnessTurn{}, err
 		},
 	}
-	_, err := contract.execute(ctx)
+	return contract.execute(ctx)
+}
+
+func (s ExecutionService) deliver(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
+	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
+		return s.deliverSteer(ctx, job, delivery, operation, input)
+	}
+	_, err := s.executeAgentRun(ctx, delivery, operation, input)
 	return err
 }
 
-// ObserveAgentRunTurn reconciles one bound ordinary Harness Turn for the
-// workflow-owned role and returns its current or terminal native result.
-func (s ExecutionService) ObserveAgentRunTurn(ctx context.Context, job Job, run AgentRun, role string) (HarnessTurn, error) {
-	if run.JobID != job.ID || run.Role != role || run.ThreadID == "" || run.TurnID == "" {
-		return HarnessTurn{}, fmt.Errorf("AgentRun %s is not an exact bound %s Turn for Job %s", run.ID, role, job.ID)
-	}
-	contract := agentRunContract{
-		store:   s.store,
-		run:     run,
-		harness: s.externals.Harness(),
-		label:   "harness",
-		history: func(ctx context.Context, run AgentRun) (HarnessHistory, error) {
-			return s.externals.AgentTurns(ctx, job, run.ThreadID)
-		},
-		beforeRecord: s.requireClaim,
-		onReadError: func(ctx context.Context, runID string, err error) {
-			_ = s.agentRunAttention(ctx, runID, "harness thread or submitted turn is currently unavailable: "+err.Error())
-		},
-	}
-	turn, err := contract.execute(ctx)
-	if err != nil {
-		return HarnessTurn{}, err
-	}
-	return turn, nil
-}
-
-func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, input string) error {
+func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
 	run := delivery.AgentRun
-	history, err := s.externals.AgentTurns(ctx, job, run.ThreadID)
+	history, err := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 	if err != nil {
 		_ = s.agentRunAttention(ctx, run.ID, "harness thread history is currently unavailable: "+err.Error())
 		return err
@@ -227,7 +352,8 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
 			return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 		}
-		return s.deliverAgentRun(ctx, job, delivery, input)
+		_, err := s.executeAgentRun(ctx, delivery, operation, input)
+		return err
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -244,7 +370,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 	}
 	acceptedTurnID, err := s.externals.AgentSteer(ctx, job, delivery)
 	if err != nil {
-		observedHistory, inspectErr := s.externals.AgentTurns(ctx, job, run.ThreadID)
+		observedHistory, inspectErr := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 		if inspectErr != nil {
 			reason := "harness steer acknowledgement is genuinely uncertain: " + err.Error() + "; history inspection failed: " + inspectErr.Error()
 			return s.uncertainAgentRun(ctx, run.ID, reason)
@@ -258,7 +384,8 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
 				return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
 			}
-			return s.deliverAgentRun(ctx, job, delivery, input)
+			_, fallbackErr := s.executeAgentRun(ctx, delivery, operation, input)
+			return fallbackErr
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -292,42 +419,72 @@ func activeHarness(status string) bool {
 }
 
 // PrepareCleanup reconciles harness ownership and returns the exact Sandboxes
-// whose cleanup Actions the workflow must execute under their own stable
+// whose cleanup Actions Core/Application executes under their own stable
 // Action Steps.
 func (s ExecutionService) PrepareCleanup(ctx context.Context, jobID string) (Job, []Sandbox, error) {
-	job, err := s.store.Job(ctx, jobID)
-	if err != nil {
-		return Job{}, nil, err
-	}
-	if job.AdmissionOpen {
-		return Job{}, nil, fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
-	}
-	if job.CleanupState == CleanupComplete {
-		return job, nil, nil
-	}
-	if err := s.cleanupStep(ctx, job.ID, "reconciling any unsettled harness mutation", func() error { return s.reconcileHarnessMutation(ctx, job) }); err != nil {
-		return Job{}, nil, err
-	}
-	deliveries, err := s.store.Deliveries(ctx, job.ID)
-	if err != nil {
-		_ = s.store.SetCleanupAttention(ctx, job.ID, "enumerating unsettled AgentRuns: "+err.Error())
-		return Job{}, nil, err
-	}
-	for _, delivery := range deliveries {
-		run := delivery.AgentRun
-		settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
-		if !settled {
-			if err := s.store.InterruptAgentRun(ctx, run.ID, "admission closed; Job resources are being reclaimed"); err != nil {
-				_ = s.store.SetCleanupAttention(ctx, job.ID, "interrupting unsettled AgentRun "+run.ID+": "+err.Error())
-				return Job{}, nil, err
+	var job Job
+	var sandboxes []Sandbox
+	err := s.store.WithJobFence(ctx, jobID, func() error {
+		if err := s.requireCleanupTask(ctx, jobID); err != nil {
+			return err
+		}
+		var err error
+		job, err = s.store.Job(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if job.AdmissionOpen {
+			return fmt.Errorf("cleanup recovery requires closed admission and a stopped ordinary run")
+		}
+		if job.CleanupState == CleanupComplete {
+			return nil
+		}
+		if job.CleanupState != CleanupScheduled {
+			return fmt.Errorf("cleanup recovery requires a durably scheduled cleanup task")
+		}
+		if err := s.cleanupStep(ctx, job.ID, "reconciling every unsettled harness mutation", func() error {
+			return s.reconcileHarnessMutations(ctx, job)
+		}); err != nil {
+			return err
+		}
+		deliveries, err := s.store.Deliveries(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		for _, delivery := range deliveries {
+			run := delivery.AgentRun
+			settled := run.State == AgentRunCompleted || run.State == AgentRunFailed || run.State == AgentRunInterrupted
+			if settled {
+				continue
+			}
+			if run.State != AgentRunPending || run.BaselineRecorded {
+				return cleanupBlocked(delivery, "a possibly accepted harness mutation remains")
+			}
+			if err := s.requireClaim(ctx); err != nil {
+				return err
+			}
+			if err := s.store.InterruptAgentRun(ctx, run.ID, "admission closed before any harness mutation; Job resources are being reclaimed"); err != nil {
+				return err
 			}
 		}
+		sandboxes, err = s.store.Sandboxes(ctx, job.ID)
+		return err
+	})
+	return job, sandboxes, err
+}
+
+func (s ExecutionService) requireCleanupTask(ctx context.Context, jobID string) error {
+	if err := s.requireClaim(ctx); err != nil {
+		return err
 	}
-	sandboxes, err := s.store.Sandboxes(ctx, job.ID)
+	job, err := exactCurrentAttachedTask(ctx, s.store, jobID, CleanupTaskName)
 	if err != nil {
-		return Job{}, nil, err
+		return err
 	}
-	return job, sandboxes, nil
+	if job.AdmissionOpen || (job.CleanupState != CleanupRequested && job.CleanupState != CleanupScheduled) {
+		return fmt.Errorf("cleanup task cannot act before cleanup is requested for Job %s", jobID)
+	}
+	return nil
 }
 
 func (s ExecutionService) cleanupStep(ctx context.Context, jobID, detail string, fn func() error) error {
@@ -335,106 +492,140 @@ func (s ExecutionService) cleanupStep(ctx context.Context, jobID, detail string,
 		return err
 	}
 	if err := fn(); err != nil {
+		var active cleanupStillActive
+		if errors.As(err, &active) {
+			return err
+		}
 		_ = s.store.SetCleanupAttention(ctx, jobID, detail+": "+err.Error())
 		return err
 	}
 	return nil
 }
 
-func (s ExecutionService) reconcileHarnessMutation(ctx context.Context, job Job) error {
-	delivery, err := s.store.HarnessMutationDelivery(ctx, job.ID)
-	if err != nil || delivery == nil {
+func (s ExecutionService) reconcileHarnessMutations(ctx context.Context, job Job) error {
+	messages, err := s.store.UnsettledAgentMessages(ctx, job.ID)
+	if err != nil {
 		return err
 	}
-	run := delivery.AgentRun
-	if run.State == AgentRunUncertain {
-		return cleanupBlocked(*delivery, run.Attention)
-	}
-	threadID := run.ThreadID
-	var history HarnessHistory
-	if threadID == "" {
-		history, err = s.externals.AgentInitialTurns(ctx, job)
-		if err == nil && history.ThreadID == "" && len(history.Turns) > 0 {
-			err = fmt.Errorf("cleanup initial history returned turns without a harness thread")
+	var settlementErrors []error
+	for _, message := range messages {
+		execution, err := s.store.AgentMessageExecution(ctx, message.MessageID)
+		if err == nil && (execution.Job.ID != job.ID || execution.Sandbox.ID != message.SandboxID) {
+			err = fmt.Errorf("unsettled Message %s no longer matches its authoritative Job and Sandbox", message.MessageID)
 		}
-		if err == nil && history.ThreadID != "" && len(history.Turns) > 0 {
-			threadID = history.ThreadID
-			run.Harness, run.ThreadID = history.Harness, history.ThreadID
-			delivery.AgentRun = run
+		if err == nil {
+			err = s.reconcileCleanupMessage(ctx, execution)
 		}
-	} else {
-		history, err = s.externals.AgentTurns(ctx, job, threadID)
+		if err != nil {
+			settlementErrors = append(settlementErrors, err)
+		}
 	}
+	return errors.Join(settlementErrors...)
+}
+
+func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution AgentMessageExecution) error {
+	delivery := Delivery{Message: execution.Message, AgentRun: execution.AgentRun}
+	run := execution.AgentRun
+	if s.agents == nil {
+		return cleanupBlocked(delivery, "Agent execution resolution is not configured")
+	}
+	operation, err := s.agents.ResolveAgentRunOperation(ctx, execution)
 	if err != nil {
-		var attention interface{ AttentionNeeded() bool }
-		if errors.As(err, &attention) && attention.AttentionNeeded() {
-			if persistErr := s.uncertainAgentRun(ctx, run.ID, err.Error()); persistErr != nil {
-				return persistErr
-			}
-			return cleanupBlocked(*delivery, err.Error())
-		}
-		reason := "cleanup could not inspect the bound harness thread: " + err.Error()
-		_ = s.agentRunAttention(ctx, run.ID, reason)
-		return cleanupBlocked(*delivery, reason)
+		return cleanupBlocked(delivery, "resolve exact Harness operation: "+err.Error())
 	}
-	turns := history.Turns
+	if operation == nil {
+		return cleanupBlocked(delivery, "resolve exact Harness operation: no operation returned")
+	}
+	if err := s.requireClaim(ctx); err != nil {
+		return err
+	}
+	history := operation.History
+	var inspected *HarnessHistory
 	if delivery.Message.Intent == MessageSteer && (run.TurnID == "" || run.TurnID == delivery.Message.TargetTurnID) {
-		reconciliation := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, turns)
-		switch reconciliation.Classification {
+		observed, err := history(ctx, run)
+		if err != nil {
+			return s.retainCleanupMutation(ctx, delivery, "bound Harness history is unavailable: "+err.Error())
+		}
+		steer := ReconcileSteer(run.ID, delivery.Message.TargetTurnID, observed.Turns)
+		switch steer.Classification {
 		case "completed":
-			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
+			if err := s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, steer.Turn.Status); err != nil {
+				return err
+			}
+			if !terminalHarness(steer.Turn.Status) {
+				return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted steer remains active"}
+			}
+			return nil
 		case "no-submit":
-			return s.failAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
+			return s.failAgentRun(ctx, run.ID, "cleanup closed steer after exact Harness history proved it was not accepted")
 		case "target-terminal":
-			if !run.BaselineRecorded {
-				return s.failAgentRun(ctx, run.ID, "cleanup closed steer delivery after harness history proved it was not accepted")
-			}
+			// A terminal target may have raced into ordinary fallback before cleanup.
+			// Observe the durable baseline below, but never create that fallback here.
+			inspected = &observed
+		case "uncertain":
+			return s.retainCleanupMutation(ctx, delivery, steer.Reason)
 		default:
-			if err := s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
-				return err
+			return s.retainCleanupMutation(ctx, delivery, "unsupported steer recovery classification")
+		}
+	}
+	contractOperation := agentRunHistoryOperation{AgentRunOperation: operation, observed: inspected}
+	if run.ThreadID == "" && run.BaselineRecorded {
+		initial, err := operation.History(ctx, run)
+		if err != nil {
+			return s.retainCleanupMutation(ctx, delivery, "initial Harness recovery is unavailable: "+err.Error())
+		}
+		if len(initial.Turns) != 1 {
+			return s.retainCleanupMutation(ctx, delivery, fmt.Sprintf("initial Harness recovery returned %d turns, not one exact accepted mutation", len(initial.Turns)))
+		}
+		binding := HarnessBinding{Harness: initial.Harness, ThreadID: initial.ThreadID, Turn: initial.Turns[0]}
+		contractOperation.recovered = &binding
+	}
+	contract := agentRunContract{
+		store: s.store, delivery: delivery, run: run,
+		operation: contractOperation,
+		label:     "cleanup harness", beforeRecord: s.requireClaim, settleOnly: true,
+		onNoSubmit: func(ctx context.Context, run AgentRun) (HarnessTurn, error) {
+			if err := s.failAgentRun(ctx, run.ID, "cleanup closed delivery after exact Harness history proved no turn was submitted"); err != nil {
+				return HarnessTurn{}, err
 			}
-			return cleanupBlocked(*delivery, reconciliation.Reason)
-		}
+			return HarnessTurn{Status: "failed"}, nil
+		},
 	}
-	reconciliation := ReconcileTurns(run.BaselineRecorded, run.BaselineTurnID, run.TurnID, turns)
-	switch reconciliation.Classification {
-	case "no-submit":
-		reason := "cleanup closed delivery after harness history proved no turn was submitted"
-		if err := s.failAgentRun(ctx, run.ID, reason); err != nil {
-			return err
-		}
-		return nil
-	case "uncertain":
-		if reconciliation.Turn.ID != "" {
-			if err := s.bindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
-				return err
-			}
-		} else if err := s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason); err != nil {
-			return err
-		}
-		return cleanupBlocked(*delivery, reconciliation.Reason)
-	}
-	if err := s.bindAgentRun(ctx, run.ID, history.Harness, history.ThreadID, reconciliation.Turn.ID, reconciliation.Turn.Status); err != nil {
-		return err
-	}
-	if reconciliation.Classification != "active" {
-		return nil
-	}
-	outcome, err := s.externals.AgentWait(ctx, job, threadID, reconciliation.Turn.ID)
+	turn, err := contract.execute(ctx)
 	if err != nil {
-		reason := "cleanup is waiting for the exact harness turn outcome: " + err.Error()
-		_ = s.agentRunAttention(ctx, run.ID, reason)
-		return cleanupBlocked(*delivery, reason)
+		return s.retainCleanupMutation(ctx, delivery, err.Error())
 	}
-	if err := s.bindAgentRun(ctx, run.ID, outcome.Harness, outcome.ThreadID, outcome.Turn.ID, outcome.Turn.Status); err != nil {
-		return err
-	}
-	if !terminalHarness(outcome.Turn.Status) {
-		reason := fmt.Sprintf("cleanup inspection returned nonterminal harness status %q", outcome.Turn.Status)
-		_ = s.agentRunAttention(ctx, run.ID, reason)
-		return cleanupBlocked(*delivery, reason)
+	if activeHarness(turn.Status) {
+		return cleanupStillActive{MessageID: delivery.Message.ID, Reason: "accepted Harness mutation remains active"}
 	}
 	return nil
+}
+
+type agentRunHistoryOperation struct {
+	AgentRunOperation
+	observed  *HarnessHistory
+	recovered *HarnessBinding
+}
+
+func (o agentRunHistoryOperation) History(ctx context.Context, run AgentRun) (HarnessHistory, error) {
+	if o.observed != nil {
+		return *o.observed, nil
+	}
+	return o.AgentRunOperation.History(ctx, run)
+}
+
+func (o agentRunHistoryOperation) Recover(ctx context.Context, run AgentRun) (HarnessBinding, error) {
+	if o.recovered != nil {
+		return *o.recovered, nil
+	}
+	return o.AgentRunOperation.Recover(ctx, run)
+}
+
+func (s ExecutionService) retainCleanupMutation(ctx context.Context, delivery Delivery, reason string) error {
+	if err := s.agentRunAttention(ctx, delivery.AgentRun.ID, reason); err != nil {
+		return err
+	}
+	return cleanupBlocked(delivery, reason)
 }
 
 func cleanupBlocked(delivery Delivery, reason string) error {
@@ -444,49 +635,143 @@ func cleanupBlocked(delivery Delivery, reason string) error {
 	return fmt.Errorf("cleanup retained Sandbox and route: message sequence %d is not safely settled (%s)", delivery.Message.Sequence, reason)
 }
 
-// ExecuteSandboxAction reconciles one external mutation against its exact
-// Sandbox. The caller uses the Action ID as the durable Absurd Step identity.
-func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, job Job, sandbox Sandbox, action Action) error {
-	if sandbox.JobID != job.ID || action.JobID != job.ID || action.Scope != sandbox.ID {
-		return fmt.Errorf("Sandbox Action does not belong to the exact Job and Sandbox")
-	}
-	var err error
-	switch action.Kind {
-	case ActionSandboxCreate:
-		err = s.externals.SandboxCreate(ctx, job, sandbox)
-	case ActionRouteCreate, ActionRouteRevoke:
-		route := RouteForSandbox(sandbox)
-		if action.Kind == ActionRouteCreate {
-			err = s.externals.RouteCreate(ctx, job, sandbox, route)
+type cleanupStillActive struct {
+	MessageID string
+	Reason    string
+}
+
+func (e cleanupStillActive) Error() string {
+	return fmt.Sprintf("cleanup is waiting for active Message %s: %s", e.MessageID, e.Reason)
+}
+
+// ExecuteSandboxAction reconciles one provider-owned mutation through the
+// stable Action and Absurd step identities owned by Core custody.
+func (s ExecutionService) ExecuteSandboxAction(ctx context.Context, jobID, sandboxID string, kind ActionKind) error {
+	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
+		switch authorized.Action.Kind {
+		case ActionSandboxCreate:
+			return s.externals.SandboxCreate(ctx, authorized.Job, authorized.Sandbox)
+		case ActionRouteCreate:
+			return s.externals.RouteCreate(ctx, authorized.Job, authorized.Sandbox, RouteForSandbox(authorized.Sandbox))
+		case ActionRouteRevoke:
+			return s.externals.RouteRevoke(ctx, authorized.Job, authorized.Sandbox, RouteForSandbox(authorized.Sandbox))
+		case ActionSandboxDelete:
+			return s.externals.SandboxDelete(ctx, authorized.Job, authorized.Sandbox)
+		default:
+			return fmt.Errorf("unsupported Sandbox Action kind %q", authorized.Action.Kind)
 		}
-		if action.Kind == ActionRouteRevoke {
-			err = s.externals.RouteRevoke(ctx, job, sandbox, route)
-		}
-	case ActionSandboxDelete:
-		err = s.externals.SandboxDelete(ctx, job, sandbox)
-	default:
-		return fmt.Errorf("unsupported Sandbox Action kind %q", action.Kind)
+	})
+}
+
+// ExecuteSandboxActionEffect is the private adapter seam that gives a
+// module-owned Sandbox mutation the same generic custody without moving the
+// mutation's meaning into Core.
+func (s ExecutionService) ExecuteSandboxActionEffect(ctx context.Context, jobID, sandboxID string, kind ActionKind, effect SandboxActionEffect) error {
+	actionID := ScopedActionID(jobID, kind, sandboxID)
+	if effect == nil {
+		return fmt.Errorf("Sandbox Action %s has no workflow-owned effect", actionID)
 	}
+	return s.runSandboxAction(ctx, jobID, sandboxID, kind, func(ctx context.Context, authorized SandboxActionAuthorization) error {
+		return effect(ctx, authorized.Job, authorized.Sandbox)
+	})
+}
+
+func (s ExecutionService) runSandboxAction(ctx context.Context, jobID, sandboxID string, kind ActionKind, effect func(context.Context, SandboxActionAuthorization) error) error {
+	if jobID == "" || sandboxID == "" || kind == "" {
+		return fmt.Errorf("Sandbox Action requires durable Job, Sandbox, and kind identities")
+	}
+	actionID := ScopedActionID(jobID, kind, sandboxID)
+	action, err := s.store.GetOrCreateSandboxAction(ctx, sandboxID, kind)
 	if err != nil {
 		return err
 	}
-	point := ""
-	if action.Kind == ActionRouteRevoke {
-		point = BarrierRouteRevoked
+	if action.ID != actionID || action.JobID != jobID || action.Kind != kind || action.Scope != sandboxID {
+		return fmt.Errorf("Sandbox Action %s changed authoritative identity", actionID)
 	}
-	if action.Kind == ActionSandboxDelete {
-		point = BarrierSandboxDeleted
+	if action.State == ActionSucceeded {
+		return nil
 	}
-	if point != "" {
-		if err := s.reachWorkflow(ctx, point, job.ID, action.ID); err != nil {
+	return absurdruntime.RunActionStep(ctx, actionID, func(workCtx context.Context) error {
+		return s.executeSandboxAction(workCtx, jobID, actionID, kind, effect)
+	})
+}
+
+func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actionID string, expectedKind ActionKind, effect func(context.Context, SandboxActionAuthorization) error) error {
+	return s.store.WithJobFence(ctx, jobID, func() error {
+		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
-	}
-	if err := s.requireClaim(ctx); err != nil {
+		task, ok := absurd.TaskFromContext(ctx)
+		if !ok {
+			return absurd.ErrNoTaskContext
+		}
+		authorized, err := s.store.AuthorizeSandboxAction(ctx, actionID, task.TaskID(), task.TaskName())
+		if err != nil {
+			return err
+		}
+		authoritative := authorized.Action
+		if authorized.Job.ID != jobID || authoritative.ID != actionID || authoritative.JobID != jobID || authorized.Sandbox.JobID != jobID || authoritative.Scope != authorized.Sandbox.ID ||
+			authorized.TaskID != task.TaskID() || authorized.TaskName != task.TaskName() {
+			return fmt.Errorf("Sandbox Action does not match its authoritative Job, Sandbox, and task")
+		}
+		if expectedKind != "" && authoritative.Kind != expectedKind {
+			return fmt.Errorf("Sandbox Action %s is %s, not expected %s", actionID, authoritative.Kind, expectedKind)
+		}
+		if authoritative.Kind == ActionRouteRevoke || authoritative.Kind == ActionSandboxDelete {
+			if err := s.rejectUnsettledHarnessMutations(ctx, jobID, string(authoritative.Kind)); err != nil {
+				return err
+			}
+		}
+		if authoritative.State == ActionSucceeded {
+			return nil
+		}
+		err = effect(ctx, authorized)
+		if err != nil {
+			return err
+		}
+		point := ""
+		switch authoritative.Kind {
+		case ActionSandboxCreate:
+			point = BarrierSandboxCreated
+		case ActionRouteRevoke:
+			point = BarrierRouteRevoked
+		case ActionSandboxDelete:
+			point = BarrierSandboxDeleted
+		}
+		if point != "" {
+			if err := s.reachWorkflow(ctx, point, authorized.Job.ID, authoritative.ID); err != nil {
+				return err
+			}
+		}
+		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		return s.store.RecordSandboxActionSuccess(ctx, authoritative.ID)
+	})
+}
+
+// CompleteCleanup delegates the final locked terminal/mismatch/resource scan
+// to the Store after revalidating the exact cleanup task under the Job fence.
+func (s ExecutionService) CompleteCleanup(ctx context.Context, jobID string) error {
+	return s.store.WithJobFence(ctx, jobID, func() error {
+		if err := s.requireCleanupTask(ctx, jobID); err != nil {
+			return err
+		}
+		task, ok := absurd.TaskFromContext(ctx)
+		if !ok {
+			return absurd.ErrNoTaskContext
+		}
+		return s.store.CompleteCleanup(ctx, jobID, task.TaskID())
+	})
+}
+
+func (s ExecutionService) rejectUnsettledHarnessMutations(ctx context.Context, jobID, operation string) error {
+	unsettled, err := s.store.UnsettledAgentMessages(ctx, jobID)
+	if err != nil {
 		return err
 	}
-	if err := s.store.RecordSandboxActionSuccess(ctx, action.ID); err != nil {
-		return err
+	if len(unsettled) != 0 {
+		return fmt.Errorf("%s rejected while %d Harness mutations remain unsettled", operation, len(unsettled))
 	}
 	return nil
 }

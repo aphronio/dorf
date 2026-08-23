@@ -16,13 +16,12 @@ import (
 type CodingExecution interface {
 	gitworkspace.Execution
 	BlobStore() blob.Store
-	ObserveRevision(context.Context, Job, core.AgentRun) error
+	ObserveRevision(context.Context, Job, string) error
 	PlanReview(context.Context, Job) error
-	RunReview(context.Context, Job, string) error
-	ExecuteReviewCheckout(context.Context, Job, string, core.Action) error
+	RecordReviewResult(context.Context, Job, string) error
+	ExecuteReviewCheckout(context.Context, Job, string) error
 }
 
-func agentRunStepName(id string) string { return "dorf/agent-run/v1/" + id }
 func revisionStepName(id string) string { return "dorf/revision/v1/" + id }
 func reviewPolicyStepName(job, revision string) string {
 	return fmt.Sprintf("dorf/review-policy/v1/%s/%s", job, revision)
@@ -31,7 +30,7 @@ func reviewPolicyStepName(job, revision string) string {
 // RunJob tells the coding story in dependency order. CurrentWork derives the
 // next operation from product facts; this loop executes it and asks again.
 // PostgreSQL never stores this disposable answer.
-func RunJob(ctx context.Context, service CodingExecution, store Store, proposal ProposalRuntime, jobID string) (Work, error) {
+func RunJob(ctx context.Context, custody core.JobHandle, service CodingExecution, store Store, proposal ProposalRuntime, jobID string) (Work, error) {
 	for {
 		snapshot, err := LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -45,26 +44,16 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 		if work.Kind == WorkComplete || work.Kind == WorkAttention {
 			return work, nil
 		}
-
 		job := snapshot.Job
 
 		switch work.Kind {
 		case WorkAction:
-			err = runSandboxAction(ctx, service, store, job, snapshot, work)
-		case WorkRunReviewer:
-			err = absurdruntime.RunFactStep(ctx, agentRunStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
-				return service.RunReview(workCtx, job, work.FactID)
+			err = runSandboxAction(ctx, custody, service, job, snapshot, work)
+		case WorkRecordReview:
+			err = absurdruntime.RunFactStep(ctx, "dorf/review-feedback/v1/"+work.FactID, work.FactID, func(workCtx context.Context) error {
+				return service.RecordReviewResult(workCtx, job, work.FactID)
 			})
-		case WorkDeliverMessage:
-			err = runDeliveryStep(ctx, service, store, job, work)
-		case WorkObserveAgent:
-			terminal, observeErr := observeAgentRun(ctx, service, job, snapshot, work)
-			if observeErr != nil {
-				return Work{}, observeErr
-			}
-			if terminal {
-				continue
-			}
+		case WorkWaitAgent:
 			return work, nil
 		case WorkObserveRevision:
 			err = runRevisionStep(ctx, service, job, snapshot, work)
@@ -87,65 +76,23 @@ func RunJob(ctx context.Context, service CodingExecution, store Store, proposal 
 			return Work{}, fmt.Errorf("unsupported current coding work %q", work.Kind)
 		}
 		if err != nil {
+			if attentionNeeded(err) {
+				return Work{Kind: WorkAttention, Revision: job.Revision, FactID: work.FactID, Detail: err.Error()}, nil
+			}
 			return work, err
 		}
 	}
 }
 
-func observeAgentRun(ctx context.Context, service CodingExecution, job Job, snapshot Snapshot, work Work) (bool, error) {
-	for i := range snapshot.Deliveries {
-		run := snapshot.Deliveries[i].AgentRun
-		if run.ID != work.FactID {
-			continue
-		}
-		if run.JobID != job.ID || run.Role != "implement" || run.State != core.AgentRunActive {
-			return false, fmt.Errorf("AgentRun observation changed from exact active implementation AgentRun %s", work.FactID)
-		}
-		turn, err := service.ObserveAgentRunTurn(ctx, job.Job, run, "implement")
-		if err != nil {
-			return false, err
-		}
-		return turn.Terminal(), nil
-	}
-	return false, fmt.Errorf("AgentRun observation has no exact implementation AgentRun %s", work.FactID)
+// AgentPrompt is coding-owned prompt policy selected by the deployment's
+// static Agent strategy composition after Core reloads the durable Message.
+func AgentPrompt(job Job, input string) string {
+	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", strings.TrimSpace(input), job.Branch, job.Revision)
 }
 
-func runDeliveryStep(ctx context.Context, service CodingExecution, store Store, job Job, work Work) error {
-	delivery, err := store.NextDelivery(ctx, job.ID)
-	if err != nil {
-		return err
-	}
-	if delivery == nil {
-		return nil
-	}
-	if delivery.AgentRun.ID != work.FactID {
-		return fmt.Errorf("delivery candidate changed from AgentRun %s to %s", work.FactID, delivery.AgentRun.ID)
-	}
-	return absurdruntime.RunFactStep(ctx, agentRunStepName(delivery.AgentRun.ID), delivery.AgentRun.ID, func(workCtx context.Context) error {
-		return service.Deliver(workCtx, job.Job, *delivery, codingAgentInput(job, *delivery))
-	})
-}
-
-func codingAgentInput(job Job, delivery core.Delivery) string {
-	if delivery.AgentRun.Role != "implement" {
-		return delivery.Message.Input
-	}
-	return fmt.Sprintf("%s\n\nDorf coding workflow contract: work on branch %q from accepted Revision %s. Before returning control, commit every intended workspace change. You may create one commit or several. Leave the checkout clean, with final HEAD on that branch and descending from the accepted Revision. If this input explicitly concludes that no code change is warranted, leave HEAD unchanged and the checkout clean.", strings.TrimSpace(delivery.Message.Input), job.Branch, job.Revision)
-}
-
-func runRevisionStep(ctx context.Context, service CodingExecution, job Job, snapshot Snapshot, work Work) error {
-	var run *core.AgentRun
-	for i := range snapshot.Deliveries {
-		if snapshot.Deliveries[i].AgentRun.ID == work.FactID {
-			run = &snapshot.Deliveries[i].AgentRun
-			break
-		}
-	}
-	if run == nil || run.JobID != job.ID || run.Role != "implement" || run.InputRevision != job.Revision {
-		return fmt.Errorf("Revision observation has no exact current implementation AgentRun %s", work.FactID)
-	}
-	return absurdruntime.RunFactStep(ctx, revisionStepName(run.ID), run.ID, func(workCtx context.Context) error {
-		return service.ObserveRevision(workCtx, job, *run)
+func runRevisionStep(ctx context.Context, service CodingExecution, job Job, _ Snapshot, work Work) error {
+	return absurdruntime.RunFactStep(ctx, revisionStepName(work.FactID), work.FactID, func(workCtx context.Context) error {
+		return service.ObserveRevision(workCtx, job, work.FactID)
 	})
 }
 
@@ -167,7 +114,7 @@ func runPublicationStep(ctx context.Context, store Store, proposal ProposalRunti
 	return nil
 }
 
-func runSandboxAction(ctx context.Context, service CodingExecution, store Store, job Job, snapshot Snapshot, work Work) error {
+func runSandboxAction(ctx context.Context, custody core.JobHandle, service CodingExecution, job Job, snapshot Snapshot, work Work) error {
 	var sandbox *core.Sandbox
 	for i := range snapshot.Sandboxes {
 		if snapshot.Sandboxes[i].ID == work.Scope {
@@ -178,13 +125,27 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store Store,
 	if sandbox == nil || sandbox.JobID != job.ID {
 		return fmt.Errorf("Action %s has no exact Job-owned Sandbox %s", work.FactID, work.Scope)
 	}
-
-	var reviewer *ReviewRunView
-	if sandbox.ID != snapshot.MainSandbox.ID {
-		reviewRuns, err := snapshot.currentReviewRuns()
+	// Sandbox-create is a truthful projection of the next Core custody
+	// prerequisite. Provider mutation remains exclusive to the opaque handle.
+	if work.ActionKind == core.ActionSandboxCreate {
+		var ensured core.SandboxHandle
+		var err error
+		if sandbox.Name == core.DefaultSandbox {
+			ensured, err = custody.EnsureDefaultSandbox(ctx)
+		} else {
+			ensured, err = custody.EnsureNamedSandbox(ctx, sandbox.Name)
+		}
 		if err != nil {
 			return err
 		}
+		if ensured.ID() != sandbox.ID {
+			return fmt.Errorf("ensured Sandbox %s changed selected identity %s", ensured.ID(), sandbox.ID)
+		}
+		return nil
+	}
+	var reviewer *ReviewRunView
+	if sandbox.ID != snapshot.MainSandbox.ID {
+		reviewRuns := snapshot.currentReviewRuns()
 		for i := range reviewRuns {
 			run := &reviewRuns[i]
 			if run.InputRevision == job.Revision && run.Sandbox.ID == sandbox.ID {
@@ -197,30 +158,17 @@ func runSandboxAction(ctx context.Context, service CodingExecution, store Store,
 		}
 	}
 
-	expectedID := core.ScopedActionID(job.ID, work.ActionKind, work.Scope)
-	if expectedID != work.FactID {
+	if expectedID := core.ScopedActionID(job.ID, work.ActionKind, work.Scope); expectedID != work.FactID {
 		return fmt.Errorf("Action changed from %s to %s", work.FactID, expectedID)
 	}
-	action, err := store.GetOrCreateSandboxAction(ctx, sandbox.ID, work.ActionKind)
-	if err != nil {
-		return err
-	}
-	if action.ID != work.FactID || action.JobID != job.ID || action.Kind != work.ActionKind || action.Scope != work.Scope {
-		return fmt.Errorf("selected Action %s changed to %s %s in %s", work.FactID, action.ID, action.Kind, action.Scope)
-	}
-	if action.State == core.ActionSucceeded {
-		return nil
-	}
-	return absurdruntime.RunActionStep(ctx, action.ID, func(workCtx context.Context) error {
-		if work.ActionKind == ActionReviewCheckout {
-			if reviewer == nil {
-				return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", action.ID)
-			}
-			return service.ExecuteReviewCheckout(workCtx, job, reviewer.ID, action)
+	if work.ActionKind == ActionReviewCheckout {
+		if reviewer == nil {
+			return fmt.Errorf("review checkout Action %s belongs to the main Sandbox", work.FactID)
 		}
-		if work.ActionKind == gitworkspace.ActionRepositoryClone {
-			return service.ExecuteRepositoryClone(workCtx, job.Job, *sandbox, action, job.Repository, job.Revision, job.Branch)
-		}
-		return service.ExecuteSandboxAction(workCtx, job.Job, *sandbox, action)
-	})
+		return service.ExecuteReviewCheckout(ctx, job, reviewer.ID)
+	}
+	if work.ActionKind == gitworkspace.ActionRepositoryClone {
+		return service.ExecuteRepositoryClone(ctx, job.Job, *sandbox, job.Repository, job.Revision, job.Branch)
+	}
+	return service.ExecuteSandboxAction(ctx, job.ID, sandbox.ID, work.ActionKind)
 }

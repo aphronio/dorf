@@ -105,12 +105,16 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		if err != nil {
 			return followSnapshot{}, err
 		}
-		runs := make([]core.AgentRun, 0, len(snapshot.Deliveries))
-		for _, delivery := range snapshot.Deliveries {
+		deliveries, err := store.Deliveries(ctx, jobID)
+		if err != nil {
+			return followSnapshot{}, err
+		}
+		runs := make([]core.AgentRun, 0, len(deliveries))
+		for _, delivery := range deliveries {
 			runs = append(runs, delivery.AgentRun)
 		}
 		return followSnapshot{
-			Job: snapshot.Job.Job, Profile: profile, Definition: coding.WorkflowDefinition(), History: workflowHistory(snapshot), Operation: projection.CurrentWork.Description(),
+			Job: snapshot.Job.Job, Profile: profile, Definition: coding.WorkflowDefinition(), History: workflowHistory(snapshot, deliveries), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == coding.WorkAttention,
 			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
@@ -119,10 +123,14 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		if err != nil {
 			return followSnapshot{}, err
 		}
+		deliveries, err := store.Deliveries(ctx, jobID)
+		if err != nil {
+			return followSnapshot{}, err
+		}
 		work := snapshot.Project()
 		return followSnapshot{
-			Job: snapshot.Job, Profile: profile, Definition: investigation.WorkflowDefinition(), History: investigationHistory(snapshot), Operation: work.Description(), OperationDetail: work.Detail,
-			NeedsAttention: work.Kind == investigation.WorkAttention, AgentRuns: investigationAgentRuns(snapshot.Deliveries),
+			Job: snapshot.Job, Profile: profile, Definition: investigation.WorkflowDefinition(), History: investigationHistory(snapshot, deliveries), Operation: work.Description(), OperationDetail: work.Detail,
+			NeedsAttention: work.Kind == investigation.WorkAttention, AgentRuns: investigationAgentRuns(deliveries),
 			Sandboxes: []core.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	default:

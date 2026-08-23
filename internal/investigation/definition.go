@@ -26,8 +26,6 @@ func (Definition) OperationLabel(kind, fallback string) string {
 		return "Complete"
 	case WorkAttention:
 		return "Needs attention"
-	case WorkWaitInput:
-		return "Waiting for follow-up or cleanup"
 	default:
 		return fallback
 	}
@@ -53,17 +51,10 @@ func (Definition) ActionLabel(kind core.ActionKind) string {
 }
 
 func (Definition) AgentRoleLabel(role string) string {
-	if role == "investigate" {
+	if role == InitialAgentRole {
 		return "Investigator"
 	}
 	return humanizeIdentifier(role)
-}
-
-func (Definition) ResultLabel(kind string) string {
-	if kind == "investigation-draft" {
-		return "Investigation draft"
-	}
-	return humanizeIdentifier(kind)
 }
 
 func humanizeIdentifier(value string) string {

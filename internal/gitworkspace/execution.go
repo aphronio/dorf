@@ -13,5 +13,5 @@ const ActionRepositoryClone core.ActionKind = "repository-clone"
 // application contract.
 type Execution interface {
 	core.Execution
-	ExecuteRepositoryClone(context.Context, core.Job, core.Sandbox, core.Action, string, string, string) error
+	ExecuteRepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error
 }

@@ -32,14 +32,14 @@ func publicationOwner(_ context.Context, sandboxID string) (provider.Ownership, 
 
 func TestPublicationIntentKeepsLaterAcceptedInputOutOfInFlightProof(t *testing.T) {
 	cutoff := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	deliveries := []core.Delivery{
-		{Message: core.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}, AgentRun: core.AgentRun{ID: "run-before", MessageID: "before"}},
-		{Message: core.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, AgentRun: core.AgentRun{ID: "run-after", MessageID: "after"}},
+	messages := []coding.MessageRecord{
+		{Message: core.Message{ID: "before", AdmittedAt: cutoff.Add(-time.Second)}, ProducerID: "run-before"},
+		{Message: core.Message{ID: "after", AdmittedAt: cutoff.Add(time.Second)}, ProducerID: "run-after"},
 	}
 
-	retained := coding.PublicationDeliveries(deliveries, cutoff)
-	if len(retained) != 1 || retained[0].Message.ID != "before" || retained[0].AgentRun.ID != "run-before" {
-		t.Fatalf("retained Deliveries=%#v", retained)
+	retained := coding.PublicationMessages(messages, cutoff)
+	if len(retained) != 1 || retained[0].Message.ID != "before" || retained[0].ProducerID != "run-before" {
+		t.Fatalf("retained Messages=%#v", retained)
 	}
 }
 
@@ -142,17 +142,11 @@ func TestBodyProjectsOnlySelectedReviewEvidence(t *testing.T) {
 	feedbackMessageID := core.MessageID(job.ID, core.MessageFromAgent, runID)
 	observedID := core.EvidenceID(runID, "review-observation")
 	runs := []coding.ReviewRunView{{
-		AgentRun: core.AgentRun{
-			ID:            runID,
-			JobID:         job.ID,
-			MessageID:     requestID,
-			Role:          role,
-			InputRevision: revision,
-		},
+		ID: runID, JobID: job.ID, MessageID: requestID, Role: role, InputRevision: revision,
 		Request: core.Message{ID: requestID, JobID: job.ID, FromKind: core.MessageFromWorkflow, FromID: coding.ReviewRequestFromID(revision, role), Input: "Review the exact Revision.", Intent: core.MessageFollow},
 	}, {
-		AgentRun: core.AgentRun{ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision},
-		Request:  core.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: core.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: core.MessageFollow},
+		ID: "agent-run-unselected", JobID: job.ID, MessageID: "message-unselected-input", Role: "unselected", InputRevision: revision,
+		Request: core.Message{ID: "message-unselected-input", JobID: job.ID, FromKind: core.MessageFromWorkflow, FromID: "unselected", Input: "Do not project this review.", Intent: core.MessageFollow},
 	}}
 	evidence := []core.Evidence{
 		{ID: observedID, Digest: strings.Repeat("2", 64)},
@@ -180,9 +174,9 @@ func TestBodySeesOnlyExactRevisionReviewRuns(t *testing.T) {
 	currentRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, currentRevision, role))
 	oldRunID := core.AgentRunID(coding.ReviewRequestMessageID(jobID, oldRevision, role))
 	runs := []coding.ReviewRunView{
-		{AgentRun: core.AgentRun{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, State: core.AgentRunCompleted}},
+		{ID: currentRunID, JobID: jobID, Role: role, InputRevision: currentRevision, Outcome: "completed"},
 		// The stale same-Role run deliberately follows the current run.
-		{AgentRun: core.AgentRun{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, State: core.AgentRunFailed}},
+		{ID: oldRunID, JobID: jobID, Role: role, InputRevision: oldRevision, Outcome: "failed"},
 	}
 
 	observedID := core.EvidenceID(currentRunID, "review-observation")

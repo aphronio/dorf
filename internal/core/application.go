@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
 	"github.com/aphronio/dorf/internal/sandbox"
@@ -12,7 +14,8 @@ import (
 const CleanupTaskName = "dorf-job-cleanup-v3"
 
 type JobTaskParams struct {
-	JobID string `json:"job_id"`
+	JobID          string `json:"job_id"`
+	PreviousTaskID string `json:"previous_task_id,omitempty"`
 }
 
 type TaskResultV1 struct {
@@ -31,19 +34,34 @@ type CleanupRuntimeResolver interface {
 	ResolveCleanup(context.Context, string) (CleanupRuntime, error)
 }
 
+type SandboxRuntime struct {
+	Execution      Execution
+	Files          SandboxFileReader
+	SandboxProfile string
+}
+
+type SandboxFileReader interface {
+	ReadSandboxFile(context.Context, Job, Sandbox, string) ([]byte, error)
+}
+
+type SandboxRuntimeResolver interface {
+	ResolveSandbox(context.Context, string) (SandboxRuntime, error)
+}
+
 // ApplicationStore is the durable Core custody required by the application boundary.
 // PostgreSQL is the current implementation, not part of the consumer contract.
 type ApplicationStore interface {
 	Job(context.Context, string) (Job, error)
+	Sandbox(context.Context, string) (Sandbox, error)
+	EnsureSandbox(context.Context, string, string) (Sandbox, error)
 	JobTasks(context.Context, string) ([]JobTask, error)
+	CleanupRequests(context.Context) ([]string, error)
 	WithJobFence(context.Context, string, func() error) error
 	AttachJobTask(context.Context, string, string, string, string) error
-	CloseAdmissionForCleanup(context.Context, string) error
+	RequestCleanup(context.Context, string) error
 	AttachCleanupTask(context.Context, string, string, string, string) error
-	GetOrCreateSandboxAction(context.Context, string, ActionKind) (Action, error)
 	RecordSandboxProfileUnavailable(context.Context, string, string, string, error) error
 	SetCleanupAttention(context.Context, string, string) error
-	CompleteCleanup(context.Context, string) error
 }
 
 // StopForUnavailableSandboxProfile turns one definitive provider artifact
@@ -58,7 +76,7 @@ func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID
 		return TaskResultV1{}, true, err
 	}
 	if err := a.Store.RecordSandboxProfileUnavailable(ctx, job.ID, job.SandboxProfile, source, cause); err != nil {
-		return TaskResultV1{}, true, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, err)
+		return TaskResultV1{}, true, errors.Join(cause, fmt.Errorf("record unavailable Sandbox profile %q: %w", job.SandboxProfile, err))
 	}
 	return TaskResultV1{JobID: job.ID, Outcome: "sandbox-profile-unavailable"}, true, nil
 }
@@ -66,13 +84,12 @@ func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID
 type Application struct {
 	Store           ApplicationStore
 	Tasks           *absurd.Client
+	AgentMessages   AgentMessageAdmission
+	SandboxRuntimes SandboxRuntimeResolver
 	CleanupRuntimes CleanupRuntimeResolver
 }
 
-// RequestCleanup closes further admission, settles the currently attached
-// task, and durably hands the Job to Core cleanup. Calling it again converges
-// on the same cleanup task or completed receipt.
-func (a Application) RequestCleanup(ctx context.Context, jobID string) (Job, error) {
+func (a Application) requestCleanup(ctx context.Context, jobID string) (Job, error) {
 	job, err := a.Store.Job(ctx, jobID)
 	if err != nil {
 		return Job{}, err
@@ -80,12 +97,24 @@ func (a Application) RequestCleanup(ctx context.Context, jobID string) (Job, err
 	if job.CleanupState == CleanupComplete {
 		return job, nil
 	}
-	if err := a.Store.CloseAdmissionForCleanup(ctx, jobID); err != nil {
-		return Job{}, err
+	if job.CleanupState == CleanupScheduled {
+		return job, nil
+	}
+	if job.CleanupState == CleanupPending {
+		if err := a.Store.WithJobFence(ctx, jobID, func() error {
+			return a.Store.RequestCleanup(ctx, jobID)
+		}); err != nil {
+			return Job{}, err
+		}
 	}
 	job, err = a.Store.Job(ctx, jobID)
 	if err != nil {
 		return Job{}, err
+	}
+	// Another requester or continuous recovery may have attached the cleanup task
+	// after this caller observed requested. Never cancel that winning cleanup.
+	if job.CleanupState == CleanupScheduled || job.CleanupState == CleanupComplete {
+		return job, nil
 	}
 	skipTaskID := currentTaskID(ctx)
 	if err := a.cancelAttachedTask(ctx, job, skipTaskID); err != nil {
@@ -98,10 +127,14 @@ func (a Application) RequestCleanup(ctx context.Context, jobID string) (Job, err
 		if err != nil {
 			return err
 		}
+		if current.CleanupState == CleanupScheduled || current.CleanupState == CleanupComplete {
+			result = current
+			return nil
+		}
 		if err := a.cancelAttachedTask(ctx, current, skipTaskID); err != nil {
 			return err
 		}
-		spawned, err := a.Tasks.Spawn(ctx, CleanupTaskName, JobTaskParams{JobID: jobID}, absurdruntime.TaskSpawnOptions("cleanup:v3:"+jobID))
+		spawned, err := a.Tasks.Spawn(ctx, CleanupTaskName, JobTaskParams{JobID: jobID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions("cleanup:v3:"+jobID))
 		if err != nil {
 			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
 		}
@@ -112,6 +145,41 @@ func (a Application) RequestCleanup(ctx context.Context, jobID string) (Job, err
 		return err
 	})
 	return result, err
+}
+
+// RecoverCleanupRequests schedules every explicit cleanup request that was
+// durably recorded before its public Absurd Spawn could be attached.
+func (a Application) RecoverCleanupRequests(ctx context.Context) error {
+	jobIDs, err := a.Store.CleanupRequests(ctx)
+	if err != nil {
+		return err
+	}
+	for _, jobID := range jobIDs {
+		if _, err := a.requestCleanup(ctx, jobID); err != nil {
+			return fmt.Errorf("recover cleanup request for Job %s: %w", jobID, err)
+		}
+	}
+	return nil
+}
+
+// ReconcileCleanupRequests continuously closes the only public Spawn gap:
+// a durable cleanup request whose requester exited before attaching cleanup.
+func (a Application) ReconcileCleanupRequests(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("cleanup reconciliation interval must be positive")
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		if err := a.RecoverCleanupRequests(ctx); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a Application) cancelAttachedTask(ctx context.Context, job Job, skipTaskID string) error {
@@ -142,7 +210,7 @@ func currentTaskID(ctx context.Context) string {
 
 // VerifyAttachedTask reconciles the public Absurd task identity with the
 // exact durable Job attachment before any task is allowed to act.
-func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName string) error {
+func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName, expectedPreviousTaskID string) error {
 	return a.Store.WithJobFence(ctx, jobID, func() error {
 		task, ok := absurd.TaskFromContext(ctx)
 		if !ok {
@@ -152,11 +220,18 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName str
 		if err != nil {
 			return err
 		}
+		if taskName == CleanupTaskName {
+			if job.AdmissionOpen || (job.CleanupState != CleanupRequested && job.CleanupState != CleanupScheduled) {
+				return fmt.Errorf("cleanup task %s cannot act before cleanup is requested", task.TaskID())
+			}
+		} else if !job.AdmissionOpen || job.CleanupState != CleanupPending {
+			return fmt.Errorf("ordinary task %s cannot act after cleanup begins", task.TaskID())
+		}
 		attachments, err := a.Store.JobTasks(ctx, jobID)
 		if err != nil {
 			return err
 		}
-		for _, attachment := range attachments {
+		for i, attachment := range attachments {
 			if attachment.TaskID != task.TaskID() {
 				continue
 			}
@@ -166,13 +241,20 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName str
 			if attachment.TaskName != taskName {
 				return fmt.Errorf("task %s is durably attached as %s, not %s", task.TaskID(), attachment.TaskName, taskName)
 			}
+			previous := ""
+			if i > 0 {
+				previous = attachments[i-1].TaskID
+			}
+			if previous != expectedPreviousTaskID {
+				return fmt.Errorf("task %s predecessor is %q, not Spawn predecessor %q", task.TaskID(), previous, expectedPreviousTaskID)
+			}
 			return verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
 		}
 		if job.CurrentTaskID != task.TaskID() {
 			if taskName == CleanupTaskName {
-				err = a.Store.AttachCleanupTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
+				err = a.Store.AttachCleanupTask(ctx, jobID, expectedPreviousTaskID, task.TaskID(), taskName)
 			} else {
-				err = a.Store.AttachJobTask(ctx, jobID, job.CurrentTaskID, task.TaskID(), taskName)
+				err = a.Store.AttachJobTask(ctx, jobID, expectedPreviousTaskID, task.TaskID(), taskName)
 			}
 			if err != nil {
 				return fmt.Errorf("recover public Spawn attachment for %s: %w", taskName, err)
@@ -180,6 +262,54 @@ func (a Application) VerifyAttachedTask(ctx context.Context, jobID, taskName str
 		}
 		return verifyTaskContext(ctx, task.TaskID(), taskName)
 	})
+}
+
+func (a Application) verifyCurrentTask(ctx context.Context, jobID, taskName string) error {
+	return a.Store.WithJobFence(ctx, jobID, func() error {
+		job, err := exactCurrentAttachedTask(ctx, a.Store, jobID, taskName)
+		if err != nil {
+			return err
+		}
+		if !job.AdmissionOpen || job.CleanupState != CleanupPending {
+			return fmt.Errorf("task %s is not the exact current open Job attachment", job.CurrentTaskID)
+		}
+		return nil
+	})
+}
+
+type currentTaskStore interface {
+	Job(context.Context, string) (Job, error)
+	JobTasks(context.Context, string) ([]JobTask, error)
+}
+
+// exactCurrentAttachedTask is the one authority check shared by Core's Job
+// effects. It proves that the running Absurd task is both the Job's current
+// task and the exact durably attached task name.
+func exactCurrentAttachedTask(ctx context.Context, store currentTaskStore, jobID, taskName string) (Job, error) {
+	task, ok := absurd.TaskFromContext(ctx)
+	if !ok {
+		return Job{}, absurd.ErrNoTaskContext
+	}
+	if taskName == "" {
+		taskName = task.TaskName()
+	}
+	job, err := store.Job(ctx, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	if task.TaskName() != taskName || job.CurrentTaskID != task.TaskID() {
+		return Job{}, fmt.Errorf("task %s is not the exact current %s attachment for Job %s", task.TaskID(), taskName, jobID)
+	}
+	attachments, err := store.JobTasks(ctx, jobID)
+	if err != nil {
+		return Job{}, err
+	}
+	for _, attachment := range attachments {
+		if attachment.TaskID == task.TaskID() && attachment.TaskName == taskName {
+			return job, verifyTaskContext(ctx, attachment.TaskID, attachment.TaskName)
+		}
+	}
+	return Job{}, fmt.Errorf("task %s has no exact durable %s attachment for Job %s", task.TaskID(), taskName, jobID)
 }
 
 func verifyTaskContext(ctx context.Context, attachedID, taskName string) error {

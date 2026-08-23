@@ -15,6 +15,7 @@ import (
 const (
 	TaskName                = "dorf-codebase-investigation-v2"
 	activeAgentPollInterval = time.Second
+	idleMessagePollInterval = 30 * time.Second
 )
 
 func TaskKey(jobID string) string { return "codebase-investigation:v2:" + jobID }
@@ -25,6 +26,7 @@ type ProviderChecker interface {
 
 type Runtime struct {
 	Profile       profile.Runtime
+	Agent         core.AgentReconciliation
 	Investigation Service
 }
 
@@ -35,7 +37,11 @@ type RuntimeResolver interface {
 // Register installs the investigation workflow's task and recovery loop.
 func Register(application core.Application, store Store, runtimes RuntimeResolver) {
 	application.Tasks.MustRegister(absurd.Task(TaskName, func(ctx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName); err != nil {
+		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName, params.PreviousTaskID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		jobHandle, err := application.OpenJob(ctx, params.JobID)
+		if err != nil {
 			return core.TaskResultV1{}, err
 		}
 		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID)
@@ -43,7 +49,16 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			return core.TaskResultV1{}, err
 		}
 		for {
-			work, err := Run(ctx, runtime.Investigation, store, params.JobID)
+			if runtime.Agent == nil {
+				return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
+			}
+			if err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, params.JobID, err); stopped {
+					return result, stopErr
+				}
+				return core.TaskResultV1{}, err
+			}
+			work, err := Run(ctx, jobHandle, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
@@ -61,7 +76,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), options)
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if work.Kind == WorkObserveAgent && errors.As(err, &timeout) {
+				if errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err
@@ -74,8 +89,8 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 }
 
 func wakeOptions(work Work, sequence int64) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence)}
-	if work.Kind == WorkObserveAgent {
+	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), Timeout: idleMessagePollInterval}
+	if work.Kind == WorkWaitAgent {
 		options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}
@@ -117,8 +132,6 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 }
 
 func Admit(ctx context.Context, store Store, application core.Application, providers ProviderChecker, runtime profile.Runtime, input Admission) (core.Job, bool, error) {
-	input.Workflow = Workflow
-	input.WorkflowRevision = WorkflowRevision
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
 		exists, err := store.JobExists(ctx, core.JobID(key))
@@ -147,15 +160,4 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err
-}
-
-func AdmitMessage(ctx context.Context, store Store, application core.Application, input core.MessageAdmission) (core.Message, bool, error) {
-	message, created, err := store.AdmitInvestigationMessage(ctx, input)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	if err := application.EmitMessageWake(ctx, message); err != nil {
-		return message, created, err
-	}
-	return message, created, nil
 }

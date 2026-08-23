@@ -10,7 +10,6 @@ func TestStepNamesComeFromDurableFactIdentity(t *testing.T) {
 		got  string
 		want string
 	}{
-		{"AgentRun", agentRunStepName("run-1"), "dorf/agent-run/v1/run-1"},
 		{"Revision", revisionStepName("run-1"), "dorf/revision/v1/run-1"},
 		{"ReviewPolicy", reviewPolicyStepName("job-1", "revision-1"), "dorf/review-policy/v1/job-1/revision-1"},
 	}

@@ -15,6 +15,7 @@ import (
 const (
 	TaskName                = "dorf-coding-job-v3"
 	activeAgentPollInterval = time.Second
+	idleMessagePollInterval = 30 * time.Second
 )
 
 func TaskKey(jobID string) string { return "coding-job:v3:" + jobID }
@@ -25,6 +26,7 @@ type ProviderChecker interface {
 
 type Runtime struct {
 	Profile  profile.Runtime
+	Agent    core.AgentReconciliation
 	Coding   CodingExecution
 	Proposal ProposalRuntime
 }
@@ -36,7 +38,11 @@ type RuntimeResolver interface {
 // Register installs the coding workflow's task and recovery loop.
 func Register(application core.Application, store Store, runtimes RuntimeResolver) {
 	application.Tasks.MustRegister(absurd.Task(TaskName, func(ctx context.Context, params core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName); err != nil {
+		if err := application.VerifyAttachedTask(ctx, params.JobID, TaskName, params.PreviousTaskID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		jobHandle, err := application.OpenJob(ctx, params.JobID)
+		if err != nil {
 			return core.TaskResultV1{}, err
 		}
 		runtime, err := runtimeForJob(ctx, store, runtimes, params.JobID)
@@ -48,7 +54,16 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			proposal.PollInterval = 30 * time.Second
 		}
 		for {
-			work, err := RunJob(ctx, runtime.Coding, store, proposal, params.JobID)
+			if runtime.Agent == nil {
+				return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
+			}
+			if err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, params.JobID, err); stopped {
+					return result, stopErr
+				}
+				return core.TaskResultV1{}, err
+			}
+			work, err := RunJob(ctx, jobHandle, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
@@ -61,7 +76,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 					return core.TaskResultV1{}, err
 				}
 				if outcome != nil {
-					if _, err := application.RequestCleanup(ctx, params.JobID); err != nil {
+					if err := jobHandle.RequestCleanup(ctx); err != nil {
 						return core.TaskResultV1{}, err
 					}
 					return core.TaskResultV1{JobID: params.JobID, Outcome: string(outcome.Kind)}, nil
@@ -75,7 +90,7 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), wakeOptions(work, sequence, proposal.PollInterval))
 			if err != nil {
 				var timeout *absurd.TimeoutError
-				if (work.Kind == WorkObserveProposal || work.Kind == WorkObserveAgent) && errors.As(err, &timeout) {
+				if errors.As(err, &timeout) {
 					continue
 				}
 				return core.TaskResultV1{}, err
@@ -122,12 +137,12 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 }
 
 func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence)}
+	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence), Timeout: idleMessagePollInterval}
 	switch work.Kind {
 	case WorkObserveProposal:
 		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
 		options.Timeout = proposalPollInterval
-	case WorkObserveAgent:
+	case WorkWaitAgent:
 		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
 		options.Timeout = activeAgentPollInterval
 	}
@@ -135,8 +150,6 @@ func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) 
 }
 
 func Admit(ctx context.Context, store Store, application core.Application, providers ProviderChecker, runtime profile.Runtime, input Admission) (core.Job, bool, error) {
-	input.Workflow = Workflow
-	input.WorkflowRevision = WorkflowRevision
 	key := strings.TrimSpace(input.AdmissionKey)
 	if key != "" {
 		exists, err := store.JobExists(ctx, core.JobID(key))
@@ -165,15 +178,4 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	}
 	job, err = store.Job(ctx, job.ID)
 	return job, created, err
-}
-
-func AdmitMessage(ctx context.Context, store Store, application core.Application, input core.MessageAdmission) (core.Message, bool, error) {
-	message, created, err := store.AdmitCodingMessage(ctx, input)
-	if err != nil {
-		return core.Message{}, false, err
-	}
-	if err := application.EmitMessageWake(ctx, message); err != nil {
-		return message, created, err
-	}
-	return message, created, nil
 }

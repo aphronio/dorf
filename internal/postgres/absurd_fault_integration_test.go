@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/absurdruntime"
-	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	"github.com/jackc/pgx/v5"
 )
@@ -81,7 +81,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	ctx := context.Background()
 	queueName := fmt.Sprintf("dorf_cleanup_retry_%d", time.Now().UnixNano())
 	client := newFaultClient(t, store, queueName)
-	const taskName = "dorf-cleanup-retry-proof-v1"
+	const taskName = core.CleanupTaskName
 	client.MustRegister(absurd.Task(taskName, func(_ context.Context, params faultActionParams) (retryProofResult, error) {
 		return retryProofResult{JobID: params.JobID}, errors.New("operator-repairable cleanup outage")
 	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
@@ -95,7 +95,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CloseAdmissionForCleanup(ctx, job.ID); err != nil {
+	if err := store.RequestCleanup(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{MaxAttempts: 1})
@@ -216,12 +216,12 @@ func (e *reconcilingFaultEffect) claims() (passed, failed []string) {
 // call fail the test instead of teaching this focused fake unrelated behavior.
 type faultActionExternals struct {
 	core.Externals
-	gitworkspace.GitExternals
+	gitworkspace.Operations
 	effect *reconcilingFaultEffect
 	runID  string
 }
 
-func (e faultActionExternals) RepositoryClone(context.Context, core.Job, core.Sandbox, string, string, string) error {
+func (e faultActionExternals) ReconcileClone(context.Context, provider.Ownership, string, string, string) error {
 	e.effect.reconcile(e.runID)
 	return nil
 }
@@ -254,15 +254,10 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 			if err != nil {
 				return faultActionResultV1{}, err
 			}
-			action, err := store.GetOrCreateSandboxAction(workCtx, core.MainSandboxName(params.JobID), gitworkspace.ActionRepositoryClone)
-			if err != nil {
-				return faultActionResultV1{}, err
-			}
 			runID := task.RunID()
 			execution := core.NewExecutionService(
 				store,
 				faultActionExternals{effect: effect, runID: runID},
-				blob.Store{},
 				nil,
 				func(claimCtx context.Context) error {
 					err := absurdruntime.RequireClaim(claimCtx)
@@ -270,15 +265,11 @@ func registerFaultActionTask(client *absurd.Client, store postgres.Store, taskNa
 					return err
 				},
 			)
-			service := gitworkspace.NewExecutor(execution, store, faultActionExternals{effect: effect, runID: runID}, func(claimCtx context.Context) error {
-				err := absurdruntime.RequireClaim(claimCtx)
-				effect.recordClaim(runID, err)
-				return err
-			})
-			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, action, job.Repository, job.Revision, job.Branch); err != nil {
+			service := gitworkspace.NewExecutor(execution, faultActionExternals{effect: effect, runID: runID}, nil)
+			if err := service.ExecuteRepositoryClone(workCtx, job.Job, sandbox, job.Repository, job.Revision, job.Branch); err != nil {
 				return faultActionResultV1{}, err
 			}
-			return faultActionResultV1{ActionID: action.ID}, nil
+			return faultActionResultV1{ActionID: core.ScopedActionID(job.ID, gitworkspace.ActionRepositoryClone, sandbox.ID)}, nil
 		})
 		if err != nil {
 			return faultActionResultV1{}, err
@@ -332,6 +323,9 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.AttachJobTask(context.Background(), job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
 
 	workerDone := make(chan error, 1)
 	go func() {
@@ -350,7 +344,7 @@ func TestAbsurdCancellationCannotRecordLateActionSuccess(t *testing.T) {
 	actions, actionsErr := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
 	passed, failed := effect.claims()
-	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 0 || len(failed) != 1 || failed[0] != firstRunID {
+	if err != nil || actionsErr != nil || snapshot == nil || snapshot.State != absurd.TaskCancelled || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID {
 		t.Fatalf("cancelled snapshot=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", snapshot, actions, effect.mutationCount(), passed, failed, err, actionsErr)
 	}
 }
@@ -374,7 +368,27 @@ func forceAbsurd050ClaimExpiry(ctx context.Context, store postgres.Store, queueN
 	return nil
 }
 
-func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
+func workUntilTaskCompleted(ctx context.Context, client *absurd.Client, queueName, taskID string, options absurd.WorkBatchOptions) error {
+	for {
+		if err := client.WorkBatch(ctx, options); err != nil {
+			return err
+		}
+		snapshot, err := client.FetchTaskResult(ctx, queueName, taskID)
+		if err != nil {
+			return err
+		}
+		if snapshot != nil && snapshot.State == absurd.TaskCompleted {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+func TestAbsurdClaimExpirySandboxEffectFenceSerializesCleanupWithoutLateReceipt(t *testing.T) {
 	_, store, defaultClient := testDatabase(t)
 	defaultClient.Close()
 	queueName := fmt.Sprintf("dorf_fault_claim_%d", time.Now().UnixNano())
@@ -388,6 +402,9 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.AttachJobTask(context.Background(), job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -397,28 +414,169 @@ func TestAbsurdClaimExpiryReconcilesEffectWithoutLateOverwrite(t *testing.T) {
 	if err := forceAbsurd050ClaimExpiry(context.Background(), store, queueName, firstRunID); err != nil {
 		t.Fatal(err)
 	}
-	var snapshot *absurd.TaskResultSnapshot
-	for range 10 {
-		if err := client.WorkBatch(context.Background(), absurd.WorkBatchOptions{WorkerID: "fault-replacement", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
-			t.Fatal(err)
-		}
-		snapshot, err = client.FetchTaskResult(context.Background(), queueName, spawned.TaskID)
-		if err != nil || snapshot != nil && snapshot.State == absurd.TaskCompleted {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := client.CancelTask(context.Background(), queueName, spawned.TaskID); err != nil {
+		t.Fatal(err)
 	}
-	if err != nil || snapshot == nil || snapshot.State != absurd.TaskCompleted {
-		t.Fatalf("replacement public result=%#v err=%v", snapshot, err)
+	application := core.Application{Store: store, Tasks: client}
+	application.RegisterCleanup()
+	handle, err := application.OpenJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupDone := make(chan error, 1)
+	go func() { cleanupDone <- handle.RequestCleanup(context.Background()) }()
+	select {
+	case err := <-cleanupDone:
+		t.Fatalf("cleanup crossed an in-flight repository effect fence: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
 	effect.release()
 	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
+	if err := <-cleanupDone; err != nil {
+		t.Fatal(err)
+	}
 	actions, err := store.Actions(context.Background(), job.ID)
 	action, found := repositoryCloneAction(actions)
 	passed, failed := effect.claims()
-	if err != nil || !found || action.State != core.ActionSucceeded || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] == firstRunID || len(failed) != 1 || failed[0] != firstRunID {
-		t.Fatalf("reconciled actions=%#v mutations=%d claims passed=%v failed=%v err=%v", actions, effect.mutationCount(), passed, failed, err)
+	closed, jobErr := store.Job(context.Background(), job.ID)
+	if err != nil || jobErr != nil || !found || action.State != core.ActionUnsettled || effect.mutationCount() != 1 || len(passed) != 1 || passed[0] != firstRunID || len(failed) != 1 || failed[0] != firstRunID || closed.AdmissionOpen || closed.CleanupState != core.CleanupScheduled {
+		t.Fatalf("serialized cleanup Job=%#v actions=%#v mutations=%d claims passed=%v failed=%v errors=%v/%v", closed, actions, effect.mutationCount(), passed, failed, err, jobErr)
+	}
+}
+
+type blockingAgentExternals struct {
+	*integrationExternals
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+	attempts chan string
+	mu       sync.Mutex
+	starts   int
+}
+
+type blockingAgentOperation struct {
+	externals *blockingAgentExternals
+	message   core.Message
+	job       core.Job
+}
+
+func (o blockingAgentOperation) Harness() string { return "codex" }
+func (o blockingAgentOperation) Submit(ctx context.Context, run core.AgentRun, input string) (core.HarnessBinding, error) {
+	binding, err := (integrationAgentOperation{
+		externals: o.externals.integrationExternals,
+		execution: core.AgentMessageExecution{Job: o.job, Message: o.message},
+	}).Submit(ctx, run, input)
+	if err != nil {
+		return core.HarnessBinding{}, err
+	}
+	o.externals.mu.Lock()
+	o.externals.starts++
+	o.externals.mu.Unlock()
+	o.externals.once.Do(func() { close(o.externals.entered) })
+	select {
+	case <-o.externals.release:
+		return binding, nil
+	case <-ctx.Done():
+		return core.HarnessBinding{}, ctx.Err()
+	}
+}
+func (o blockingAgentOperation) Recover(ctx context.Context, run core.AgentRun) (core.HarnessBinding, error) {
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.Recover(ctx, run)
+}
+func (o blockingAgentOperation) History(ctx context.Context, run core.AgentRun) (core.HarnessHistory, error) {
+	return integrationAgentOperation{externals: o.externals.integrationExternals, execution: core.AgentMessageExecution{Job: o.job, Message: o.message}}.History(ctx, run)
+}
+
+func (e *blockingAgentExternals) startCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.starts
+}
+
+func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmitAck(t *testing.T) {
+	_, store, defaultClient := testDatabase(t)
+	defaultClient.Close()
+	ctx := context.Background()
+	queueName := fmt.Sprintf("dorf_agent_fence_%d", time.Now().UnixNano())
+	client := newFaultClient(t, store, queueName)
+	job := admitFaultJob(t, store, fmt.Sprintf("agent-fence-%d", time.Now().UnixNano()))
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 1 {
+		t.Fatalf("initial delivery=%#v err=%v", deliveries, err)
+	}
+	messageID := deliveries[0].Message.ID
+	externals := &blockingAgentExternals{
+		integrationExternals: &integrationExternals{turnStatus: "completed"},
+		entered:              make(chan struct{}),
+		release:              make(chan struct{}),
+		attempts:             make(chan string, 2),
+	}
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(resultBoundaryAgentExecution{
+			fixed:     &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)},
+			operation: blockingAgentOperation{externals: externals, message: deliveries[0].Message, job: job},
+		})
+	taskName := "dorf-agent-fence-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ faultActionParams) (faultActionResultV1, error) {
+		task, ok := absurd.TaskFromContext(taskCtx)
+		if !ok {
+			return faultActionResultV1{}, absurd.ErrNoTaskContext
+		}
+		externals.attempts <- task.RunID()
+		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return faultActionResultV1{}, err
+		}
+		result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, messageID)
+		if err != nil {
+			return faultActionResultV1{}, err
+		}
+		if !result.Terminal() {
+			return faultActionResultV1{}, fmt.Errorf("Message %s did not reconcile terminally", messageID)
+		}
+		return faultActionResultV1{ActionID: messageID}, nil
+	}, absurd.TaskOptions{DefaultMaxAttempts: 2}))
+	spawned, err := client.Spawn(ctx, taskName, faultActionParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "agent-fence-first", BatchSize: 1, ClaimTimeout: time.Minute})
+	}()
+	firstRunID := <-externals.attempts
+	<-externals.entered
+	if err := forceAbsurd050ClaimExpiry(ctx, store, queueName, firstRunID); err != nil {
+		t.Fatal(err)
+	}
+	replacementDone := make(chan error, 1)
+	go func() {
+		replacementDone <- workUntilTaskCompleted(ctx, client, queueName, spawned.TaskID, absurd.WorkBatchOptions{WorkerID: "agent-fence-replacement", BatchSize: 1, ClaimTimeout: time.Minute})
+	}()
+	select {
+	case <-externals.attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement did not claim the expired Agent attempt")
+	}
+	select {
+	case err := <-replacementDone:
+		t.Fatalf("replacement crossed the in-flight Agent Job fence: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(externals.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-replacementDone; err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.FetchTaskResult(ctx, queueName, spawned.TaskID)
+	settled, deliveryErr := store.Deliveries(ctx, job.ID)
+	if err != nil || deliveryErr != nil || result == nil || result.State != absurd.TaskCompleted || len(settled) != 1 || settled[0].AgentRun.State != core.AgentRunCompleted || settled[0].AgentRun.TurnID == "" || externals.startCount() != 1 {
+		t.Fatalf("replacement result=%#v deliveries=%#v starts=%d errors=%v/%v", result, settled, externals.startCount(), err, deliveryErr)
 	}
 }

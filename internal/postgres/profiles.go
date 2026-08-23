@@ -30,6 +30,36 @@ type SandboxProfilePatch struct {
 	E2BAllowInternet  *bool
 }
 
+func (s Store) WithSandboxProfileVerification(ctx context.Context, name string, work func(context.Context) error) (resultErr error) {
+	name = strings.TrimSpace(name)
+	if name == "" || work == nil {
+		return fmt.Errorf("Sandbox profile verification requires a profile name and operation")
+	}
+	conn, err := s.DB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			resultErr = errors.Join(resultErr, fmt.Errorf("release Sandbox profile verification ownership: %w", err))
+		}
+	}()
+	lockKey := "dorf:sandbox-profile-verification:" + name
+	var acquired bool
+	if err := tx.QueryRowContext(ctx, `select pg_try_advisory_xact_lock(hashtextextended($1,0))`, lockKey).Scan(&acquired); err != nil {
+		return err
+	}
+	if !acquired {
+		return fmt.Errorf("Sandbox profile %q verification is already running", name)
+	}
+	return work(ctx)
+}
+
 func (s Store) CreateSandboxProfile(ctx context.Context, profile core.SandboxProfile) (core.SandboxProfile, bool, error) {
 	profile, err := normalizeSandboxProfile(profile)
 	if err != nil {
@@ -258,13 +288,6 @@ func (s Store) BeginSandboxProfileVerification(ctx context.Context, name string)
 		return profile, *profile.Verification, nil
 	}
 	if profile.Verification != nil && !profile.Verification.ProbeCompletedAt.IsZero() {
-		inUse, err := queries.ProfileHasIncompleteJobs(ctx, name)
-		if err != nil {
-			return core.SandboxProfile{}, core.ProfileVerification{}, err
-		}
-		if inUse {
-			return core.SandboxProfile{}, core.ProfileVerification{}, fmt.Errorf("Sandbox profile %q cannot be freshly verified while a Job using it has incomplete cleanup", name)
-		}
 		if err := queries.DeleteProfileVerification(ctx, name); err != nil {
 			return core.SandboxProfile{}, core.ProfileVerification{}, err
 		}

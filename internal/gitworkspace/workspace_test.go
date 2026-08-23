@@ -92,26 +92,9 @@ func TestReconcileCloneOwnsExactCheckoutAboveSandboxProvider(t *testing.T) {
 	}
 }
 
-type localSandbox struct{ workspace string }
+type localSandbox struct{}
 
-func (s localSandbox) Workspace() string                                            { return s.workspace }
-func (localSandbox) ReconcileOwnedCreate(context.Context, provider.Ownership) error { return nil }
-func (localSandbox) AttestOwnership(context.Context, provider.Ownership) error      { return nil }
-func (localSandbox) AttachReviewMetadata(context.Context, provider.Ownership, provider.ReviewMetadata) error {
-	return nil
-}
-func (localSandbox) OwnedPresent(context.Context, provider.Ownership) (bool, error) { return true, nil }
-func (localSandbox) DeleteOwned(context.Context, provider.Ownership) error          { return nil }
-func (localSandbox) AttestReview(context.Context, provider.Ownership, provider.ReviewMetadata) error {
-	return nil
-}
-func (localSandbox) PutFile(_ context.Context, _ provider.Ownership, path string, contents []byte) error {
-	return os.WriteFile(path, contents, 0o600)
-}
-func (localSandbox) Endpoint(context.Context, provider.Ownership, int) (provider.Endpoint, error) {
-	return provider.Endpoint{}, nil
-}
-func (localSandbox) ProviderRouteURL(context.Context, string) (string, error) { return "", nil }
+func (localSandbox) AttestOwnership(context.Context, provider.Ownership) error { return nil }
 
 func (localSandbox) Exec(ctx context.Context, _ provider.Ownership, input []byte, args ...string) (provider.Result, error) {
 	if len(args) == 0 {
@@ -135,7 +118,7 @@ func (localSandbox) Exec(ctx context.Context, _ provider.Ownership, input []byte
 }
 
 func testManager(workspace string) Workspace {
-	return Workspace{Sandbox: localSandbox{workspace: workspace}, Workspace: workspace}
+	return Workspace{Transport: localSandbox{}, Workspace: workspace}
 }
 
 func testRepository(t *testing.T) (string, string) {

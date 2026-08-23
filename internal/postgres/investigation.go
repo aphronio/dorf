@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/investigation"
@@ -27,103 +26,43 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 // follow-up policy inside the same locked transaction that records the Message.
 func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
 	if input.Intent != core.MessageFollow {
-		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts follow-up Messages only after a draft")
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts only follow-up Messages")
 	}
-	latest, err := queries.GetLatestInvestigationRunAndDraft(ctx, input.JobID)
+	if input.SandboxID != core.MainSandboxName(input.JobID) {
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation Message requires the workflow-authorized default Sandbox")
+	}
+	latest, err := queries.GetLatestInvestigationRun(ctx, input.JobID)
 	if err != nil {
 		return admittedAgentRun{}, err
 	}
-	if latest.State != core.AgentRunCompleted || latest.ArtifactID == "" || latest.Harness == "" || latest.ThreadID == "" {
-		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only while waiting on its latest retained draft")
+	if latest.State != core.AgentRunCompleted || latest.Harness == "" || latest.ThreadID == "" {
+		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only after its latest run completes on a retained Thread")
 	}
 	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
 	if err != nil {
 		return admittedAgentRun{}, err
 	}
 	return admittedAgentRun{
-		Role: "investigate", Capability: "repository-read-report", InputRevision: source.Revision,
-		SandboxID: core.MainSandboxName(input.JobID), Harness: latest.Harness, ThreadID: latest.ThreadID,
+		Role: investigation.InitialAgentRole, Capability: investigation.InitialAgentCapability, InputRevision: source.Revision,
+		SandboxID: input.SandboxID, Harness: latest.Harness, ThreadID: latest.ThreadID,
 	}, nil
 }
 
-func (s Store) CodebaseInvestigationDrafts(ctx context.Context, jobID string) ([]investigation.Draft, error) {
-	rows, err := dbsql.New(s.DB).ListCodebaseInvestigationDrafts(ctx, jobID)
+func (s Store) CodebaseInvestigationMessages(ctx context.Context, jobID string) ([]investigation.MessageRecord, error) {
+	deliveries, err := s.Deliveries(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
-	drafts := make([]investigation.Draft, 0, len(rows))
-	for _, row := range rows {
-		drafts = append(drafts, investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()})
-	}
-	return drafts, nil
-}
-
-func (s Store) RecordCodebaseInvestigationDraft(ctx context.Context, artifact core.Artifact) (investigation.Draft, bool, error) {
-	if err := validateInvestigationDraft(artifact); err != nil {
-		return investigation.Draft{}, false, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return investigation.Draft{}, false, err
-	}
-	defer tx.Rollback()
-	queries := dbsql.New(s.DB).WithTx(tx)
-	run, err := queries.GetCodebaseInvestigationRunForUpdate(ctx, dbsql.GetCodebaseInvestigationRunForUpdateParams{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID})
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return investigation.Draft{}, false, ErrNotFound
-		}
-		return investigation.Draft{}, false, err
-	}
-	if run.WorkflowName != investigation.Workflow || run.WorkflowRevision != investigation.WorkflowRevision || run.Role != "investigate" ||
-		run.State != core.AgentRunCompleted || run.TurnID == "" || run.TurnOutcome != "completed" || run.InputRevision != run.Revision ||
-		!run.StartedAt.Valid || !run.FinishedAt.Valid {
-		return investigation.Draft{}, false, fmt.Errorf("investigation draft conflicts with its completed exact-Revision AgentRun")
-	}
-	drafts, err := queries.ListCodebaseInvestigationDrafts(ctx, artifact.JobID)
-	if err != nil {
-		return investigation.Draft{}, false, err
-	}
-	for _, row := range drafts {
-		if row.AgentRunID != artifact.AgentRunID {
+	work := make([]investigation.MessageRecord, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
+		if run.Role != investigation.InitialAgentRole {
 			continue
 		}
-		existing := investigation.Draft{JobID: row.JobID, AgentRunID: row.AgentRunID, ArtifactID: row.ArtifactID, CreatedAt: row.CreatedAt.UTC()}
-		if existing.ArtifactID != artifact.ID {
-			return investigation.Draft{}, false, fmt.Errorf("AgentRun %s already has a different immutable investigation draft", artifact.AgentRunID)
-		}
-		if err := insertArtifact(ctx, tx, artifact); err != nil {
-			return investigation.Draft{}, false, err
-		}
-		return existing, false, nil
+		work = append(work, investigation.MessageRecord{
+			MessageID: delivery.Message.ID, SandboxID: run.SandboxID,
+			Outcome: agentRunOutcome(run.State, run.TurnOutcome), Attention: run.Attention,
+		})
 	}
-	if !run.AdmissionOpen || run.CleanupState != core.CleanupPending {
-		return investigation.Draft{}, false, fmt.Errorf("investigation draft cannot be recorded after admission closes or cleanup begins")
-	}
-	if !artifact.CreatedAt.Equal(run.FinishedAt.Time) {
-		return investigation.Draft{}, false, fmt.Errorf("investigation draft timing conflicts with its completed AgentRun")
-	}
-	if err := insertArtifact(ctx, tx, artifact); err != nil {
-		return investigation.Draft{}, false, err
-	}
-	if err := expectOneRows(queries.InsertCodebaseInvestigationDraft(ctx, dbsql.InsertCodebaseInvestigationDraftParams{
-		JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID,
-	})); err != nil {
-		return investigation.Draft{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return investigation.Draft{}, false, err
-	}
-	stored := investigation.Draft{JobID: artifact.JobID, AgentRunID: artifact.AgentRunID, ArtifactID: artifact.ID, CreatedAt: artifact.CreatedAt.UTC()}
-	return stored, true, nil
-}
-
-func validateInvestigationDraft(artifact core.Artifact) error {
-	if strings.TrimSpace(artifact.JobID) == "" || strings.TrimSpace(artifact.AgentRunID) == "" ||
-		!strings.HasPrefix(artifact.Name, "report-") || !strings.HasSuffix(artifact.Name, ".md") ||
-		artifact.ID != core.ArtifactID(artifact.JobID, artifact.Name) || artifact.MediaType != "text/markdown" ||
-		artifact.Producer != "dorf-codebase-investigation" || artifact.Digest == "" || artifact.ByteSize <= 0 || artifact.CreatedAt.IsZero() {
-		return fmt.Errorf("codebase-investigation draft lacks its exact Markdown Artifact")
-	}
-	return nil
+	return work, nil
 }

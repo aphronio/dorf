@@ -104,8 +104,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		defer client.Close()
 		return retry(ctx, store, client, args[1:], stdout, stderr)
-	case "artifact":
-		return artifactCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	case "inspect":
 		client, err := absurdClient(db)
 		if err != nil {
@@ -127,9 +125,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
-		return worker(ctx, client, cfg, args[1:], stdout, stderr)
+		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
+	case "sandbox":
+		runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client}
+		core := coreApplication(store, client)
+		core.SandboxRuntimes = runtimes
+		return sandboxCommand(ctx, core, args[1:], stdout, stderr)
 	case "cleanup":
 		return cleanup(ctx, store, client, args[1:], stdout, stderr)
 	case "abandon":
@@ -153,6 +156,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}
 	core := coreApplication(store, client)
+	core.SandboxRuntimes = runtimes
 	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
 	coding.Register(core, store, runtimes)
@@ -161,7 +165,31 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 }
 
 func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
-	return core.Application{Store: store, Tasks: client}
+	return core.Application{Store: store, Tasks: client, AgentMessages: workflowMessageAdmissions{store: store}}
+}
+
+// workflowMessageAdmissions is closed-world deployment composition, not a
+// Core workflow registry. Each known module retains its policy transaction.
+type workflowMessageAdmissions struct{ store postgres.Store }
+
+func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+	job, err := a.store.Job(ctx, input.JobID)
+	if err != nil {
+		return core.MessageAdmissionResult{}, err
+	}
+	var admitted core.MessageAdmissionResult
+	switch {
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		admitted, err = a.store.AdmitCodingMessage(ctx, input)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		admitted, err = a.store.AdmitInvestigationMessage(ctx, input)
+	default:
+		return core.MessageAdmissionResult{}, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
+	}
+	if err != nil {
+		return admitted, err
+	}
+	return admitted, nil
 }
 
 func absurdClient(db *sql.DB) (*absurd.Client, error) {
@@ -996,28 +1024,31 @@ func message(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if err != nil {
 		return err
 	}
-	job, err := store.Job(ctx, *jobID)
+	application := coreApplication(store, client)
+	jobHandle, err := application.OpenJob(ctx, *jobID)
 	if err != nil {
 		return err
 	}
-	messageInput := core.MessageAdmission{JobID: *jobID, FromKind: core.MessageFromHuman, FromID: *requestID, Input: input, Intent: core.MessageDeliveryIntent(*intent)}
-	var accepted core.Message
-	var created bool
-	switch {
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		accepted, created, err = coding.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		accepted, created, err = investigation.AdmitMessage(ctx, store, coreApplication(store, client), messageInput)
+	sandbox, err := jobHandle.DefaultSandbox(ctx)
+	if err != nil {
+		return err
+	}
+	options := []core.MessageOption(nil)
+	switch core.MessageDeliveryIntent(*intent) {
+	case core.MessageFollow:
+	case core.MessageSteer:
+		options = append(options, core.Steer())
 	default:
-		return fmt.Errorf("workflow %s revision %s does not accept Messages in this slice", job.Workflow, job.WorkflowRevision)
+		return fmt.Errorf("message intent must be follow or steer")
 	}
+	accepted, err := sandbox.Agent().Message(ctx, *requestID, input, options...)
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.ID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": created, "accepted": true, "delivery": "queued"})
+	return writeJSON(stdout, map[string]any{"job_id": accepted.JobID, "message_id": accepted.MessageID, "sequence": accepted.Sequence, "intent": accepted.Intent, "target_turn_id": accepted.TargetTurnID, "created": accepted.Created, "accepted": true, "delivery": "queued"})
 }
 
-func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("worker", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	once := set.Bool("once", false, "claim at most one batch and return")
@@ -1027,6 +1058,9 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	}
 	if *concurrency < 1 {
 		return fmt.Errorf("worker concurrency must be positive")
+	}
+	if err := coreApplication(store, client).RecoverCleanupRequests(ctx); err != nil {
+		return err
 	}
 	claimTimeout := cfg.TurnTimeout + 5*time.Minute
 	if *once {
@@ -1038,8 +1072,23 @@ func worker(ctx context.Context, client *absurd.Client, cfg config.Config, args 
 	}
 	workerCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	runCtx, cancel := context.WithCancel(workerCtx)
+	defer cancel()
+	recoveryDone := make(chan error, 1)
+	go func() {
+		err := coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
+		recoveryDone <- err
+		if err != nil && !errors.Is(err, context.Canceled) {
+			cancel()
+		}
+	}()
 	fmt.Fprintln(stdout, "Dorf durable worker started")
-	err := client.RunWorker(workerCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	err := client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	cancel()
+	recoveryErr := <-recoveryDone
+	if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
+		return recoveryErr
+	}
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
@@ -1091,7 +1140,11 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	currentWork := projection.CurrentWork
 	assessment := projection.Readiness
-	history := workflowHistory(snapshot)
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil {
+		return err
+	}
+	history := workflowHistory(snapshot, deliveries)
 	definition := coding.WorkflowDefinition()
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
@@ -1103,9 +1156,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		executionOperation = operation
 	}
 	if *jsonOutput {
-		messages := make([]core.Message, 0, len(snapshot.Deliveries))
-		agentRuns := make([]core.AgentRun, 0, len(snapshot.Deliveries))
-		for _, delivery := range snapshot.Deliveries {
+		messages := make([]core.Message, 0, len(deliveries))
+		agentRuns := make([]core.AgentRun, 0, len(deliveries))
+		for _, delivery := range deliveries {
 			messages = append(messages, delivery.Message)
 			agentRuns = append(agentRuns, delivery.AgentRun)
 		}
@@ -1172,12 +1225,9 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return err
 	}
 	work := snapshot.Project()
-	artifacts, err := store.Artifacts(ctx, job.ID)
+	deliveries, err := store.Deliveries(ctx, job.ID)
 	if err != nil {
 		return err
-	}
-	if artifacts == nil {
-		artifacts = []core.Artifact{}
 	}
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
@@ -1190,10 +1240,17 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		executionOperation = operation
 	}
 	if jsonOutput {
+		report := map[string]any{
+			"path": investigation.ReportPath, "storage": "workspace", "existence_checked": false, "durably_retained": false,
+			"readable_before_cleanup": job.CleanupState == core.CleanupPending,
+		}
+		if job.CleanupState == core.CleanupPending {
+			report["retrieval_command"] = fmt.Sprintf("dorf sandbox file get %s %s --output %s", job.ID, investigation.ReportPath, investigation.ReportPath)
+		}
 		return writeJSON(stdout, map[string]any{
-			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "drafts": snapshot.Drafts, "artifacts": artifacts,
+			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": report,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
-			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(snapshot.Deliveries), "sandbox": snapshot.MainSandbox},
+			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
 		})
 	}
@@ -1201,7 +1258,11 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), snapshot.Source.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
-	fmt.Fprintf(stdout, "  current work: %s", work.Kind)
+	currentWork := string(work.Kind)
+	if currentWork == "" {
+		currentWork = "none"
+	}
+	fmt.Fprintf(stdout, "  current work: %s", currentWork)
 	if work.Detail != "" {
 		fmt.Fprintf(stdout, " — %s", work.Detail)
 	}
@@ -1213,19 +1274,20 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
-	renderHistory(stdout, investigationHistory(snapshot))
-	if len(snapshot.Drafts) == 0 {
-		fmt.Fprintln(stdout, "  draft: none")
-		return nil
-	}
-	latest := snapshot.Drafts[len(snapshot.Drafts)-1]
-	fmt.Fprintf(stdout, "  latest draft: created-at=%s Artifact=%s\n", latest.CreatedAt.Format(time.RFC3339Nano), latest.ArtifactID)
-	fmt.Fprintf(stdout, "  retrieve: dorf artifact get %s\n", latest.ArtifactID)
+	renderHistory(stdout, investigationHistory(snapshot, deliveries))
+	renderInvestigationReportAccess(stdout, job)
+	return nil
+}
+
+func renderInvestigationReportAccess(stdout io.Writer, job core.Job) {
+	fmt.Fprintf(stdout, "  report: %s (agent-owned workspace file; existence not checked; not durably retained)\n", investigation.ReportPath)
 	if job.AdmissionOpen && job.CleanupState == core.CleanupPending {
+		fmt.Fprintf(stdout, "  retrieve before cleanup: dorf sandbox file get %s %s --output %s\n", job.ID, investigation.ReportPath, investigation.ReportPath)
 		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
 		fmt.Fprintf(stdout, "  release resources: dorf cleanup %s\n", job.ID)
+	} else if job.CleanupState != core.CleanupPending {
+		fmt.Fprintln(stdout, "  report retrieval: unavailable after cleanup began")
 	}
-	return nil
 }
 
 func investigationAgentRuns(deliveries []core.Delivery) []core.AgentRun {
@@ -1306,7 +1368,15 @@ func cleanup(ctx context.Context, store postgres.Store, client *absurd.Client, a
 	if set.NArg() != 1 {
 		return fmt.Errorf("cleanup requires one Job ID")
 	}
-	job, err := coreApplication(store, client).RequestCleanup(ctx, set.Arg(0))
+	application := coreApplication(store, client)
+	handle, err := application.OpenJob(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
+		return err
+	}
+	job, err := store.Job(ctx, handle.ID())
 	if err != nil {
 		return err
 	}
@@ -1324,9 +1394,17 @@ func abandon(ctx context.Context, store postgres.Store, client *absurd.Client, g
 	if err != nil {
 		return err
 	}
-	job, err := coreApplication(store, client).RequestCleanup(ctx, receipt.JobID)
+	application := coreApplication(store, client)
+	handle, err := application.OpenJob(ctx, receipt.JobID)
 	if err != nil {
+		return fmt.Errorf("%s outcome receipt was retained, but loading its Job failed: %w", receipt.Kind, err)
+	}
+	if err := handle.RequestCleanup(ctx); err != nil {
 		return fmt.Errorf("%s outcome receipt was retained, but durable cleanup scheduling failed: %w", receipt.Kind, err)
+	}
+	job, err := store.Job(ctx, handle.ID())
+	if err != nil {
+		return fmt.Errorf("%s outcome receipt was retained, but reloading cleanup state failed: %w", receipt.Kind, err)
 	}
 	return writeJSON(stdout, map[string]any{"outcome": receipt, "created": created, "cleanup": job.CleanupState, "task_id": job.CurrentTaskID})
 }
@@ -1501,6 +1579,6 @@ func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution t
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|artifact|admit|message|worker|inspect|retry|evidence|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|migrate|doctor|provider|profile|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

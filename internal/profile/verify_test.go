@@ -17,6 +17,9 @@ type verificationStore struct {
 	verification core.ProfileVerification
 	errorDetail  string
 	cleanupErr   error
+	lockErr      error
+	lockCalls    int
+	beginCalls   int
 }
 
 func newVerificationStore() *verificationStore {
@@ -29,7 +32,16 @@ func newVerificationStore() *verificationStore {
 	}
 }
 
+func (s *verificationStore) WithSandboxProfileVerification(ctx context.Context, _ string, work func(context.Context) error) error {
+	s.lockCalls++
+	if s.lockErr != nil {
+		return s.lockErr
+	}
+	return work(ctx)
+}
+
 func (s *verificationStore) BeginSandboxProfileVerification(context.Context, string) (core.SandboxProfile, core.ProfileVerification, error) {
+	s.beginCalls++
 	if !s.verification.ProbeCompletedAt.IsZero() && !s.verification.CleanedAt.IsZero() {
 		s.verification = core.ProfileVerification{
 			ProfileName: s.profile.Name, ContractVersion: core.BaseProfileContract,
@@ -38,6 +50,19 @@ func (s *verificationStore) BeginSandboxProfileVerification(context.Context, str
 	}
 	s.profile.Verification = &s.verification
 	return s.profile, s.verification, nil
+}
+
+func TestVerifyBaseRefusesBeforeBeginningWithoutExclusiveOwnership(t *testing.T) {
+	store := newVerificationStore()
+	store.lockErr = errors.New("Sandbox profile verification is already running")
+	runtimeBuilt := false
+	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) {
+		runtimeBuilt = true
+		return &verificationSandbox{}, nil
+	}, store.profile.Name)
+	if err == nil || !strings.Contains(err.Error(), "already running") || store.lockCalls != 1 || store.beginCalls != 0 || runtimeBuilt {
+		t.Fatalf("lock calls=%d begin calls=%d runtime built=%v err=%v", store.lockCalls, store.beginCalls, runtimeBuilt, err)
+	}
 }
 func (s *verificationStore) RecordSandboxProfileProbe(_ context.Context, verification core.ProfileVerification, version string) error {
 	s.verification = verification
@@ -71,6 +96,9 @@ type verificationSandbox struct {
 	presentErr          error
 	putCall             int
 	putErr              error
+	readCall            int
+	readResult          []byte
+	readErr             error
 	execResult          provider.Result
 	execErr             error
 }
@@ -102,6 +130,16 @@ func (s *verificationSandbox) PutFile(context.Context, provider.Ownership, strin
 	s.putCall++
 	return s.putErr
 }
+func (s *verificationSandbox) ReadFile(ctx context.Context, owner provider.Ownership, relativePath string) ([]byte, error) {
+	s.readCall++
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	if s.readResult != nil {
+		return append([]byte(nil), s.readResult...), nil
+	}
+	return []byte{'d', 0, 'o', 'r', 'f', 0xff, '\n'}, nil
+}
 func (s *verificationSandbox) Exec(context.Context, provider.Ownership, []byte, ...string) (provider.Result, error) {
 	return s.execResult, s.execErr
 }
@@ -122,8 +160,22 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 || runtime.present {
+	if !profile.BaseVerified() || observedArtifact != store.profile.Artifact || runtime.createCall != 1 || runtime.putCall != 2 || runtime.readCall != 1 || runtime.deleteCall != 1 || runtime.present {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
+	}
+}
+
+func TestVerifyBaseRejectsFailedOrInexactFileReadProbe(t *testing.T) {
+	for _, runtime := range []*verificationSandbox{
+		{readErr: errors.New("read failed")},
+		{readResult: []byte("changed")},
+	} {
+		store := newVerificationStore()
+		store.profile.Artifact = "exact-artifact"
+		runtime.execResult = provider.Result{Stdout: "codex 1.2.3\n"}
+		if _, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil || runtime.deleteCall != 1 || runtime.present {
+			t.Fatalf("runtime=%#v err=%v", runtime, err)
+		}
 	}
 }
 
@@ -138,7 +190,7 @@ func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !profile.BaseVerified() || runtime.createCall != 1 || runtime.putCall != 1 || runtime.deleteCall != 1 {
+	if !profile.BaseVerified() || runtime.createCall != 1 || runtime.putCall != 2 || runtime.readCall != 1 || runtime.deleteCall != 1 {
 		t.Fatalf("profile=%#v runtime=%#v", profile, runtime)
 	}
 	if !store.verification.AttemptedAt.After(previous) || store.verification.HarnessVersion != "codex fresh" || store.verification.OwnershipNonce != "fresh-nonce" {

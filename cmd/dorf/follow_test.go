@@ -178,14 +178,13 @@ func TestInvestigationHistoryIsChronologicalAndIncludesTerminalDuration(t *testi
 			Kind: core.ActionSandboxCreate, State: core.ActionSucceeded,
 			CreatedAt: base.Add(time.Minute), SettledAt: base.Add(2 * time.Minute),
 		}},
-		Deliveries: []core.Delivery{{AgentRun: core.AgentRun{
-			Role: "investigate", State: core.AgentRunCompleted,
-			StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
-		}}},
-		Drafts: []investigation.Draft{{ArtifactID: "artifact-draft", CreatedAt: base.Add(9 * time.Minute)}},
 	}
-	history := investigationHistory(snapshot)
-	if len(history) != 7 {
+	deliveries := []core.Delivery{{AgentRun: core.AgentRun{
+		Role: "investigate", State: core.AgentRunCompleted,
+		StartedAt: base.Add(3 * time.Minute), FinishedAt: base.Add(8 * time.Minute),
+	}}}
+	history := investigationHistory(snapshot, deliveries)
+	if len(history) != 6 {
 		t.Fatalf("history entries=%d: %#v", len(history), history)
 	}
 	for i := 1; i < len(history); i++ {
@@ -202,7 +201,7 @@ func TestProvisionedSandboxTimeExcludesDeletedSandbox(t *testing.T) {
 	job := core.Job{ID: "job-123"}
 	main := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	reviewRun := core.AgentRun{ID: "review-run"}
-	review := core.Sandbox{ID: coding.ReviewSandboxName(reviewRun.ID), JobID: job.ID}
+	review := core.Sandbox{ID: coding.ReviewSandboxName(job.ID, reviewRun.ID), JobID: job.ID}
 	reviewRun.SandboxID = review.ID
 	now := time.Now()
 	actions := []core.Action{
