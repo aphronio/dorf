@@ -38,16 +38,6 @@ func TestAuthorityRequiresCanonicalRepositoryInstallationBaseAndDistinctHead(t *
 	}
 }
 
-func TestVerifyPermissionFloorIsLeastPrivilegeAndOpenToNativeNames(t *testing.T) {
-	permissions, err := verifyPermissions(map[string]string{"custom_permission": "read"}, true)
-	if err != nil || len(permissions) != 3 || permissions["metadata"] != "read" || permissions["contents"] != "read" || permissions["custom_permission"] != "read" {
-		t.Fatalf("permissions=%v err=%v", permissions, err)
-	}
-	if _, err := verifyPermissions(map[string]string{"custom_permission": "admin"}, false); err == nil {
-		t.Fatal("unsupported level accepted")
-	}
-}
-
 func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -57,7 +47,7 @@ func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *test
 	directory := t.TempDir()
 	credentialsPath := filepath.Join(directory, "credentials.json")
 	encoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(encoded)})
+	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(encoded), Slug: "dorf-test"})
 	if err := os.WriteFile(credentialsPath, bundle, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +78,31 @@ func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *test
 	}
 	if _, err := client.PushToken(context.Background(), Authority{"aphronio/dorf", "42"}); err == nil {
 		t.Fatal("over-permissive private key was accepted")
+	}
+}
+
+func TestRepositoryInstallationDiscoveryUsesExactAppAndRepository(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	key := testKey(t)
+	credentials := filepath.Join(t.TempDir(), "credentials.json")
+	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(key), Slug: "dorf-test"})
+	if err := os.WriteFile(credentials, bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transport := integrationRoundTrip(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/repos/aphronio/dorf/installation" {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL.Path)
+			return nil, nil
+		}
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ey") {
+			t.Fatalf("discovery authorization=%q", request.Header.Get("Authorization"))
+		}
+		return response(`{"id":42,"app_id":7}`), nil
+	})
+	client := Client{APIURL: "https://github.test", HTTP: &http.Client{Transport: transport}, Credentials: credentials, Now: func() time.Time { return now }}
+	installation, err := client.DiscoverInstallation(context.Background(), "aphronio/dorf")
+	if err != nil || installation != "42" {
+		t.Fatalf("installation=%q err=%v", installation, err)
 	}
 }
 

@@ -875,8 +875,6 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	repository := set.String("repo", "", "clone URL")
 	revision := set.String("revision", "", "exact commit or admitted starting Revision")
 	branch := set.String("branch", "", "Job branch (default dorf/<Job ID>)")
-	githubRepository := set.String("github-repo", "", "canonical lower-case GitHub owner/repository")
-	githubInstallation := set.String("github-installation", "", "GitHub App installation identity")
 	base := set.String("base", "", "explicit immutable GitHub base branch")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	model := set.String("model", "", "Codex model")
@@ -904,14 +902,48 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err != nil {
 		return err
 	}
-	job, created, err := coding.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, coding.Admission{
+	codingRuntime := (profileRuntimeResolver{cfg: cfg}).ResolveCodingAdmission(profile)
+	input := coding.Admission{
 		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
-		Repository:   *repository, Revision: *revision, Branch: *branch, GitHubRepository: *githubRepository, GitHubInstallation: *githubInstallation, BaseBranch: *base,
+		Repository:   *repository, Revision: *revision, Branch: *branch, BaseBranch: *base,
+	}
+	job, created, err := resolveAndAdmitCoding(ctx, store, codingRuntime.Installations, input, func(ctx context.Context, resolved coding.Admission) (core.Job, bool, error) {
+		return coding.Admit(ctx, store, coreApplication(store, client), providers, codingRuntime.Profile, resolved)
 	})
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.CurrentTaskID, "scheduled": true})
+}
+
+type codingAdmission func(context.Context, coding.Admission) (core.Job, bool, error)
+
+type codingAdmissionJobs interface {
+	CodingJob(context.Context, string) (coding.Job, error)
+}
+
+func resolveAndAdmitCoding(ctx context.Context, jobs codingAdmissionJobs, github githubInstallationDiscovery, input coding.Admission, admit codingAdmission) (core.Job, bool, error) {
+	repository, err := githubapi.RepositoryFromCloneURL(input.Repository)
+	if err != nil {
+		return core.Job{}, false, err
+	}
+	input.GitHubRepository = repository
+	if key := strings.TrimSpace(input.AdmissionKey); key != "" {
+		existing, err := jobs.CodingJob(ctx, core.JobID(key))
+		if err == nil {
+			input.GitHubInstallation = existing.GitHubInstallation
+			return admit(ctx, input)
+		}
+		if !errors.Is(err, postgres.ErrNotFound) {
+			return core.Job{}, false, err
+		}
+	}
+	installation, err := github.DiscoverInstallation(ctx, input.GitHubRepository)
+	if err != nil {
+		return core.Job{}, false, err
+	}
+	input.GitHubInstallation = installation
+	return admit(ctx, input)
 }
 
 func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {

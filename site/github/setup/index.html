@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action https://github.com; base-uri 'none'"
+  >
+  <meta name="color-scheme" content="dark">
+  <title>Connect GitHub · Dorf</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --night: #071f1b;
+      --night-soft: #0d3029;
+      --panel: rgba(15, 48, 40, 0.92);
+      --line: rgba(240, 226, 184, 0.18);
+      --cream: #f0e2b8;
+      --cream-soft: #cfc59f;
+      --moss: #8eae45;
+      --moss-bright: #b8d75c;
+      --amber: #f5aa32;
+      --danger: #ff9c7a;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+      color: var(--cream);
+      background:
+        radial-gradient(circle at 50% 0%, rgba(142, 174, 69, 0.15), transparent 34rem),
+        linear-gradient(145deg, #061814, var(--night) 45%, #09251f);
+    }
+
+    main {
+      width: min(100%, 610px);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: clamp(28px, 6vw, 52px);
+      background: var(--panel);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 42px;
+      font: 800 24px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -0.08em;
+    }
+
+    .logo {
+      width: 72px;
+      height: 72px;
+      object-fit: contain;
+      image-rendering: pixelated;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--moss-bright);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 12ch;
+      font-size: clamp(38px, 8vw, 58px);
+      line-height: 0.98;
+      letter-spacing: -0.055em;
+    }
+
+    .lede {
+      margin: 20px 0 30px;
+      color: var(--cream-soft);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    .owner {
+      color: var(--cream);
+      font-weight: 700;
+    }
+
+    .benefits {
+      margin: 0 0 28px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      list-style: none;
+      background: rgba(3, 20, 16, 0.32);
+    }
+
+    .benefits li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .benefits li::before {
+      content: "✓";
+      color: var(--moss-bright);
+      font-weight: 900;
+    }
+
+    .benefits li:last-child { border-bottom: 0; }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 16px 20px;
+      color: #0a211b;
+      background: var(--cream);
+      box-shadow: 0 8px 30px rgba(245, 170, 50, 0.12);
+      cursor: pointer;
+      font: 800 16px/1.2 inherit;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+
+    button:hover {
+      background: #fff1c9;
+      transform: translateY(-1px);
+    }
+
+    button:focus-visible {
+      outline: 3px solid var(--amber);
+      outline-offset: 3px;
+    }
+
+    .privacy {
+      display: flex;
+      gap: 10px;
+      margin: 18px 2px 0;
+      color: var(--cream-soft);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .privacy::before {
+      content: "";
+      flex: 0 0 auto;
+      width: 8px;
+      height: 8px;
+      margin-top: 5px;
+      border-radius: 50%;
+      background: var(--moss-bright);
+      box-shadow: 0 0 0 4px rgba(184, 215, 92, 0.1);
+    }
+
+    .error {
+      display: none;
+      margin: 22px 0 0;
+      padding: 14px 16px;
+      border: 1px solid rgba(255, 156, 122, 0.35);
+      border-radius: 12px;
+      color: var(--danger);
+      background: rgba(90, 25, 15, 0.24);
+      line-height: 1.45;
+    }
+
+    .error.visible { display: block; }
+
+    footer {
+      margin-top: 30px;
+      color: rgba(207, 197, 159, 0.68);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 520px) {
+      body { padding: 0; }
+      main {
+        min-height: 100vh;
+        border: 0;
+        border-radius: 0;
+        padding-top: 34px;
+      }
+      .brand { margin-bottom: 52px; }
+      .logo {
+        width: 60px;
+        height: 60px;
+      }
+      .benefits li { font-size: 14px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand"><img class="logo" src="../../assets/logo.png" alt=""><span>dorf</span></div>
+    <p class="eyebrow">Connect GitHub to Dorf</p>
+    <h1>Let Dorf ship your work</h1>
+    <p class="lede">
+      Connect <span class="owner" id="owner">your account</span> so Dorf coding Jobs can carry
+      finished work from isolated Sandboxes back into GitHub.
+    </p>
+
+    <ul class="benefits" aria-label="What connecting GitHub enables in Dorf">
+      <li>Publish verified Job branches</li>
+      <li>Open and update pull requests</li>
+      <li>Continue work from review feedback</li>
+      <li>Choose exactly which repositories Dorf can use</li>
+    </ul>
+
+    <form id="manifest-form" method="post">
+      <input id="manifest" type="hidden" name="manifest">
+      <button type="submit">Connect GitHub</button>
+    </form>
+
+    <p class="privacy">
+      You stay in control. GitHub will ask which repositories Dorf may access before anything is
+      connected.
+    </p>
+    <p id="error" class="error" role="alert"></p>
+    <footer>Your agents. Your infrastructure. One API.</footer>
+  </main>
+
+  <script id="manifest-template" type="application/json">
+    {
+      "url": "https://github.com/aphronio/dorf",
+      "redirect_url": "https://github.com/aphronio/dorf",
+      "public": false,
+      "default_permissions": {
+        "metadata": "read",
+        "contents": "write",
+        "issues": "read",
+        "pull_requests": "write"
+      },
+      "default_events": []
+    }
+  </script>
+  <script>
+    (() => {
+      const query = new URLSearchParams(window.location.search)
+      const state = query.get("state") || ""
+      const organization = query.get("org") || ""
+      const preview = query.get("preview") === "1"
+      const statePattern = /^[A-Za-z0-9_-]{32}$/
+      const ownerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+      const error = document.getElementById("error")
+      const form = document.getElementById("manifest-form")
+
+      function fail(message) {
+        form.hidden = true
+        error.textContent = message
+        error.classList.add("visible")
+      }
+
+      if (!statePattern.test(state) && !preview) {
+        fail("This setup link is incomplete or expired. Return to the terminal and run setup again.")
+        return
+      }
+      if (organization && !ownerPattern.test(organization)) {
+        fail("The organization in this setup link is invalid. Return to the terminal and run setup again.")
+        return
+      }
+
+      const effectiveState = statePattern.test(state) ? state : "preview0000000000000000000000000"
+      const namePart = organization ? organization.toLowerCase() : "deployment"
+      let name = `dorf-${namePart}-${effectiveState.slice(0, 8).toLowerCase()}`
+      if (name.length > 34) name = `${name.slice(0, 25)}-${effectiveState.slice(0, 8).toLowerCase()}`
+
+      document.getElementById("owner").textContent = organization || "your account"
+      const endpoint = organization
+        ? `https://github.com/organizations/${encodeURIComponent(organization)}/settings/apps/new`
+        : "https://github.com/settings/apps/new"
+      form.action = `${endpoint}?state=${encodeURIComponent(effectiveState)}`
+      const manifest = JSON.parse(document.getElementById("manifest-template").textContent)
+      manifest.name = name
+      document.getElementById("manifest").value = JSON.stringify(manifest)
+
+      if (preview) {
+        form.addEventListener("submit", event => {
+          event.preventDefault()
+          error.textContent = "Preview only — the published page will continue to GitHub."
+          error.classList.add("visible")
+        })
+      }
+    })()
+  </script>
+</body>
+</html>

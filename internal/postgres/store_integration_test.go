@@ -424,7 +424,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	}
 	repeatedJob, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
-		t.Fatalf("idempotent Job admission=%#v created=%v err=%v", repeatedJob, created, err)
+		t.Fatalf("same-key replay with the same complete authority=%#v created=%v err=%v", repeatedJob, created, err)
 	}
 	changedJob := input
 	changedJob.Goal = "changed complete input"
@@ -435,6 +435,31 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	changedProfile.SandboxProfile = "e2b"
 	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
 		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
+	}
+	changedBase := input
+	changedBase.BaseBranch = "changed-base"
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedBase.SandboxProfile}, changedBase); err == nil {
+		t.Fatal("changed caller base under the same admission key did not conflict")
+	}
+	changedRepository := input
+	changedRepository.Repository = "https://github.com/aphronio/other.git"
+	changedRepository.GitHubRepository = "aphronio/other"
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRepository.SandboxProfile}, changedRepository); err == nil {
+		t.Fatal("changed caller repository under the same admission key did not conflict")
+	}
+	changedInstallation := input
+	changedInstallation.GitHubInstallation = "43"
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedInstallation.SandboxProfile}, changedInstallation); err == nil {
+		t.Fatal("changed derived GitHub installation under the same admission key did not conflict")
+	}
+	changedRevision := input
+	changedRevision.Revision = strings.Repeat("b", 40)
+	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRevision.SandboxProfile}, changedRevision); err == nil {
+		t.Fatal("changed caller Revision under the same admission key did not conflict")
+	}
+	storedAuthority, err := store.CodingJob(ctx, job.ID)
+	if err != nil || storedAuthority.GitHubInstallation != input.GitHubInstallation || storedAuthority.StartingRevision != input.Revision || storedAuthority.Revision != input.Revision {
+		t.Fatalf("authority conflict rewrote admitted Job: %#v err=%v", storedAuthority, err)
 	}
 	taskIDs := []string{job.CurrentTaskID}
 	t.Cleanup(func() {

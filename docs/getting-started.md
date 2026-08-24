@@ -77,36 +77,27 @@ Skip this section when a client or workflow needs only plain Git access, such as
 repository or consuming retained Git input. A GitHub App is required for authenticated GitHub API
 or repository operations.
 
-Create or reuse a GitHub App, install it on only the repositories this deployment may use, and
-download a private key. Protect the downloaded file, then install its App identity as the
-deployment's one GitHub credential bundle:
+Create the deployment-default App through GitHub's approval flow:
 
 ```bash
-chmod 600 /protected/path/github-app.private-key.pem
-dorf integration github setup \
-  --app-id APP_ID \
-  --private-key /protected/path/github-app.private-key.pem
+dorf integration github setup
 ```
 
-Setup proves that the key belongs to the declared App and installs a protected copy in deployment
-configuration. Repeating the same setup converges; replacing a different identity requires explicit
-interactive approval or `--yes`.
+Use `--org OWNER` when the organization should own the App; omit it for an App owned by the
+authenticated GitHub user. Setup prints a readable HTTPS link to Dorf's static GitHub Pages
+launcher and an explicit copy-and-paste fallback. The page has no backend, tracking, credentials,
+or callback; it only submits the fixed App manifest directly to GitHub. After approving GitHub's
+form, paste either the redirected URL or its short-lived manifest code into the waiting command.
+Dorf exchanges it, verifies the returned App identity and exact supported permission envelope,
+atomically installs GitHub's returned credential bundle, prints the reusable App installation URL,
+and exits. Open that URL to install the App on the repositories this deployment may use.
 
-Each workflow or direct client then proves only the GitHub authority it will use. The current coding
-workflow needs an exact base plus contents-write, issues-read, and pull-requests-write:
-
-```bash
-dorf integration github verify \
-  --repo OWNER/REPOSITORY \
-  --installation INSTALLATION_ID \
-  --base main \
-  --require contents:write \
-  --require issues:read \
-  --require pull_requests:write
-```
-
-Metadata-read is implicit. Supplying `--base` also requires contents-read and proves the branch's
-exact Revision. Other consumers should omit the base or permissions they do not need.
+The App registration uses the fixed module permission envelope owned by
+[D093](project/decisions.md#d093--github-authentication-is-an-optional-deployment-integration).
+Runtime operations still mint repository-scoped tokens with only their exact required subset. Setup
+runs no local callback listener or hosted relay and does not select, poll, or verify a repository.
+Repeating setup remotely proves the configured App identity and permission envelope, then returns
+the same installation URL. Replacing it requires explicit `--yes` approval.
 
 ## 3. Run a coding Job
 
@@ -123,8 +114,6 @@ dorf admit \
   --repo https://github.com/OWNER/REPOSITORY.git \
   --revision FULL_COMMIT_OID \
   --branch dorf/my-change-v1 \
-  --github-repo OWNER/REPOSITORY \
-  --github-installation INSTALLATION_ID \
   --base main \
   --model MODEL \
   --reasoning high
@@ -132,6 +121,12 @@ dorf admit \
 dorf worker
 dorf inspect JOB_ID
 ```
+
+Admission derives the exact GitHub owner/repository from `--repo`. The coding runtime composed for
+the selected profile discovers the deployment-default App installation before admitting a new Job;
+the Job request carries no integration or permission settings. The caller supplies the exact starting
+`--revision` and base. Retrying an existing key reuses its retained installation so recovery does not
+depend on GitHub availability; the complete caller input must still match.
 
 To follow the same durable facts without repeatedly invoking inspection, use:
 

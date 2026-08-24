@@ -26,10 +26,10 @@ Absurd, queue, selected Sandbox profile and its base verification,
 Provider Gateway, and selected AI connection separately. Incus checks its command, access, network,
 and credential-free image; E2B checks its exact profile configuration and host-only API key.
 
-Optional external integrations have their own readiness boundary. For GitHub, run
-`dorf integration github verify` with the exact repository, installation, base when needed, and
-permission floor required by the consumer. [Getting started](getting-started.md) contains the current
-coding example.
+Optional external integrations have their own readiness boundary. For GitHub, rerun
+`dorf integration github setup` to prove the deployment-default App identity and recover its reusable
+installation URL. Exact repository access and least permission scope are verified by the runtime
+operation that needs them. [Getting started](getting-started.md) contains the setup procedure.
 
 Ownership guide:
 

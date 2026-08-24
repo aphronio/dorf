@@ -2420,17 +2420,23 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted module boundary refinement — 2026-08-23
 - **Decision:** Refine D015's coding-branch authentication framing into one optional GitHub
-  integration composed beside Core. The deployment owns one protected GitHub App credential bundle
-  and uses it to mint short-lived repository-scoped tokens. `dorf setup` remains the shared
-  control-plane foundation; GitHub credentials are installed separately. A workflow or trusted
-  direct client supplies the exact repository, installation, base when needed, and native permission
-  floor for each use. Core and Sandbox profiles receive no GitHub knowledge or ambient authority.
-- **Verification:** Integration setup proves that the protected private key belongs to the declared
-  App before atomically installing or explicitly replacing the bundle. Per-use verification proves
-  the named installation can access the exact repository with the requested native permissions;
-  metadata read is always included, and naming a base also proves contents read and resolves its
-  exact Revision. The current coding workflow requires contents write, issues read, pull-requests
-  write, and an exact base. Plain Git access to public or retained input needs no GitHub App.
+  integration composed beside Core. The deployment owns one default protected GitHub App credential
+  bundle and uses it to mint short-lived repository-scoped tokens. `dorf setup` remains the shared
+  control-plane foundation; `dorf integration github setup` creates the App through GitHub's App
+  Manifest flow using one static, backend-free GitHub Pages launcher, accepts the short-lived
+  conversion code or redirected URL through a manual handoff, verifies the returned App contract,
+  atomically installs the returned identity and private key, and returns the reusable installation
+  URL. It runs no callback listener or hosted relay and accepts no repository or workflow scope.
+- **Permissions and verification:** App registration uses the fixed envelope supported by this
+  module: metadata read, contents write, issues read, and pull-requests write. Setup verifies the App
+  owner, identity, exact permission envelope, and absence of subscribed events before retaining it;
+  a rerun proves that retained contract remotely and converges. Runtime operations own exact
+  repository discovery, base or Revision proof when needed, and least-scope repository token minting
+  within that envelope. The resulting installation and repository facts remain authority of the
+  operation or durable consumer that needs them. The selected profile's coding runtime composes the
+  deployment-default integration; neither the durable profile nor the Job request stores its
+  credentials or permission envelope. Replacing the default App requires explicit `--yes`; plain Git
+  access to public or retained input needs no GitHub App.
 - **Authority:** This does not move repository authority into deployment configuration. D060 remains
   the coding Job authority for its immutable repository, installation, base, and head. Another
   workflow or direct client owns its own accepted per-use scope while reusing the same integration.
@@ -2438,5 +2444,6 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   not generic execution custody. Separating deployment credentials from consumer scope makes the
   reuse explicit without leaking GitHub into Core or treating global setup as workflow setup.
 - **Reconsider when:** Multiple App identities per deployment are required, another source host
-  earns a common integration contract, or a real consumer needs authority that cannot be expressed
-  as an exact repository, installation, and native permission floor.
+  earns a common integration contract, a Dorf web UI or cloud control plane can absorb the browser
+  handoff behind an authenticated callback, or a real consumer needs authority that cannot be
+  expressed as an exact repository, installation, and native permission floor.

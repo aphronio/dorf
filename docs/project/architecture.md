@@ -191,11 +191,14 @@ Git, coding, GitHub, publication, and human-in-the-loop behavior are workflow/mo
 They may use the Sandbox and Agent handles but are not Core capabilities or provider behavior.
 
 Reusable external-authority integrations are deployment modules composed beside Core. The GitHub
-integration owns one optional deployment App credential bundle, verifies per-use repository,
-installation, base-branch, and permission authority, and mints short-lived repository-scoped tokens.
-The workflow or direct client supplies that per-use scope; Core and Sandbox profiles know nothing
-about GitHub. Plain Git access, including public clones and retained Git input, does not require the
-GitHub integration.
+integration uses a static, backend-free launcher for GitHub's POST-only App Manifest flow and retains
+the returned protected credential bundle only after verifying the App identity and exact supported
+permission envelope. Runtime operations discover their exact repository installation, verify any
+repository or base authority they need, and mint short-lived repository-scoped tokens with the least
+required subset of the App's admitted permissions. A selected profile's coding runtime composes that
+deployment integration; the durable profile definition stores no GitHub credentials or scope, and
+Job requests do not repeat them. Core knows nothing about GitHub. Plain Git access, including public
+clones and retained Git input, does not require the integration.
 
 ## Failure and code evolution
 
