@@ -28,7 +28,7 @@ attention, caller-requested output, and cleanup facts.
 4. Pause and let the human perform these boundaries personally:
 
    - enter a sudo password;
-   - complete ChatGPT or Cloudflare browser authorization;
+   - complete ChatGPT, Cloudflare, or optional-integration browser authorization;
    - enter an OpenAI or E2B key through the masked prompt or an explicitly supplied protected file;
    - choose infrastructure, a DNS hostname, paid services, or broader network access.
 
@@ -44,9 +44,11 @@ attention, caller-requested output, and cleanup facts.
    ```
 
    When the requested operation needs an optional external integration, use that integration's
-   setup and verification commands after the shared foundation is ready. Let the human supply its
-   credentials and approve its exact authority; do not treat optional integration setup as part of
-   `dorf setup` or a Sandbox profile.
+   setup command after the shared foundation is ready. Pause while the human approves any browser
+   form, and return any short-lived redirected URL or code only to the waiting command. Never copy it
+   into chat. Let the runtime operation prove its own exact authority; do not put optional
+   integration settings in Job requests because the selected profile's runtime composition supplies
+   them.
 
 ## Operating protocol
 

@@ -83,10 +83,6 @@ if [[ "$OFFICIAL_IMAGE_RELEASE" == "$RELEASE_TAG" ]]; then
     echo "Set AI_CONNECTION to one ready AI connection name for Incus image promotion." >&2
     exit 2
   fi
-  if [[ -z "${GITHUB_INSTALLATION_ID:-}" ]]; then
-    echo "Set GITHUB_INSTALLATION_ID to the Dorf GitHub App installation used by the real image proof." >&2
-    exit 2
-  fi
   OUTPUT_DIR="$OUTPUT_DIR" RELEASE_TAG="$RELEASE_TAG" \
     "$PROJECT_ROOT/scripts/incus/release-dorf-image.sh"
   assets+=("$IMAGE_ARCHIVE" "$IMAGE_MANIFEST")

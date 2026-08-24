@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"path"
@@ -28,7 +29,6 @@ const apiVersion = "2022-11-28"
 var (
 	canonicalRepository = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?/[a-z0-9][a-z0-9_.-]*$`)
 	installationID      = regexp.MustCompile(`^[1-9][0-9]*$`)
-	permissionName      = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 )
 
 type Authority struct {
@@ -230,56 +230,35 @@ func (c Client) PushToken(ctx context.Context, authority Authority) (string, err
 	return c.mint(ctx, authority, "contents", "write")
 }
 
-// Verify proves exact repository and installation authority at the caller's
-// explicit native GitHub permission floor. A base branch is optional.
-func (c Client) Verify(ctx context.Context, authority Authority, base string, requested map[string]string) (string, map[string]string, error) {
-	if !canonicalRepository.MatchString(authority.Repository) {
-		return "", nil, fmt.Errorf("canonical GitHub repository must be lower-case owner/repository")
+// DiscoverInstallation resolves the App installation that GitHub authorizes for
+// one exact repository. Callers retain the returned ID as their per-use authority.
+func (c Client) DiscoverInstallation(ctx context.Context, repository string) (string, error) {
+	if !canonicalRepository.MatchString(repository) {
+		return "", fmt.Errorf("canonical GitHub repository must be lower-case owner/repository")
 	}
-	if !installationID.MatchString(authority.InstallationID) {
-		return "", nil, fmt.Errorf("GitHub App installation identity must be a positive decimal integer")
-	}
-	permissions, err := verifyPermissions(requested, base != "")
+	bundle, key, err := c.loadCredentialBundle()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	if base != "" {
-		if err := validateBranch(base); err != nil {
-			return "", nil, fmt.Errorf("invalid explicit GitHub base branch: %w", err)
-		}
-	}
-	token, err := c.mintInstallationTokenPermissions(ctx, authority, permissions)
+	jwt, err := appJWT(bundle.AppID, key, c.now())
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
-	if base == "" {
-		return "", permissions, nil
+	var response struct {
+		ID    int64 `json:"id"`
+		AppID int64 `json:"app_id"`
 	}
-	revision, exists, err := c.remoteHead(ctx, token, authority, base)
+	status, err := c.request(ctx, jwt, http.MethodGet, "/repos/"+repository+"/installation", nil, &response)
+	if status == http.StatusNotFound {
+		return "", fmt.Errorf("configured GitHub App is not installed on %s; run dorf integration github setup and open its installation URL", repository)
+	}
 	if err != nil {
-		return "", nil, err
+		return "", fmt.Errorf("discover GitHub App installation for %s: %w", repository, err)
 	}
-	if !exists {
-		return "", nil, fmt.Errorf("GitHub base branch %q was not found in %s through installation %s", base, authority.Repository, authority.InstallationID)
+	if response.ID < 1 || response.AppID < 1 || strconv.FormatInt(response.AppID, 10) != bundle.AppID {
+		return "", fmt.Errorf("GitHub repository-installation response omitted the configured App identity")
 	}
-	return revision, permissions, nil
-}
-
-func verifyPermissions(requested map[string]string, needsContents bool) (map[string]string, error) {
-	permissions := make(map[string]string, len(requested)+2)
-	for name, level := range requested {
-		if !permissionName.MatchString(name) || (level != "read" && level != "write") {
-			return nil, fmt.Errorf("unsupported GitHub permission requirement %s:%s", name, level)
-		}
-		permissions[name] = level
-	}
-	if !permissionAtLeast(permissions["metadata"], "read") {
-		permissions["metadata"] = "read"
-	}
-	if needsContents && !permissionAtLeast(permissions["contents"], "read") {
-		permissions["contents"] = "read"
-	}
-	return permissions, nil
+	return strconv.FormatInt(response.ID, 10), nil
 }
 
 func (c Client) PullRequests(ctx context.Context, authority Authority, owner, head string) ([]PullRequest, error) {
@@ -390,24 +369,16 @@ func (c Client) mint(ctx context.Context, authority Authority, permission, level
 }
 
 func (c Client) mintInstallationToken(ctx context.Context, authority Authority, permission, level string) (string, error) {
-	return c.mintInstallationTokenPermissions(ctx, authority, map[string]string{permission: level})
-}
-
-func (c Client) mintInstallationTokenPermissions(ctx context.Context, authority Authority, permissions map[string]string) (string, error) {
-	credentials, err := readProtectedFile(c.Credentials, "GitHub credentials")
+	bundle, key, err := c.loadCredentialBundle()
 	if err != nil {
 		return "", err
 	}
-	var bundle credentialBundle
-	if err := json.Unmarshal(credentials, &bundle); err != nil || !installationID.MatchString(bundle.AppID) || bundle.PrivateKey == "" {
-		return "", fmt.Errorf("GitHub credential bundle is invalid")
-	}
-	jwt, err := appJWT(bundle.AppID, []byte(bundle.PrivateKey), c.now())
+	jwt, err := appJWT(bundle.AppID, key, c.now())
 	if err != nil {
 		return "", err
 	}
 	repositoryName := strings.SplitN(authority.Repository, "/", 2)[1]
-	body := map[string]any{"repositories": []string{repositoryName}, "permissions": permissions}
+	body := map[string]any{"repositories": []string{repositoryName}, "permissions": map[string]string{permission: level}}
 	var response struct {
 		Token        string            `json:"token"`
 		ExpiresAt    string            `json:"expires_at"`
@@ -422,14 +393,26 @@ func (c Client) mintInstallationTokenPermissions(ctx context.Context, authority 
 	}
 	expiresAt, expiryErr := time.Parse(time.RFC3339, response.ExpiresAt)
 	now := c.now()
-	validPermissions := true
-	for permission, level := range permissions {
-		validPermissions = validPermissions && permissionAtLeast(response.Permissions[permission], level)
-	}
-	if response.Token == "" || expiryErr != nil || !expiresAt.After(now) || expiresAt.After(now.Add(65*time.Minute)) || !validPermissions || len(response.Repositories) != 1 || strings.ToLower(response.Repositories[0].FullName) != authority.Repository {
+	if response.Token == "" || expiryErr != nil || !expiresAt.After(now) || expiresAt.After(now.Add(65*time.Minute)) || !permissionAtLeast(response.Permissions[permission], level) || len(response.Repositories) != 1 || strings.ToLower(response.Repositories[0].FullName) != authority.Repository {
 		return "", fmt.Errorf("GitHub App token did not prove the exact repository and required permissions")
 	}
 	return response.Token, nil
+}
+
+func (c Client) loadCredentialBundle() (credentialBundle, []byte, error) {
+	credentials, err := readProtectedFile(c.Credentials, "GitHub credentials")
+	if err != nil {
+		return credentialBundle{}, nil, err
+	}
+	var bundle credentialBundle
+	if err := json.Unmarshal(credentials, &bundle); err != nil || !installationID.MatchString(bundle.AppID) || bundle.PrivateKey == "" || !appSlug.MatchString(bundle.Slug) {
+		return credentialBundle{}, nil, fmt.Errorf("GitHub credential bundle is invalid")
+	}
+	key, err := canonicalPrivateKey([]byte(bundle.PrivateKey))
+	if err != nil {
+		return credentialBundle{}, nil, fmt.Errorf("GitHub credential bundle is invalid")
+	}
+	return bundle, key, nil
 }
 
 func (c Client) verifyAppIdentity(ctx context.Context, appID string, key []byte) error {
@@ -441,13 +424,18 @@ func (c Client) verifyAppIdentity(ctx context.Context, appID string, key []byte)
 		return err
 	}
 	var payload struct {
-		ID int64 `json:"id"`
+		ID          int64             `json:"id"`
+		Permissions map[string]string `json:"permissions"`
+		Events      []string          `json:"events"`
 	}
 	if _, err := c.request(ctx, jwt, http.MethodGet, "/app", nil, &payload); err != nil {
 		return fmt.Errorf("verify GitHub App identity: %w", err)
 	}
 	if payload.ID < 1 || strconv.FormatInt(payload.ID, 10) != appID {
 		return fmt.Errorf("GitHub App private key does not prove App ID %s", appID)
+	}
+	if !maps.Equal(payload.Permissions, modulePermissionEnvelope()) || len(payload.Events) != 0 {
+		return fmt.Errorf("GitHub App permissions or events do not match Dorf's supported envelope")
 	}
 	return nil
 }
@@ -466,7 +454,9 @@ func (c Client) request(ctx context.Context, token, method, endpoint string, bod
 		return 0, err
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	request.Header.Set("User-Agent", "dorf")
 	request.Header.Set("X-GitHub-Api-Version", apiVersion)
 	if body != nil {
@@ -577,6 +567,9 @@ func (c Client) now() time.Time {
 func redact(err error, secret string) error {
 	if err == nil {
 		return nil
+	}
+	if secret == "" {
+		return err
 	}
 	return errors.New(strings.ReplaceAll(err.Error(), secret, "[REDACTED_GITHUB_TOKEN]"))
 }

@@ -9,11 +9,6 @@ if [[ -z "${AI_CONNECTION:-}" ]]; then
   echo "Set AI_CONNECTION to one ready AI connection name." >&2
   exit 2
 fi
-if [[ -z "${GITHUB_INSTALLATION_ID:-}" ]]; then
-  echo "Set GITHUB_INSTALLATION_ID to the Dorf GitHub App installation used by the real proof." >&2
-  exit 2
-fi
-
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/dist/incus-image}"
@@ -143,8 +138,6 @@ prove_harness() {
     --repo https://github.com/aphronio/dorf.git \
     --revision "$SOURCE_COMMIT" \
     --branch "dorf/image-proof-$harness-$BUILD_ID" \
-    --github-repo aphronio/dorf \
-    --github-installation "$GITHUB_INSTALLATION_ID" \
     --base "${BASE_BRANCH:-main}" \
     --ai-connection "$AI_CONNECTION" \
     --profile "$profile_name" \

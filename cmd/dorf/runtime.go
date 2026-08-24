@@ -93,6 +93,24 @@ func (r profileRuntimeResolver) ResolveCoding(ctx context.Context, name string) 
 	}, nil
 }
 
+type githubInstallationDiscovery interface {
+	DiscoverInstallation(context.Context, string) (string, error)
+}
+
+type codingAdmissionRuntime struct {
+	Profile       profileapp.Runtime
+	Installations githubInstallationDiscovery
+}
+
+// Coding admission needs only the selected profile's runtime composition. It
+// does not construct the Sandbox, Harness, Agent, or publication runtime.
+func (r profileRuntimeResolver) ResolveCodingAdmission(selected core.SandboxProfile) codingAdmissionRuntime {
+	return codingAdmissionRuntime{
+		Profile:       profileapp.Runtime{SandboxProfile: selected.Name},
+		Installations: githubapi.Client{APIURL: r.cfg.GitHubAPIURL, Credentials: r.cfg.GitHubCredentials},
+	}
+}
+
 func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name string) (investigation.Runtime, error) {
 	resolved, err := r.resolveBase(ctx, name)
 	if err != nil {

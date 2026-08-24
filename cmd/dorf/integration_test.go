@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -14,50 +15,141 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
+
+	githubapi "github.com/aphronio/dorf/internal/github"
 )
 
-func TestGitHubIntegrationSetupRunsWithoutDatabaseAndNeverPrintsKey(t *testing.T) {
-	root, source := t.TempDir(), ""
-	source = filepath.Join(root, "source.pem")
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	secret := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	if err := os.WriteFile(source, secret, 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestGitHubIntegrationExposesOnlySetupBeforeDatabase(t *testing.T) {
+	root := t.TempDir()
 	t.Setenv("HOME", root)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv("DORF_DATABASE_URL", "")
 	t.Setenv("DORF_GITHUB_API_URL", "https://github.test")
-	for _, leaf := range []string{"setup", "verify"} {
-		var help strings.Builder
-		err := run(context.Background(), []string{"integration", "github", leaf, "--help"}, io.Discard, &help)
-		if !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "Usage of integration github "+leaf) {
-			t.Fatalf("%s help=%q err=%v", leaf, help.String(), err)
-		}
+	var help strings.Builder
+	err := run(context.Background(), []string{"integration", "github", "setup", "--help"}, io.Discard, &help)
+	if !errors.Is(err, flag.ErrHelp) || !strings.Contains(help.String(), "Usage of integration github setup") {
+		t.Fatalf("help=%q err=%v", help.String(), err)
 	}
-	original := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = original })
-	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		body := `{"id":7}`
-		if strings.Contains(request.URL.Path, "access_tokens") {
-			body = `{"token":"ephemeral","expires_at":"` + time.Now().UTC().Add(55*time.Minute).Format(time.RFC3339) + `","permissions":{"contents":"read","issues":"read","metadata":"read"},"repositories":[{"full_name":"aphronio/dorf"}]}`
-		} else if strings.Contains(request.URL.Path, "/git/ref/") {
-			body = `{"object":{"sha":"` + strings.Repeat("a", 40) + `"}}`
+}
+
+func TestGitHubManifestSetupInstallsDefaultAppAndPrintsReusableURLWithoutSecrets(t *testing.T) {
+	key := githubSetupTestKey(t)
+	credentials := filepath.Join(t.TempDir(), "credentials.json")
+	client := githubapi.Client{APIURL: "https://github.test", Credentials: credentials, HTTP: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/app-manifests/manifest-code/conversions":
+			if request.Method != http.MethodPost || request.Header.Get("Authorization") != "" {
+				t.Fatalf("conversion request=%s auth=%q", request.Method, request.Header.Get("Authorization"))
+			}
+			payload, _ := json.Marshal(map[string]any{"id": 7, "slug": "dorf-deployment", "pem": string(key), "owner": map[string]string{"login": "AuthenticatedUser", "type": "User"}})
+			return githubSetupResponse(http.StatusOK, string(payload)), nil
+		case "/app":
+			return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		default:
+			t.Fatalf("setup performed repository/install operation %s %s", request.Method, request.URL.Path)
+			return nil, nil
 		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
-	})
+	})}}
 	var stdout, stderr strings.Builder
-	err := run(context.Background(), []string{"integration", "github", "setup", "--app-id", "7", "--private-key", source}, &stdout, &stderr)
-	if err != nil || !strings.Contains(stdout.String(), "GitHub App credentials ready") || !strings.Contains(stdout.String(), "Next: dorf integration github verify") || strings.Contains(stdout.String(), string(secret)) || strings.Contains(stderr.String(), string(secret)) {
-		t.Fatalf("stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "config", "dorf", "integrations", "github", "credentials.json")); err != nil {
+	if err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader("manifest-code\n"), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	stdout.Reset()
-	err = run(context.Background(), []string{"integration", "github", "verify", "--repo", "aphronio/dorf", "--installation", "42", "--base", "main", "--require", "issues:read"}, &stdout, &stderr)
-	if err != nil || !strings.Contains(stdout.String(), "Permissions: contents:read, issues:read, metadata:read") || !strings.Contains(stdout.String(), strings.Repeat("a", 40)) {
-		t.Fatalf("verify receipt=%q err=%v", stdout.String(), err)
+	receipt := stdout.String()
+	if !strings.Contains(receipt, "\x1b]8;;https://aphronio.github.io/dorf/github/setup/?state=") || !strings.Contains(receipt, "Open GitHub App setup") || !strings.Contains(receipt, "copy and paste this address into your browser:\nhttps://aphronio.github.io/dorf/github/setup/?state=") || strings.Contains(receipt, "data:text") || !strings.Contains(receipt, "GitHub App configured") || !strings.Contains(receipt, "https://github.test/github-apps/dorf-deployment/installations/new") {
+		t.Fatalf("receipt=%q", receipt)
 	}
+	if strings.Contains(receipt, string(key)) || strings.Contains(receipt, "manifest-code") || strings.Contains(stderr.String(), string(key)) {
+		t.Fatal("setup output exposed a private key or manifest code")
+	}
+	info, err := os.Stat(credentials)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("credentials info=%v err=%v", info, err)
+	}
+}
+
+func TestGitHubSetupExistingAppProvesIdentityAndConvergesWithoutInput(t *testing.T) {
+	client := configuredGitHubSetupClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/app" || !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ey") {
+			t.Fatalf("identity request=%s auth=%q", request.URL.Path, request.Header.Get("Authorization"))
+		}
+		return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+	}))
+	input := strings.NewReader("unconsumed-capability-code\n")
+	before := input.Len()
+	var stdout, stderr strings.Builder
+	if err := githubIntegrationSetup(context.Background(), client, nil, input, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "GitHub App configured") || !strings.Contains(stdout.String(), "/github-apps/dorf-existing/installations/new") || strings.Contains(stdout.String(), "github.io/dorf/github/setup") || input.Len() != before {
+		t.Fatalf("stdout=%q remaining input=%d/%d", stdout.String(), input.Len(), before)
+	}
+	stdout.Reset()
+	err := githubIntegrationSetup(context.Background(), client, []string{"--yes"}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "manifest handoff") || !strings.Contains(stdout.String(), "https://aphronio.github.io/dorf/github/setup/") {
+		t.Fatalf("explicit rotation stdout=%q err=%v", stdout.String(), err)
+	}
+}
+
+func TestGitHubSetupRemoteProofFailureRequiresExplicitRotation(t *testing.T) {
+	proofFailure := errors.New("GitHub App identity unavailable")
+	for _, yes := range []bool{false, true} {
+		t.Run(map[bool]string{false: "return", true: "rotate"}[yes], func(t *testing.T) {
+			client := configuredGitHubSetupClient(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, proofFailure
+			}))
+			args := []string{}
+			if yes {
+				args = append(args, "--yes")
+			}
+			input := strings.NewReader("")
+			var stdout, stderr strings.Builder
+			err := githubIntegrationSetup(context.Background(), client, args, input, &stdout, &stderr)
+			if err == nil {
+				t.Fatal("remote proof failure was accepted")
+			}
+			artifact := strings.Contains(stdout.String(), "https://aphronio.github.io/dorf/github/setup/")
+			if yes && (!artifact || !strings.Contains(err.Error(), "manifest handoff")) {
+				t.Fatalf("rotation stdout=%q err=%v", stdout.String(), err)
+			}
+			if !yes && (artifact || !strings.Contains(err.Error(), proofFailure.Error())) {
+				t.Fatalf("proof failure stdout=%q err=%v", stdout.String(), err)
+			}
+		})
+	}
+}
+
+func TestGitHubManifestSetupTruthfullyRequiresManualHandoffInput(t *testing.T) {
+	client := githubapi.Client{APIURL: "https://github.test", Credentials: filepath.Join(t.TempDir(), "credentials.json")}
+	var stdout, stderr strings.Builder
+	err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader(""), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "manifest handoff") || !strings.Contains(stdout.String(), "paste the redirected URL or short-lived manifest code") {
+		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
+	}
+}
+
+func configuredGitHubSetupClient(t *testing.T, transport http.RoundTripper) githubapi.Client {
+	t.Helper()
+	credentials := filepath.Join(t.TempDir(), "credentials.json")
+	bundle, _ := json.Marshal(map[string]string{"app_id": "7", "private_key": string(githubSetupTestKey(t)), "slug": "dorf-existing"})
+	if err := os.WriteFile(credentials, bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return githubapi.Client{APIURL: "https://github.test", Credentials: credentials, HTTP: &http.Client{Transport: transport}}
+}
+
+func githubSetupTestKey(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+}
+
+func githubSetupResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func githubSetupAppIdentity() string {
+	return `{"id":7,"permissions":{"metadata":"read","contents":"write","issues":"read","pull_requests":"write"},"events":[]}`
 }
