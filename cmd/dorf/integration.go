@@ -53,7 +53,7 @@ func githubIntegrationSetup(ctx context.Context, client githubapi.Client, args [
 	fmt.Fprintln(stdout, "Create the Dorf GitHub App in your browser:")
 	writeTerminalLink(stdout, "Open GitHub App setup", approval.URL)
 	fmt.Fprintf(stdout, "If the link is not clickable or did not open, copy and paste this address into your browser:\n%s\n", approval.URL)
-	fmt.Fprintln(stdout, "\nAfter approval, paste the redirected URL or short-lived manifest code and press Enter:")
+	fmt.Fprintln(stdout, "\nAfter approval, the page will show a one-time code. Copy it, paste it here, and press Enter:")
 	reader := bufio.NewReader(stdin)
 	// TODO: When a Dorf web UI or cloud control plane exists, replace this manual handoff with its authenticated callback.
 	handoff, err := readGitHubSetupLine(reader)
@@ -80,7 +80,7 @@ func writeTerminalLink(output io.Writer, label, target string) {
 }
 
 func printGitHubAppReady(stdout io.Writer, app githubapi.ConvertedApp) {
-	fmt.Fprintf(stdout, "GitHub App configured\n  Install or manage repository access: %s\n", app.InstallURL)
+	fmt.Fprintf(stdout, "GitHub App configured\nNext, choose or update which repositories Dorf can use:\n  %s\n", app.InstallURL)
 }
 
 func readGitHubSetupLine(reader *bufio.Reader) (string, error) {
