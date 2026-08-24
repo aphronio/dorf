@@ -173,10 +173,17 @@ func (a Adapter) Exec(ctx context.Context, owner provider.Ownership, input []byt
 func providerExecResult(result ExecResult, stdout, stderr string, execErr error) (provider.Result, error) {
 	observed := provider.Result{Stdout: stdout, Stderr: stderr, ExitCode: int(result.ExitCode)}
 	var exit *ExitError
-	if errors.As(execErr, &exit) && exit.Result.Exited && exit.Result.RemoteError == "" {
+	if errors.As(execErr, &exit) && ordinaryProcessExit(exit.Result) {
 		return observed, nil
 	}
 	return observed, execErr
+}
+
+func ordinaryProcessExit(result ExecResult) bool {
+	if !result.Exited {
+		return false
+	}
+	return result.RemoteError == "" || (result.ExitCode != 0 && result.RemoteError == fmt.Sprintf("exit status %d", result.ExitCode))
 }
 
 func (a Adapter) Endpoint(ctx context.Context, owner provider.Ownership, port int) (provider.Endpoint, error) {
