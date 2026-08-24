@@ -194,7 +194,12 @@ Reusable external-authority integrations are deployment modules composed beside 
 integration uses a static, backend-free launcher for GitHub's POST-only App Manifest flow, renders
 the returned one-time code for manual transfer to the waiting CLI, and retains the protected
 credential bundle only after verifying the App identity and exact supported permission envelope.
-Runtime operations discover their exact repository installation, verify any
+Setup then directs the operator to the reusable App installation URL, waits for explicit completion,
+and makes one bounded App-authenticated observation; readiness requires at least one installation.
+A rerun proves both App identity and installation without terminal input when already converged, or
+resumes the same installation step when the configured App has none. No polling service, durable
+installation fact, or repository authority enters Core or deployment configuration. Runtime
+operations discover their exact repository installation, verify any
 repository or base authority they need, and mint short-lived repository-scoped tokens with the least
 required subset of the App's admitted permissions. A selected profile's coding runtime composes that
 deployment integration; the durable profile definition stores no GitHub credentials or scope, and

@@ -46,6 +46,11 @@ type ConvertedApp struct {
 	InstallURL string
 }
 
+type appInstallation struct {
+	ID    int64 `json:"id"`
+	AppID int64 `json:"app_id"`
+}
+
 type credentialBundle struct {
 	AppID      string `json:"app_id"`
 	PrivateKey string `json:"private_key"`
@@ -181,6 +186,34 @@ func (c Client) ConfiguredApp(ctx context.Context) (ConvertedApp, bool, error) {
 		return ConvertedApp{}, true, err
 	}
 	return ConvertedApp{InstallURL: c.appInstallURL(bundle.Slug)}, true, nil
+}
+
+// HasInstallation observes whether the configured App has at least one
+// installation through GitHub's authenticated App authority.
+func (c Client) HasInstallation(ctx context.Context) (bool, error) {
+	bundle, key, err := c.loadCredentialBundle()
+	if err != nil {
+		return false, err
+	}
+	jwt, err := appJWT(bundle.AppID, key, c.now())
+	if err != nil {
+		return false, err
+	}
+	var installations []appInstallation
+	if _, err := c.request(ctx, jwt, http.MethodGet, "/app/installations?per_page=1", nil, &installations); err != nil {
+		return false, fmt.Errorf("verify GitHub App installation: %w", err)
+	}
+	if installations == nil {
+		return false, fmt.Errorf("GitHub App installations response omitted a JSON array")
+	}
+	if len(installations) == 0 {
+		return false, nil
+	}
+	installation := installations[0]
+	if installation.ID < 1 || installation.AppID < 1 || strconv.FormatInt(installation.AppID, 10) != bundle.AppID {
+		return false, fmt.Errorf("GitHub App installation response omitted the configured App identity")
+	}
+	return true, nil
 }
 
 func modulePermissionEnvelope() map[string]string {

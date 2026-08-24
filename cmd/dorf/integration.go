@@ -36,14 +36,23 @@ func githubIntegrationSetup(ctx context.Context, client githubapi.Client, args [
 	if set.NArg() != 0 {
 		return fmt.Errorf("integration github setup does not accept positional arguments")
 	}
+	reader := bufio.NewReader(stdin)
 
 	configured, present, configuredErr := client.ConfiguredApp(ctx)
 	if configuredErr != nil && (!present || !*yes) {
 		return configuredErr
 	}
 	if present && !*yes {
-		printGitHubAppReady(stdout, configured)
-		return nil
+		installed, err := client.HasInstallation(ctx)
+		if err != nil {
+			return err
+		}
+		if installed {
+			printGitHubIntegrationReady(stdout)
+			return nil
+		}
+		fmt.Fprintln(stdout, "GitHub App already configured")
+		return finishGitHubInstallation(ctx, client, configured, reader, stdout)
 	}
 
 	approval, err := client.ManifestApproval(githubapi.ManifestInput{Organization: strings.TrimSpace(*organization)})
@@ -54,7 +63,6 @@ func githubIntegrationSetup(ctx context.Context, client githubapi.Client, args [
 	writeTerminalLink(stdout, "Open GitHub App setup", approval.URL)
 	fmt.Fprintf(stdout, "If the link is not clickable or did not open, copy and paste this address into your browser:\n%s\n", approval.URL)
 	fmt.Fprintln(stdout, "\nAfter approval, the page will show a one-time code. Copy it, paste it here, and press Enter:")
-	reader := bufio.NewReader(stdin)
 	// TODO: When a Dorf web UI or cloud control plane exists, replace this manual handoff with its authenticated callback.
 	handoff, err := readGitHubSetupLine(reader)
 	if err != nil {
@@ -71,16 +79,40 @@ func githubIntegrationSetup(ctx context.Context, client githubapi.Client, args [
 		}
 		return err
 	}
-	printGitHubAppReady(stdout, converted)
-	return nil
+	fmt.Fprintln(stdout, "GitHub App created")
+	return finishGitHubInstallation(ctx, client, converted, reader, stdout)
 }
 
 func writeTerminalLink(output io.Writer, label, target string) {
 	fmt.Fprintf(output, "\x1b]8;;%s\x1b\\%s\x1b]8;;\x1b\\\n", target, label)
 }
 
-func printGitHubAppReady(stdout io.Writer, app githubapi.ConvertedApp) {
-	fmt.Fprintf(stdout, "GitHub App configured\nNext, choose or update which repositories Dorf can use:\n  %s\n", app.InstallURL)
+func finishGitHubInstallation(ctx context.Context, client githubapi.Client, app githubapi.ConvertedApp, reader *bufio.Reader, stdout io.Writer) error {
+	fmt.Fprintln(stdout, "Install repository access for the Dorf GitHub App in your browser:")
+	writeTerminalLink(stdout, "Open GitHub App installation", app.InstallURL)
+	fmt.Fprintf(stdout, "If the link is not clickable or did not open, copy and paste this address into your browser:\n%s\n", app.InstallURL)
+	fmt.Fprintln(stdout, "\nAfter GitHub reports that the App was installed, type installed and press Enter:")
+	confirmation, err := readGitHubSetupLine(reader)
+	if err != nil {
+		return fmt.Errorf("read GitHub installation confirmation: %w", err)
+	}
+	if confirmation != "installed" {
+		return fmt.Errorf("GitHub installation confirmation must be exactly installed")
+	}
+	installed, err := client.HasInstallation(ctx)
+	if err != nil {
+		return err
+	}
+	if !installed {
+		return fmt.Errorf("GitHub App has no installation after confirmation; install repository access at %s and rerun dorf integration github setup", app.InstallURL)
+	}
+	fmt.Fprintln(stdout, "GitHub repository access installed")
+	printGitHubIntegrationReady(stdout)
+	return nil
+}
+
+func printGitHubIntegrationReady(stdout io.Writer) {
+	fmt.Fprintln(stdout, "GitHub integration ready")
 }
 
 func readGitHubSetupLine(reader *bufio.Reader) (string, error) {
