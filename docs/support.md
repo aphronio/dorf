@@ -27,9 +27,10 @@ Provider Gateway, and selected AI connection separately. Incus checks its comman
 and credential-free image; E2B checks its exact profile configuration and host-only API key.
 
 Optional external integrations have their own readiness boundary. For GitHub, rerun
-`dorf integration github setup` to prove the deployment-default App identity and recover its reusable
-installation URL. Exact repository access and least permission scope are verified by the runtime
-operation that needs them. [Getting started](getting-started.md) contains the setup procedure.
+`dorf integration github setup` to prove the deployment-default App identity and that it has at least
+one installation; a missing installation resumes the operator handoff at its reusable URL. Exact
+repository access and least permission scope are verified by the runtime operation that needs them.
+[Getting started](getting-started.md) contains the setup procedure.
 
 Ownership guide:
 

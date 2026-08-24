@@ -32,7 +32,7 @@ func TestGitHubIntegrationExposesOnlySetupBeforeDatabase(t *testing.T) {
 	}
 }
 
-func TestGitHubManifestSetupInstallsDefaultAppAndPrintsReusableURLWithoutSecrets(t *testing.T) {
+func TestGitHubManifestSetupCompletesAppAndInstallationWithoutExposingSecrets(t *testing.T) {
 	key := githubSetupTestKey(t)
 	credentials := filepath.Join(t.TempDir(), "credentials.json")
 	client := githubapi.Client{APIURL: "https://github.test", Credentials: credentials, HTTP: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -45,17 +45,22 @@ func TestGitHubManifestSetupInstallsDefaultAppAndPrintsReusableURLWithoutSecrets
 			return githubSetupResponse(http.StatusOK, string(payload)), nil
 		case "/app":
 			return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		case "/app/installations":
+			if request.Method != http.MethodGet || request.URL.Query().Get("per_page") != "1" || !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ey") {
+				t.Fatalf("installation request=%s query=%q auth=%q", request.Method, request.URL.RawQuery, request.Header.Get("Authorization"))
+			}
+			return githubSetupResponse(http.StatusOK, githubSetupInstallations()), nil
 		default:
-			t.Fatalf("setup performed repository/install operation %s %s", request.Method, request.URL.Path)
+			t.Fatalf("setup performed unexpected operation %s %s", request.Method, request.URL.Path)
 			return nil, nil
 		}
 	})}}
 	var stdout, stderr strings.Builder
-	if err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader("manifest-code\n"), &stdout, &stderr); err != nil {
+	if err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader("manifest-code\ninstalled\n"), &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	receipt := stdout.String()
-	if !strings.Contains(receipt, "\x1b]8;;https://aphronio.github.io/dorf/github/setup/?state=") || !strings.Contains(receipt, "Open GitHub App setup") || !strings.Contains(receipt, "copy and paste this address into your browser:\nhttps://aphronio.github.io/dorf/github/setup/?state=") || strings.Contains(receipt, "data:text") || !strings.Contains(receipt, "After approval, the page will show a one-time code") || !strings.Contains(receipt, "GitHub App configured") || !strings.Contains(receipt, "choose or update which repositories Dorf can use") || !strings.Contains(receipt, "https://github.test/github-apps/dorf-deployment/installations/new") {
+	if !strings.Contains(receipt, "\x1b]8;;https://aphronio.github.io/dorf/github/setup/?state=") || !strings.Contains(receipt, "Open GitHub App setup") || !strings.Contains(receipt, "copy and paste this address into your browser:\nhttps://aphronio.github.io/dorf/github/setup/?state=") || strings.Contains(receipt, "data:text") || !strings.Contains(receipt, "After approval, the page will show a one-time code") || !strings.Contains(receipt, "GitHub App created") || !strings.Contains(receipt, "Open GitHub App installation") || !strings.Contains(receipt, "type installed and press Enter") || !strings.Contains(receipt, "https://github.test/github-apps/dorf-deployment/installations/new") || !strings.Contains(receipt, "GitHub repository access installed") || !strings.Contains(receipt, "GitHub integration ready") {
 		t.Fatalf("receipt=%q", receipt)
 	}
 	if strings.Contains(receipt, string(key)) || strings.Contains(receipt, "manifest-code") || strings.Contains(stderr.String(), string(key)) {
@@ -69,10 +74,18 @@ func TestGitHubManifestSetupInstallsDefaultAppAndPrintsReusableURLWithoutSecrets
 
 func TestGitHubSetupExistingAppProvesIdentityAndConvergesWithoutInput(t *testing.T) {
 	client := configuredGitHubSetupClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.Path != "/app" || !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ey") {
-			t.Fatalf("identity request=%s auth=%q", request.URL.Path, request.Header.Get("Authorization"))
+		if !strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ey") {
+			t.Fatalf("request=%s auth=%q", request.URL.Path, request.Header.Get("Authorization"))
 		}
-		return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		switch request.URL.Path {
+		case "/app":
+			return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		case "/app/installations":
+			return githubSetupResponse(http.StatusOK, githubSetupInstallations()), nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+			return nil, nil
+		}
 	}))
 	input := strings.NewReader("unconsumed-capability-code\n")
 	before := input.Len()
@@ -80,13 +93,59 @@ func TestGitHubSetupExistingAppProvesIdentityAndConvergesWithoutInput(t *testing
 	if err := githubIntegrationSetup(context.Background(), client, nil, input, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "GitHub App configured") || !strings.Contains(stdout.String(), "/github-apps/dorf-existing/installations/new") || strings.Contains(stdout.String(), "github.io/dorf/github/setup") || input.Len() != before {
+	if stdout.String() != "GitHub integration ready\n" || strings.Contains(stdout.String(), "/github-apps/dorf-existing/installations/new") || input.Len() != before {
 		t.Fatalf("stdout=%q remaining input=%d/%d", stdout.String(), input.Len(), before)
 	}
 	stdout.Reset()
 	err := githubIntegrationSetup(context.Background(), client, []string{"--yes"}, strings.NewReader(""), &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "manifest handoff") || !strings.Contains(stdout.String(), "https://aphronio.github.io/dorf/github/setup/") {
 		t.Fatalf("explicit rotation stdout=%q err=%v", stdout.String(), err)
+	}
+}
+
+func TestGitHubSetupResumesInstallationForConfiguredApp(t *testing.T) {
+	installationObservations := 0
+	client := configuredGitHubSetupClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/app":
+			return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		case "/app/installations":
+			installationObservations++
+			if installationObservations == 1 {
+				return githubSetupResponse(http.StatusOK, `[]`), nil
+			}
+			return githubSetupResponse(http.StatusOK, githubSetupInstallations()), nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+			return nil, nil
+		}
+	}))
+	var stdout, stderr strings.Builder
+	if err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader("installed\n"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	receipt := stdout.String()
+	if installationObservations != 2 || !strings.Contains(receipt, "GitHub App already configured") || !strings.Contains(receipt, "/github-apps/dorf-existing/installations/new") || strings.Contains(receipt, "github.io/dorf/github/setup") || !strings.Contains(receipt, "GitHub integration ready") {
+		t.Fatalf("observations=%d stdout=%q", installationObservations, receipt)
+	}
+}
+
+func TestGitHubSetupRejectsConfirmationWhenAppHasNoInstallation(t *testing.T) {
+	client := configuredGitHubSetupClient(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/app":
+			return githubSetupResponse(http.StatusOK, githubSetupAppIdentity()), nil
+		case "/app/installations":
+			return githubSetupResponse(http.StatusOK, `[]`), nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+			return nil, nil
+		}
+	}))
+	var stdout, stderr strings.Builder
+	err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader("installed\n"), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "has no installation after confirmation") || strings.Contains(stdout.String(), "GitHub integration ready") {
+		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
 	}
 }
 
@@ -152,4 +211,8 @@ func githubSetupResponse(status int, body string) *http.Response {
 
 func githubSetupAppIdentity() string {
 	return `{"id":7,"permissions":{"metadata":"read","contents":"write","issues":"read","pull_requests":"write"},"events":[]}`
+}
+
+func githubSetupInstallations() string {
+	return `[{"id":23,"app_id":7}]`
 }

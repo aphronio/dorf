@@ -46,7 +46,9 @@ attention, caller-requested output, and cleanup facts.
    When the requested operation needs an optional external integration, use that integration's
    setup command after the shared foundation is ready. Pause while the human approves any browser
    form, and return any short-lived redirected URL or code only to the waiting command. Never copy it
-   into chat. Let the runtime operation prove its own exact authority; do not put optional
+   into chat. For GitHub, leave the setup command waiting while the human completes both browser
+   steps described in Getting started, and report readiness only when the command does. Let the
+   runtime operation prove its own exact authority; do not put optional
    integration settings in Job requests because the selected profile's runtime composition supplies
    them.
 

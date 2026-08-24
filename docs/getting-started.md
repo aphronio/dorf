@@ -89,15 +89,20 @@ launcher and an explicit copy-and-paste fallback. The page has no backend, track
 submits the fixed App manifest directly to GitHub, then displays GitHub's returned one-time code
 with a Copy button. After approving GitHub's form, copy that code into the waiting command.
 Dorf exchanges it, verifies the returned App identity and exact supported permission envelope,
-atomically installs GitHub's returned credential bundle, prints the reusable App installation URL,
-and exits. Open that URL to choose or update the repositories this deployment may use.
+atomically installs GitHub's returned credential bundle, and prints `GitHub App created`. Setup then
+prints the reusable App installation URL. Open it, install the App with access to at least one
+repository, return to the waiting command, and type `installed`. Dorf makes one authenticated
+observation through the App authority and prints `GitHub integration ready` only after GitHub reports
+at least one installation.
 
 The App registration uses the fixed module permission envelope owned by
 [D093](project/decisions.md#d093--github-authentication-is-an-optional-deployment-integration).
 Runtime operations still mint repository-scoped tokens with only their exact required subset. Setup
 runs no local callback listener or hosted relay and does not select, poll, or verify a repository.
-Repeating setup remotely proves the configured App identity and permission envelope, then returns
-the same installation URL. Replacing it requires explicit `--yes` approval.
+Repeating setup remotely proves the configured App identity, permission envelope, and presence of an
+installation. An already installed App returns ready without reading terminal input; an App with no
+installation resumes at the same reusable installation URL instead of creating another App.
+Replacing the configured credential bundle retains its explicit `--yes` approval boundary.
 
 ## 3. Run a coding Job
 
