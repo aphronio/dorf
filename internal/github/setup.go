@@ -84,8 +84,9 @@ func (c Client) ManifestApproval(input ManifestInput) (ManifestApproval, error) 
 }
 
 // ParseManifestCode accepts either GitHub's short-lived conversion code or the
-// redirected URL. A raw code is an intentional capability handoff with no
-// separately checkable state; a URL must carry the manifest's exact state.
+// exact Dorf setup-page redirect. A raw code is an intentional capability
+// handoff with no separately checkable state; a URL must carry the manifest's
+// exact state.
 func ParseManifestCode(raw, state string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -98,8 +99,9 @@ func ParseManifestCode(raw, state string) (string, error) {
 		return raw, nil
 	}
 	redirect, err := url.Parse(raw)
-	if err != nil || redirect.Scheme != "https" || !strings.EqualFold(redirect.Hostname(), "github.com") || redirect.Port() != "" || redirect.User != nil || redirect.Fragment != "" {
-		return "", fmt.Errorf("GitHub manifest redirect must be an exact HTTPS github.com URL")
+	launcher, launcherErr := url.Parse(dorfGitHubSetupURL)
+	if err != nil || launcherErr != nil || redirect.Scheme != launcher.Scheme || !strings.EqualFold(redirect.Host, launcher.Host) || redirect.Path != launcher.Path || redirect.User != nil || redirect.Fragment != "" {
+		return "", fmt.Errorf("GitHub manifest redirect must be the exact Dorf setup page")
 	}
 	if redirect.Query().Get("state") != state {
 		return "", fmt.Errorf("GitHub manifest redirect state did not match this setup")

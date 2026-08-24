@@ -85,12 +85,12 @@ dorf integration github setup
 
 Use `--org OWNER` when the organization should own the App; omit it for an App owned by the
 authenticated GitHub user. Setup prints a readable HTTPS link to Dorf's static GitHub Pages
-launcher and an explicit copy-and-paste fallback. The page has no backend, tracking, credentials,
-or callback; it only submits the fixed App manifest directly to GitHub. After approving GitHub's
-form, paste either the redirected URL or its short-lived manifest code into the waiting command.
+launcher and an explicit copy-and-paste fallback. The page has no backend, tracking, or callback; it
+submits the fixed App manifest directly to GitHub, then displays GitHub's returned one-time code
+with a Copy button. After approving GitHub's form, copy that code into the waiting command.
 Dorf exchanges it, verifies the returned App identity and exact supported permission envelope,
 atomically installs GitHub's returned credential bundle, prints the reusable App installation URL,
-and exits. Open that URL to install the App on the repositories this deployment may use.
+and exits. Open that URL to choose or update the repositories this deployment may use.
 
 The App registration uses the fixed module permission envelope owned by
 [D093](project/decisions.md#d093--github-authentication-is-an-optional-deployment-integration).

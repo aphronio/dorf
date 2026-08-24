@@ -55,7 +55,7 @@ func TestGitHubManifestSetupInstallsDefaultAppAndPrintsReusableURLWithoutSecrets
 		t.Fatal(err)
 	}
 	receipt := stdout.String()
-	if !strings.Contains(receipt, "\x1b]8;;https://aphronio.github.io/dorf/github/setup/?state=") || !strings.Contains(receipt, "Open GitHub App setup") || !strings.Contains(receipt, "copy and paste this address into your browser:\nhttps://aphronio.github.io/dorf/github/setup/?state=") || strings.Contains(receipt, "data:text") || !strings.Contains(receipt, "GitHub App configured") || !strings.Contains(receipt, "https://github.test/github-apps/dorf-deployment/installations/new") {
+	if !strings.Contains(receipt, "\x1b]8;;https://aphronio.github.io/dorf/github/setup/?state=") || !strings.Contains(receipt, "Open GitHub App setup") || !strings.Contains(receipt, "copy and paste this address into your browser:\nhttps://aphronio.github.io/dorf/github/setup/?state=") || strings.Contains(receipt, "data:text") || !strings.Contains(receipt, "After approval, the page will show a one-time code") || !strings.Contains(receipt, "GitHub App configured") || !strings.Contains(receipt, "choose or update which repositories Dorf can use") || !strings.Contains(receipt, "https://github.test/github-apps/dorf-deployment/installations/new") {
 		t.Fatalf("receipt=%q", receipt)
 	}
 	if strings.Contains(receipt, string(key)) || strings.Contains(receipt, "manifest-code") || strings.Contains(stderr.String(), string(key)) {
@@ -122,7 +122,7 @@ func TestGitHubManifestSetupTruthfullyRequiresManualHandoffInput(t *testing.T) {
 	client := githubapi.Client{APIURL: "https://github.test", Credentials: filepath.Join(t.TempDir(), "credentials.json")}
 	var stdout, stderr strings.Builder
 	err := githubIntegrationSetup(context.Background(), client, nil, strings.NewReader(""), &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "manifest handoff") || !strings.Contains(stdout.String(), "paste the redirected URL or short-lived manifest code") {
+	if err == nil || !strings.Contains(err.Error(), "manifest handoff") || !strings.Contains(stdout.String(), "the page will show a one-time code") {
 		t.Fatalf("stdout=%q err=%v", stdout.String(), err)
 	}
 }

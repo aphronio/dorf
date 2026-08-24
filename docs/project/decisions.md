@@ -2423,8 +2423,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   integration composed beside Core. The deployment owns one default protected GitHub App credential
   bundle and uses it to mint short-lived repository-scoped tokens. `dorf setup` remains the shared
   control-plane foundation; `dorf integration github setup` creates the App through GitHub's App
-  Manifest flow using one static, backend-free GitHub Pages launcher, accepts the short-lived
-  conversion code or redirected URL through a manual handoff, verifies the returned App contract,
+  Manifest flow using one static, backend-free GitHub Pages launcher. GitHub redirects back to that
+  page, which displays the short-lived conversion code for manual transfer to the waiting CLI; Dorf
+  verifies the returned App contract,
   atomically installs the returned identity and private key, and returns the reusable installation
   URL. It runs no callback listener or hosted relay and accepts no repository or workflow scope.
 - **Permissions and verification:** App registration uses the fixed envelope supported by this

@@ -163,6 +163,51 @@
       box-shadow: 0 0 0 4px rgba(184, 215, 92, 0.1);
     }
 
+    .handoff {
+      margin: 26px 0 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(3, 20, 16, 0.32);
+    }
+
+    .handoff label {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--cream-soft);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .handoff-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+    }
+
+    .handoff input {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+      color: var(--cream);
+      background: var(--night);
+      font: 700 14px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .handoff button {
+      width: auto;
+      white-space: nowrap;
+    }
+
+    .copy-status {
+      min-height: 1.45em;
+      margin: 12px 2px 0;
+      color: var(--moss-bright);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
     .error {
       display: none;
       margin: 22px 0 0;
@@ -197,6 +242,8 @@
         height: 60px;
       }
       .benefits li { font-size: 14px; }
+      .handoff-row { grid-template-columns: 1fr; }
+      .handoff button { width: 100%; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -207,29 +254,50 @@
 <body>
   <main>
     <div class="brand"><img class="logo" src="../../assets/logo.png" alt=""><span>dorf</span></div>
-    <p class="eyebrow">Connect GitHub to Dorf</p>
-    <h1>Let Dorf ship your work</h1>
-    <p class="lede">
-      Connect <span class="owner" id="owner">your account</span> so Dorf coding Jobs can carry
-      finished work from isolated Sandboxes back into GitHub.
-    </p>
 
-    <ul class="benefits" aria-label="What connecting GitHub enables in Dorf">
-      <li>Publish verified Job branches</li>
-      <li>Open and update pull requests</li>
-      <li>Continue work from review feedback</li>
-      <li>Choose exactly which repositories Dorf can use</li>
-    </ul>
+    <section id="connect-view">
+      <p class="eyebrow">Connect GitHub to Dorf</p>
+      <h1>Let Dorf ship your work</h1>
+      <p class="lede">
+        Connect <span class="owner" id="owner">your account</span> so Dorf coding Jobs can carry
+        finished work from isolated Sandboxes back into GitHub.
+      </p>
 
-    <form id="manifest-form" method="post">
-      <input id="manifest" type="hidden" name="manifest">
-      <button type="submit">Connect GitHub</button>
-    </form>
+      <ul class="benefits" aria-label="What connecting GitHub enables in Dorf">
+        <li>Publish verified Job branches</li>
+        <li>Open and update pull requests</li>
+        <li>Continue work from review feedback</li>
+        <li>Choose exactly which repositories Dorf can use</li>
+      </ul>
 
-    <p class="privacy">
-      You stay in control. GitHub will ask which repositories Dorf may access before anything is
-      connected.
-    </p>
+      <form id="manifest-form" method="post">
+        <input id="manifest" type="hidden" name="manifest">
+        <button type="submit">Connect GitHub</button>
+      </form>
+
+      <p class="privacy">
+        You stay in control. GitHub will ask which repositories Dorf may access before anything is
+        connected.
+      </p>
+    </section>
+
+    <section id="complete-view" hidden>
+      <p class="eyebrow">GitHub approved</p>
+      <h1>Finish in your terminal</h1>
+      <p class="lede">
+        Copy this one-time setup code, return to the waiting Dorf command, paste it, and press Enter.
+      </p>
+      <div class="handoff">
+        <label for="handoff-code">One-time setup code</label>
+        <div class="handoff-row">
+          <input id="handoff-code" type="text" readonly autocomplete="off" spellcheck="false">
+          <button id="copy-code" type="button">Copy code</button>
+        </div>
+        <p id="copy-status" class="copy-status" aria-live="polite"></p>
+      </div>
+      <p class="privacy">This page does not exchange or store the code. Only paste it into your waiting Dorf command.</p>
+    </section>
+
     <p id="error" class="error" role="alert"></p>
     <footer>Your agents. Your infrastructure. One API.</footer>
   </main>
@@ -237,7 +305,7 @@
   <script id="manifest-template" type="application/json">
     {
       "url": "https://github.com/aphronio/dorf",
-      "redirect_url": "https://github.com/aphronio/dorf",
+      "redirect_url": "https://aphronio.github.io/dorf/github/setup/",
       "public": false,
       "default_permissions": {
         "metadata": "read",
@@ -252,15 +320,20 @@
     (() => {
       const query = new URLSearchParams(window.location.search)
       const state = query.get("state") || ""
+      const code = query.get("code") || ""
       const organization = query.get("org") || ""
       const preview = query.get("preview") === "1"
       const statePattern = /^[A-Za-z0-9_-]{32}$/
+      const codePattern = /^[A-Za-z0-9_-]{6,256}$/
       const ownerPattern = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
       const error = document.getElementById("error")
       const form = document.getElementById("manifest-form")
+      const connectView = document.getElementById("connect-view")
+      const completeView = document.getElementById("complete-view")
 
       function fail(message) {
-        form.hidden = true
+        connectView.hidden = true
+        completeView.hidden = true
         error.textContent = message
         error.classList.add("visible")
       }
@@ -271,6 +344,30 @@
       }
       if (organization && !ownerPattern.test(organization)) {
         fail("The organization in this setup link is invalid. Return to the terminal and run setup again.")
+        return
+      }
+
+      if (code) {
+        if (!codePattern.test(code)) {
+          fail("GitHub did not return a valid setup code. Return to the terminal and run setup again.")
+          return
+        }
+        connectView.hidden = true
+        completeView.hidden = false
+        const handoffCode = document.getElementById("handoff-code")
+        const copyButton = document.getElementById("copy-code")
+        const copyStatus = document.getElementById("copy-status")
+        handoffCode.value = code
+        copyButton.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(code)
+            copyStatus.textContent = "Copied. Return to the terminal and paste it."
+          } catch (_) {
+            handoffCode.focus()
+            handoffCode.select()
+            copyStatus.textContent = "The code is selected. Copy it, then paste it into the terminal."
+          }
+        })
         return
       }
 

@@ -73,10 +73,10 @@ func TestManifestApprovalLinksStaticLauncherWithExactContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPermissions := map[string]string{"metadata": "read", "contents": "write", "issues": "read", "pull_requests": "write"}
-	if manifest.URL != "https://github.com/aphronio/dorf" || manifest.RedirectURL != "https://github.com/aphronio/dorf" || manifest.Public || manifest.Events == nil || len(manifest.Events) != 0 || !maps.Equal(manifest.Permissions, wantPermissions) {
+	if manifest.URL != "https://github.com/aphronio/dorf" || manifest.RedirectURL != dorfGitHubSetupURL || manifest.Public || manifest.Events == nil || len(manifest.Events) != 0 || !maps.Equal(manifest.Permissions, wantPermissions) {
 		t.Fatalf("manifest=%#v", manifest)
 	}
-	for _, required := range []string{"https://github.com/settings/apps/new", "https://github.com/organizations/${encodeURIComponent(organization)}/settings/apps/new", "manifest.name = name"} {
+	for _, required := range []string{"https://github.com/settings/apps/new", "https://github.com/organizations/${encodeURIComponent(organization)}/settings/apps/new", "manifest.name = name", "Finish in your terminal", "Copy code", "navigator.clipboard.writeText(code)"} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("static launcher omitted %q", required)
 		}
@@ -98,11 +98,11 @@ func TestParseManifestCodeAcceptsCodeOrMatchingRedirectOnly(t *testing.T) {
 	if got, err := ParseManifestCode(code, "different-state"); err != nil || got != code {
 		t.Fatalf("raw code=%q err=%v", got, err)
 	}
-	redirect := "https://github.com/aphronio/dorf?code=" + code + "&state=" + state
+	redirect := dorfGitHubSetupURL + "?code=" + code + "&state=" + state
 	if got, err := ParseManifestCode(redirect, state); err != nil || got != code {
 		t.Fatalf("redirect code=%q err=%v", got, err)
 	}
-	for _, input := range []string{"", "bad code", "https://github.com/aphronio/dorf?code=" + code + "&state=wrong", "http://github.com/aphronio/dorf?code=" + code + "&state=" + state, "https://github.com:444/aphronio/dorf?code=" + code + "&state=" + state, "https://evil.test/?code=" + code + "&state=" + state} {
+	for _, input := range []string{"", "bad code", dorfGitHubSetupURL + "?code=" + code + "&state=wrong", "http://aphronio.github.io/dorf/github/setup/?code=" + code + "&state=" + state, "https://aphronio.github.io/dorf/github/other/?code=" + code + "&state=" + state, "https://evil.test/?code=" + code + "&state=" + state} {
 		if got, err := ParseManifestCode(input, state); err == nil || got != "" {
 			t.Fatalf("invalid input=%q code=%q err=%v", input, got, err)
 		}
