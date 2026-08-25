@@ -130,3 +130,31 @@ func TestApplicationInstallerIgnoresAuthorityOverrides(t *testing.T) {
 		t.Fatalf("filtered environment=%q", got)
 	}
 }
+
+func TestApplicationInstallerUsesUpdatePresentation(t *testing.T) {
+	installer := filepath.Join(t.TempDir(), installerName)
+	contents := `#!/bin/sh
+update=false
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--version | --install-dir) shift 2 ;;
+		--update) update=true; shift ;;
+		*) exit 2 ;;
+	esac
+done
+printf 'Installed dorf\n'
+if [ "$update" = false ]; then
+	printf 'Next, initialize Dorf when you are ready:\n  dorf setup\n'
+fi
+`
+	if err := os.WriteFile(installer, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout strings.Builder
+	if err := runApplicationInstaller(context.Background(), installer, t.TempDir(), "v1.2.4", &stdout, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if output := stdout.String(); !strings.Contains(output, "Installed dorf") || strings.Contains(output, "dorf setup") {
+		t.Fatalf("update installer output=%q", output)
+	}
+}

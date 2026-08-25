@@ -6,11 +6,11 @@ DORF_RELEASES_URL="${DORF_RELEASES_URL:-https://github.com/aphronio/dorf/release
 
 usage() {
   cat <<'EOF'
-Usage: install.sh [--version vX.Y.Z] [--install-dir ABSOLUTE_DIR]
+Usage: install.sh [--version vX.Y.Z] [--install-dir ABSOLUTE_DIR] [--update]
 
 Install a verified Dorf release for x86_64 Linux. The default install directory is
 $HOME/.local/bin. The release asset supplies the default version; --version selects
-another exact immutable release.
+another exact immutable release. --update omits fresh-install setup guidance.
 EOF
 }
 
@@ -21,6 +21,7 @@ fail() {
 
 version="$DEFAULT_VERSION"
 install_dir="${DORF_INSTALL_DIR:-}"
+update=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --version)
@@ -32,6 +33,10 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || fail "--install-dir requires an absolute directory"
       install_dir="$2"
       shift 2
+      ;;
+    --update)
+      update=true
+      shift
       ;;
     -h | --help)
       usage
@@ -123,4 +128,6 @@ case ":${PATH:-}:" in
     printf ':"$PATH"\n'
     ;;
 esac
-printf 'Next, initialize Dorf when you are ready:\n  dorf setup\n'
+if [ "$update" = false ]; then
+  printf 'Next, initialize Dorf when you are ready:\n  dorf setup\n'
+fi
