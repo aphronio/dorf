@@ -109,6 +109,10 @@ observed_version="$("$work_dir/extract/dorf" version)" || fail "downloaded dorf 
 mkdir -p "$install_dir" || fail "cannot create $install_dir; pass --install-dir ABSOLUTE_DIR"
 target="$install_dir/dorf"
 [ ! -d "$target" ] || fail "$target is a directory"
+existing_install=false
+if [ -e "$target" ]; then
+  existing_install=true
+fi
 install_temp="$(mktemp "$install_dir/.dorf.install.XXXXXX")" ||
   fail "cannot write to $install_dir; pass --install-dir ABSOLUTE_DIR"
 install -m 0755 "$work_dir/extract/dorf" "$install_temp"
@@ -128,6 +132,6 @@ case ":${PATH:-}:" in
     printf ':"$PATH"\n'
     ;;
 esac
-if [ "$update" = false ]; then
+if [ "$update" = false ] && [ "$existing_install" = false ]; then
   printf 'Next, initialize Dorf when you are ready:\n  dorf setup\n'
 fi

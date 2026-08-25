@@ -143,11 +143,19 @@ test_pinned_default_and_explicit_replacement() {
 
 test_fresh_install_and_update_guidance() {
   local install_dir="$WORK_DIR/guidance-bin"
-  local install_output update_output
+  local install_output legacy_update_output update_output
 
   install_output="$(install_with_release_server --install-dir "$install_dir")"
   [[ "$install_output" == *$'Next, initialize Dorf when you are ready:\n  dorf setup'* ]] ||
     fail "standalone installer omitted fresh-install setup guidance"
+
+  legacy_update_output="$(
+    install_with_release_server --version v2.4.6 --install-dir "$install_dir"
+  )"
+  [[ "$legacy_update_output" == *"Installed dorf 2.4.6 at $install_dir/dorf"* ]] ||
+    fail "legacy update caller omitted successful installation output"
+  [[ "$legacy_update_output" != *"dorf setup"* ]] ||
+    fail "legacy update caller printed fresh-install setup guidance"
 
   update_output="$(
     install_with_release_server --version v2.4.6 --install-dir "$install_dir" --update
