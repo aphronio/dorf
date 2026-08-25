@@ -130,7 +130,7 @@ func (u applicationUpdater) latestRelease(ctx context.Context) (githubRelease, e
 }
 
 func runApplicationInstaller(ctx context.Context, installer, installDir, tag string, stdout, stderr io.Writer) error {
-	command := exec.CommandContext(ctx, "/bin/sh", installer, "--version", tag, "--install-dir", installDir)
+	command := exec.CommandContext(ctx, "/bin/sh", installer, "--version", tag, "--install-dir", installDir, "--update")
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.Env = environmentWithout(os.Environ(), "DORF_INSTALL_DIR", "DORF_RELEASES_URL")

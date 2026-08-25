@@ -12,8 +12,9 @@ curl -fsSL https://github.com/aphronio/dorf/releases/latest/download/install.sh 
 
 The installer downloads the matching x86_64 Linux archive and checksum, verifies the archive before
 atomically installing `dorf` to `~/.local/bin`, and prints a `PATH` handoff when needed. It does not
-run setup. Upgrade an installed binary through the same verified path with `dorf update`. Install an
-exact release by using its pinned installer asset:
+run setup. A standalone install prints the next-step `dorf setup` guidance; `dorf update` uses the
+same verified installer while omitting that fresh-install hint. Install an exact release by using
+its pinned installer asset:
 
 ```bash
 RELEASE_TAG=YOUR_RELEASE_TAG

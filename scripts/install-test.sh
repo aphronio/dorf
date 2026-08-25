@@ -141,6 +141,24 @@ test_pinned_default_and_explicit_replacement() {
   assert_binary_output "$install_dir/dorf" "dorf 2.4.6"
 }
 
+test_fresh_install_and_update_guidance() {
+  local install_dir="$WORK_DIR/guidance-bin"
+  local install_output update_output
+
+  install_output="$(install_with_release_server --install-dir "$install_dir")"
+  [[ "$install_output" == *$'Next, initialize Dorf when you are ready:\n  dorf setup'* ]] ||
+    fail "standalone installer omitted fresh-install setup guidance"
+
+  update_output="$(
+    install_with_release_server --version v2.4.6 --install-dir "$install_dir" --update
+  )"
+  [[ "$update_output" == *"Installed dorf 2.4.6 at $install_dir/dorf"* ]] ||
+    fail "update installer omitted successful installation output"
+  [[ "$update_output" != *"dorf setup"* ]] ||
+    fail "update installer printed fresh-install setup guidance"
+  assert_binary_output "$install_dir/dorf" "dorf 2.4.6"
+}
+
 test_install_dir_must_be_absolute() {
   if install_with_release_server --install-dir relative-bin; then
     fail "installer accepted a relative install directory"
@@ -243,6 +261,7 @@ prepare_generated_release
 start_release_server
 
 test_pinned_default_and_explicit_replacement
+test_fresh_install_and_update_guidance
 test_install_dir_must_be_absolute
 test_checksum_failure_is_atomic
 test_unsupported_platforms
