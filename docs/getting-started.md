@@ -2,7 +2,7 @@
 
 Check [Support and diagnostics](support.md) before installing Dorf.
 
-## 1. Install the application and initialize storage
+## 1. Install the application; initialize a deployment host
 
 Beginning with the first release after `v0.3.0`, install the latest immutable Dorf release:
 
@@ -40,7 +40,9 @@ dorf version
 Contributors building from source should instead use the repository-managed toolchain in
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-Run the convergent setup entry point:
+On a remote CLI client, installation ends after `dorf version`; continue at
+[Connect one remote CLI Client](#3-connect-one-remote-cli-client). Only the deployment host runs the
+convergent setup entry point:
 
 ```bash
 dorf setup
@@ -105,10 +107,69 @@ installation. An already installed App returns ready without reading terminal in
 installation resumes at the same reusable installation URL instead of creating another App.
 Replacing the configured credential bundle retains its explicit `--yes` approval boundary.
 
-## 3. Run a direct client Job
+## 3. Connect one remote CLI Client
 
-Use the CLI client when you want controlled agent execution without delegating result meaning or
-completion policy to a native workflow. Save the complete prompt in `goal.txt`, then admit it:
+The deployment host owns setup, Profiles, provider and Harness credentials, PostgreSQL, and the
+worker. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS Deployment URL,
+and one short-lived Enrollment; it does not run `dorf setup`.
+
+The control API URL must be an operator-owned HTTPS origin backed by the plain HTTP, loopback-only
+`dorf serve` listener. The operator must give it a different origin from the Provider Gateway: that
+separate `/v1` service provides model access to Sandboxes, not Dorf client operations. Dorf does not
+provision or infer this ingress separation. Current setup does not install or supervise the control
+API and worker as managed services. Until Slice 4 delivers that lifecycle, the deployment operator
+must supervise `dorf serve` and `dorf worker` separately. The repository's
+`scripts/dev/control-services.sh` is only a transient dogfood helper, not a supported deployment
+interface.
+
+On the deployment host, create a one-use Enrollment:
+
+```bash
+dorf client enroll
+```
+
+Transfer the printed code to the intended client through a private channel. On that client, connect
+to the Deployment and paste the code when prompted:
+
+```bash
+dorf connect https://control.example.com
+dorf auth status
+```
+
+For non-interactive enrollment, put only the code in a protected file and pass
+`--enrollment-file PATH`, or use `--enrollment-file -` to read it from standard input. The CLI keeps
+one normalized Deployment URL and its client-generated credential in a dedicated owner-only file;
+there are no named contexts or context switching.
+
+Save the complete prompt in `goal.txt`, then use the same CLI to admit and operate a direct Job over
+HTTPS:
+
+```bash
+dorf run --goal-file goal.txt --model MODEL --reasoning high
+dorf job inspect JOB_ID
+dorf job cleanup JOB_ID
+```
+
+Add `--output json` before `JOB_ID` to inspect or request cleanup with stable machine output. The
+ordinary `run` flow creates retry identity internally and retries the exact admission once after a
+retryable transport or HTTP server failure; a human does not need to configure a key. The Job
+remains open and idle after a successful Turn until the caller requests cleanup.
+
+The deployment operator can revoke exactly one Client at any time using the Client ID reported by
+`dorf connect` or `dorf auth status`:
+
+```bash
+dorf client revoke CLIENT_ID
+```
+
+Revocation makes subsequent authenticated requests from that Client fail without changing other
+Clients or Jobs.
+
+## 4. Run a direct Job on the deployment host
+
+On a deployment host without a saved remote Client connection, use the local CLI when you want
+controlled agent execution without delegating result meaning or completion policy to a native
+workflow. Save the complete prompt in `goal.txt`, then admit it:
 
 ```bash
 dorf run \
@@ -142,7 +203,7 @@ Dorf owns durable delivery, recovery, the exact
 Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
 GitHub integration is required.
 
-## 4. Run a coding Job
+## 5. Run a coding Job
 
 The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
 Create and verify a separate Pi profile when that Job should use Pi; both may reference the same

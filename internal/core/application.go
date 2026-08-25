@@ -134,7 +134,7 @@ func (a Application) requestCleanup(ctx context.Context, jobID string) (Job, err
 		if err := a.cancelAttachedTask(ctx, current, skipTaskID); err != nil {
 			return err
 		}
-		spawned, err := a.Tasks.Spawn(ctx, CleanupTaskName, JobTaskParams{JobID: jobID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions("cleanup:v3:"+jobID))
+		spawned, err := a.Tasks.Spawn(ctx, CleanupTaskName, JobTaskParams{JobID: jobID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(a.Tasks.QueueName(), "cleanup:v3:"+jobID))
 		if err != nil {
 			return fmt.Errorf("schedule cleanup in Absurd: %w", err)
 		}

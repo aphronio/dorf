@@ -23,6 +23,7 @@ import (
 var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("Dorf Job not found")
+var ErrAdmissionConflict = errors.New("admission key is bound to different complete Job input")
 var ErrRevisionObservationSuperseded = errors.New("Revision observation is no longer current; retry derived workflow")
 var fullCommitOID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -35,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql", "003_client_directed_jobs.sql"}
+var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql", "003_client_directed_jobs.sql", "004_control_auth.sql"}
 
 type Store struct{ DB *sql.DB }
 

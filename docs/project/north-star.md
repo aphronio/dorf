@@ -35,9 +35,10 @@ Architecture documents its technical consequences; the Decision Log records why 
 documents should link here rather than redefine it.
 
 Dorf Core is the product: a stateful, self-hostable control plane with one application boundary for
-supported existing Harnesses on chosen compatible infrastructure. Workflows and trusted client
-adapters compose that boundary in-process inside a deployment backed by its durable dependencies;
-this is not yet a public transport, SDK, or embeddable-runtime promise. Portability is
+supported existing Harnesses on chosen compatible infrastructure. Core remains an internal
+application boundary inside a deployment backed by its durable dependencies. Native workflows
+compose it in-process; external clients may receive deliberately narrower authenticated projections
+without turning Core into an embeddable runtime, generic public API, or workflow API. Portability is
 capability-based: admission selects a verified profile and rejects combinations whose configuration,
 dependencies, credentials, host constraints, tools, isolation, recovery, or observation contract
 has not been proved.
@@ -46,8 +47,9 @@ Dorf does not own the user's memory, priorities, or cross-Job life. A personal a
 Agent0, a CLI, CI, or another trusted client decides what to delegate and how separate Jobs compose.
 A workflow owns Job semantics, policy, evaluation, and what its Outcome means. Dorf owns custody of
 execution and durable attachment of that Outcome. A client may instead drive Core mechanisms
-directly and retain that policy itself. Native Dorf workflows and trusted client adapters compose
-the same small application contract in-process. Neither receives a privileged hidden path.
+directly and retain that policy itself. Native Dorf workflows and trusted client adapters reach the
+same small ownership boundary, whether through in-process composition or a supported external
+projection. Neither receives a privileged hidden path.
 
 Core provides mechanisms, never workflow or interaction policy. It may admit input, run and recover
 AgentRuns, return the exact bytes of a caller-selected Sandbox file while that Sandbox remains
@@ -226,11 +228,13 @@ contracts, fixtures, local evaluation, and diagnostics. An agent may propose wor
 new version must pass its checks and evaluations and receive any required capability approval before
 activation. Humans must be able to inspect, edit, fork, pin, and roll back what the agent built.
 
-Native workflows and trusted client adapters should compose the same intended Core contract
-in-process. Transport, client SDK, and public compatibility promises remain uncommitted until real
-external-client use proves them. Dynamic agent-authored recipes are a later UX layer, not the
-requirements driver for Core. Dorf does not become a generic automation canvas, graph framework,
-agent builder, or model/tool Harness.
+Native workflows compose the intended Core contract in-process. External-client surfaces project
+only the operations their real use has earned; the first such projection covers direct Job
+admission, inspection, and requested cleanup through one configured deployment. Public workflow
+compatibility, thin SDKs, MCP, a control-plane UI, and named multi-deployment contexts remain
+uncommitted. Dynamic agent-authored recipes are a later UX layer, not the requirements driver for
+Core. Dorf does not become a generic automation canvas, graph framework, agent builder, or
+model/tool Harness.
 
 Native workflows are demos and showcases of compositions available over Core, not compatibility
 constraints or privileged product contracts. They remain Core consumers even when compiled into the

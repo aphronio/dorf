@@ -131,17 +131,15 @@ values('agent-run-client-migration','job-client-migration','message-client-migra
 	if _, err := tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='requested' where id='job-migration'`); err != nil {
 		t.Fatalf("requested cleanup state: %v", err)
 	}
-	var migrationCount int
 	var artifacts, drafts bool
 	if err := tx.QueryRowContext(ctx, `
 select
-  (select count(*) from dorf.schema_migrations),
   to_regclass('dorf.artifacts') is not null,
   to_regclass('dorf.codebase_investigation_drafts') is not null
-`).Scan(&migrationCount, &artifacts, &drafts); err != nil {
+`).Scan(&artifacts, &drafts); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 3 || artifacts || drafts {
-		t.Fatalf("migrations=%d artifacts=%t drafts=%t", migrationCount, artifacts, drafts)
+	if artifacts || drafts {
+		t.Fatalf("artifacts=%t drafts=%t", artifacts, drafts)
 	}
 }

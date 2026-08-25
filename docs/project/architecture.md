@@ -10,20 +10,24 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 ```mermaid
 flowchart LR
-    Client["Trusted client adapter"] --> Core["In-process Core application boundary"]
+    Remote["Remote direct client"] --> HTTPS["Authenticated HTTPS projection"]
+    HTTPS --> Core["In-process Core application boundary"]
+    Client["Host-local client adapter"] --> Core
     Workflow["Native Dorf workflow"] --> Core
     Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
-    Absurd --> Edge["Actions · observations · AgentRuns"]
+    Absurd --> Worker["Durable worker"]
+    Worker --> Edge["Actions · observations · AgentRuns"]
     Edge --> Sandbox["Sandbox provider"]
     Edge --> External["Workflow external authorities"]
     Sandbox --> Harness["Agent Harness"]
 ```
 
-Dorf runs as a stateful control-plane deployment. Native workflows and trusted client adapters are
-composed into that deployment and call one small application boundary in-process. No public
-transport, client SDK, or embeddable-runtime contract exists yet.
+Dorf runs as a stateful control-plane deployment. Native workflows and host-local client adapters
+compose one small application boundary in-process. A separate API service projects a deliberately
+narrow direct-Job subset over authenticated HTTPS; this is not a network exposure of Core itself, a
+client SDK, or an embeddable-runtime contract.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -176,20 +180,32 @@ composition boundary.
 Trusted client adapters may drive bounded execution directly or delegate policy to a predefined
 workflow. Direct clients decide what agent work to request, what results mean, whether more work is
 needed, and when to request cleanup. Workflow clients delegate those decisions to the selected
-workflow. Both compose the same in-process Core application contract and observe the same durable
-facts.
+workflow. Native workflows and host-local adapters compose the in-process Core contract and observe
+its durable facts.
 
-The CLI is one composed client adapter. A public transport, authentication contract, language SDK,
-plugin system, or workflow DSL must be earned by a real external consumer; none is part of the
-current boundary. Future adapters may translate external events into idempotent application calls
-and render the same facts, but they must not expose PostgreSQL, Absurd, provider adapters, or Core as
-an embeddable runtime.
+The first external projection serves one configured Dorf Deployment over authenticated HTTPS. Its
+surface is intentionally limited to direct Job admission, situation-first inspection, and requested
+cleanup. It does not expose workflow admission, follow, steer, Sandbox files, PostgreSQL, Absurd,
+provider adapters, or Core as a network or embeddable runtime. Named deployment contexts, MCP, a
+control-plane UI, language SDKs, and a public workflow API remain deferred. The accepted working
+transport design and slice boundaries live in the
+[Remote Control API design](../implementation/control-api-design.md) and
+[implementation slices](../implementation/control-api-slices.md).
 
-The CLI's direct client admits a Job without workflow identity, delivers the caller's prompt through
-the `direct` Agent role, and leaves the Job open and idle after a successful Turn. Later follow or
-steer Messages, exact Sandbox file reads, and requested cleanup use the same Core custody as native
-workflows. The client—not Core—decides what the work means and when retained resources may be
-released.
+The deployment has one operator Principal. An operator-issued, short-lived, one-use Enrollment lets
+a Client register a client-generated opaque credential; only its digest is retained server-side,
+and each Client can be revoked independently. The CLI retains one Deployment origin and Client
+credential rather than implementing multi-deployment context selection. The API listens on a
+host-private HTTP address behind operator-owned HTTPS ingress. It admits and projects Jobs but does
+not register execution handlers; a separate durable worker claims and reconciles the attached
+Absurd tasks. Managed service and ingress packaging, multi-user identity, roles, organizations,
+billing, and quotas remain separate work.
+
+A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
+the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.
+Follow, steer, and exact Sandbox file reads remain reusable Core mechanisms but are not part of the
+current HTTPS projection. The client—not Core—decides what the work means and when retained
+resources may be released.
 
 ## Native workflow composition
 

@@ -37,6 +37,7 @@ import (
 	"github.com/aphronio/dorf/internal/proofbarrier"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	"github.com/aphronio/dorf/internal/version"
+	"github.com/charmbracelet/x/term"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -73,6 +74,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	}
+	if handled, err := remoteCommand(ctx, args, stdout, stderr); handled || err != nil {
+		return err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -93,6 +97,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	defer db.Close()
 	store := postgres.Store{DB: db}
 	switch args[0] {
+	case "client":
+		return clientCommand(ctx, store, args[1:], stdout)
 	case "migrate":
 		return migrate(ctx, store, args[1:], stdout, stderr)
 	case "doctor":
@@ -118,12 +124,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		defer client.Close()
 		return inspect(ctx, store, client, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
 	}
-	client, err := application(db, cfg)
+	client, err := absurdClient(db)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 	switch args[0] {
+	case "serve":
+		return serveCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "run":
 		return runDirect(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "admit":
@@ -133,6 +141,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "message":
 		return message(ctx, store, client, args[1:], stdout, stderr)
 	case "worker":
+		if err := registerWorkerTasks(store, client, cfg); err != nil {
+			return err
+		}
 		return worker(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "evidence":
 		return evidenceCommand(ctx, store, blob.Store{Root: cfg.BlobRoot}, args[1:], stdout, stderr)
@@ -214,16 +225,10 @@ func directAdmissionKey(value string, source io.Reader) (string, bool, error) {
 	return "direct-" + hex.EncodeToString(random), true, nil
 }
 
-func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
-	client, err := absurdClient(db)
-	if err != nil {
-		return nil, err
-	}
-	store := postgres.Store{DB: db}
+func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config) error {
 	barrier, err := proofbarrier.FromEnv()
 	if err != nil {
-		client.Close()
-		return nil, err
+		return err
 	}
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: client, barrier: barrier}
 	core := coreApplication(store, client)
@@ -233,7 +238,7 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	direct.Register(core, store, runtimes)
 	coding.Register(core, store, runtimes)
 	investigation.Register(core, store, runtimes)
-	return client, nil
+	return nil
 }
 
 func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
@@ -905,8 +910,7 @@ func approveHostPlan(ctx context.Context, plan hostsetup.HostPlan, yes bool, out
 }
 
 func isTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return file != nil && term.IsTerminal(file.Fd())
 }
 
 func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string, stdout, stderr io.Writer) error {
@@ -1264,7 +1268,7 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderExecutionAttention(stdout, job, currentExecution, executionOperation)
-	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, codingJob.Repository, codingJob.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
+	fmt.Fprintf(stdout, "  goal: %q\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, codingJob.Repository, codingJob.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
 	renderJobAttention(stdout, job, currentExecution)
 	if job.CleanupAttention != "" {
@@ -1295,85 +1299,35 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 	return nil
 }
 
-type directJobFacts struct {
-	MainSandbox core.Sandbox
-	Sandboxes   []core.Sandbox
-	Actions     []core.Action
-	Deliveries  []core.Delivery
-}
-
-func loadDirectJobFacts(ctx context.Context, store postgres.Store, jobID string) (directJobFacts, error) {
-	var facts directJobFacts
-	var err error
-	facts.Sandboxes, err = store.Sandboxes(ctx, jobID)
-	if err != nil {
-		return facts, err
+func directOperation(projection direct.Projection) (operation, detail string, attention, idle bool) {
+	switch projection.State {
+	case direct.ExecutionProvisioningSandbox:
+		return "Provisioning Sandbox", projection.Detail, false, false
+	case direct.ExecutionConnectingRoute:
+		return "Connecting model access", projection.Detail, false, false
+	case direct.ExecutionAwaitingAgent:
+		return "Awaiting agent", projection.Detail, false, false
+	case direct.ExecutionAttention:
+		return "Needs attention", projection.Detail, true, false
+	case direct.ExecutionIdle:
+		return "Open and idle", projection.Detail, false, true
+	default:
+		return "Needs attention", "unknown direct execution state", true, false
 	}
-	for _, sandbox := range facts.Sandboxes {
-		if sandbox.ID == core.MainSandboxName(jobID) && sandbox.Name == core.DefaultSandbox {
-			facts.MainSandbox = sandbox
-			break
-		}
-	}
-	if facts.MainSandbox.ID == "" {
-		return facts, fmt.Errorf("direct Job %s has no exact default Sandbox reservation", jobID)
-	}
-	facts.Actions, err = store.Actions(ctx, jobID)
-	if err != nil {
-		return facts, err
-	}
-	facts.Deliveries, err = store.Deliveries(ctx, jobID)
-	if err != nil {
-		return facts, err
-	}
-	return facts, nil
-}
-
-func directCurrent(job core.Job, main core.Sandbox, actions []core.Action, deliveries []core.Delivery) (operation, detail string, attention, idle bool) {
-	if !job.AdmissionOpen {
-		return "Complete", "admission closed", false, false
-	}
-	if job.WorkflowAttention != "" {
-		return "Needs attention", job.WorkflowAttention, true, false
-	}
-	if !core.HasSucceededAction(actions, core.ActionSandboxCreate, main.ID) {
-		return "Provisioning Sandbox", "", false, false
-	}
-	if !core.HasSucceededAction(actions, core.ActionRouteCreate, main.ID) {
-		return "Connecting model access", "", false, false
-	}
-	for _, delivery := range deliveries {
-		run := delivery.AgentRun
-		if run.Attention != "" {
-			return "Needs attention", run.Attention, true, false
-		}
-		switch run.State {
-		case core.AgentRunCompleted:
-			if run.TurnOutcome == "completed" {
-				continue
-			}
-			return "Needs attention", "agent completed without a successful Turn outcome", true, false
-		case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
-			return "Needs attention", "agent delivery ended with state " + string(run.State), true, false
-		default:
-			return "Awaiting agent", "", false, false
-		}
-	}
-	return "Open and idle", "", false, true
 }
 
 func inspectDirectJob(ctx context.Context, store postgres.Store, client *absurd.Client, job core.Job, profile core.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
-	facts, err := loadDirectJobFacts(ctx, store, job.ID)
+	snapshot, err := direct.LoadSnapshot(ctx, store, job)
 	if err != nil {
 		return err
 	}
-	operation, detail, _, idle := directCurrent(job, facts.MainSandbox, facts.Actions, facts.Deliveries)
+	operation, detail, _, idle := directOperation(snapshot.Project())
 	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
 	if err != nil {
 		return err
 	}
 	currentExecution := currentTaskExecution(executions)
-	if cleanup, ok := cleanupOperation(coreJobPresentation{}, job, facts.Sandboxes, facts.Actions); ok {
+	if cleanup, ok := cleanupOperation(coreJobPresentation{}, job, snapshot.Sandboxes, snapshot.Actions); ok {
 		operation = cleanup
 		detail = ""
 	}
@@ -1381,8 +1335,8 @@ func inspectDirectJob(ctx context.Context, store postgres.Store, client *absurd.
 		view := map[string]any{
 			"job": job, "client": "dorf-cli", "sandbox_profile": profileView(profile), "current": operation,
 			"observed_facts": map[string]any{
-				"actions": facts.Actions, "agent_runs": deliveryAgentRuns(facts.Deliveries),
-				"sandboxes": facts.Sandboxes, "messages": deliveryMessages(facts.Deliveries),
+				"actions": snapshot.Actions, "agent_runs": deliveryAgentRuns(snapshot.Deliveries),
+				"sandboxes": snapshot.Sandboxes, "messages": deliveryMessages(snapshot.Deliveries),
 			},
 			"execution": executions,
 		}
@@ -1393,7 +1347,7 @@ func inspectDirectJob(ctx context.Context, store postgres.Store, client *absurd.
 	}
 	fmt.Fprintf(stdout, "Job %s\n  client: dorf-cli\n", job.ID)
 	renderExecutionAttention(stdout, job, currentExecution, operation)
-	fmt.Fprintf(stdout, "  goal: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  current: %s\n",
+	fmt.Fprintf(stdout, "  goal: %q\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  current: %s\n",
 		job.Goal, profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, operation)
 	if detail != "" {
 		fmt.Fprintf(stdout, "  detail: %s\n", detail)
@@ -1405,7 +1359,7 @@ func inspectDirectJob(ctx context.Context, store postgres.Store, client *absurd.
 	if idle && job.CleanupState == core.CleanupPending {
 		fmt.Fprintf(stdout, "  next: send another Message, read a Sandbox file, or run dorf cleanup %s\n", job.ID)
 	}
-	renderHistory(stdout, directJobHistory(job, facts.Deliveries, facts.Actions))
+	renderHistory(stdout, directJobHistory(job, snapshot.Deliveries, snapshot.Actions))
 	return nil
 }
 
@@ -1446,7 +1400,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
 	renderExecutionAttention(stdout, job, currentExecution, executionOperation)
-	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
+	fmt.Fprintf(stdout, "  brief: %q\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), snapshot.Source.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	currentWork := string(work.Kind)
 	if currentWork == "" {
@@ -1778,6 +1732,6 @@ func jobAttentionNext(job core.Job, execution taskResultView) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|integration|migrate|doctor|provider|profile|run|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

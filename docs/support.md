@@ -14,6 +14,14 @@ provenance. An E2B profile that blocks general internet access can consume a ret
 source, but cannot run coding or investigation work that must clone a remote Git source; Dorf rejects
 that combination before admitting a Job.
 
+The remote control API is a separate authority on a separate hostname from the Provider Gateway.
+Its public boundary is one exact HTTPS Deployment origin backed by the private loopback-only
+`dorf serve` listener. After Enrollment, a remote CLI Client needs network and TLS access to that
+origin and only its own Dorf Client credential; it never needs PostgreSQL, provider, Harness,
+Gateway, or Sandbox credentials. The
+[remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
+host-service lifecycle and its limits.
+
 Run the Go CLI's direct diagnostic boundary:
 
 ```bash
@@ -32,6 +40,13 @@ one installation; a missing installation resumes the operator handoff at its reu
 repository access and least permission scope are verified by the runtime operation that needs them.
 [Getting started](getting-started.md) contains the setup procedure.
 
+For a remote Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
+failure belongs to DNS, TLS, ingress, or the private control listener. An `unauthenticated` response
+means the saved Client credential is invalid, expired, or revoked; a deployment-host operator must
+issue a new Enrollment. If admission succeeds but a Job does not progress, inspect the separately
+supervised worker on the deployment host. The remote client must not repair host services, Profiles,
+integrations, or storage.
+
 Ownership guide:
 
 - a minimal Incus command failing outside Dorf is an Incus or host-distribution problem;
@@ -40,9 +55,13 @@ Ownership guide:
 - the official image failing credential or Harness checks is a Dorf image or Harness compatibility
   problem;
 - broker authentication failing independently is Provider Gateway/upstream provider work;
+- control discovery or TLS failing independently is control ingress or deployment-service work;
+- an expired or revoked Client being denied is expected control authentication behavior;
 - incorrect durable facts, duplicate effects, leaked secrets, or incomplete cleanup are Dorf bugs;
 - absent KVM or disabled virtualization is host configuration;
 - another OS or architecture is unsupported, not silently equivalent.
 
-Never attach Provider Gateway state, credentials, environment dumps, or Harness transcript contents
-to a report. `dorf inspect JOB` contains stable IDs and bounded observed facts suitable for triage.
+Never attach Enrollment codes, Client configuration, Provider Gateway state, credentials,
+environment dumps, Harness transcript contents, or complete inspection output to a report. Both
+local and remote Job inspection include the caller's full goal. Report only the needed Job ID and
+reviewed state, attention, and cleanup facts; redact caller input first.

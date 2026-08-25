@@ -12,6 +12,10 @@ Read only the authority relevant to the task:
 - [Provider Gateway](docs/project/provider-gateway.md): provider authentication, routing, and broker ownership.
 - [Agent Guide](docs/agent-guide.md): delegated installation and CLI-operation runbook.
 - [Buzz Deployment](docs/implementation/buzz.md): Buzz infrastructure and operations.
+- [Remote Control API Design](docs/implementation/control-api-design.md): accepted working design and
+  delivered-versus-planned contract for the HTTPS client boundary.
+- [Remote Control API Slices](docs/implementation/control-api-slices.md): high-level vertical slices
+  and mandatory discovery, simplification, proof, and test discipline.
 - [Release Process](docs/releasing.md): release operator entry point.
 - [Sandbox and VM Watchlist](docs/research/sandbox-vm-watchlist.md): non-normative candidates and
   current evaluation priority; consult when discussing or selecting Sandbox or VM providers.

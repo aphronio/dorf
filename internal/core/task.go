@@ -32,7 +32,7 @@ func (a Application) ScheduleJobTask(ctx context.Context, job Job, taskName, tas
 		if !current.AdmissionOpen || current.CleanupState != CleanupPending {
 			return fmt.Errorf("Job %s cannot schedule ordinary work after cleanup begins", job.ID)
 		}
-		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(taskKey))
+		spawned, err := a.Tasks.Spawn(ctx, taskName, JobTaskParams{JobID: job.ID, PreviousTaskID: current.CurrentTaskID}, absurdruntime.TaskSpawnOptions(a.Tasks.QueueName(), taskKey))
 		if err != nil {
 			return fmt.Errorf("schedule admitted Job in Absurd: %w", err)
 		}

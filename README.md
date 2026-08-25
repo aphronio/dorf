@@ -14,11 +14,14 @@ without rebuilding it in a new agent framework. Dorf keeps custody of controlled
 including recovery, external effects, retained results, and requested cleanup.
 
 ```text
-External clients                  Native workflows
+Remote direct clients             Native workflows
+        |                                |
+        v                                v
+ authenticated HTTPS          in-process composition
         |                                |
         +-------------+------------------+
                       v
-                 Dorf Core
+              Dorf deployment
         durable execution and recovery
                       |
                       v
@@ -26,9 +29,10 @@ External clients                  Native workflows
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-Native workflows and the trusted CLI client consume Core in-process. The CLI can drive a Job
-directly or delegate policy to a predefined workflow. A public network API and thin client SDKs are
-direction, not current support claims.
+Native workflows compose Core in-process. The first external-client boundary is intentionally
+narrow: an enrolled CLI client can admit a direct Job, inspect it, and request cleanup through one
+configured Dorf deployment over authenticated HTTPS. Public workflow admission, client SDKs, MCP,
+and a control-plane UI remain later work.
 
 The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows cover
 coding to a verified pull-request Proposal and repository-grounded codebase investigation. See
