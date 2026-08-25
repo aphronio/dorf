@@ -12,12 +12,3 @@ select s.job_id,s.kind,s.repository,s.revision,
        coalesce(s.bundle_digest,'') as bundle_digest,coalesce(s.bundle_byte_size,0) as bundle_byte_size
 from dorf.codebase_investigation_sources s
 where s.job_id=sqlc.arg(job_id);
-
--- name: GetLatestInvestigationRun :one
-select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
-       coalesce(ar.thread_id,'') as thread_id,ar.state
-from dorf.agent_runs ar
-join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=sqlc.arg(job_id) and ar.role='investigate'
-order by m.sequence desc
-limit 1;

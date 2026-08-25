@@ -124,17 +124,17 @@ func (s Snapshot) Project() Work {
 		}
 		return work
 	}
-	if !investigationActionSucceeded(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
+	if !core.HasSucceededAction(s.Actions, core.ActionSandboxCreate, s.MainSandbox.ID) {
 		return action(core.ActionSandboxCreate)
 	}
 	materializationAction := gitworkspace.ActionRepositoryClone
 	if s.Source.Kind == SourceGitBundle {
 		materializationAction = ActionRepositoryRestore
 	}
-	if !investigationActionSucceeded(s.Actions, materializationAction, s.MainSandbox.ID) {
+	if !core.HasSucceededAction(s.Actions, materializationAction, s.MainSandbox.ID) {
 		return action(materializationAction)
 	}
-	if !investigationActionSucceeded(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
+	if !core.HasSucceededAction(s.Actions, core.ActionRouteCreate, s.MainSandbox.ID) {
 		return action(core.ActionRouteCreate)
 	}
 	if s.Message.MessageID == "" {
@@ -157,32 +157,6 @@ func messageAttention(message MessageRecord) string {
 		return message.Attention
 	}
 	return "investigator Harness work ended with outcome " + message.Outcome
-}
-
-// SelectAgentMessage is investigation's static eligibility policy. Core calls
-// it under the Job fence before the typed coordinator observes workflow facts.
-func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.AgentMessageWork, error) {
-	snapshot, err := LoadSnapshot(ctx, store, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if !snapshot.Job.AdmissionOpen ||
-		!investigationActionSucceeded(snapshot.Actions, core.ActionSandboxCreate, snapshot.MainSandbox.ID) ||
-		!investigationActionSucceeded(snapshot.Actions, core.ActionRouteCreate, snapshot.MainSandbox.ID) {
-		return nil, nil
-	}
-	materialization := gitworkspace.ActionRepositoryClone
-	if snapshot.Source.Kind == SourceGitBundle {
-		materialization = ActionRepositoryRestore
-	}
-	if !investigationActionSucceeded(snapshot.Actions, materialization, snapshot.MainSandbox.ID) ||
-		snapshot.Message.Outcome != "" || snapshot.Message.Attention != "" {
-		return nil, nil
-	}
-	if snapshot.Message.MessageID == "" || snapshot.Message.SandboxID != snapshot.MainSandbox.ID {
-		return nil, nil
-	}
-	return &core.AgentMessageWork{MessageID: snapshot.Message.MessageID, SandboxID: snapshot.Message.SandboxID}, nil
 }
 
 func Run(ctx context.Context, custody core.JobHandle, service Service, store Store, jobID string) (Work, error) {
@@ -244,13 +218,4 @@ func runInvestigationAction(ctx context.Context, custody core.JobHandle, service
 		return service.ExecuteRepositoryClone(ctx, snapshot.Job, snapshot.MainSandbox, snapshot.Source.Repository, snapshot.Source.Revision, "")
 	}
 	return service.ExecuteSandboxAction(ctx, snapshot.Job.ID, snapshot.MainSandbox.ID, work.ActionKind)
-}
-
-func investigationActionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {
-	for _, action := range actions {
-		if action.Kind == kind && action.Scope == scope {
-			return action.State == core.ActionSucceeded
-		}
-	}
-	return false
 }

@@ -41,7 +41,7 @@ func factMessage(message core.Message, run core.AgentRun) MessageRecord {
 	return MessageRecord{
 		Message: message, SandboxID: run.SandboxID, InputRevision: run.InputRevision,
 		ProducerID: run.ID, Outcome: outcome, Attention: run.Attention,
-		StartsTurn: message.Intent == core.MessageFollow || message.Intent == core.MessageSteer && run.TurnID != "" && run.TurnID != message.TargetTurnID,
+		StartsTurn: message.Intent == core.MessageFollow,
 	}
 }
 
@@ -177,18 +177,6 @@ func TestCurrentWorkSurfacesSandboxActionAttention(t *testing.T) {
 	}
 }
 
-func TestDownstreamFactsWaitForCodingPrerequisites(t *testing.T) {
-	facts := readyFacts()
-	if !codingPrerequisitesComplete(facts) {
-		t.Fatal("complete infrastructure was not ready for coding facts")
-	}
-	facts = readyFacts()
-	facts.Actions = facts.Actions[1:]
-	if codingPrerequisitesComplete(facts) {
-		t.Fatal("missing Sandbox creation exposed downstream coding facts")
-	}
-}
-
 func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -238,15 +226,6 @@ func TestUnchangedReviewFeedbackIgnoresSharedTurnSteer(t *testing.T) {
 		t.Fatalf("CurrentWork = %#v, want unchanged review feedback to continue to publication", got)
 	}
 
-	fallback := factMessage(
-		core.Message{ID: "fallback-steer", Sequence: 1, FromKind: core.MessageFromHuman, Intent: core.MessageSteer, TargetTurnID: "turn-old"},
-		core.AgentRun{ID: "fallback-run", MessageID: "fallback-steer", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-new"},
-	)
-	facts.Messages = []MessageRecord{fallback}
-	facts.Evidence = []core.Evidence{{Kind: "git-revision", AgentRunID: fallback.ProducerID, Revision: facts.Job.Revision}}
-	if id, _ := unchangedAttention(facts); id != fallback.Message.ID {
-		t.Fatalf("terminal-target fallback attention ID = %q, want %q", id, fallback.Message.ID)
-	}
 }
 
 func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
@@ -262,48 +241,6 @@ func TestRevisionCandidateIsLatestBatchBoundary(t *testing.T) {
 	facts.Evidence = []core.Evidence{{Kind: "git-revision", AgentRunID: "run-2"}}
 	if got := revisionCandidate(facts, latestTurnStart); got != nil {
 		t.Fatalf("revisionCandidate = %#v after latest observation; earlier batch member must not be observed again", got)
-	}
-}
-
-func TestTerminalTargetSteerFallbackBecomesLatestRevisionBoundary(t *testing.T) {
-	facts := readyFacts()
-	facts.ReviewPlans = nil
-	facts.Messages = []MessageRecord{
-		factMessage(core.Message{ID: "initial", Sequence: 1, Intent: core.MessageFollow}, core.AgentRun{ID: "run-initial", MessageID: "initial", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-old", TurnOutcome: "completed"}),
-		factMessage(core.Message{ID: "fallback", Sequence: 2, Intent: core.MessageSteer, TargetTurnID: "turn-old"}, core.AgentRun{ID: "run-fallback", MessageID: "fallback", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-new", TurnOutcome: "completed"}),
-	}
-	facts.Evidence = []core.Evidence{{Kind: "git-revision", AgentRunID: "run-initial", Revision: facts.Job.Revision}}
-
-	if got := decideCurrentWork(facts); got.Kind != WorkObserveRevision || got.FactID != "fallback" {
-		t.Fatalf("CurrentWork = %#v, want terminal-target steer fallback observation", got)
-	}
-	facts.Messages[1].Outcome = "failed"
-	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "fallback" {
-		t.Fatalf("CurrentWork = %#v, want failed terminal-target steer fallback attention", got)
-	}
-	facts.Messages[1].Outcome = ""
-	facts.Messages[1].Attention = "accepted fallback is uncertain"
-	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "fallback" {
-		t.Fatalf("CurrentWork = %#v, want uncertain terminal-target steer fallback attention", got)
-	}
-	facts.Messages[1].StartsTurn = false
-	if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != "fallback" {
-		t.Fatalf("CurrentWork = %#v, want unbound uncertain fallback input attention", got)
-	}
-	facts.Messages = append(facts.Messages, factMessage(core.Message{ID: "recovery", Sequence: 3, Intent: core.MessageFollow}, core.AgentRun{ID: "run-recovery", MessageID: "recovery", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-recovery", TurnOutcome: "completed"}))
-	if got := decideCurrentWork(facts); got.Kind != WorkObserveRevision || got.FactID != "recovery" {
-		t.Fatalf("CurrentWork = %#v, want later successful turn start to recover failed fallback", got)
-	}
-	facts.Messages = facts.Messages[:2]
-
-	// A steer bound to its target is handled inside the original Turn and does
-	// not create another Git observation boundary.
-	facts.Messages[1].Outcome = "completed"
-	facts.Messages[1].Attention = ""
-	facts.Messages[1].StartsTurn = false
-	_, latestTurnStart := latestImplementationRuns(facts)
-	if got := revisionCandidate(facts, latestTurnStart); got != nil {
-		t.Fatalf("shared-turn steer became a Revision candidate: %#v", got)
 	}
 }
 

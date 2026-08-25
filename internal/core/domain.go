@@ -168,9 +168,9 @@ const (
 	MessageSteer  MessageDeliveryIntent = "steer"
 )
 
-// AgentRun is the durable delivery of one Message to an agent harness. A follow
-// normally binds a new Turn; a steer normally binds its target Turn and creates
-// a new Turn only when terminal-target fallback is required.
+// AgentRun is the durable delivery of one Message to an agent harness. A Follow
+// binds a new Turn; a Steer remains bound to the exact active Turn captured at
+// admission and never falls back to creating a Turn.
 type AgentRun struct {
 	ID               string        `json:"id"`
 	JobID            string        `json:"job_id"`
@@ -236,6 +236,15 @@ type Action struct {
 	Scope     string      `json:"scope"`
 	CreatedAt time.Time   `json:"created_at,omitempty"`
 	SettledAt time.Time   `json:"settled_at,omitempty"`
+}
+
+func HasSucceededAction(actions []Action, kind ActionKind, scope string) bool {
+	for _, action := range actions {
+		if action.Kind == kind && action.Scope == scope && action.State == ActionSucceeded {
+			return true
+		}
+	}
+	return false
 }
 
 // SandboxActionAuthorization is the authoritative persisted provider-effect

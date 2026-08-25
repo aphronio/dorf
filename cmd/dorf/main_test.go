@@ -23,6 +23,21 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
+func TestDirectAdmissionKeyPreservesExplicitIdentityAndGeneratesBeforeAdmission(t *testing.T) {
+	explicit, generated, err := directAdmissionKey("  caller-stable  ", nil)
+	if err != nil || generated || explicit != "caller-stable" {
+		t.Fatalf("explicit key=%q generated=%t err=%v", explicit, generated, err)
+	}
+	random := strings.NewReader(strings.Repeat("\xab", 16))
+	key, generated, err := directAdmissionKey("", random)
+	if err != nil || !generated || key != "direct-abababababababababababababababab" {
+		t.Fatalf("generated key=%q generated=%t err=%v", key, generated, err)
+	}
+	if _, _, err := directAdmissionKey("", strings.NewReader("short")); err == nil {
+		t.Fatal("short randomness generated a partial admission key")
+	}
+}
+
 func TestOpenAIConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "openai.key")
@@ -550,10 +565,13 @@ func TestTaskResultProjectionPublishesOnlyBoundedFailureMessage(t *testing.T) {
 }
 
 func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
-	job := core.Job{ID: "job-123", AdmissionOpen: true}
+	job := core.Job{
+		ID: "job-123", AdmissionOpen: true,
+		Workflow: coding.Workflow, WorkflowRevision: coding.WorkflowRevision,
+	}
 	execution := taskResultView{TaskID: "task-1", State: absurd.TaskFailed, LastError: "clone repository: DNS failed"}
 	var output strings.Builder
-	renderWorkflowExecutionAttention(&output, job, execution, "Clone repository")
+	renderExecutionAttention(&output, job, execution, "Clone repository")
 	want := "  attention: workflow stopped\n" +
 		"  operation: Clone repository\n" +
 		"  reason: clone repository: DNS failed\n" +
@@ -563,30 +581,36 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupComplete}, execution, "Complete")
+	renderExecutionAttention(&output, core.Job{ID: "job-direct", AdmissionOpen: true}, execution, "Run prompt")
+	if got := output.String(); !strings.Contains(got, "attention: job stopped") || strings.Contains(got, "workflow stopped") {
+		t.Fatalf("client-directed attention output:\n%s", got)
+	}
+
+	output.Reset()
+	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupComplete}, execution, "Complete")
 	if output.Len() != 0 {
 		t.Fatalf("completed Job rendered non-actionable attention: %q", output.String())
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupScheduled}, execution, "Deleting Sandbox")
+	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupScheduled}, execution, "Deleting Sandbox")
 	if got := output.String(); !strings.Contains(got, "attention: cleanup stopped") || !strings.Contains(got, "operation: Deleting Sandbox") || !strings.Contains(got, "dorf retry job-123") {
 		t.Fatalf("failed cleanup attention:\n%s", got)
 	}
 
 	output.Reset()
-	renderWorkflowExecutionAttention(&output, job, taskResultView{State: absurd.TaskRunning}, "Clone repository")
+	renderExecutionAttention(&output, job, taskResultView{State: absurd.TaskRunning}, "Clone repository")
 	if output.Len() != 0 {
 		t.Fatalf("running task rendered failure attention: %q", output.String())
 	}
 }
 
-func TestCompletedWorkflowAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
+func TestCompletedDirectAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
 	job := core.Job{ID: "job-123", AdmissionOpen: true, CleanupState: core.CleanupPending, WorkflowAttention: "E2B template is unavailable"}
 	execution := taskResultView{TaskID: "task-1", State: absurd.TaskCompleted}
 	var output strings.Builder
-	renderWorkflowAttentionRecovery(&output, job, execution)
-	if got := output.String(); got != "  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
+	renderJobAttention(&output, job, execution)
+	if got := output.String(); got != "  attention: E2B template is unavailable\n  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
 		t.Fatalf("recovery output=%q", got)
 	}
 }

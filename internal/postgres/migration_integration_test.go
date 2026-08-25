@@ -88,6 +88,18 @@ values('agent-run-review','job-migration','message-review','general','pending','
 	if err := migrateDorf(ctx, tx); err != nil {
 		t.Fatalf("migration ledger replay: %v", err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
+values('job-client-migration','client-migration-admission','','','run direct caller intent','migration-profile','primary','gpt-5.6-sol','high');
+insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
+values('message-client-migration','job-client-migration','human','dorf:initial',1,'run direct caller intent');
+insert into dorf.sandboxes(id,job_id,name,ownership_nonce)
+values('sandbox-client-migration','job-client-migration','default',repeat('4',64));
+insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id)
+values('agent-run-client-migration','job-client-migration','message-client-migration','direct','pending','sandbox-client-migration');
+`); err != nil {
+		t.Fatalf("client-directed Job after retained migration: %v", err)
+	}
 
 	rows, err := tx.QueryContext(ctx, `select id,name from dorf.sandboxes where job_id='job-migration' order by id`)
 	if err != nil {
@@ -129,7 +141,7 @@ select
 `).Scan(&migrationCount, &artifacts, &drafts); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 2 || artifacts || drafts {
+	if migrationCount != 3 || artifacts || drafts {
 		t.Fatalf("migrations=%d artifacts=%t drafts=%t", migrationCount, artifacts, drafts)
 	}
 }

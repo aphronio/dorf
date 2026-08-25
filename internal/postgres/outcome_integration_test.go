@@ -10,7 +10,6 @@ import (
 
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/postgres"
 	policy "github.com/aphronio/dorf/internal/review"
 )
@@ -73,8 +72,8 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 		t.Fatalf("Outcome=%#v created=%v err=%v", stored, created, err)
 	}
 	job, err = store.Job(context.Background(), job.ID)
-	if err != nil || job.AdmissionOpen {
-		t.Fatalf("terminal Job=%#v err=%v", job, err)
+	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
+		t.Fatalf("Outcome changed generic Message or cleanup lifecycle: Job=%#v err=%v", job, err)
 	}
 	repeated := receipt
 	repeated.ObservedAt = now.Add(time.Hour)
@@ -82,11 +81,15 @@ func TestPostgresPreProposalAbandonmentIsTerminalAndIdempotent(t *testing.T) {
 	if err != nil || created || got != stored {
 		t.Fatalf("idempotent Outcome=%#v created=%v err=%v", got, created, err)
 	}
-	if admitted, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err == nil || admitted.Created {
-		t.Fatalf("post-abandon Message admitted=%#v err=%v", admitted, err)
+	if admitted, err := store.AdmitCodingMessage(context.Background(), core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "after-abandon", Input: "continue"}); err != nil || !admitted.Created {
+		t.Fatalf("Outcome blocked Message before explicit cleanup: admitted=%#v err=%v", admitted, err)
 	}
 	if err := store.RequestCleanup(context.Background(), job.ID); err != nil {
 		t.Fatalf("cleanup close after abandonment: %v", err)
+	}
+	job, err = store.Job(context.Background(), job.ID)
+	if err != nil || job.AdmissionOpen || job.CleanupState != core.CleanupRequested {
+		t.Fatalf("explicit cleanup did not close admission: Job=%#v err=%v", job, err)
 	}
 }
 
@@ -150,9 +153,9 @@ func TestPostgresExactProposalAbandonmentPermitsActiveInputForCleanup(t *testing
 	if err != nil || !created || stored.Kind != coding.OutcomeAbandoned || stored.ObservedState != "open" {
 		t.Fatalf("Outcome=%#v created=%v err=%v", stored, created, err)
 	}
-	closed, err := store.Job(context.Background(), job.ID)
-	if err != nil || closed.AdmissionOpen {
-		t.Fatalf("closed Job=%#v err=%v", closed, err)
+	retained, err := store.Job(context.Background(), job.ID)
+	if err != nil || !retained.AdmissionOpen || retained.CleanupState != core.CleanupPending {
+		t.Fatalf("Outcome changed Message or cleanup lifecycle: Job=%#v err=%v", retained, err)
 	}
 	gotProposal, err := store.Proposal(context.Background(), job.ID)
 	if err != nil || gotProposal == nil || *gotProposal != proposal {
@@ -202,85 +205,25 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	wg.Wait()
 	close(results)
 
-	winner := ""
+	resultsByKind := make(map[string]result, 2)
 	for result := range results {
-		if result.err == nil && result.created {
-			if winner != "" {
-				t.Fatalf("both admission and outcome succeeded; second=%s", result.kind)
-			}
-			winner = result.kind
-		} else if result.err == nil {
-			t.Fatalf("%s returned neither a creation nor a conflict", result.kind)
-		}
+		resultsByKind[result.kind] = result
+	}
+	messageResult := resultsByKind["message"]
+	outcomeResult := resultsByKind["outcome"]
+	if messageResult.err != nil || !messageResult.created {
+		t.Fatalf("Outcome race blocked generic Message admission: %#v", messageResult)
+	}
+	if outcomeResult.err == nil && !outcomeResult.created {
+		t.Fatalf("Outcome returned neither creation nor a typed-fact conflict")
 	}
 	storedOutcome, err := store.Outcome(context.Background(), job.ID)
 	storedProposal, proposalErr := store.Proposal(context.Background(), job.ID)
-	if err != nil || proposalErr != nil || winner == "" || storedProposal == nil || storedProposal.ProposedRevision != proposal.ProposedRevision {
-		t.Fatalf("winner=%q Outcome=%#v Proposal=%#v err=%v proposalErr=%v", winner, storedOutcome, storedProposal, err, proposalErr)
+	if err != nil || proposalErr != nil || storedProposal == nil || storedProposal.ProposedRevision != proposal.ProposedRevision {
+		t.Fatalf("Outcome=%#v Proposal=%#v err=%v proposalErr=%v", storedOutcome, storedProposal, err, proposalErr)
 	}
-	if winner == "outcome" && storedOutcome == nil || winner == "message" && storedOutcome != nil {
-		t.Fatalf("winner=%q Outcome=%#v", winner, storedOutcome)
-	}
-}
-
-func TestOutcomeRequiresObservedTerminalTargetSteerFallback(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	ctx := context.Background()
-	job, _ := preparePublishedOutcomeJob(t, store, "steer-fallback")
-	threadID := "thread-" + job.ID
-	priorTurnID := "turn-" + job.ID
-
-	follow, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-follow", Input: "continue before outcome"})
-	if err != nil || !follow.Created {
-		t.Fatalf("follow=%#v err=%v", follow, err)
-	}
-	target, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || target == nil || target.Message.ID != follow.Message.ID {
-		t.Fatalf("target delivery=%#v err=%v", target, err)
-	}
-	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", priorTurnID); err != nil {
-		t.Fatal(err)
-	}
-	targetTurnID := "turn-outcome-target-" + job.ID
-	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
-		t.Fatal(err)
-	}
-	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "outcome-steer-fallback", Input: "finish in a new Turn", Intent: core.MessageSteer})
-	if err != nil || !steer.Created {
-		t.Fatalf("steer=%#v err=%v", steer, err)
-	}
-	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	fallback, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || fallback == nil || fallback.Message.ID != steer.Message.ID {
-		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
-	}
-	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, "turn-outcome-fallback-"+job.ID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	merge := coding.Outcome{
-		JobID: job.ID, Kind: coding.OutcomeAccepted, ObservedState: "closed",
-		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
-	}
-	if _, created, err := store.RecordOutcome(ctx, merge); err == nil || created {
-		t.Fatalf("unobserved fallback outcome created=%v err=%v", created, err)
-	}
-	if stored, err := store.Outcome(ctx, job.ID); err != nil || stored != nil {
-		t.Fatalf("unobserved fallback persisted Outcome=%#v err=%v", stored, err)
-	}
-	observed := integrationEvidence(fallback.AgentRun.ID, "git-revision", "", "", job.Revision, "e")
-	observed.AgentRunID = fallback.AgentRun.ID
-	revision := gitworkspace.Observation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("d", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
-	if err := store.RecordRevisionObservation(ctx, job.ID, fallback.AgentRun.ID, revision, observed); err != nil {
-		t.Fatalf("fallback Revision observation: %v", err)
-	}
-	if _, created, err := store.RecordOutcome(ctx, merge); err != nil || !created {
-		t.Fatalf("observed fallback outcome created=%v err=%v", created, err)
+	if (outcomeResult.err == nil) != (storedOutcome != nil) {
+		t.Fatalf("Outcome result=%#v stored=%#v", outcomeResult, storedOutcome)
 	}
 }
 

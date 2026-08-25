@@ -14,6 +14,7 @@ type ExecutionStore interface {
 	JobTasks(context.Context, string) ([]JobTask, error)
 	Sandboxes(context.Context, string) ([]Sandbox, error)
 	Deliveries(context.Context, string) ([]Delivery, error)
+	AgentMessage(context.Context, string) (*AgentMessageWork, error)
 	AgentMessageExecution(context.Context, string) (AgentMessageExecution, error)
 	InterruptAgentRun(context.Context, string, string) error
 	WithJobFence(context.Context, string, func() error) error
@@ -56,7 +57,6 @@ type AgentRunOperation interface {
 }
 
 type AgentExecutionResolver interface {
-	SelectAgentMessage(context.Context, string) (*AgentMessageWork, error)
 	ResolveAgentPrompt(context.Context, AgentMessageExecution) (string, error)
 	ResolveAgentRunOperation(context.Context, AgentMessageExecution) (AgentRunOperation, error)
 }
@@ -148,14 +148,15 @@ func (s ExecutionService) reachWorkflow(ctx context.Context, point, jobID, ident
 	return s.barrier.ReachWorkflow(ctx, point, jobID, identity)
 }
 
-// ReconcileJobAgent advances at most one Message chosen by the statically
-// composed workflow selector. Core keeps Message, Sandbox, AgentRun, and
-// Harness lifecycle identities inside the Job fence.
-func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) error {
+// ReconcileJobAgent advances at most one Message after its consumer has made
+// the Job's Agent infrastructure ready. Core keeps generic Message ordering plus
+// Message, Sandbox, AgentRun, and Harness lifecycle identities inside the Job fence.
+func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) (AgentReconciliationProgress, error) {
 	if jobID == "" {
-		return fmt.Errorf("Agent reconciliation requires an exact Job identity")
+		return AgentReconciliationIdle, fmt.Errorf("Agent reconciliation requires an exact Job identity")
 	}
-	return s.store.WithJobFence(ctx, jobID, func() error {
+	progress := AgentReconciliationIdle
+	err := s.store.WithJobFence(ctx, jobID, func() error {
 		if err := s.requireClaim(ctx); err != nil {
 			return err
 		}
@@ -169,13 +170,14 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 		if s.agents == nil {
 			return fmt.Errorf("Agent execution resolution is not configured")
 		}
-		selected, err := s.agents.SelectAgentMessage(ctx, attachedJob.ID)
+		selected, err := s.store.AgentMessage(ctx, attachedJob.ID)
 		if err != nil || selected == nil {
 			return err
 		}
+		progress = AgentReconciliationPending
 		messageID, sandboxID := selected.MessageID, selected.SandboxID
 		if messageID == "" || sandboxID == "" {
-			return fmt.Errorf("Agent selector returned an incomplete Message identity")
+			return fmt.Errorf("Agent Message selection returned an incomplete identity")
 		}
 		authoritative, err := s.store.AgentMessageExecution(ctx, messageID)
 		if err != nil {
@@ -194,16 +196,6 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 		}
 		if input == "" {
 			return fmt.Errorf("Message %s resolved empty agent input", messageID)
-		}
-		// Prompt eligibility may durably adopt an early queued follow onto the
-		// now-authoritative prior Thread. Discard the pre-resolution aggregate so
-		// bound submission can never fall back to initial recovery.
-		authoritative, err = s.store.AgentMessageExecution(ctx, messageID)
-		if err != nil {
-			return err
-		}
-		if authoritative.Job.ID != jobID || authoritative.Sandbox.ID != sandboxID || authoritative.AgentRun.SandboxID != sandboxID {
-			return fmt.Errorf("Message %s changed authoritative Job or Sandbox during input resolution", messageID)
 		}
 		delivery := Delivery{Message: authoritative.Message, AgentRun: authoritative.AgentRun}
 		run := authoritative.AgentRun
@@ -239,6 +231,7 @@ func (s ExecutionService) ReconcileJobAgent(ctx context.Context, jobID string) e
 		}
 		return nil
 	})
+	return progress, err
 }
 
 // ObserveSettledAgentMessage reads the exact Harness Turn needed by typed
@@ -330,13 +323,13 @@ func (s ExecutionService) executeAgentRun(ctx context.Context, delivery Delivery
 
 func (s ExecutionService) deliver(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
 	if delivery.Message.Intent == MessageSteer && (delivery.AgentRun.TurnID == "" || delivery.AgentRun.TurnID == delivery.Message.TargetTurnID) {
-		return s.deliverSteer(ctx, job, delivery, operation, input)
+		return s.deliverSteer(ctx, job, delivery)
 	}
 	_, err := s.executeAgentRun(ctx, delivery, operation, input)
 	return err
 }
 
-func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery, operation AgentRunOperation, input string) error {
+func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery Delivery) error {
 	run := delivery.AgentRun
 	history, err := s.externals.SteerHistory(ctx, job, run.SandboxID, run.ThreadID)
 	if err != nil {
@@ -349,11 +342,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 		return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciliation.Turn.Status)
 	}
 	if reconciliation.Classification == "target-terminal" {
-		if !run.BaselineRecorded && turns[len(turns)-1].ID != delivery.Message.TargetTurnID {
-			return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
-		}
-		_, err := s.executeAgentRun(ctx, delivery, operation, input)
-		return err
+		return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
 	}
 	if reconciliation.Classification == "uncertain" {
 		return s.uncertainAgentRun(ctx, run.ID, reconciliation.Reason)
@@ -381,11 +370,7 @@ func (s ExecutionService) deliverSteer(ctx context.Context, job Job, delivery De
 			return s.bindSteer(ctx, run.ID, delivery.Message.TargetTurnID, reconciled.Turn.Status)
 		}
 		if reconciled.Classification == "target-terminal" {
-			if !delivery.AgentRun.BaselineRecorded && observed[len(observed)-1].ID != delivery.Message.TargetTurnID {
-				return s.uncertainAgentRun(ctx, run.ID, "harness turns appeared after the terminal steer target before a fallback baseline was recorded")
-			}
-			_, fallbackErr := s.executeAgentRun(ctx, delivery, operation, input)
-			return fallbackErr
+			return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
 		}
 		if reconciled.Classification == "uncertain" {
 			return s.uncertainAgentRun(ctx, run.ID, reconciled.Reason)
@@ -540,7 +525,6 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 		return err
 	}
 	history := operation.History
-	var inspected *HarnessHistory
 	if delivery.Message.Intent == MessageSteer && (run.TurnID == "" || run.TurnID == delivery.Message.TargetTurnID) {
 		observed, err := history(ctx, run)
 		if err != nil {
@@ -559,16 +543,14 @@ func (s ExecutionService) reconcileCleanupMessage(ctx context.Context, execution
 		case "no-submit":
 			return s.failAgentRun(ctx, run.ID, "cleanup closed steer after exact Harness history proved it was not accepted")
 		case "target-terminal":
-			// A terminal target may have raced into ordinary fallback before cleanup.
-			// Observe the durable baseline below, but never create that fallback here.
-			inspected = &observed
+			return s.failAgentRun(ctx, run.ID, "steer target became terminal before the exact Message was accepted")
 		case "uncertain":
 			return s.retainCleanupMutation(ctx, delivery, steer.Reason)
 		default:
 			return s.retainCleanupMutation(ctx, delivery, "unsupported steer recovery classification")
 		}
 	}
-	contractOperation := agentRunHistoryOperation{AgentRunOperation: operation, observed: inspected}
+	contractOperation := agentRunHistoryOperation{AgentRunOperation: operation}
 	if run.ThreadID == "" && run.BaselineRecorded {
 		initial, err := operation.History(ctx, run)
 		if err != nil {

@@ -49,21 +49,23 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			return core.TaskResultV1{}, err
 		}
 		for {
-			if runtime.Agent == nil {
-				return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
-			}
-			if err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
-				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, params.JobID, err); stopped {
-					return result, stopErr
-				}
-				return core.TaskResultV1{}, err
-			}
 			work, err := Run(ctx, jobHandle, runtime.Investigation, store, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
 				}
 				return core.TaskResultV1{}, err
+			}
+			if work.Kind == WorkWaitAgent {
+				if runtime.Agent == nil {
+					return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
+				}
+				if _, err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+					if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
+						return result, stopErr
+					}
+					return core.TaskResultV1{}, err
+				}
 			}
 			if work.Kind == WorkComplete {
 				return core.TaskResultV1{JobID: params.JobID, Outcome: "admission-closed"}, nil
@@ -72,29 +74,20 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			if err != nil {
 				return core.TaskResultV1{}, err
 			}
-			options := wakeOptions(work, sequence)
-			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), options)
-			if err != nil {
-				var timeout *absurd.TimeoutError
-				if errors.As(err, &timeout) {
-					continue
-				}
+			stepName, timeout := wakeOptions(work, sequence)
+			if err := application.AwaitMessageWake(ctx, params.JobID, sequence, stepName, timeout); err != nil {
 				return core.TaskResultV1{}, err
-			}
-			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return core.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
 }
 
-func wakeOptions(work Work, sequence int64) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), Timeout: idleMessagePollInterval}
+func wakeOptions(work Work, sequence int64) (string, time.Duration) {
+	stepName, timeout := fmt.Sprintf("dorf/investigation-wake/v2/%020d", sequence), idleMessagePollInterval
 	if work.Kind == WorkWaitAgent {
-		options.StepName = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence)
-		options.Timeout = activeAgentPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/investigation-agent-wake/v2/%s/%020d", work.FactID, sequence), activeAgentPollInterval
 	}
-	return options
+	return stepName, timeout
 }
 
 func runtimeForJob(ctx context.Context, store Store, runtimes RuntimeResolver, jobID string) (Runtime, error) {
@@ -155,9 +148,6 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	if err != nil || !job.AdmissionOpen {
 		return job, created, err
 	}
-	if err := application.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID)); err != nil {
-		return core.Job{}, false, err
-	}
-	job, err = store.Job(ctx, job.ID)
+	job, err = application.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID))
 	return job, created, err
 }

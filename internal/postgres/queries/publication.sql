@@ -1,6 +1,7 @@
 -- name: GetPublicationJobForUpdate :one
 select c.revision,c.github_repository,c.github_installation_id,
-       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state
+       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
 from dorf.jobs j
 join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 where j.id=sqlc.arg(job_id)

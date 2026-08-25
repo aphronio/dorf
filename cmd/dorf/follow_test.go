@@ -21,12 +21,12 @@ func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
 	job.SandboxProfile = "e2b"
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job:        job,
-		Definition: coding.WorkflowDefinition(),
-		History:    []historyEntry{{At: now.Add(-11 * time.Minute), Text: "Job admitted"}},
-		Operation:  "Implementation agent running",
-		AgentRuns:  []core.AgentRun{{Role: "implement", State: core.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
-		Sandboxes:  []core.Sandbox{sandbox},
+		Job:          job,
+		Presentation: coding.WorkflowDefinition(),
+		History:      []historyEntry{{At: now.Add(-11 * time.Minute), Text: "Job admitted"}},
+		Operation:    "Implementation agent running",
+		AgentRuns:    []core.AgentRun{{Role: "implement", State: core.AgentRunActive, StartedAt: now.Add(-5 * time.Minute)}},
+		Sandboxes:    []core.Sandbox{sandbox},
 		Actions: []core.Action{{
 			Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: now.Add(-10 * time.Minute),
 		}},
@@ -60,6 +60,15 @@ func TestFollowRendererTailsFactsOperationsAndTruthfulTimers(t *testing.T) {
 	}
 }
 
+func TestInteractiveFollowLabelsClientDirectedContractTruthfully(t *testing.T) {
+	var output bytes.Buffer
+	renderer := newFollowRenderer(&output)
+	renderer.renderInteractiveHeader(time.Now(), followSnapshot{Job: core.Job{ID: "job-direct"}})
+	if got := output.String(); !strings.Contains(got, "Following Job job-direct · client-directed") || strings.Contains(got, "revision") {
+		t.Fatalf("interactive direct header:\n%s", got)
+	}
+}
+
 func followTimestamp(value time.Time) string {
 	return value.In(time.Local).Format(time.RFC3339)
 }
@@ -71,7 +80,10 @@ func followHumanTimestamp(value time.Time) string {
 func TestFollowRendererStopsOnActionableFailureWithoutExposingClosedHistoryAsAttention(t *testing.T) {
 	now := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
 	snapshot := followSnapshot{
-		Job:       core.Job{ID: "job-123", AdmissionOpen: true},
+		Job: core.Job{
+			ID: "job-123", AdmissionOpen: true,
+			Workflow: coding.Workflow, WorkflowRevision: coding.WorkflowRevision,
+		},
 		Operation: "Clone repository",
 		Execution: taskResultView{State: absurd.TaskFailed, LastError: "Could not resolve host: github.com"},
 	}
@@ -129,7 +141,7 @@ func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
 	job := core.Job{ID: "job-cleanup", CleanupState: core.CleanupScheduled, CleanupAttention: "reconciling provider-route-revoke"}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Definition: investigation.WorkflowDefinition(), Operation: "Complete",
+		Job: job, Presentation: investigation.WorkflowDefinition(), Operation: "Complete",
 		Sandboxes: []core.Sandbox{sandbox},
 		Actions: []core.Action{{
 			Kind: core.ActionRouteRevoke, Scope: sandbox.ID, State: core.ActionUnsettled,
@@ -223,7 +235,7 @@ func TestInteractiveFollowHeaderShowsLiveClocksWithoutAppendingPulse(t *testing.
 	job := core.Job{ID: "job-123", Workflow: investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision, SandboxProfile: "local-codex", AdmittedAt: now.Add(-20 * time.Second)}
 	sandbox := core.Sandbox{ID: core.MainSandboxName(job.ID), JobID: job.ID}
 	snapshot := followSnapshot{
-		Job: job, Profile: core.SandboxProfile{Name: "local-codex", Provider: core.SandboxProviderIncus}, Definition: investigation.WorkflowDefinition(), Operation: "Investigator running",
+		Job: job, Profile: core.SandboxProfile{Name: "local-codex", Provider: core.SandboxProviderIncus}, Presentation: investigation.WorkflowDefinition(), Operation: "Investigator running",
 		AgentRuns: []core.AgentRun{{Role: "investigate", State: core.AgentRunActive, StartedAt: now.Add(-15 * time.Second)}},
 		Sandboxes: []core.Sandbox{sandbox},
 		Actions:   []core.Action{{Kind: core.ActionSandboxCreate, Scope: sandbox.ID, State: core.ActionSucceeded, SettledAt: now.Add(-18 * time.Second)}},

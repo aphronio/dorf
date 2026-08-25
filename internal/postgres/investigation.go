@@ -22,21 +22,11 @@ func (s Store) CodebaseInvestigationSource(ctx context.Context, jobID string) (i
 	return investigationSourceFromValues(row.JobID, row.Kind, row.Repository, row.Revision, row.BundleDigest, row.BundleByteSize), nil
 }
 
-// authorizeInvestigationMessage implements the investigation workflow's
-// follow-up policy inside the same locked transaction that records the Message.
-func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
-	if input.Intent != core.MessageFollow {
-		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts only follow-up Messages")
-	}
+// resolveInvestigationMessageEnvelope resolves only the investigation execution
+// envelope. Generic Message admission owns Follow, Steer, and Thread binding.
+func resolveInvestigationMessageEnvelope(ctx context.Context, queries *dbsql.Queries, job dbsql.GetJobAdmissionForUpdateRow, input core.MessageAdmission) (admittedAgentRun, error) {
 	if input.SandboxID != core.MainSandboxName(input.JobID) {
 		return admittedAgentRun{}, fmt.Errorf("codebase-investigation Message requires the workflow-authorized default Sandbox")
-	}
-	latest, err := queries.GetLatestInvestigationRun(ctx, input.JobID)
-	if err != nil {
-		return admittedAgentRun{}, err
-	}
-	if latest.State != core.AgentRunCompleted || latest.Harness == "" || latest.ThreadID == "" {
-		return admittedAgentRun{}, fmt.Errorf("codebase-investigation accepts a follow-up only after its latest run completes on a retained Thread")
 	}
 	source, err := queries.GetCodebaseInvestigationSource(ctx, input.JobID)
 	if err != nil {
@@ -44,7 +34,7 @@ func authorizeInvestigationMessage(ctx context.Context, queries *dbsql.Queries, 
 	}
 	return admittedAgentRun{
 		Role: investigation.InitialAgentRole, Capability: investigation.InitialAgentCapability, InputRevision: source.Revision,
-		SandboxID: input.SandboxID, Harness: latest.Harness, ThreadID: latest.ThreadID,
+		SandboxID: input.SandboxID,
 	}, nil
 }
 

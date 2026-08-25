@@ -1043,7 +1043,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D048 — Simplify the post-cutover core around Absurd and explicit workflow semantics
 
-- **Status:** Accepted audit correction — 2026-08-09
+- **Status:** Accepted audit correction; steer fallback superseded by D096 — 2026-08-25
 - **Durable sequencing:** Use Absurd's public task, named-step, event, cancellation, and inspection
   surfaces for generic execution mechanics. Dorf retains Job and Revision facts, deterministic
   policy, stable external Action identity, scope, settlement state, and reconciliation because those are product
@@ -1053,7 +1053,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   inspect those tables without making them product authority.
 - **Message order:** Every accepted message keeps a monotonic Job-local admission sequence. Follow-up
   Turns are FIFO. A `steer` is an explicit priority lane for the active harness Turn and may overtake
-  queued follow-ups. Default text and structured inspection, command help, and the admission
+  queued follow-ups. D096 preserves that priority intent but supersedes any terminal-target fallback:
+  steer remains bound to its exact active Turn and never creates a new Turn. Default text and
+  structured inspection, command help, and the admission
   acknowledgement must expose its intent, target, original sequence, and priority effect; an
   architecture document alone is not adequate observability.
 - **Review composition (superseded by D052):** Deterministic policy supplies the mandatory Role floor. An implementation
@@ -1258,16 +1260,16 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D055 — AgentRun owns its harness execution binding
 
-- **Status:** Accepted execution simplification — 2026-08-10
+- **Status:** Accepted execution simplification; terminal-target fallback superseded by D096 — 2026-08-25
 - **Decision:** `AgentRun` is Dorf's complete durable delivery record for one durable Message.
   Submitting, reconciling, waiting for, and recording the harness Turn are its lifecycle, not a
   paired `Action`. Every AgentRun consumes exactly one durable Message; every Message selected for
   agent delivery has exactly one AgentRun. The AgentRun retains the Message identity, Harness,
   Thread, Turn, Role, Revision, capability, Turn outcome, recovery baseline, and the nonces required
   to prove ownership and submission. Implementation continuity comes from reusing the Thread bound
-  to prior implementation AgentRuns; there is no separate Thread row or binding on Job. A follow
-  normally creates a new Turn; a steer normally binds to its target Turn and creates a new Turn only
-  on terminal-target fallback.
+  to prior implementation AgentRuns; there is no separate Thread row or binding on Job. D096 makes
+  follow a distinct Turn on the authoritative retained Thread and steer an exact active-Turn binding
+  that never falls back to a new Turn.
 - **Vocabulary:** A Harness is software that hosts an agent and exposes Threads and Turns; Codex
   app-server is the first Harness. A Thread is a continuing harness conversation that one or more
   AgentRuns may use. A Turn is one request/response cycle inside a Thread. These known terms replace
@@ -2263,7 +2265,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D088 — Core is a small in-process custody contract organized by Job ownership
 
-- **Status:** Accepted application-boundary correction; file custody refined by D089 — 2026-08-22
+- **Status:** Accepted application-boundary correction; file custody refined by D089 and message
+  semantics refined by D096 — 2026-08-25
 - **Decision:** The [North Star product boundary](north-star.md#product-boundary) remains the sole
   authority for product ownership, and [Architecture](architecture.md#execution-model) owns the
   current technical contract. Workflows, workflow modules, and trusted client adapters compose one
@@ -2290,8 +2293,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   in-process consumers.
 - **Reconciliation:** D076's separate Core and workflow facts remain, but workflow identity and
   workflow input apply only to workflow-driven Jobs. D080's workflow-specific Message admission as
-  the only route is superseded by the generic Agent handle; consumers may still apply their own
-  delivery policy before calling it, while Core retains atomic identity, FIFO, and recovery. D081's
+  the only route is superseded by the generic Agent handle. Consumers supply typed execution
+  envelopes and infrastructure readiness, while Core retains intent authorization, atomic identity,
+  FIFO and priority order, Thread semantics, and recovery. D081's
   current transport framing is superseded; the stateful deployment remains, but its only current
   application contract is in-process. D082's consumer-facing capability-interface inventory is
   superseded by the Job/Sandbox/Agent handle shape; provider-neutral interfaces remain internal.
@@ -2340,20 +2344,21 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D090 — Open Jobs may have no current workflow operation
 
-- **Status:** Accepted execution correction — 2026-08-22
+- **Status:** Accepted execution correction; message admission refined by D096 — 2026-08-25
 - **Decision:** When an open Job's authoritative facts expose no eligible workflow operation, keep
   its existing attached Absurd task durably waiting. Do not project a workflow `WaitForInput`
   operation, persist an idle phase or status, complete the task, or attach another task for a later
-  Message. A follow admitted through the Sandbox-bound Agent handle wakes that same execution owner;
-  the internal AgentRun reuses the workflow-selected Harness Thread and owns its distinct Turn.
+  Message. A follow accepted while admission is open wakes that same execution owner, including when
+  it entered the FIFO before an earlier Turn settled; the internal AgentRun reuses the authoritative
+  retained Harness Thread and owns its distinct Turn.
 - **Recovery:** The Message and AgentRun transaction remains authority and its deterministic event is
   only a wake hint. The task reloads durable facts on a bounded timeout when a hint is lost, and a
   replacement executor reclaims the same attachment after process loss. Cleanup still closes
   admission under the Job fence, cancels the ordinary task, and attaches only the cleanup handoff.
 - **Ownership:** Absurd continues to own waits, wakes, claims, retries, and cancellation. Dorf owns
   Message facts, task attachment, and deterministic wake emission. Workflows retain Outcome,
-  attention, report-path, and delivery-eligibility policy; an absence of current work adds no Core or
-  workflow vocabulary.
+  attention, report-path, and typed execution-envelope policy; an absence of current work adds no
+  Core or workflow vocabulary.
 - **Refines:** D075's same-Thread investigation revision loop, D087's workflow task composition, and
   D088's requirement that task attachment and wake details remain behind the Core application
   behavior. It preserves D048's FIFO/steer rules and D068's operator retry authority.
@@ -2393,20 +2398,20 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D092 — Investigation reports remain Sandbox files
 
-- **Status:** Accepted workflow simplification — 2026-08-22
+- **Status:** Accepted workflow simplification; follow admission refined by D096 — 2026-08-25
 - **Decision:** `codebase-investigation` asks its agent, as workflow-owned prompt policy, to maintain
   workspace-root `REPORT.md`. A completed internal AgentRun is the durable completion fact. The
   workflow does not interpret Harness prose as the report, copy report bytes into PostgreSQL or the
   blob store, record a Draft or report receipt, or add a generic result abstraction.
 - **Access and lifetime:** A caller retrieves the current exact bytes through
-  `SandboxHandle.ReadFile` before requesting cleanup. Follow-up Messages reuse the same Harness
-  Thread and may update the same path. Missing files fail honestly at read time. Requested cleanup
-  closes reads and Sandbox deletion makes the report unavailable; clients own any retention or
+  `SandboxHandle.ReadFile` before requesting cleanup. Follow-up Messages reuse the authoritative
+  Harness Thread and may update the same path. Missing files fail honestly at read time. Requested
+  cleanup closes reads and Sandbox deletion makes the report unavailable; clients own any retention or
   publication they require.
 - **Workflow boundary:** Remove the Draft domain, validation and unchanged-checkout checkpoint,
-  PostgreSQL table and queries, history/display persistence, and follow-up Draft gate. Follow-up
-  eligibility derives from the latest completed bound Investigation AgentRun. Core injects no
-  prompt, scans no output, and owns no Investigation result meaning.
+  PostgreSQL table and queries, history/display persistence, and follow-up Draft gate. Investigation
+  supplies the typed execution envelope and report prompt, but does not authorize or defer Follow.
+  Core injects no prompt, scans no output, and owns no Investigation result meaning.
 - **Why:** Retaining Markdown duplicated mutable Sandbox state and forced workflow authors to know a
   persistence contract. The exact-read primitive already provides the smallest truthful boundary:
   workflow policy chooses a path, the stock agent writes ordinary files, and the client decides what
@@ -2481,3 +2486,47 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** A major release deliberately declares a destructive database reset, retained
   deployment data no longer has product value, or migration volume makes a maintained framework
   materially smaller than the explicit ordered runner and its behavioral tests.
+
+## D095 — The CLI is Dorf's first direct trusted client
+
+- **Status:** Accepted concrete client slice; role and message semantics refined by D096 — 2026-08-25
+- **Decision:** Add `dorf run` as a concrete in-process CLI client that admits complete Job intent
+  without workflow identity. It delivers the caller's exact prompt through the `direct` Agent role,
+  leaves successful work open and idle for follow, steer, or exact file reads, and releases resources
+  only when the caller requests cleanup. The CLI owns result meaning and completion policy.
+- **Durable identity:** A direct Job records both workflow name and revision as absent together;
+  workflow Jobs still require an exact pair. Migration `003_client_directed_jobs.sql` admits the
+  absent pair and `direct` role; Messages, AgentRuns, Sandboxes, Actions, task attachment, and cleanup
+  remain the same Core facts used by workflows.
+- **Why:** This proves D088's trusted-client boundary without a fake workflow. Keeping meaning in the
+  CLI while Core owns custody makes that separation concrete; it does not earn a public transport,
+  SDK, plugin contract, client registry, or alternate lifecycle.
+- **Reconsider when:** A real external client requires a network transport or SDK, direct clients
+  need durable typed policy beyond their own adapter, or more than one direct client proves a
+  smaller shared contract than explicit composition.
+
+## D096 — Follow and steer are invariant custody; cleanup timing remains consumer policy
+
+- **Status:** Accepted message-semantics convergence — 2026-08-25
+- **Decision:** While Job admission is open, Core accepts follow as durable FIFO input. A follow may
+  queue before the preceding Turn settles, reuses the Agent handle's authoritative retained Harness
+  Thread, and receives a distinct Turn. Steer atomically captures the exact active Turn at admission,
+  has priority over queued follows, and remains bound to that Turn. It never falls back to a new Turn;
+  if the target becomes terminal before delivery settles, reconciliation reports that honest failure.
+- **Consumer boundary:** A workflow or direct client supplies a typed execution envelope, including
+  Role, capability, input Revision when applicable, and deterministic infrastructure readiness. It
+  may own prompts, results, evaluation, and workflow-specific sequencing, but it does not authorize
+  follow or steer, reorder accepted Messages, select their Thread behavior, or impose a completed-run
+  gate on follow admission.
+- **Lifecycle policy:** Cleanup timing is separate consumer policy. A workflow or direct client may
+  conditionally call `RequestCleanup`; Core never derives that request from an Outcome, attention,
+  AgentRun completion, idleness, or Harness state. Coding's explicit policy that observes a terminal
+  GitHub Outcome and then requests cleanup remains valid because the workflow makes that conditional
+  call; the Outcome itself does not trigger Core cleanup.
+- **Refines:** D087's workflow composition, D088's Agent handle, D090's open-wait execution, D092's
+  investigation follow-up gate, and D095's direct client. It supersedes the D048/D055 terminal-target
+  steer fallback while retaining D048's priority intent; D089's pre-cleanup file boundary remains
+  intact.
+- **Why:** Follow and steer describe durable delivery and Harness identity, not the meaning a consumer
+  assigns to work. Making those rules invariant removes divergent workflow gates without moving
+  prompt, result, infrastructure, or cleanup policy into Core.

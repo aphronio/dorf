@@ -54,21 +54,23 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			proposal.PollInterval = 30 * time.Second
 		}
 		for {
-			if runtime.Agent == nil {
-				return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
-			}
-			if err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
-				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, params.JobID, err); stopped {
-					return result, stopErr
-				}
-				return core.TaskResultV1{}, err
-			}
 			work, err := RunJob(ctx, jobHandle, runtime.Coding, store, proposal, params.JobID)
 			if err != nil {
 				if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
 					return result, stopErr
 				}
 				return core.TaskResultV1{}, err
+			}
+			if work.Kind == WorkWaitAgent {
+				if runtime.Agent == nil {
+					return core.TaskResultV1{}, fmt.Errorf("Agent reconciliation is not configured")
+				}
+				if _, err := runtime.Agent.ReconcileJobAgent(ctx, params.JobID); err != nil {
+					if result, stopped, stopErr := application.StopForUnavailableSandboxProfile(ctx, params.JobID, work.FactID, err); stopped {
+						return result, stopErr
+					}
+					return core.TaskResultV1{}, err
+				}
 			}
 			if work.Kind == WorkComplete {
 				outcome, err := store.Outcome(ctx, params.JobID)
@@ -87,16 +89,9 @@ func Register(application core.Application, store Store, runtimes RuntimeResolve
 			if err != nil {
 				return core.TaskResultV1{}, err
 			}
-			wake, err := absurd.AwaitEvent[core.MessageWakeV1](ctx, core.MessageWakeEvent(params.JobID, sequence), wakeOptions(work, sequence, proposal.PollInterval))
-			if err != nil {
-				var timeout *absurd.TimeoutError
-				if errors.As(err, &timeout) {
-					continue
-				}
+			stepName, timeout := wakeOptions(work, sequence, proposal.PollInterval)
+			if err := application.AwaitMessageWake(ctx, params.JobID, sequence, stepName, timeout); err != nil {
 				return core.TaskResultV1{}, err
-			}
-			if wake.JobID != params.JobID || wake.Sequence != sequence {
-				return core.TaskResultV1{}, fmt.Errorf("message wake payload conflicts with Job %s sequence %d", params.JobID, sequence)
 			}
 		}
 	}, absurd.TaskOptions{DefaultMaxAttempts: 5}))
@@ -136,17 +131,15 @@ func recordRuntimeAttention(ctx context.Context, store Store, jobID, source, det
 	return errors.New(detail)
 }
 
-func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) absurd.AwaitEventOptions {
-	options := absurd.AwaitEventOptions{StepName: fmt.Sprintf("dorf/message-wake/v1/%020d", sequence), Timeout: idleMessagePollInterval}
+func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) (string, time.Duration) {
+	stepName, timeout := fmt.Sprintf("dorf/message-wake/v1/%020d", sequence), idleMessagePollInterval
 	switch work.Kind {
 	case WorkObserveProposal:
-		options.StepName = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence)
-		options.Timeout = proposalPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/proposal-wake/v2/%s/%020d", work.Revision, sequence), proposalPollInterval
 	case WorkWaitAgent:
-		options.StepName = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence)
-		options.Timeout = activeAgentPollInterval
+		stepName, timeout = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence), activeAgentPollInterval
 	}
-	return options
+	return stepName, timeout
 }
 
 func Admit(ctx context.Context, store Store, application core.Application, providers ProviderChecker, runtime profile.Runtime, input Admission) (core.Job, bool, error) {
@@ -173,9 +166,6 @@ func Admit(ctx context.Context, store Store, application core.Application, provi
 	if err != nil || !job.AdmissionOpen {
 		return job, created, err
 	}
-	if err := application.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID)); err != nil {
-		return core.Job{}, false, err
-	}
-	job, err = store.Job(ctx, job.ID)
+	job, err = application.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID))
 	return job, created, err
 }

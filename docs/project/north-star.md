@@ -57,6 +57,14 @@ started, or that resources should now be released. Those choices belong to a wor
 such as Agent0, n8n, a UI, CI, or a human-operated CLI. Shipping a native workflow in the same
 repository, process, or binary does not move its policy into Core.
 
+Message intent is reusable custody rather than consumer policy. While admission is open, an accepted
+follow joins the FIFO, reuses the authoritative retained Harness Thread, and receives a distinct
+Turn, even when accepted before earlier work settles. A steer atomically captures the exact active
+Turn, has priority over queued follows, never falls back to a new Turn, and fails honestly if that
+target becomes terminal. Consumers and workflows supply typed execution envelopes and deterministic
+infrastructure readiness; they do not authorize these intents, reorder them, or choose their Thread
+semantics.
+
 Core likewise owns no Git, coding, GitHub, publication, or human-in-the-loop policy. Those may be
 composed by a workflow, module, or client without becoming Core merely because several consumers use
 them.
@@ -71,7 +79,7 @@ This gives each layer one job:
 ```text
 Client       chooses goals, drives Core directly, or composes Jobs through workflows
 Workflow     owns semantics, policy, evaluation, and Outcome meaning
-Dorf core    owns Job-wide run custody, recovery, Evidence, exact Sandbox file reads, and requested cleanup execution
+Dorf core    owns invariant Follow/Steer delivery, Job-wide run custody, recovery, Evidence, exact Sandbox file reads, and requested cleanup execution
 Adapters     translate Harnesses, Sandboxes, providers, and external authorities
 ```
 
@@ -133,7 +141,8 @@ A client delegates a complete coding goal. The coding workflow creates an isolat
 lets an implementation agent commit, observes an exact Revision, selects only useful review, and
 publishes an exact-Revision pull request.
 GitHub merge, close, or explicit abandonment supplies the workflow outcome; the workflow then
-requests cleanup, which remains a separate observable fact.
+conditionally requests cleanup under its explicit policy, which remains separate from both the
+Outcome and Core's cleanup execution. Core never infers the request from completion.
 
 ### Codebase investigation to a repository-grounded report
 

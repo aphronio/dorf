@@ -66,7 +66,7 @@ type ApplicationStore interface {
 
 // StopForUnavailableSandboxProfile turns one definitive provider artifact
 // failure into durable attention instead of asking Absurd to retry an input
-// that cannot succeed. The workflow supplies the exact current fact identity.
+// that cannot succeed. The concrete consumer supplies the exact current fact identity.
 func (a Application) StopForUnavailableSandboxProfile(ctx context.Context, jobID, source string, cause error) (TaskResultV1, bool, error) {
 	if !sandbox.IsArtifactUnavailable(cause) {
 		return TaskResultV1{}, false, nil

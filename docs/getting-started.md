@@ -105,7 +105,44 @@ installation. An already installed App returns ready without reading terminal in
 installation resumes at the same reusable installation URL instead of creating another App.
 Replacing the configured credential bundle retains its explicit `--yes` approval boundary.
 
-## 3. Run a coding Job
+## 3. Run a direct client Job
+
+Use the CLI client when you want controlled agent execution without delegating result meaning or
+completion policy to a native workflow. Save the complete prompt in `goal.txt`, then admit it:
+
+```bash
+dorf run \
+  --goal-file goal.txt \
+  --model MODEL \
+  --reasoning high
+
+dorf worker
+dorf inspect --follow JOB_ID
+```
+
+For a human invocation, `--key` is optional: Dorf generates and prints an admission key before
+accepting the Job; reuse that key if the command is interrupted. Automation or deliberate replay
+should pass a stable `--key` explicitly so the same complete request can be replayed safely.
+
+The verified deployment-default Sandbox profile and AI connection are used unless explicitly
+selected. After a successful Turn, the Job remains open and idle so the caller can continue the same
+Harness Thread, retrieve an exact workspace file, or request cleanup:
+
+```bash
+dorf message --job JOB_ID --id follow-1 --input-file follow-up.txt
+dorf sandbox file get JOB_ID PATH --output DESTINATION
+dorf cleanup JOB_ID
+```
+
+Follow-up Messages may be queued while earlier work is active; Dorf delivers them FIFO as distinct
+Turns on the retained Thread. Use `--intent steer` only to target the exact active Turn. Steer has
+priority over queued follows, never falls back to a new Turn, and fails honestly if that Turn has
+already become terminal. The CLI owns the raw prompt and the meaning of any resulting prose or files;
+Dorf owns durable delivery, recovery, the exact
+Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
+GitHub integration is required.
+
+## 4. Run a coding Job
 
 The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
 Create and verify a separate Pi profile when that Job should use Pi; both may reference the same

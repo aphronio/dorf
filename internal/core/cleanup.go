@@ -67,7 +67,7 @@ func cleanupTargets(sandboxes []Sandbox) []cleanupTarget {
 // same ordered targets used by execution. It records no additional status.
 func CurrentCleanupAction(sandboxes []Sandbox, actions []Action) (ActionKind, string, bool) {
 	for _, target := range cleanupTargets(sandboxes) {
-		if !actionSucceeded(actions, target.Kind, target.Sandbox.ID) {
+		if !HasSucceededAction(actions, target.Kind, target.Sandbox.ID) {
 			return target.Kind, target.Sandbox.ID, true
 		}
 	}
@@ -121,13 +121,4 @@ func (a Application) runCleanup(ctx context.Context, service CleanupExecution, j
 		return err
 	}
 	return nil
-}
-
-func actionSucceeded(actions []Action, kind ActionKind, sandboxID string) bool {
-	for _, action := range actions {
-		if action.Kind == kind && action.Scope == sandboxID && action.State == ActionSucceeded {
-			return true
-		}
-	}
-	return false
 }

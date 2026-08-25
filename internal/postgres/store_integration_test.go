@@ -19,6 +19,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gitworkspace"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
@@ -34,7 +35,7 @@ type providerCheck struct {
 }
 
 func codingDelivery(ctx context.Context, store postgres.Store, jobID string) (*core.Delivery, error) {
-	work, err := store.CodingAgentMessage(ctx, jobID)
+	work, err := store.AgentMessage(ctx, jobID)
 	if err != nil || work == nil {
 		return nil, err
 	}
@@ -97,6 +98,13 @@ type integrationRuntimeResolver struct {
 	profile              profileapp.Runtime
 	codingRuntime        coding.Runtime
 	investigationRuntime investigation.Runtime
+}
+
+func (r integrationRuntimeResolver) ResolveDirect(_ context.Context, name string) (direct.Runtime, error) {
+	if name != r.profile.SandboxProfile {
+		return direct.Runtime{}, fmt.Errorf("unexpected Sandbox profile %q", name)
+	}
+	return direct.Runtime{Profile: r.profile, Execution: r.execution}, nil
 }
 
 func (r integrationRuntimeResolver) ResolveSandbox(_ context.Context, name string) (core.SandboxRuntime, error) {
@@ -174,8 +182,9 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	externals := &integrationExternals{}
-	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
+	externals := &integrationExternals{turnStatus: "completed"}
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(integrationAgentExecution{store: store, externals: externals})
 	workspaceExecutor := gitworkspace.NewExecutor(execution, externals, nil)
 	codingService := coding.NewService(workspaceExecutor, store, externals, blob.Store{}, func(context.Context) error { return nil })
 	runtimeProfile := profileapp.Runtime{SandboxProfile: "incus"}
@@ -188,6 +197,7 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 	}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver, CleanupRuntimes: resolver}
 	application.RegisterCleanup()
+	direct.Register(application, store, resolver)
 	coding.Register(application, store, resolver)
 	investigation.Register(application, store, resolver)
 	t.Cleanup(func() {
@@ -271,7 +281,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 		integrationExternals: &integrationExternals{}, entered: make(chan struct{}), release: make(chan struct{}),
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(codingAgentExecution{store: store, externals: externals.integrationExternals})
+		WithAgentExecution(integrationAgentExecution{store: store, externals: externals.integrationExternals})
 	workspace := gitworkspace.NewExecutor(execution, externals, nil)
 	service := coding.NewService(workspace, store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	profile := profileapp.Runtime{SandboxProfile: "incus"}
@@ -297,7 +307,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("admit ensure winner created=%t err=%v", created, err)
 	}
-	if err := application.ScheduleJobTask(ctx, job, coding.TaskName, coding.TaskKey(job.ID)); err != nil {
+	if _, err := application.ScheduleJobTask(ctx, job, coding.TaskName, coding.TaskKey(job.ID)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -355,7 +365,7 @@ func TestWorkflowEnsureAndCleanupSerializeBothWinnerOrders(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("admit cleanup winner created=%t err=%v", created, err)
 	}
-	if err := loserApplication.ScheduleJobTask(ctx, loser, coding.TaskName, coding.TaskKey(loser.ID)); err != nil {
+	if _, err := loserApplication.ScheduleJobTask(ctx, loser, coding.TaskName, coding.TaskKey(loser.ID)); err != nil {
 		t.Fatal(err)
 	}
 	loserHandle, err := loserApplication.OpenJob(ctx, loser.ID)
@@ -381,6 +391,130 @@ func codingJobInput(key, goal, revision, branch string) coding.Admission {
 	}
 }
 
+func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	profile := profileapp.Runtime{SandboxProfile: "incus"}
+	job, created, err := direct.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profile, core.JobAdmission{
+		AdmissionKey: fmt.Sprintf("direct-execution-%d", time.Now().UnixNano()),
+		Goal:         "prove the direct client execution boundary", SandboxProfile: profile.SandboxProfile,
+		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+	})
+	if err != nil || !created || job.CurrentTaskID == "" {
+		t.Fatalf("direct admission Job=%#v created=%t err=%v", job, created, err)
+	}
+	initialTaskID := job.CurrentTaskID
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "direct-execution", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions, err := store.Actions(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !job.AdmissionOpen || job.CleanupState != core.CleanupPending || job.WorkflowAttention != "" ||
+		len(actions) != 2 || actions[0].Kind != core.ActionSandboxCreate || actions[1].Kind != core.ActionRouteCreate ||
+		actions[0].SettledAt.After(actions[1].CreatedAt) || len(deliveries) != 1 ||
+		deliveries[0].AgentRun.Role != direct.DirectAgentRole || deliveries[0].AgentRun.State != core.AgentRunCompleted ||
+		deliveries[0].AgentRun.StartedAt.IsZero() || actions[1].SettledAt.After(deliveries[0].AgentRun.StartedAt) {
+		t.Fatalf("direct bootstrap did not settle create → route → Agent and remain open: job=%#v actions=%#v deliveries=%#v", job, actions, deliveries)
+	}
+	idleTask, err := client.FetchTaskResult(ctx, client.QueueName(), job.CurrentTaskID)
+	if err != nil || idleTask == nil || idleTask.State != absurd.TaskSleeping {
+		t.Fatalf("open-idle direct Absurd task=%#v err=%v", idleTask, err)
+	}
+
+	application := core.Application{Store: store, Tasks: client, AgentMessages: directMessageAdmissions{store: store}}
+	handle, err := application.OpenJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox, err := handle.DefaultSandbox(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := sandbox.Agent().Message(ctx, "direct-follow", "continue in the retained Thread")
+	if err != nil || !accepted.Created {
+		t.Fatalf("direct Follow=%#v err=%v", accepted, err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "direct-follow", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = store.Deliveries(ctx, job.ID)
+	if err != nil || job.CurrentTaskID != initialTaskID || len(deliveries) != 2 ||
+		deliveries[1].AgentRun.State != core.AgentRunCompleted || deliveries[1].AgentRun.ThreadID == "" ||
+		deliveries[1].AgentRun.ThreadID != deliveries[0].AgentRun.ThreadID {
+		t.Fatalf("direct Follow did not reuse the exact task and Thread: job=%#v deliveries=%#v err=%v", job, deliveries, err)
+	}
+
+	if err := handle.RequestCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	requested, err := store.Job(ctx, job.ID)
+	if err != nil || requested.AdmissionOpen || requested.CleanupState != core.CleanupScheduled || requested.CurrentTaskID == initialTaskID {
+		t.Fatalf("explicit direct cleanup request=%#v err=%v", requested, err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "direct-cleanup", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := store.Job(ctx, job.ID)
+	if err != nil || cleaned.CleanupState != core.CleanupComplete {
+		t.Fatalf("explicit direct cleanup=%#v err=%v", cleaned, err)
+	}
+}
+
+type directMessageAdmissions struct{ store postgres.Store }
+
+func (a directMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+	return a.store.AdmitDirectMessage(ctx, input)
+}
+
+func TestPostgresDirectAdmissionReplayRecoversTaskAttachment(t *testing.T) {
+	_, store, client := testDatabase(t)
+	ctx := context.Background()
+	input := core.JobAdmission{
+		AdmissionKey: fmt.Sprintf("direct-%d", time.Now().UnixNano()), Goal: "produce a caller-owned result",
+		SandboxProfile: "incus", ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
+	}
+	job, created, err := store.AdmitDirect(ctx, input)
+	if err != nil || !created || job.Workflow != "" || job.WorkflowRevision != "" {
+		t.Fatalf("direct admission job=%#v created=%t err=%v", job, created, err)
+	}
+	recovered, created, err := direct.Admit(
+		ctx, store, core.Application{Store: store, Tasks: client},
+		providerCheck{err: errors.New("provider unavailable during admission recovery")},
+		profileapp.Runtime{SandboxProfile: "unavailable-during-admission-recovery"}, input,
+	)
+	if err != nil || created || recovered.ID != job.ID || recovered.CurrentTaskID == "" {
+		t.Fatalf("client scheduling recovery job=%#v created=%t err=%v", recovered, created, err)
+	}
+	replayed, created, err := direct.Admit(
+		ctx, store, core.Application{Store: store, Tasks: client},
+		providerCheck{err: errors.New("provider unavailable during replay")},
+		profileapp.Runtime{SandboxProfile: "unavailable-during-replay"}, input,
+	)
+	if err != nil || created || replayed.ID != job.ID || replayed.CurrentTaskID != recovered.CurrentTaskID {
+		t.Fatalf("client scheduled replay job=%#v created=%t err=%v", replayed, created, err)
+	}
+	deliveries, err := store.Deliveries(ctx, job.ID)
+	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.Role != direct.DirectAgentRole ||
+		deliveries[0].AgentRun.Capability != "" || deliveries[0].AgentRun.InputRevision != "" ||
+		deliveries[0].AgentRun.SandboxID != core.MainSandboxName(job.ID) {
+		t.Fatalf("initial direct delivery=%#v err=%v", deliveries, err)
+	}
+}
+
 func requestCleanupIntegration(t *testing.T, application core.Application, jobID string) core.Job {
 	t.Helper()
 	handle, err := application.OpenJob(context.Background(), jobID)
@@ -398,13 +532,8 @@ func requestCleanupIntegration(t *testing.T, application core.Application, jobID
 }
 
 func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T) {
-	db, store, client := testDatabase(t)
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	var migrationCount int
-	var migrationNames string
-	if err := db.QueryRowContext(ctx, `select count(*),string_agg(name,',' order by name) from dorf.schema_migrations`).Scan(&migrationCount, &migrationNames); err != nil || migrationCount != 2 || migrationNames != "001_baseline.sql,002_sandbox_custody.sql" {
-		t.Fatalf("Dorf migrations count=%d names=%q err=%v", migrationCount, migrationNames, err)
-	}
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
 	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
@@ -1075,7 +1204,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "exact active regular harness Turn") {
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "one exact active Harness Turn") {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -1114,13 +1243,13 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 
 	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: targetTurnID, Status: "inProgress"}}}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(resultBoundaryAgentExecution{store: store, externals: externals})
+		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
 	resolver := integrationRuntimeResolver{execution: execution, profile: profileapp.Runtime{SandboxProfile: job.SandboxProfile}}
 	application := core.Application{Store: store, Tasks: client, SandboxRuntimes: resolver}
 	service := coding.NewService(gitworkspace.NewExecutor(execution, externals, nil), store, externals, blob.Store{}, absurdruntime.RequireClaim)
 	taskName := "dorf-active-steer-result-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		handle, err := application.OpenJob(taskCtx, job.ID)
@@ -1145,7 +1274,7 @@ func TestCompletedSteerReceiptKeepsActiveTurnNonterminalAndWorkflowAttentionClea
 		externals.turns[0].Status = "completed"
 		externals.turns[0].Output = "target completed"
 		externals.mu.Unlock()
-		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 			return core.TaskResultV1{}, err
 		}
 		settled, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, target.Message.ID)
@@ -1259,10 +1388,10 @@ func TestSharedSteersPersistEveryTerminalTargetOutcome(t *testing.T) {
 	}
 }
 
-func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.T) {
-	_, store, _ := testDatabase(t)
+func TestSteerTargetTerminalBeforeAcceptanceFailsWithoutNewTurn(t *testing.T) {
+	_, store, client := testDatabase(t)
 	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "steer-terminal-fallback")
+	job, threadID := prepareTransportIntegrationJob(t, store, "steer-terminal-failure")
 	target, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || target == nil {
 		t.Fatalf("target delivery=%#v err=%v", target, err)
@@ -1281,42 +1410,47 @@ func TestSteerTerminalFallbackPreservesRequestAndSerializesLaterFIFO(t *testing.
 	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
 		t.Fatal(err)
 	}
-	fallback, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || fallback == nil || fallback.Message.ID != steer.Message.ID || fallback.AgentRun.ID != core.AgentRunID(steer.Message.ID) {
-		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
-	}
-	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {
-		t.Fatal(err)
-	}
-	actualTurnID := "turn-fallback-" + job.ID
-	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, actualTurnID, "running"); err != nil {
-		t.Fatal(err)
-	}
 	later, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "later-follow", Input: "later FIFO delivery"})
 	if err != nil || !later.Created {
 		t.Fatalf("later=%#v err=%v", later, err)
 	}
-	active, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || active == nil || active.Message.ID != fallback.Message.ID {
-		t.Fatalf("active fallback reconciliation=%#v err=%v", active, err)
+	externals := &integrationExternals{turns: []core.HarnessTurn{{ID: targetTurnID, Status: "completed"}}}
+	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
+		WithAgentExecution(resultBoundaryAgentExecution{externals: externals})
+	taskName := "dorf-terminal-steer-failure-proof-v1"
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		return core.TaskResultV1{JobID: job.ID, Outcome: "terminal-steer-failed"}, nil
+	}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{IdempotencyKey: taskName + ":" + job.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "terminal-steer-failure", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AwaitTaskResult(ctx, client.QueueName(), spawned.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if submitted := externals.submittedSequences(); len(submitted) != 0 {
+		t.Fatalf("terminal-target Steer submitted a new Turn: %v", submitted)
 	}
 	deliveries, err := store.Deliveries(ctx, job.ID)
 	if err != nil || len(deliveries) != 3 {
 		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
 	}
-	if deliveries[1].Message.Intent != core.MessageSteer || deliveries[1].Message.TargetTurnID != targetTurnID || deliveries[1].AgentRun.TurnID != actualTurnID {
-		t.Fatalf("fallback delivery=%#v later=%#v", deliveries[1], deliveries[2])
-	}
-	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, actualTurnID, "failed"); err != nil {
-		t.Fatal(err)
+	failed := deliveries[1]
+	if failed.Message.ID != steer.Message.ID || failed.Message.TargetTurnID != targetTurnID || failed.AgentRun.State != core.AgentRunFailed || failed.AgentRun.TurnID != "" || !strings.Contains(failed.AgentRun.Attention, "terminal before") {
+		t.Fatalf("terminal-target Steer did not fail honestly: %#v", failed)
 	}
 	next, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || next == nil || next.Message.ID != later.Message.ID || next.AgentRun.ThreadID != threadID {
-		t.Fatalf("later delivery=%#v err=%v", next, err)
-	}
-	deliveries, err = store.Deliveries(ctx, job.ID)
-	if err != nil || deliveries[1].AgentRun.State != core.AgentRunFailed || deliveries[1].AgentRun.TurnOutcome != "failed" || deliveries[1].Message.TargetTurnID != targetTurnID {
-		t.Fatalf("terminal fallback evidence=%#v err=%v", deliveries[1], err)
+	if err != nil || next == nil || next.Message.ID != later.Message.ID || next.AgentRun.ThreadID != threadID || next.Message.Intent != core.MessageFollow {
+		t.Fatalf("later Follow=%#v err=%v", next, err)
 	}
 }
 
@@ -1410,11 +1544,11 @@ func TestEarlyCodingFollowsAdoptAuthoritativeThreadAndSubmitDistinctTurns(t *tes
 
 	externals := &integrationExternals{turnStatus: "completed"}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
-		WithAgentExecution(codingAgentExecution{store: store, externals: externals})
+		WithAgentExecution(integrationAgentExecution{store: store, externals: externals})
 	taskName := "dorf-early-follow-proof-v1"
 	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
 		for _, messageID := range messageIDs {
-			if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+			if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 				return core.TaskResultV1{}, err
 			}
 			result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, messageID)
@@ -1519,7 +1653,7 @@ func TestEarlyCodingFollowNoThreadPredecessorRules(t *testing.T) {
 			if err != nil || !follow.Created {
 				t.Fatalf("admit follow=%#v err=%v", follow, err)
 			}
-			selected, err := store.CodingAgentMessage(ctx, job.ID)
+			selected, err := store.AgentMessage(ctx, job.ID)
 			if err != nil || selected == nil {
 				t.Fatalf("selected=%#v err=%v", selected, err)
 			}
@@ -1619,47 +1753,6 @@ func TestSubmittingSteerRemainsPriorityDeliveryUntilReconciled(t *testing.T) {
 		if err != nil || candidate == nil || candidate.Message.ID != steer.Message.ID || candidate.AgentRun.State != core.AgentRunSubmitting {
 			t.Fatalf("%s submitting steer candidate=%#v err=%v", load.name, candidate, err)
 		}
-	}
-}
-
-func TestTerminalTargetSteerFallbackOwnsRevisionObservation(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	ctx := context.Background()
-	job, threadID := prepareTransportIntegrationJob(t, store, "steer-fallback-revision")
-	target, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || target == nil {
-		t.Fatalf("target delivery=%#v err=%v", target, err)
-	}
-	if err := store.PrepareAgentRun(ctx, target.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	targetTurnID := "turn-target-" + job.ID
-	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "running"); err != nil {
-		t.Fatal(err)
-	}
-	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "terminal-target-fallback", Input: "continue in a new Turn", Intent: core.MessageSteer})
-	if err != nil || !steer.Created {
-		t.Fatalf("steer=%#v err=%v", steer, err)
-	}
-	if err := store.BindAgentRun(ctx, target.AgentRun.ID, "codex", threadID, targetTurnID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	fallback, err := codingDelivery(ctx, store, job.ID)
-	if err != nil || fallback == nil || fallback.Message.ID != steer.Message.ID {
-		t.Fatalf("fallback delivery=%#v err=%v", fallback, err)
-	}
-	if err := store.PrepareAgentRun(ctx, fallback.AgentRun.ID, "codex", targetTurnID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, fallback.AgentRun.ID, "codex", threadID, "turn-fallback-"+job.ID, "completed"); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	evidence := integrationEvidence(fallback.AgentRun.ID, "git-revision", "", "", job.Revision, "9")
-	evidence.AgentRunID = fallback.AgentRun.ID
-	observation := gitworkspace.Observation{ComparisonBase: job.Revision, Revision: job.Revision, Tree: strings.Repeat("9", 40), Branch: job.Branch, StartedAt: now, FinishedAt: now}
-	if err := store.RecordRevisionObservation(ctx, job.ID, fallback.AgentRun.ID, observation, evidence); err != nil {
-		t.Fatalf("terminal-target fallback Revision observation: %v", err)
 	}
 }
 
@@ -1853,6 +1946,83 @@ func TestAtomicReviewPolicyPersistsNoReviewAndStableSelectedRuns(t *testing.T) {
 	}
 }
 
+func TestGlobalAgentMessageSelectionOrdersAcrossRoleAndSandboxLanes(t *testing.T) {
+	_, store, _ := testDatabase(t)
+	ctx := context.Background()
+	job, revision, _ := prepareReviewIntegrationJob(t, store, "global-cross-role-order")
+	facts, err := policy.FactsFromPaths(strings.Repeat("a", 40), revision, []string{"internal/auth/session.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := policy.ReviewPolicy(facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPolicy(ctx, coding.ReviewPlanRecord{JobID: job.ID, Revision: revision, Facts: facts, Plan: plan}); err != nil {
+		t.Fatal(err)
+	}
+	reviewRuns, err := reviewRunsForRevision(ctx, store, job.ID, revision)
+	if err != nil || len(reviewRuns) != 1 {
+		t.Fatalf("review runs=%#v err=%v", reviewRuns, err)
+	}
+
+	follow, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "cross-role-follow", Input: "continue the implementation while review is queued",
+	})
+	if err != nil || !follow.Created || follow.Message.Sequence <= reviewRuns[0].Request.Sequence {
+		t.Fatalf("implementation Follow=%#v review=%#v err=%v", follow, reviewRuns[0].Request, err)
+	}
+	implementation, err := store.AgentMessageExecution(ctx, follow.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	implementationThread := "thread-" + job.ID
+	implementationTurn := "turn-cross-role-" + job.ID
+	if implementation.AgentRun.Role != coding.InitialAgentRole || implementation.AgentRun.SandboxID != core.MainSandboxName(job.ID) || implementation.AgentRun.ThreadID != "" {
+		t.Fatalf("implementation envelope=%#v", implementation.AgentRun)
+	}
+	if err := store.PrepareAgentRun(ctx, implementation.AgentRun.ID, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindAgentRun(ctx, implementation.AgentRun.ID, "codex", implementationThread, implementationTurn, "running"); err != nil {
+		t.Fatal(err)
+	}
+	steer, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{
+		JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman,
+		FromID: "cross-role-steer", Input: "adjust the exact active implementation Turn", Intent: core.MessageSteer,
+	})
+	if err != nil || !steer.Created || steer.Message.TargetTurnID != implementationTurn {
+		t.Fatalf("Steer=%#v err=%v", steer, err)
+	}
+
+	selected, err := store.AgentMessage(ctx, job.ID)
+	if err != nil || selected == nil || selected.MessageID != steer.Message.ID || selected.SandboxID != core.MainSandboxName(job.ID) {
+		t.Fatalf("global Steer priority selection=%#v err=%v", selected, err)
+	}
+	steerExecution, err := store.AgentMessageExecution(ctx, steer.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PrepareAgentRun(ctx, steerExecution.AgentRun.ID, "codex", implementationTurn); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindSteer(ctx, steerExecution.AgentRun.ID, implementationTurn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = store.AgentMessage(ctx, job.ID)
+	if err != nil || selected == nil || selected.MessageID != follow.Message.ID {
+		t.Fatalf("global active recovery selection=%#v err=%v", selected, err)
+	}
+	if err := store.BindAgentRun(ctx, implementation.AgentRun.ID, "codex", implementationThread, implementationTurn, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = store.AgentMessage(ctx, job.ID)
+	if err != nil || selected == nil || selected.MessageID != reviewRuns[0].MessageID || selected.SandboxID != reviewRuns[0].Sandbox.ID {
+		t.Fatalf("global queued reviewer selection=%#v reviewer=%#v err=%v", selected, reviewRuns[0], err)
+	}
+}
+
 func TestUnsettledHarnessInventoryIncludesActiveReviewRegardlessOfRole(t *testing.T) {
 	_, store, _ := testDatabase(t)
 	ctx := context.Background()
@@ -1931,16 +2101,11 @@ func TestReviewAgentOperationRequiresExactNamedSandboxForSubmitAndRecovery(t *te
 			}
 
 			externals := &reviewOperationIntegrationExternals{integrationExternals: &integrationExternals{}}
-			agents := &reviewOperationIntegrationResolver{store: store, externals: externals, messageID: run.MessageID}
+			agents := &reviewOperationIntegrationResolver{store: store, externals: externals}
 			execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentExecution(agents)
 			taskName := "dorf-review-named-sandbox-proof-v1"
 			client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-				agents.sandboxID = core.MainSandboxName(job.ID)
-				if err := execution.ReconcileJobAgent(taskCtx, job.ID); err == nil {
-					return core.TaskResultV1{}, fmt.Errorf("default Sandbox satisfied an isolated review Message")
-				}
-				agents.sandboxID = run.Sandbox.ID
-				if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+				if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 					return core.TaskResultV1{}, err
 				}
 				result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, run.MessageID)
@@ -2839,12 +3004,6 @@ func (e *reviewOperationIntegrationExternals) reviewCalls() (int, int, []string)
 type reviewOperationIntegrationResolver struct {
 	store     postgres.Store
 	externals *reviewOperationIntegrationExternals
-	messageID string
-	sandboxID string
-}
-
-func (r reviewOperationIntegrationResolver) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
-	return &core.AgentMessageWork{MessageID: r.messageID, SandboxID: r.sandboxID}, nil
 }
 
 func (reviewOperationIntegrationResolver) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
@@ -2855,52 +3014,30 @@ func (r reviewOperationIntegrationResolver) ResolveAgentRunOperation(ctx context
 	return coding.NewReviewAgentOperation(ctx, r.store, r.externals, execution)
 }
 
-type codingAgentExecution struct {
+type integrationAgentExecution struct {
 	store     postgres.Store
 	externals *integrationExternals
 }
 
-type countingCodingAgentExecution struct {
-	codingAgentExecution
-	selections int
-}
-
-func (s *countingCodingAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	s.selections++
-	return s.codingAgentExecution.SelectAgentMessage(ctx, jobID)
-}
-
-func (s codingAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	return coding.SelectAgentMessage(ctx, s.store, jobID)
-}
-
-func (s codingAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+func (s integrationAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
+	if execution.Job.Workflow == "" && execution.Job.WorkflowRevision == "" {
+		return execution.Message.Input, nil
+	}
 	if err := s.store.ValidateCodingAgentMessage(ctx, execution); err != nil {
 		return "", err
 	}
 	return execution.Message.Input, nil
 }
 
-func (s codingAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+func (s integrationAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	return integrationAgentOperation{externals: s.externals, execution: execution}, nil
 }
 
-// resultBoundaryAgentExecution leaves selector eligibility to the real
-// coding coordinator so this proof can replay a completed steer receipt and
-// exercise both Core completed-run result branches.
+// resultBoundaryAgentExecution lets Core's generic selector replay a completed
+// steer receipt and exercise both completed-run result branches.
 type resultBoundaryAgentExecution struct {
-	store     postgres.Store
-	fixed     *core.AgentMessageWork
 	externals *integrationExternals
 	operation core.AgentRunOperation
-}
-
-func (s resultBoundaryAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	if s.fixed != nil {
-		selected := *s.fixed
-		return &selected, nil
-	}
-	return s.store.CodingAgentMessage(ctx, jobID)
 }
 
 func (resultBoundaryAgentExecution) ResolveAgentPrompt(_ context.Context, execution core.AgentMessageExecution) (string, error) {
@@ -2920,14 +3057,9 @@ type cleanupOnlyAgentExecution struct {
 	externals      *integrationExternals
 }
 
-func (s *cleanupOnlyAgentExecution) SelectAgentMessage(context.Context, string) (*core.AgentMessageWork, error) {
-	s.executionCalls++
-	return nil, errors.New("ordinary execution selection must not run after admission closes")
-}
-
 func (s *cleanupOnlyAgentExecution) ResolveAgentPrompt(context.Context, core.AgentMessageExecution) (string, error) {
 	s.executionCalls++
-	return "", errors.New("ordinary execution eligibility must not run after admission closes")
+	return "", errors.New("ordinary prompt resolution must not run after admission closes")
 }
 
 func (s *cleanupOnlyAgentExecution) ResolveAgentRunOperation(_ context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
@@ -3078,11 +3210,11 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	externals := &integrationExternals{}
-	agents := &countingCodingAgentExecution{codingAgentExecution: codingAgentExecution{store: store, externals: externals}}
+	agents := integrationAgentExecution{store: store, externals: externals}
 	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).WithAgentExecution(agents)
 	staleTaskName := "stale-provider-effect-v1"
 	client.MustRegister(absurd.Task(staleTaskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
-		if err := service.ReconcileJobAgent(taskCtx, job.ID); err == nil {
+		if _, err := service.ReconcileJobAgent(taskCtx, job.ID); err == nil {
 			return core.TaskResultV1{}, fmt.Errorf("unattached task reached Agent Message selection")
 		}
 		if err := service.ExecuteSandboxAction(taskCtx, job.ID, owned.ID, action.Kind); err == nil {
@@ -3107,9 +3239,6 @@ func TestJobTaskAttachmentFencesStaleEffectsAndAgentSelection(t *testing.T) {
 	}
 	if got := externals.effectKinds(); len(got) != 0 {
 		t.Fatalf("unattached stale task mutated provider: %v", got)
-	}
-	if agents.selections != 0 {
-		t.Fatalf("unattached stale task invoked Agent selector %d times", agents.selections)
 	}
 	unchanged, err := store.AgentMessageExecution(ctx, follow.Message.ID)
 	if err != nil || unchanged.AgentRun.ThreadID != "" {

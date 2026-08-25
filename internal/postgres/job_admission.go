@@ -19,8 +19,11 @@ func normalizeCoreAdmission(input core.JobAdmission) (core.JobAdmission, error) 
 	input.ProviderConnection = strings.TrimSpace(input.ProviderConnection)
 	input.Model = strings.TrimSpace(input.Model)
 	input.ReasoningEffort = strings.TrimSpace(input.ReasoningEffort)
-	if input.AdmissionKey == "" || input.Workflow == "" || input.WorkflowRevision == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
-		return core.JobAdmission{}, fmt.Errorf("admission requires key, workflow revision, complete goal, Sandbox profile, AI connection, and model")
+	if (input.Workflow == "") != (input.WorkflowRevision == "") {
+		return core.JobAdmission{}, fmt.Errorf("workflow name and revision must either both be absent or both be present")
+	}
+	if input.AdmissionKey == "" || strings.TrimSpace(input.Goal) == "" || input.SandboxProfile == "" || input.ProviderConnection == "" || input.Model == "" {
+		return core.JobAdmission{}, fmt.Errorf("admission requires key, complete goal, Sandbox profile, AI connection, and model")
 	}
 	if input.ReasoningEffort != "low" && input.ReasoningEffort != "medium" && input.ReasoningEffort != "high" && input.ReasoningEffort != "xhigh" {
 		return core.JobAdmission{}, fmt.Errorf("reasoning effort must be low, medium, high, or xhigh")

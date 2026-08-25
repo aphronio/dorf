@@ -300,7 +300,7 @@ func (q *Queries) GetJob(ctx context.Context, jobID string) (GetJobRow, error) {
 }
 
 const getJobAdmissionForUpdate = `-- name: GetJobAdmissionForUpdate :one
-select workflow_name,workflow_revision,admission_open,
+select workflow_name,workflow_revision,admission_open,cleanup_state,
        exists(select 1 from dorf.job_outcomes where job_id=dorf.jobs.id) as outcome_exists
 from dorf.jobs
 where id=$1
@@ -311,6 +311,7 @@ type GetJobAdmissionForUpdateRow struct {
 	WorkflowName     core.WorkflowName
 	WorkflowRevision string
 	AdmissionOpen    bool
+	CleanupState     core.CleanupState
 	OutcomeExists    bool
 }
 
@@ -321,6 +322,7 @@ func (q *Queries) GetJobAdmissionForUpdate(ctx context.Context, jobID string) (G
 		&i.WorkflowName,
 		&i.WorkflowRevision,
 		&i.AdmissionOpen,
+		&i.CleanupState,
 		&i.OutcomeExists,
 	)
 	return i, err

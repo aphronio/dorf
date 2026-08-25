@@ -18,7 +18,7 @@ select count(*)
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
-  and ar.role='implement' and ar.state not in ('completed','failed','interrupted')
+  and ar.state not in ('completed','failed','interrupted')
 `
 
 func (q *Queries) CountUnsettledInputs(ctx context.Context, jobID string) (int64, error) {
@@ -28,37 +28,35 @@ func (q *Queries) CountUnsettledInputs(ctx context.Context, jobID string) (int64
 	return count, err
 }
 
-const getActiveImplementationTurn = `-- name: GetActiveImplementationTurn :one
+const getActiveAgentTurn = `-- name: GetActiveAgentTurn :one
 select coalesce(turn_id,'') as turn_id,coalesce(harness,'') as harness,
-       coalesce(thread_id,'') as thread_id,role
-from dorf.agent_runs
-where job_id=$1 and state='active' and turn_id is not null
-  and role='implement' and sandbox_id=$2
-order by started_at,id
-limit 1
+       coalesce(thread_id,'') as thread_id
+from dorf.agent_runs ar
+where ar.job_id=$1 and ar.state='active' and ar.turn_id is not null
+  and ar.role=$2 and ar.sandbox_id=$3
+  and (
+    select count(*) from dorf.agent_runs active
+    where active.job_id=$1 and active.state='active' and active.turn_id is not null
+      and active.role=$2 and active.sandbox_id=$3
+  )=1
 `
 
-type GetActiveImplementationTurnParams struct {
+type GetActiveAgentTurnParams struct {
 	JobID     string
+	Role      string
 	SandboxID string
 }
 
-type GetActiveImplementationTurnRow struct {
+type GetActiveAgentTurnRow struct {
 	TurnID   string
 	Harness  string
 	ThreadID string
-	Role     string
 }
 
-func (q *Queries) GetActiveImplementationTurn(ctx context.Context, arg GetActiveImplementationTurnParams) (GetActiveImplementationTurnRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveImplementationTurn, arg.JobID, arg.SandboxID)
-	var i GetActiveImplementationTurnRow
-	err := row.Scan(
-		&i.TurnID,
-		&i.Harness,
-		&i.ThreadID,
-		&i.Role,
-	)
+func (q *Queries) GetActiveAgentTurn(ctx context.Context, arg GetActiveAgentTurnParams) (GetActiveAgentTurnRow, error) {
+	row := q.db.QueryRowContext(ctx, getActiveAgentTurn, arg.JobID, arg.Role, arg.SandboxID)
+	var i GetActiveAgentTurnRow
+	err := row.Scan(&i.TurnID, &i.Harness, &i.ThreadID)
 	return i, err
 }
 
@@ -67,7 +65,7 @@ select m.sequence,coalesce(ar.state,'') as state,coalesce(ar.attention,'') as at
 from dorf.job_messages m
 left join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1
-  and ar.role='implement' and ar.state not in ('completed','failed','interrupted')
+  and ar.state not in ('completed','failed','interrupted')
 order by m.sequence
 limit 1
 `
@@ -85,24 +83,37 @@ func (q *Queries) GetFirstUnsettledInput(ctx context.Context, jobID string) (Get
 	return i, err
 }
 
-const getLatestImplementationRun = `-- name: GetLatestImplementationRun :one
-select ar.id,ar.state
-from dorf.job_messages m
-join dorf.agent_runs ar on ar.message_id=m.id
-where m.job_id=$1 and ar.role='implement'
+const getLatestAgentRun = `-- name: GetLatestAgentRun :one
+select state,coalesce(turn_outcome,'') as turn_outcome,
+       coalesce(harness,'') as harness,coalesce(thread_id,'') as thread_id
+from dorf.agent_runs ar
+join dorf.job_messages m on m.id=ar.message_id
+where ar.job_id=$1 and ar.role=$2
 order by m.sequence desc
 limit 1
 `
 
-type GetLatestImplementationRunRow struct {
-	ID    string
-	State core.AgentRunState
+type GetLatestAgentRunParams struct {
+	JobID string
+	Role  string
 }
 
-func (q *Queries) GetLatestImplementationRun(ctx context.Context, jobID string) (GetLatestImplementationRunRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestImplementationRun, jobID)
-	var i GetLatestImplementationRunRow
-	err := row.Scan(&i.ID, &i.State)
+type GetLatestAgentRunRow struct {
+	State       core.AgentRunState
+	TurnOutcome string
+	Harness     string
+	ThreadID    string
+}
+
+func (q *Queries) GetLatestAgentRun(ctx context.Context, arg GetLatestAgentRunParams) (GetLatestAgentRunRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestAgentRun, arg.JobID, arg.Role)
+	var i GetLatestAgentRunRow
+	err := row.Scan(
+		&i.State,
+		&i.TurnOutcome,
+		&i.Harness,
+		&i.ThreadID,
+	)
 	return i, err
 }
 
@@ -115,9 +126,7 @@ select ar.id,ar.job_id,ar.state,ar.role,coalesce(ar.input_revision,'') as input_
 from dorf.job_messages m
 join dorf.agent_runs ar on ar.message_id=m.id
 where m.job_id=$1 and ar.role='implement'
-  and (m.delivery_intent='follow' or (
-    m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
-  ))
+  and m.delivery_intent='follow'
 order by m.sequence desc
 limit 1
 `
@@ -405,14 +414,13 @@ select coalesce(
         select min(m.sequence)
         from dorf.job_messages m
         join dorf.agent_runs ar on ar.message_id=m.id
-        where m.job_id=$1 and m.sequence>1 and ar.role='implement'
+        where m.job_id=$1 and m.sequence>1
           and ar.state='pending' and ar.turn_id is null
           and not exists (
               select 1
               from dorf.job_messages earlier
               join dorf.agent_runs earlier_run on earlier_run.message_id=earlier.id
               where earlier.job_id=m.job_id and earlier.sequence<m.sequence
-                and earlier_run.role='implement'
                 and earlier_run.state not in ('completed','failed','interrupted')
           )
     ),

@@ -94,9 +94,6 @@ func (s Store) RecordOutcome(ctx context.Context, receipt coding.Outcome) (codin
 	if err != nil {
 		return coding.Outcome{}, false, err
 	}
-	if err := expectOneRows(queries.CloseAdmissionForOutcome(ctx, receipt.JobID)); err != nil {
-		return coding.Outcome{}, false, fmt.Errorf("close admission for Job outcome: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return coding.Outcome{}, false, err
 	}

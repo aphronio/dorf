@@ -13,10 +13,51 @@ import (
 	"github.com/aphronio/dorf/internal/investigation"
 )
 
-type workflowPresentation interface {
-	OperationLabel(string, string) string
+type jobPresentation interface {
 	ActionLabel(core.ActionKind) string
 	AgentRoleLabel(string) string
+}
+
+// coreJobPresentation is generic CLI copy for Jobs without workflow-owned
+// presentation. It does not participate in execution or Message delivery.
+type coreJobPresentation struct{}
+
+func (coreJobPresentation) ActionLabel(kind core.ActionKind) string {
+	switch kind {
+	case core.ActionSandboxCreate:
+		return "Provisioning Sandbox"
+	case core.ActionRouteCreate:
+		return "Connecting model access"
+	case core.ActionRouteRevoke:
+		return "Revoking model access"
+	case core.ActionSandboxDelete:
+		return "Deleting Sandbox"
+	default:
+		return humanIdentifier(string(kind))
+	}
+}
+
+func (coreJobPresentation) AgentRoleLabel(role string) string {
+	if role == "direct" {
+		return "Agent"
+	}
+	return humanIdentifier(role)
+}
+
+func deliveryMessages(deliveries []core.Delivery) []core.Message {
+	messages := make([]core.Message, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		messages = append(messages, delivery.Message)
+	}
+	return messages
+}
+
+func deliveryAgentRuns(deliveries []core.Delivery) []core.AgentRun {
+	runs := make([]core.AgentRun, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		runs = append(runs, delivery.AgentRun)
+	}
+	return runs
 }
 
 // historyEntry is disposable human copy projected from durable product facts.
@@ -83,16 +124,25 @@ func investigationHistory(snapshot investigation.Snapshot, deliveries []core.Del
 	return sortedHistory(entries)
 }
 
+func directJobHistory(job core.Job, deliveries []core.Delivery, actions []core.Action) []historyEntry {
+	definition := coreJobPresentation{}
+	entries := commonHistory(job, deliveries, actions)
+	for _, delivery := range deliveries {
+		if delivery.Message.Sequence > 1 {
+			addHistoryEntry(&entries, delivery.Message.AdmittedAt, fmt.Sprintf("Message %d received", delivery.Message.Sequence))
+		}
+		addAgentRunHistory(&entries, definition, delivery)
+	}
+	return sortedHistory(entries)
+}
+
 func commonHistory(job core.Job, deliveries []core.Delivery, actions []core.Action) []historyEntry {
 	entries := make([]historyEntry, 0, 3+2*len(actions))
 	addHistoryEntry(&entries, job.AdmittedAt, "Job admitted")
 	if strings.TrimSpace(job.WorkflowAttention) != "" {
 		addHistoryEntry(&entries, job.WorkflowAttentionAt, "Needs attention · "+job.WorkflowAttention)
 	}
-	runs := make([]core.AgentRun, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		runs = append(runs, delivery.AgentRun)
-	}
+	runs := deliveryAgentRuns(deliveries)
 	for _, action := range actions {
 		addHistoryEntry(&entries, action.CreatedAt, actionStartedText(job, runs, action))
 		if !action.SettledAt.IsZero() {
@@ -103,7 +153,7 @@ func commonHistory(job core.Job, deliveries []core.Delivery, actions []core.Acti
 	return entries
 }
 
-func addAgentRunHistory(entries *[]historyEntry, definition workflowPresentation, delivery core.Delivery) {
+func addAgentRunHistory(entries *[]historyEntry, definition jobPresentation, delivery core.Delivery) {
 	run := delivery.AgentRun
 	role := agentRunHumanRole(definition, run)
 	context := ""
@@ -121,7 +171,7 @@ func addAgentRunHistory(entries *[]historyEntry, definition workflowPresentation
 	addHistoryEntry(entries, run.FinishedAt, text+context)
 }
 
-func agentRunHumanRole(definition workflowPresentation, run core.AgentRun) string {
+func agentRunHumanRole(definition jobPresentation, run core.AgentRun) string {
 	role := definition.AgentRoleLabel(run.Role)
 	if run.Capability == coding.ReviewReadOnlyCapability && !strings.Contains(strings.ToLower(role), "reviewer") {
 		role += " reviewer"

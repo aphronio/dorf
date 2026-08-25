@@ -232,8 +232,8 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 		return core.Message{}, false, err
 	}
 	missing := errors.Is(err, sql.ErrNoRows)
-	if missing && (!run.AdmissionOpen || run.OutcomeExists) {
-		return core.Message{}, false, fmt.Errorf("Job %s cannot accept new review feedback after admission closes or an Outcome is recorded", run.JobID)
+	if missing && !run.AdmissionOpen {
+		return core.Message{}, false, fmt.Errorf("Job %s cannot accept new review feedback after admission closes", run.JobID)
 	}
 	if err := insertEvidence(ctx, tx, run.JobID, observed); err != nil {
 		return core.Message{}, false, err
@@ -250,9 +250,10 @@ func (s Store) RecordReviewFeedback(ctx context.Context, runID string, outcome c
 			return core.Message{}, false, err
 		}
 		implementationRunID := core.AgentRunID(expectedMessage.ID)
-		if err := expectOneRows(queries.InsertImplementationAgentRun(ctx, dbsql.InsertImplementationAgentRunParams{
+		if err := expectOneRows(queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: implementationRunID, JobID: run.JobID, MessageID: expectedMessage.ID,
-			InputRevision: nullableString(run.CurrentRevision), SandboxID: core.MainSandboxName(run.JobID),
+			Role: coding.InitialAgentRole, InputRevision: nullableString(run.CurrentRevision),
+			SandboxID: core.MainSandboxName(run.JobID),
 		})); err != nil {
 			return core.Message{}, false, err
 		}

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,6 +24,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/doctor"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -121,6 +124,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	defer client.Close()
 	switch args[0] {
+	case "run":
+		return runDirect(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "admit":
 		return admit(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "workflow":
@@ -146,6 +151,69 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+func runDirect(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("run", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable caller admission identity")
+	goalFile := set.String("goal-file", "", "path containing the complete goal")
+	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
+	model := set.String("model", "", "Harness model")
+	effort := set.String("reasoning", "high", "Harness reasoning effort")
+	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("run does not accept positional arguments")
+	}
+	goal, err := readInput(*goalFile, "run", "goal")
+	if err != nil {
+		return err
+	}
+	admissionKey, generatedKey, err := directAdmissionKey(*key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	if generatedKey {
+		fmt.Fprintf(stderr, "Generated admission key %s; if this command is interrupted, retry with --key %s.\n", admissionKey, admissionKey)
+	}
+	profile, err := selectedSandboxProfile(ctx, store, *profileName)
+	if err != nil {
+		return err
+	}
+	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
+	selectedConnection, err := selectedAIConnection(providers, *connection)
+	if err != nil {
+		return err
+	}
+	input := core.JobAdmission{
+		AdmissionKey: admissionKey, Goal: goal, SandboxProfile: profile.Name,
+		ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort,
+	}
+	job, created, err := direct.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, input)
+	if err != nil {
+		return err
+	}
+	return writeJSON(stdout, map[string]any{
+		"job_id": job.ID, "admission_key": admissionKey, "client": "dorf-cli", "created": created,
+		"task_id": job.CurrentTaskID, "scheduled": job.AdmissionOpen && job.CurrentTaskID != "",
+	})
+}
+
+func directAdmissionKey(value string, source io.Reader) (string, bool, error) {
+	if value = strings.TrimSpace(value); value != "" {
+		return value, false, nil
+	}
+	if source == nil {
+		return "", false, fmt.Errorf("generate direct admission key: randomness is not configured")
+	}
+	random := make([]byte, 16)
+	if _, err := io.ReadFull(source, random); err != nil {
+		return "", false, fmt.Errorf("generate direct admission key: %w", err)
+	}
+	return "direct-" + hex.EncodeToString(random), true, nil
+}
+
 func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	client, err := absurdClient(db)
 	if err != nil {
@@ -162,32 +230,35 @@ func application(db *sql.DB, cfg config.Config) (*absurd.Client, error) {
 	core.SandboxRuntimes = runtimes
 	core.CleanupRuntimes = runtimes
 	core.RegisterCleanup()
+	direct.Register(core, store, runtimes)
 	coding.Register(core, store, runtimes)
 	investigation.Register(core, store, runtimes)
 	return client, nil
 }
 
 func coreApplication(store postgres.Store, client *absurd.Client) core.Application {
-	return core.Application{Store: store, Tasks: client, AgentMessages: workflowMessageAdmissions{store: store}}
+	return core.Application{Store: store, Tasks: client, AgentMessages: composedMessageAdmissions{store: store}}
 }
 
-// workflowMessageAdmissions is closed-world deployment composition, not a
-// Core workflow registry. Each known module retains its policy transaction.
-type workflowMessageAdmissions struct{ store postgres.Store }
+// composedMessageAdmissions is closed-world deployment composition, not a
+// Core registry. Each known workflow or client supplies its execution envelope.
+type composedMessageAdmissions struct{ store postgres.Store }
 
-func (a workflowMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
+func (a composedMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	job, err := a.store.Job(ctx, input.JobID)
 	if err != nil {
 		return core.MessageAdmissionResult{}, err
 	}
 	var admitted core.MessageAdmissionResult
 	switch {
+	case job.Workflow == "" && job.WorkflowRevision == "":
+		admitted, err = a.store.AdmitDirectMessage(ctx, input)
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
 		admitted, err = a.store.AdmitCodingMessage(ctx, input)
 	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
 		admitted, err = a.store.AdmitInvestigationMessage(ctx, input)
 	default:
-		return core.MessageAdmissionResult{}, fmt.Errorf("workflow %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
+		return core.MessageAdmissionResult{}, fmt.Errorf("Job contract %s revision %s does not accept Messages in this deployment", job.Workflow, job.WorkflowRevision)
 	}
 	if err != nil {
 		return admitted, err
@@ -1127,6 +1198,9 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		defer stop()
 		return followJob(followCtx, store, client, evidenceStore, job.ID, stdout)
 	}
+	if job.Workflow == "" && job.WorkflowRevision == "" {
+		return inspectDirectJob(ctx, store, client, job, profile, *jsonOutput, stdout)
+	}
 	if job.Workflow == investigation.Workflow {
 		return inspectCodebaseInvestigation(ctx, store, client, job, profile, *jsonOutput, stdout)
 	}
@@ -1189,13 +1263,10 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		readiness = "ready"
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
+	renderExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  goal: %s\n  repository: %s\n  current Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  readiness: %s — %s\n", job.Goal, codingJob.Repository, codingJob.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, readiness, assessment.Reason)
 	renderWorkflow(stdout, currentWork)
-	if job.WorkflowAttention != "" {
-		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
-		renderWorkflowAttentionRecovery(stdout, job, currentExecution)
-	}
+	renderJobAttention(stdout, job, currentExecution)
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
@@ -1221,6 +1292,120 @@ func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, e
 		fmt.Fprintf(stdout, " observed-at=%s\n", snapshot.Outcome.ObservedAt.Format(time.RFC3339Nano))
 	}
 	renderHistory(stdout, history)
+	return nil
+}
+
+type directJobFacts struct {
+	MainSandbox core.Sandbox
+	Sandboxes   []core.Sandbox
+	Actions     []core.Action
+	Deliveries  []core.Delivery
+}
+
+func loadDirectJobFacts(ctx context.Context, store postgres.Store, jobID string) (directJobFacts, error) {
+	var facts directJobFacts
+	var err error
+	facts.Sandboxes, err = store.Sandboxes(ctx, jobID)
+	if err != nil {
+		return facts, err
+	}
+	for _, sandbox := range facts.Sandboxes {
+		if sandbox.ID == core.MainSandboxName(jobID) && sandbox.Name == core.DefaultSandbox {
+			facts.MainSandbox = sandbox
+			break
+		}
+	}
+	if facts.MainSandbox.ID == "" {
+		return facts, fmt.Errorf("direct Job %s has no exact default Sandbox reservation", jobID)
+	}
+	facts.Actions, err = store.Actions(ctx, jobID)
+	if err != nil {
+		return facts, err
+	}
+	facts.Deliveries, err = store.Deliveries(ctx, jobID)
+	if err != nil {
+		return facts, err
+	}
+	return facts, nil
+}
+
+func directCurrent(job core.Job, main core.Sandbox, actions []core.Action, deliveries []core.Delivery) (operation, detail string, attention, idle bool) {
+	if !job.AdmissionOpen {
+		return "Complete", "admission closed", false, false
+	}
+	if job.WorkflowAttention != "" {
+		return "Needs attention", job.WorkflowAttention, true, false
+	}
+	if !core.HasSucceededAction(actions, core.ActionSandboxCreate, main.ID) {
+		return "Provisioning Sandbox", "", false, false
+	}
+	if !core.HasSucceededAction(actions, core.ActionRouteCreate, main.ID) {
+		return "Connecting model access", "", false, false
+	}
+	for _, delivery := range deliveries {
+		run := delivery.AgentRun
+		if run.Attention != "" {
+			return "Needs attention", run.Attention, true, false
+		}
+		switch run.State {
+		case core.AgentRunCompleted:
+			if run.TurnOutcome == "completed" {
+				continue
+			}
+			return "Needs attention", "agent completed without a successful Turn outcome", true, false
+		case core.AgentRunFailed, core.AgentRunInterrupted, core.AgentRunUncertain:
+			return "Needs attention", "agent delivery ended with state " + string(run.State), true, false
+		default:
+			return "Awaiting agent", "", false, false
+		}
+	}
+	return "Open and idle", "", false, true
+}
+
+func inspectDirectJob(ctx context.Context, store postgres.Store, client *absurd.Client, job core.Job, profile core.SandboxProfile, jsonOutput bool, stdout io.Writer) error {
+	facts, err := loadDirectJobFacts(ctx, store, job.ID)
+	if err != nil {
+		return err
+	}
+	operation, detail, _, idle := directCurrent(job, facts.MainSandbox, facts.Actions, facts.Deliveries)
+	executions, err := fetchJobTaskExecutions(ctx, store, client, job)
+	if err != nil {
+		return err
+	}
+	currentExecution := currentTaskExecution(executions)
+	if cleanup, ok := cleanupOperation(coreJobPresentation{}, job, facts.Sandboxes, facts.Actions); ok {
+		operation = cleanup
+		detail = ""
+	}
+	if jsonOutput {
+		view := map[string]any{
+			"job": job, "client": "dorf-cli", "sandbox_profile": profileView(profile), "current": operation,
+			"observed_facts": map[string]any{
+				"actions": facts.Actions, "agent_runs": deliveryAgentRuns(facts.Deliveries),
+				"sandboxes": facts.Sandboxes, "messages": deliveryMessages(facts.Deliveries),
+			},
+			"execution": executions,
+		}
+		if detail != "" {
+			view["current_detail"] = detail
+		}
+		return writeJSON(stdout, view)
+	}
+	fmt.Fprintf(stdout, "Job %s\n  client: dorf-cli\n", job.ID)
+	renderExecutionAttention(stdout, job, currentExecution, operation)
+	fmt.Fprintf(stdout, "  goal: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n  current: %s\n",
+		job.Goal, profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState, operation)
+	if detail != "" {
+		fmt.Fprintf(stdout, "  detail: %s\n", detail)
+	}
+	renderJobAttention(stdout, job, currentExecution)
+	if job.CleanupAttention != "" {
+		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
+	}
+	if idle && job.CleanupState == core.CleanupPending {
+		fmt.Fprintf(stdout, "  next: send another Message, read a Sandbox file, or run dorf cleanup %s\n", job.ID)
+	}
+	renderHistory(stdout, directJobHistory(job, facts.Deliveries, facts.Actions))
 	return nil
 }
 
@@ -1255,12 +1440,12 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		return writeJSON(stdout, map[string]any{
 			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": report,
 			"required_provider_capabilities": definition.RequiredProviderCapabilities,
-			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": investigationAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
+			"observed_facts":                 map[string]any{"actions": snapshot.Actions, "agent_runs": deliveryAgentRuns(deliveries), "sandbox": snapshot.MainSandbox},
 			"execution":                      executions,
 		})
 	}
 	fmt.Fprintf(stdout, "Job %s\n  workflow: %s revision %s\n", job.ID, job.Workflow, job.WorkflowRevision)
-	renderWorkflowExecutionAttention(stdout, job, currentExecution, executionOperation)
+	renderExecutionAttention(stdout, job, currentExecution, executionOperation)
 	fmt.Fprintf(stdout, "  brief: %s\n  source: %s\n  exact Revision: %s\n  required provider capabilities: %s\n  Sandbox profile: %s · %s · %s\n  admission: %s\n  cleanup: %s\n",
 		job.Goal, investigationSourceSummary(snapshot.Source), snapshot.Source.Revision, joinProviderCapabilities(definition.RequiredProviderCapabilities), profile.Name, profile.Provider, profile.Harness, openClosed(job.AdmissionOpen), job.CleanupState)
 	currentWork := string(work.Kind)
@@ -1272,10 +1457,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 		fmt.Fprintf(stdout, " — %s", work.Detail)
 	}
 	fmt.Fprintln(stdout)
-	if job.WorkflowAttention != "" {
-		fmt.Fprintf(stdout, "  attention: %s\n", job.WorkflowAttention)
-		renderWorkflowAttentionRecovery(stdout, job, currentExecution)
-	}
+	renderJobAttention(stdout, job, currentExecution)
 	if job.CleanupAttention != "" {
 		fmt.Fprintf(stdout, "  cleanup attention: %s\n", job.CleanupAttention)
 	}
@@ -1293,14 +1475,6 @@ func renderInvestigationReportAccess(stdout io.Writer, job core.Job) {
 	} else if job.CleanupState != core.CleanupPending {
 		fmt.Fprintln(stdout, "  report retrieval: unavailable after cleanup began")
 	}
-}
-
-func investigationAgentRuns(deliveries []core.Delivery) []core.AgentRun {
-	runs := make([]core.AgentRun, 0, len(deliveries))
-	for _, delivery := range deliveries {
-		runs = append(runs, delivery.AgentRun)
-	}
-	return runs
 }
 
 func investigationSourceSummary(source investigation.Source) string {
@@ -1559,11 +1733,14 @@ func boundedTaskError(raw json.RawMessage) string {
 	return message
 }
 
-func renderWorkflowExecutionAttention(output io.Writer, job core.Job, execution taskResultView, operation string) {
+func renderExecutionAttention(output io.Writer, job core.Job, execution taskResultView, operation string) {
 	if execution.State != absurd.TaskFailed || job.CleanupState == core.CleanupComplete {
 		return
 	}
 	label := "workflow stopped"
+	if job.Workflow == "" {
+		label = "job stopped"
+	}
 	if job.CleanupState == core.CleanupScheduled {
 		label = "cleanup stopped"
 	}
@@ -1577,13 +1754,21 @@ func renderWorkflowExecutionAttention(output io.Writer, job core.Job, execution 
 	fmt.Fprintf(output, "  next: repair the cause, then run dorf retry %s\n", job.ID)
 }
 
-func renderWorkflowAttentionRecovery(output io.Writer, job core.Job, execution taskResultView) {
+func renderExecutionRecovery(output io.Writer, job core.Job, execution taskResultView) {
 	if execution.State == absurd.TaskCompleted && job.CleanupState == core.CleanupPending {
 		fmt.Fprintf(output, "  next: run dorf cleanup %s to release resources\n", job.ID)
 	}
 }
 
+func renderJobAttention(output io.Writer, job core.Job, execution taskResultView) {
+	if job.WorkflowAttention == "" {
+		return
+	}
+	fmt.Fprintf(output, "  attention: %s\n", job.WorkflowAttention)
+	renderExecutionRecovery(output, job, execution)
+}
+
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|integration|migrate|doctor|provider|profile|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|integration|migrate|doctor|provider|profile|run|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

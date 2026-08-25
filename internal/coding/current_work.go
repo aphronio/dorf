@@ -154,44 +154,6 @@ func LoadSnapshot(ctx context.Context, store Store, jobID string) (Snapshot, err
 	return snapshot, nil
 }
 
-// SelectAgentMessage is coding's static, workflow-owned eligibility policy.
-// Core calls it under the Job fence before the typed coordinator evaluates
-// facts; callers never receive the selected Message or its lifecycle result.
-func SelectAgentMessage(ctx context.Context, store Store, jobID string) (*core.AgentMessageWork, error) {
-	f, err := LoadSnapshot(ctx, store, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if f.Outcome != nil || !f.Job.AdmissionOpen || !codingPrerequisitesComplete(f) ||
-		f.Proposal == nil && publicationPending(f.Actions, f.Job.Revision) {
-		return nil, nil
-	}
-	plan := f.currentReviewPlan()
-	if plan != nil {
-		byRole := make(map[string]ReviewRunView, len(f.ReviewRuns))
-		for _, run := range f.currentReviewRuns() {
-			byRole[run.Role] = run
-		}
-		for _, role := range plan.Plan.Roles {
-			run, ok := byRole[string(role)]
-			if !ok {
-				return nil, nil
-			}
-			if reviewFeedbackReturned(f.Messages, f.Job.ID, run.ID) {
-				continue
-			}
-			if run.Attention != "" || run.Outcome != "" || run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID ||
-				!actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) ||
-				!actionSucceeded(f.Actions, ActionReviewCheckout, run.Sandbox.ID) ||
-				!actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
-				return nil, nil
-			}
-			return &core.AgentMessageWork{MessageID: run.MessageID, SandboxID: run.Sandbox.ID}, nil
-		}
-	}
-	return store.CodingAgentMessage(ctx, jobID)
-}
-
 func (s Snapshot) currentReviewPlan() *ReviewPlanRecord {
 	for i := range s.ReviewPlans {
 		if s.ReviewPlans[i].Revision == s.Job.Revision {
@@ -209,12 +171,6 @@ func (s Snapshot) currentReviewRuns() []ReviewRunView {
 		}
 	}
 	return runs
-}
-
-func codingPrerequisitesComplete(f Snapshot) bool {
-	return actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) &&
-		actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) &&
-		actionSucceeded(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID)
 }
 
 // decideCurrentWork is intentionally an ordinary, coding-specific decision.
@@ -249,13 +205,13 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 
 	// Infrastructure is a fixed prerequisite chain. Sandbox-create truthfully
 	// projects Core custody; the workflow never executes its provider mutation.
-	if !actionSucceeded(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
+	if !core.HasSucceededAction(f.Actions, core.ActionSandboxCreate, f.MainSandbox.ID) {
 		return actionWork(core.ActionSandboxCreate, f.MainSandbox.ID, "")
 	}
-	if !actionSucceeded(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) {
+	if !core.HasSucceededAction(f.Actions, gitworkspace.ActionRepositoryClone, f.MainSandbox.ID) {
 		return actionWork(gitworkspace.ActionRepositoryClone, f.MainSandbox.ID, "")
 	}
-	if !actionSucceeded(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID) {
+	if !core.HasSucceededAction(f.Actions, core.ActionRouteCreate, f.MainSandbox.ID) {
 		return actionWork(core.ActionRouteCreate, f.MainSandbox.ID, "")
 	}
 	// Once exact-Revision publication Actions exist, reconcile them before a
@@ -290,13 +246,13 @@ func decideCurrentWorkWithReviewRuns(f Snapshot, reviewRuns []ReviewRunView) Wor
 			if run.Sandbox.ID == "" || run.Sandbox.ID != run.SandboxID || run.Sandbox.JobID != f.Job.ID {
 				return work(WorkAttention, run.ID, fmt.Sprintf("selected reviewer %s has no exact Job-owned Sandbox", role))
 			}
-			if !actionSucceeded(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) {
+			if !core.HasSucceededAction(f.Actions, core.ActionSandboxCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionSandboxCreate, run.Sandbox.ID, string(role))
 			}
-			if !actionSucceeded(f.Actions, ActionReviewCheckout, run.Sandbox.ID) {
+			if !core.HasSucceededAction(f.Actions, ActionReviewCheckout, run.Sandbox.ID) {
 				return actionWork(ActionReviewCheckout, run.Sandbox.ID, string(role))
 			}
-			if !actionSucceeded(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
+			if !core.HasSucceededAction(f.Actions, core.ActionRouteCreate, run.Sandbox.ID) {
 				return actionWork(core.ActionRouteCreate, run.Sandbox.ID, string(role))
 			}
 			if run.Outcome == "completed" {
@@ -354,15 +310,6 @@ func reviewFeedbackReturned(messages []MessageRecord, jobID, runID string) bool 
 		message := record.Message
 		if message.ID == expectedID && message.JobID == jobID && message.FromKind == core.MessageFromAgent && message.FromID == runID && message.Intent == core.MessageFollow {
 			return true
-		}
-	}
-	return false
-}
-
-func actionSucceeded(actions []core.Action, kind core.ActionKind, scope string) bool {
-	for _, action := range actions {
-		if action.Kind == kind && action.Scope == scope {
-			return action.State == core.ActionSucceeded
 		}
 	}
 	return false
@@ -476,12 +423,9 @@ func unchangedAttention(f Snapshot) (string, string) {
 		if message.Sequence <= previous || message.Sequence > last.sequence {
 			continue
 		}
-		// A steer bound to its active target settles inside an existing Turn. It
-		// shares that Turn's Git observation boundary and must not independently
-		// demand another committed Revision. A terminal-target fallback starts a
-		// Turn, remains a Revision boundary, and deliberately falls through.
-		sharedTurnSteer := message.Intent == core.MessageSteer && !record.StartsTurn
-		if message.FromKind == core.MessageFromAgent || sharedTurnSteer || message.FromKind == core.MessageFromHuman && exactProposal {
+		// A Steer settles inside its exact target Turn and shares that Turn's Git
+		// observation boundary; it never creates a separate Revision boundary.
+		if message.FromKind == core.MessageFromAgent || message.Intent == core.MessageSteer || message.FromKind == core.MessageFromHuman && exactProposal {
 			continue
 		}
 		return last.message.Message.ID, fmt.Sprintf("Message %s was handled without a new committed Revision", last.message.Message.ID)

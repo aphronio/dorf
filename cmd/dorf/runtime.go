@@ -11,6 +11,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	githubapi "github.com/aphronio/dorf/internal/github"
@@ -122,6 +123,14 @@ func (r profileRuntimeResolver) ResolveInvestigation(ctx context.Context, name s
 	return investigation.Runtime{Profile: resolved.Profile, Agent: resolved.Execution, Investigation: service}, nil
 }
 
+func (r profileRuntimeResolver) ResolveDirect(ctx context.Context, name string) (direct.Runtime, error) {
+	resolved, err := r.resolveBase(ctx, name)
+	if err != nil {
+		return direct.Runtime{}, err
+	}
+	return direct.Runtime{Profile: resolved.Profile, Execution: resolved.Execution}, nil
+}
+
 type resolvedBaseRuntime struct {
 	Profile   profileapp.Runtime
 	Execution core.ExecutionService
@@ -166,7 +175,7 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}
 	review := coding.ReviewController{Transport: sandbox, Agent: agent, Ownership: ownership}
 	execution := core.NewExecutionService(r.store, externals, r.barrier, absurdruntime.RequireClaim).
-		WithAgentExecution(workflowAgentExecution{store: r.store, externals: externals, review: review})
+		WithAgentExecution(composedAgentExecution{store: r.store, externals: externals, review: review})
 	return resolvedBaseRuntime{
 		Profile:   profileapp.Runtime{SandboxProfile: profile.Name},
 		Execution: execution,
@@ -174,32 +183,22 @@ func (r profileRuntimeResolver) resolveBase(ctx context.Context, name string) (r
 	}, nil
 }
 
-// workflowAgentExecution is static deployment composition. It resolves the
-// prompt and one cohesive Harness operation from the pinned workflow; Core
-// never switches on workflow, Role, or review policy.
-type workflowAgentExecution struct {
+// composedAgentExecution is static deployment composition. It resolves the
+// prompt and one cohesive Harness operation from the pinned consumer
+// contract; Core never switches on workflow, Role, or review policy.
+type composedAgentExecution struct {
 	store     postgres.Store
 	externals terminal.Externals
 	review    coding.ReviewExecution
 }
 
-func (s workflowAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	job, err := s.store.Job(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
+func (s composedAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
 	switch {
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		return coding.SelectAgentMessage(ctx, s.store, jobID)
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		return investigation.SelectAgentMessage(ctx, s.store, jobID)
-	default:
-		return nil, fmt.Errorf("Job %s has no statically composed Agent Message selector", jobID)
-	}
-}
-
-func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {
-	switch {
+	case execution.Job.Workflow == "" && execution.Job.WorkflowRevision == "":
+		if err := validateDirectAgentExecution(execution); err != nil {
+			return "", err
+		}
+		return execution.Message.Input, nil
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
 		return execution.Message.Input, nil
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Role == "implement":
@@ -229,8 +228,14 @@ func (s workflowAgentExecution) ResolveAgentPrompt(ctx context.Context, executio
 // ResolveAgentRunOperation is shared by reconciliation, settled observation,
 // and cleanup. Cleanup never asks for a prompt and the operation cannot choose
 // whether Core submits, recovers, or only observes.
-func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
+func (s composedAgentExecution) ResolveAgentRunOperation(ctx context.Context, execution core.AgentMessageExecution) (core.AgentRunOperation, error) {
 	switch {
+	case execution.Job.Workflow == "" && execution.Job.WorkflowRevision == "":
+		if err := validateDirectAgentExecution(execution); err != nil {
+			return nil, err
+		}
+		operation, err := terminal.NewAgentRunOperation(s.externals, execution)
+		return operation, err
 	case execution.Job.Workflow == coding.Workflow && execution.Job.WorkflowRevision == coding.WorkflowRevision && execution.AgentRun.Capability == coding.ReviewReadOnlyCapability:
 		operation, err := coding.NewReviewAgentOperation(ctx, s.store, s.review, execution)
 		if err != nil {
@@ -246,6 +251,16 @@ func (s workflowAgentExecution) ResolveAgentRunOperation(ctx context.Context, ex
 	default:
 		return nil, fmt.Errorf("Message %s has no statically composed Agent Harness operation", execution.Message.ID)
 	}
+}
+
+func validateDirectAgentExecution(execution core.AgentMessageExecution) error {
+	job, run := execution.Job, execution.AgentRun
+	if job.Workflow != "" || job.WorkflowRevision != "" || run.Role != direct.DirectAgentRole ||
+		run.Capability != "" || run.InputRevision != "" || run.SandboxID != core.MainSandboxName(job.ID) ||
+		execution.Sandbox.Name != core.DefaultSandbox {
+		return fmt.Errorf("Message %s conflicts with the exact client-directed Agent contract", execution.Message.ID)
+	}
+	return nil
 }
 
 func sandboxForProfile(cfg config.Config, profile core.SandboxProfile) (provider.Sandbox, error) {

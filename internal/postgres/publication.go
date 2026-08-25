@@ -24,8 +24,8 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (co
 	if err != nil {
 		return coding.Job{}, core.Action{}, core.Action{}, err
 	}
-	if !locked.AdmissionOpen || locked.CleanupState != core.CleanupPending {
-		return coding.Job{}, core.Action{}, core.Action{}, fmt.Errorf("publication cannot start after Job admission closes or cleanup begins")
+	if !locked.AdmissionOpen || locked.CleanupState != core.CleanupPending || locked.OutcomeExists {
+		return coding.Job{}, core.Action{}, core.Action{}, fmt.Errorf("publication cannot start after Job outcome, admission closure, or cleanup begins")
 	}
 	if locked.Revision != revision || !ValidRevision(revision) {
 		return coding.Job{}, core.Action{}, core.Action{}, fmt.Errorf("publication Revision %s conflicts with exact ready Revision %s", revision, locked.Revision)
@@ -52,7 +52,7 @@ func (s Store) BeginPublication(ctx context.Context, jobID, revision string) (co
 		if err != nil {
 			return coding.Job{}, core.Action{}, core.Action{}, err
 		}
-		latestInput, err := queries.GetLatestImplementationRun(ctx, jobID)
+		latestInput, err := queries.GetLatestAgentRun(ctx, dbsql.GetLatestAgentRunParams{JobID: jobID, Role: coding.InitialAgentRole})
 		if err != nil || latestInput.State != core.AgentRunCompleted {
 			return coding.Job{}, core.Action{}, core.Action{}, fmt.Errorf("publication cannot begin before the latest implementation input is finished and observed")
 		}

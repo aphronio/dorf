@@ -1,19 +1,3 @@
--- name: InsertImplementationAgentRun :execrows
-insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,input_revision,sandbox_id)
-select sqlc.arg(id),j.id,sqlc.arg(message_id),prior.harness,prior.thread_id,'implement','pending',sqlc.arg(input_revision),sqlc.arg(sandbox_id)
-from dorf.jobs j
-left join lateral (
-    select ar.harness,ar.thread_id
-    from dorf.agent_runs ar
-    left join dorf.job_messages m on m.id=ar.message_id
-    where ar.job_id=j.id and ar.sandbox_id=sqlc.arg(sandbox_id)
-      and ar.role='implement' and ar.thread_id is not null
-    order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
-    limit 1
-) prior on true
-where j.id=sqlc.arg(job_id)
-on conflict do nothing;
-
 -- name: InsertAdmittedAgentRun :execrows
 insert into dorf.agent_runs(
     id,job_id,message_id,harness,thread_id,role,state,input_revision,capability,sandbox_id
@@ -24,16 +8,16 @@ from dorf.jobs j
 where j.id=sqlc.arg(job_id)
 on conflict do nothing;
 
--- name: GetLatestImplementationThreadBinding :one
+-- name: GetLatestAgentThreadBinding :one
 select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
 from dorf.agent_runs ar
 left join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=sqlc.arg(job_id) and ar.role='implement'
+where ar.job_id=sqlc.arg(job_id) and ar.role=sqlc.arg(role)
   and ar.sandbox_id=sqlc.arg(sandbox_id) and ar.thread_id is not null
 order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
 limit 1;
 
--- name: BindPendingCodingMessageToPriorThread :execrows
+-- name: BindPendingFollowToPriorThread :execrows
 with prior as (
     select prior_run.harness,prior_run.thread_id
     from dorf.agent_runs current_run
@@ -42,9 +26,9 @@ with prior as (
       and prior_message.sequence<current_message.sequence
     join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
     where current_run.message_id=sqlc.arg(message_id)
-      and prior_run.role='implement' and prior_run.sandbox_id=current_run.sandbox_id
-      and prior_run.harness is not null and prior_run.thread_id is not null and prior_run.turn_id is not null
-      and (prior_message.delivery_intent='follow' or prior_run.turn_id<>prior_message.steer_target_turn_id)
+      and current_message.delivery_intent='follow'
+      and prior_run.role=current_run.role and prior_run.sandbox_id=current_run.sandbox_id
+      and prior_run.harness is not null and prior_run.thread_id is not null
     order by prior_message.sequence desc
     limit 1
 )
@@ -56,11 +40,11 @@ where current_run.message_id=sqlc.arg(message_id)
   and current_run.thread_id is null
   and (current_run.harness is null or current_run.harness=prior.harness);
 
--- name: ListImplementationThreadBindings :many
+-- name: ListAgentThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
 where job_id=sqlc.arg(job_id) and sandbox_id=sqlc.arg(sandbox_id)
-  and role='implement' and thread_id is not null
+  and role=sqlc.arg(role) and thread_id is not null
 order by id;
 
 -- name: GetAgentRunByMessage :one

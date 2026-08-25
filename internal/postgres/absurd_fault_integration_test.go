@@ -515,7 +515,6 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 	}
 	execution := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim).
 		WithAgentExecution(resultBoundaryAgentExecution{
-			fixed:     &core.AgentMessageWork{MessageID: messageID, SandboxID: core.MainSandboxName(job.ID)},
 			operation: blockingAgentOperation{externals: externals, message: deliveries[0].Message, job: job},
 		})
 	taskName := "dorf-agent-fence-proof-v1"
@@ -525,7 +524,7 @@ func TestAgentReconciliationClaimExpirySerializesReplacementAndRecoversLostSubmi
 			return faultActionResultV1{}, absurd.ErrNoTaskContext
 		}
 		externals.attempts <- task.RunID()
-		if err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
+		if _, err := execution.ReconcileJobAgent(taskCtx, job.ID); err != nil {
 			return faultActionResultV1{}, err
 		}
 		result, err := execution.ObserveSettledAgentMessage(taskCtx, job.ID, messageID)

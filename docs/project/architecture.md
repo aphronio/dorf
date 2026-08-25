@@ -91,14 +91,17 @@ rather than alternate application contracts.
 
 Accepted client input receives immutable Job-local identity and order. A caller-retained per-send
 idempotency key binds its complete admitted delivery request: the exact Sandbox, text, follow or
-steer intent and target, authorized Role, capability and input Revision when used, and the caller's
-Thread reuse choice. The same key and request return the same Message; changing any bound field
-conflicts; a different key may admit identical text. Sending through the Agent handle defaults to
-follow, which preserves FIFO order. Steer is a distinct explicit mode targeting active work and
-remains observable as such. Wake events make work eligible; they do not replace durable delivery
-facts. A later Message wakes the Job's existing execution task rather than attaching a task for that
-Message. A bounded reload of durable Message facts covers a missing wake hint, and an executor
-restart reclaims the same task attachment.
+steer intent and target, authorized Role, capability and input Revision when used, and the
+authoritative retained Thread. The same key and request return the same Message; changing any bound
+field conflicts; a different key may admit identical text. Sending through the Agent handle defaults
+to follow. While admission remains open, every accepted follow enters the FIFO, including input
+accepted before an earlier Turn settles; delivery reuses the authoritative retained Thread and
+creates a distinct Turn. Steer is a distinct priority mode whose exact active Turn target is captured
+atomically at admission. It may overtake queued follows, never falls back to a new Turn, and fails
+honestly if reconciliation observes that its target became terminal. Wake events make work eligible;
+they do not replace durable delivery facts. A later Message wakes the Job's existing execution task
+rather than attaching a task for that Message. A bounded reload of durable Message facts covers a
+missing wake hint, and an executor restart reclaims the same task attachment.
 
 An AgentRun is Core's internal durable recovery fact for one bounded delivery of one Message to an
 agent in a named Role and capability envelope. It retains the exact Harness, Thread, Turn,
@@ -114,9 +117,11 @@ Message delivery. Internal delivery reconciliation alternates observation with a
 durable wait, so an accepted steer can wake and overtake polling without another controller path or
 duplicate Turn.
 
-Thread reuse is a workflow choice. Coding may reuse an implementation Thread and isolate reviewers;
-research may choose a different pattern. That choice does not create a second durable conversation
-primitive.
+Consumers and workflows choose a typed execution envelope, including Role, capability, and any input
+Revision, but do not authorize message intent, reorder accepted input, or choose Thread semantics.
+Follow and steer retain the invariant behavior above. A workflow may still choose separate Sandboxes
+and Agent handles for responsibilities such as implementation and review; each handle then has its
+own authoritative retained Thread.
 
 ### Deterministic operations
 
@@ -180,11 +185,19 @@ current boundary. Future adapters may translate external events into idempotent 
 and render the same facts, but they must not expose PostgreSQL, Absurd, provider adapters, or Core as
 an embeddable runtime.
 
+The CLI's direct client admits a Job without workflow identity, delivers the caller's prompt through
+the `direct` Agent role, and leaves the Job open and idle after a successful Turn. Later follow or
+steer Messages, exact Sandbox file reads, and requested cleanup use the same Core custody as native
+workflows. The client—not Core—decides what the work means and when retained resources may be
+released.
+
 ## Native workflow composition
 
 Native workflows consume the same application boundary without a privileged execution path. They
-own typed input, sequencing, evaluation, external authorities, result meaning, and cleanup requests;
-Core owns the reusable custody beneath those decisions. Their product and authoring direction lives
+own typed input and execution envelopes, deterministic infrastructure-readiness policy, evaluation,
+external authorities, result meaning, and conditional cleanup requests; Core owns invariant message
+intent and ordering, Thread and Turn custody, and the reusable lifecycle mechanisms beneath those
+decisions. Their product and authoring direction lives
 in the [North Star](north-star.md), while concrete behavior lives in code and its tests.
 
 Git, coding, GitHub, publication, and human-in-the-loop behavior are workflow/module/client policy.

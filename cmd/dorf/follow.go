@@ -27,7 +27,7 @@ const (
 type followSnapshot struct {
 	Job             core.Job
 	Profile         core.SandboxProfile
-	Definition      workflowPresentation
+	Presentation    jobPresentation
 	History         []historyEntry
 	Operation       string
 	OperationDetail string
@@ -96,6 +96,21 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		return followSnapshot{}, err
 	}
 	switch job.Workflow {
+	case "":
+		if job.WorkflowRevision != "" {
+			return followSnapshot{}, fmt.Errorf("client-directed Job %s has a workflow revision without a workflow", job.ID)
+		}
+		facts, err := loadDirectJobFacts(ctx, store, jobID)
+		if err != nil {
+			return followSnapshot{}, err
+		}
+		operation, detail, attention, _ := directCurrent(job, facts.MainSandbox, facts.Actions, facts.Deliveries)
+		return followSnapshot{
+			Job: job, Profile: profile, Presentation: coreJobPresentation{}, History: directJobHistory(job, facts.Deliveries, facts.Actions),
+			Operation: operation, OperationDetail: detail, NeedsAttention: attention,
+			AgentRuns: deliveryAgentRuns(facts.Deliveries), Sandboxes: facts.Sandboxes,
+			Actions: facts.Actions, Execution: execution,
+		}.withCleanupOperation(), nil
 	case coding.Workflow:
 		snapshot, err := coding.LoadSnapshot(ctx, store, jobID)
 		if err != nil {
@@ -109,14 +124,10 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		if err != nil {
 			return followSnapshot{}, err
 		}
-		runs := make([]core.AgentRun, 0, len(deliveries))
-		for _, delivery := range deliveries {
-			runs = append(runs, delivery.AgentRun)
-		}
 		return followSnapshot{
-			Job: snapshot.Job.Job, Profile: profile, Definition: coding.WorkflowDefinition(), History: workflowHistory(snapshot, deliveries), Operation: projection.CurrentWork.Description(),
+			Job: snapshot.Job.Job, Profile: profile, Presentation: coding.WorkflowDefinition(), History: workflowHistory(snapshot, deliveries), Operation: projection.CurrentWork.Description(),
 			OperationDetail: projection.CurrentWork.Detail, NeedsAttention: projection.CurrentWork.Kind == coding.WorkAttention,
-			AgentRuns: runs, Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
+			AgentRuns: deliveryAgentRuns(deliveries), Sandboxes: snapshot.Sandboxes, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	case investigation.Workflow:
 		snapshot, err := investigation.LoadSnapshot(ctx, store, jobID)
@@ -129,8 +140,8 @@ func loadFollowSnapshot(ctx context.Context, store postgres.Store, client *absur
 		}
 		work := snapshot.Project()
 		return followSnapshot{
-			Job: snapshot.Job, Profile: profile, Definition: investigation.WorkflowDefinition(), History: investigationHistory(snapshot, deliveries), Operation: work.Description(), OperationDetail: work.Detail,
-			NeedsAttention: work.Kind == investigation.WorkAttention, AgentRuns: investigationAgentRuns(deliveries),
+			Job: snapshot.Job, Profile: profile, Presentation: investigation.WorkflowDefinition(), History: investigationHistory(snapshot, deliveries), Operation: work.Description(), OperationDetail: work.Detail,
+			NeedsAttention: work.Kind == investigation.WorkAttention, AgentRuns: deliveryAgentRuns(deliveries),
 			Sandboxes: []core.Sandbox{snapshot.MainSandbox}, Actions: snapshot.Actions, Execution: execution,
 		}.withCleanupOperation(), nil
 	default:
@@ -147,14 +158,14 @@ func (s followSnapshot) executionFailed() bool {
 }
 
 func (s followSnapshot) withCleanupOperation() followSnapshot {
-	if operation, ok := cleanupOperation(s.Definition, s.Job, s.Sandboxes, s.Actions); ok {
+	if operation, ok := cleanupOperation(s.Presentation, s.Job, s.Sandboxes, s.Actions); ok {
 		s.Operation = operation
 		s.OperationDetail = ""
 	}
 	return s
 }
 
-func cleanupOperation(definition workflowPresentation, job core.Job, sandboxes []core.Sandbox, actions []core.Action) (string, bool) {
+func cleanupOperation(definition jobPresentation, job core.Job, sandboxes []core.Sandbox, actions []core.Action) (string, bool) {
 	if job.CleanupState != core.CleanupScheduled {
 		return "", false
 	}
@@ -181,7 +192,7 @@ func newFollowRenderer(output io.Writer) *followRenderer {
 func (r *followRenderer) Start(snapshot followSnapshot) {
 	r.started = true
 	if !r.interactive {
-		fmt.Fprintf(r.output, "Following Job %s (%s revision %s); Ctrl-C to stop\n", snapshot.Job.ID, snapshot.Job.Workflow, snapshot.Job.WorkflowRevision)
+		fmt.Fprintf(r.output, "Following Job %s (%s); Ctrl-C to stop\n", snapshot.Job.ID, jobContractLabel(snapshot.Job))
 		return
 	}
 	fmt.Fprint(r.output, "\x1b[2J\x1b[H")
@@ -229,11 +240,19 @@ func (r *followRenderer) renderAttention(observedAt time.Time, snapshot followSn
 	case snapshot.executionFailed() && snapshot.Job.CleanupState == core.CleanupScheduled:
 		summary = "Cleanup stopped"
 	case snapshot.executionFailed():
-		summary = "Workflow stopped"
+		if snapshot.Job.Workflow == "" {
+			summary = "Job stopped"
+		} else {
+			summary = "Workflow stopped"
+		}
 	case snapshot.NeedsAttention && snapshot.Job.WorkflowAttention != "":
 		summary = "Needs attention · " + snapshot.Job.WorkflowAttention
 	case snapshot.NeedsAttention:
-		summary = "Workflow needs attention"
+		if snapshot.Job.Workflow == "" {
+			summary = "Job needs attention"
+		} else {
+			summary = "Workflow needs attention"
+		}
 	}
 	if summary == "" || summary == r.lastAttention {
 		return
@@ -255,7 +274,7 @@ func (r *followRenderer) renderPulse(observedAt time.Time, snapshot followSnapsh
 		if run.State != core.AgentRunActive {
 			continue
 		}
-		detail := fmt.Sprintf("%s active", agentRunHumanRole(snapshot.Definition, run))
+		detail := fmt.Sprintf("%s active", agentRunHumanRole(snapshot.Presentation, run))
 		if !run.StartedAt.IsZero() {
 			detail += " " + formatElapsed(observedAt.Sub(run.StartedAt))
 		}
@@ -269,11 +288,11 @@ func (r *followRenderer) renderPulse(observedAt time.Time, snapshot followSnapsh
 func (r *followRenderer) renderInteractiveHeader(observedAt time.Time, snapshot followSnapshot) {
 	statuses := liveFollowStatuses(observedAt, snapshot)
 	heading := "Live · refreshed every 1s"
-	title := fmt.Sprintf("Following Job %s · %s revision %s", snapshot.Job.ID, snapshot.Job.Workflow, snapshot.Job.WorkflowRevision)
+	title := fmt.Sprintf("Following Job %s · %s", snapshot.Job.ID, jobContractLabel(snapshot.Job))
 	instruction := "Ctrl-C stops following; it does not stop the Job."
 	if snapshot.Job.CleanupState == core.CleanupComplete {
 		heading = "Complete"
-		title = fmt.Sprintf("Job %s · %s revision %s", snapshot.Job.ID, snapshot.Job.Workflow, snapshot.Job.WorkflowRevision)
+		title = fmt.Sprintf("Job %s · %s", snapshot.Job.ID, jobContractLabel(snapshot.Job))
 		instruction = ""
 	}
 	lines := []string{
@@ -298,6 +317,13 @@ func (r *followRenderer) renderInteractiveHeader(observedAt time.Time, snapshot 
 	fmt.Fprintf(r.output, "\x1b[%d;r\x1b8", followHistoryRow)
 }
 
+func jobContractLabel(job core.Job) string {
+	if job.Workflow == "" && job.WorkflowRevision == "" {
+		return "client-directed"
+	}
+	return fmt.Sprintf("%s revision %s", job.Workflow, job.WorkflowRevision)
+}
+
 func liveFollowStatuses(observedAt time.Time, snapshot followSnapshot) []string {
 	if snapshot.Job.CleanupState == core.CleanupComplete {
 		statuses := make([]string, 0, 2)
@@ -318,7 +344,7 @@ func liveFollowStatuses(observedAt time.Time, snapshot followSnapshot) []string 
 		if run.State != core.AgentRunActive {
 			continue
 		}
-		detail := agentRunHumanRole(snapshot.Definition, run) + " · active"
+		detail := agentRunHumanRole(snapshot.Presentation, run) + " · active"
 		if !run.StartedAt.IsZero() {
 			detail += " " + formatElapsed(observedAt.Sub(run.StartedAt))
 		}

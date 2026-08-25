@@ -138,7 +138,8 @@ func (q *Queries) GetProposalJobForUpdate(ctx context.Context, jobID string) (Ge
 
 const getPublicationJobForUpdate = `-- name: GetPublicationJobForUpdate :one
 select c.revision,c.github_repository,c.github_installation_id,
-       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state
+       c.base_branch,c.branch,c.repository,j.admission_open,j.cleanup_state,
+       exists(select 1 from dorf.job_outcomes where job_id=j.id) as outcome_exists
 from dorf.jobs j
 join dorf.coding_to_proposal_inputs c on c.job_id=j.id
 where j.id=$1
@@ -154,6 +155,7 @@ type GetPublicationJobForUpdateRow struct {
 	Repository           string
 	AdmissionOpen        bool
 	CleanupState         core.CleanupState
+	OutcomeExists        bool
 }
 
 func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) (GetPublicationJobForUpdateRow, error) {
@@ -168,6 +170,7 @@ func (q *Queries) GetPublicationJobForUpdate(ctx context.Context, jobID string) 
 		&i.Repository,
 		&i.AdmissionOpen,
 		&i.CleanupState,
+		&i.OutcomeExists,
 	)
 	return i, err
 }

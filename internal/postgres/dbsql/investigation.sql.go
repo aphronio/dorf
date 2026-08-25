@@ -8,8 +8,6 @@ package dbsql
 import (
 	"context"
 	"database/sql"
-
-	"github.com/aphronio/dorf/internal/core"
 )
 
 const getCodebaseInvestigationSource = `-- name: GetCodebaseInvestigationSource :one
@@ -38,35 +36,6 @@ func (q *Queries) GetCodebaseInvestigationSource(ctx context.Context, jobID stri
 		&i.Revision,
 		&i.BundleDigest,
 		&i.BundleByteSize,
-	)
-	return i, err
-}
-
-const getLatestInvestigationRun = `-- name: GetLatestInvestigationRun :one
-select ar.id as agent_run_id,coalesce(ar.harness,'') as harness,
-       coalesce(ar.thread_id,'') as thread_id,ar.state
-from dorf.agent_runs ar
-join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=$1 and ar.role='investigate'
-order by m.sequence desc
-limit 1
-`
-
-type GetLatestInvestigationRunRow struct {
-	AgentRunID string
-	Harness    string
-	ThreadID   string
-	State      core.AgentRunState
-}
-
-func (q *Queries) GetLatestInvestigationRun(ctx context.Context, jobID string) (GetLatestInvestigationRunRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestInvestigationRun, jobID)
-	var i GetLatestInvestigationRunRow
-	err := row.Scan(
-		&i.AgentRunID,
-		&i.Harness,
-		&i.ThreadID,
-		&i.State,
 	)
 	return i, err
 }

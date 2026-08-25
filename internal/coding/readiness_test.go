@@ -78,37 +78,6 @@ func TestReviewReadinessRequiresExplicitDecisionAndSettledSelectedRuns(t *testin
 	}
 }
 
-func TestReviewReadinessUsesTerminalTargetSteerFallbackAsLatestTurnStart(t *testing.T) {
-	store, jobID, revision := readinessFixture(t)
-	job := Job{Job: core.Job{ID: jobID}, Revision: revision, Branch: "dorf/readiness"}
-	plan := ReviewPlanRecord{JobID: jobID, Revision: revision, Plan: policy.ReviewPlan{Decision: "no-review"}}
-	message := core.Message{
-		ID: "message-fallback", JobID: jobID, Sequence: 2,
-		Intent: core.MessageSteer, TargetTurnID: "turn-old",
-	}
-	run := core.AgentRun{
-		ID: "run-fallback", JobID: jobID, MessageID: message.ID, Role: "implement",
-		InputRevision: revision, State: core.AgentRunCompleted, TurnID: "turn-new", TurnOutcome: "completed",
-	}
-	record := factMessage(message, run)
-	observed := gitObservationEvidence(t, store, job, record, time.Now().UTC().Truncate(time.Microsecond))
-	ready := AssessReviewReadiness(job, []core.Evidence{observed}, store, &plan, nil, []MessageRecord{record})
-	if !ready.Ready {
-		t.Fatalf("observed terminal-target steer fallback was not ready: %#v", ready)
-	}
-
-	missing := AssessReviewReadiness(job, nil, store, &plan, nil, []MessageRecord{record})
-	if missing.Ready || !strings.Contains(missing.Reason, "no valid Git observation") {
-		t.Fatalf("unobserved terminal-target steer fallback satisfied readiness: %#v", missing)
-	}
-	run.State, run.TurnID, run.TurnOutcome = core.AgentRunFailed, "", "failed"
-	failedRecord := factMessage(message, run)
-	failed := AssessReviewReadiness(job, nil, store, &plan, nil, []MessageRecord{failedRecord})
-	if failed.Ready || !strings.Contains(failed.Reason, "has not completed successfully") {
-		t.Fatalf("failed terminal-target steer fallback satisfied readiness: %#v", failed)
-	}
-}
-
 func gitObservationEvidence(t *testing.T, store blob.Store, job Job, message MessageRecord, started time.Time) core.Evidence {
 	t.Helper()
 	observation := gitworkspace.Observation{

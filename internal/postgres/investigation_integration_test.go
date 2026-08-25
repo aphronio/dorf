@@ -62,15 +62,18 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	if admitted, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"}); err == nil || admitted.Created {
-		t.Fatalf("investigation accepted a follow-up before its first run completed: admitted=%#v err=%v", admitted, err)
+	early, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"})
+	if err != nil || !early.Created || early.Message.Sequence != 2 {
+		t.Fatalf("investigation did not durably queue an early Follow: admitted=%#v err=%v", early, err)
 	}
 	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
 		t.Fatalf("coding admission crossed into investigation: admitted=%#v err=%v", admitted, err)
 	}
 
 	deliveries, err := store.Deliveries(ctx, job.ID)
-	if err != nil || len(deliveries) != 1 || deliveries[0].AgentRun.Role != "investigate" || deliveries[0].AgentRun.Capability != "repository-read-report" {
+	if err != nil || len(deliveries) != 2 || deliveries[0].AgentRun.Role != "investigate" || deliveries[0].AgentRun.Capability != "repository-read-report" ||
+		deliveries[0].AgentRun.InputRevision != input.Source.Revision ||
+		deliveries[1].Message.ID != early.Message.ID || deliveries[1].AgentRun.ThreadID != "" {
 		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
 	}
 	run := deliveries[0].AgentRun
@@ -89,29 +92,19 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 	if err != nil || !job.AdmissionOpen {
 		t.Fatalf("completed run prematurely closed Job=%#v err=%v", job, err)
 	}
-	follow, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "later", Input: "broaden the question"})
-	if err != nil || !follow.Created || follow.Message.Sequence != 2 {
-		t.Fatalf("follow-up=%#v err=%v", follow, err)
+	selected, err := store.AgentMessage(ctx, job.ID)
+	if err != nil || selected == nil || selected.MessageID != early.Message.ID {
+		t.Fatalf("early Follow selection=%#v err=%v", selected, err)
 	}
-	deliveries, err = store.Deliveries(ctx, job.ID)
-	if err != nil || len(deliveries) != 2 || deliveries[1].AgentRun.ThreadID != "thread-investigation" || deliveries[1].AgentRun.Role != "investigate" {
-		t.Fatalf("continued deliveries=%#v err=%v", deliveries, err)
+	earlyExecution, err := store.AgentMessageExecution(ctx, early.Message.ID)
+	if err != nil || earlyExecution.AgentRun.ThreadID != "thread-investigation" {
+		t.Fatalf("early Follow did not adopt retained Thread: execution=%#v err=%v", earlyExecution, err)
 	}
-	secondRun := deliveries[1].AgentRun
-	if err := store.PrepareAgentRun(ctx, secondRun.ID, "codex", ""); err != nil {
+	if err := store.PrepareAgentRun(ctx, earlyExecution.AgentRun.ID, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BindAgentRun(ctx, secondRun.ID, "codex", "thread-investigation", "turn-investigation-2", "completed"); err != nil {
+	if err := store.BindAgentRun(ctx, earlyExecution.AgentRun.ID, "codex", "thread-investigation", "turn-investigation-2", "completed"); err != nil {
 		t.Fatal(err)
-	}
-	deliveries, err = store.Deliveries(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondRun = deliveries[1].AgentRun
-	job, err = store.Job(ctx, job.ID)
-	if err != nil || !job.AdmissionOpen || job.CleanupState != core.CleanupPending {
-		t.Fatalf("completed follow-up did not remain available for another follow-up or cleanup: Job=%#v err=%v", job, err)
 	}
 }
 
@@ -164,10 +157,6 @@ type investigationMessageAdmissions struct{ store postgres.Store }
 
 func (a investigationMessageAdmissions) AdmitAgentMessage(ctx context.Context, input core.MessageAdmission) (core.MessageAdmissionResult, error) {
 	return a.store.AdmitInvestigationMessage(ctx, input)
-}
-
-func (s investigationAgentExecution) SelectAgentMessage(ctx context.Context, jobID string) (*core.AgentMessageWork, error) {
-	return investigation.SelectAgentMessage(ctx, s.store, jobID)
 }
 
 func (s investigationAgentExecution) ResolveAgentPrompt(ctx context.Context, execution core.AgentMessageExecution) (string, error) {

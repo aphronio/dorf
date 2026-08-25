@@ -49,13 +49,13 @@ func TestTaskAndWakeIdentitiesRemainStable(t *testing.T) {
 	if TaskName != "dorf-codebase-investigation-v2" || TaskKey("job-1") != "codebase-investigation:v2:job-1" {
 		t.Fatalf("task identity changed: name=%q key=%q", TaskName, TaskKey("job-1"))
 	}
-	active := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
-	if active.Timeout != time.Second || active.StepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" {
-		t.Fatalf("active investigator wake=%#v", active)
+	stepName, timeout := wakeOptions(Work{Kind: WorkWaitAgent, FactID: "message-1"}, 2)
+	if timeout != time.Second || stepName != "dorf/investigation-agent-wake/v2/message-1/00000000000000000002" {
+		t.Fatalf("active investigator wake=%q %s", stepName, timeout)
 	}
-	idle := wakeOptions(Work{}, 3)
-	if idle.Timeout != 30*time.Second || idle.StepName != "dorf/investigation-wake/v2/00000000000000000003" {
-		t.Fatalf("open-idle Message wake=%#v", idle)
+	stepName, timeout = wakeOptions(Work{}, 3)
+	if timeout != 30*time.Second || stepName != "dorf/investigation-wake/v2/00000000000000000003" {
+		t.Fatalf("open-idle Message wake=%q %s", stepName, timeout)
 	}
 }
 

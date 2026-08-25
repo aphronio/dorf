@@ -33,7 +33,6 @@ type Store interface {
 	ReviewPlans(context.Context, string) ([]ReviewPlanRecord, error)
 	Proposal(context.Context, string) (*Proposal, error)
 	Outcome(context.Context, string) (*Outcome, error)
-	CodingAgentMessage(context.Context, string) (*core.AgentMessageWork, error)
 	BeginPublication(context.Context, string, string) (Job, core.Action, core.Action, error)
 	RecordRevisionObservation(context.Context, string, string, gitworkspace.Observation, core.Evidence) error
 	SetWorkflowAttention(context.Context, string, string, string) error

@@ -71,7 +71,7 @@ func (q *Queries) BindHarnessTurn(ctx context.Context, arg BindHarnessTurnParams
 	return result.RowsAffected()
 }
 
-const bindPendingCodingMessageToPriorThread = `-- name: BindPendingCodingMessageToPriorThread :execrows
+const bindPendingFollowToPriorThread = `-- name: BindPendingFollowToPriorThread :execrows
 with prior as (
     select prior_run.harness,prior_run.thread_id
     from dorf.agent_runs current_run
@@ -80,9 +80,9 @@ with prior as (
       and prior_message.sequence<current_message.sequence
     join dorf.agent_runs prior_run on prior_run.message_id=prior_message.id
     where current_run.message_id=$1
-      and prior_run.role='implement' and prior_run.sandbox_id=current_run.sandbox_id
-      and prior_run.harness is not null and prior_run.thread_id is not null and prior_run.turn_id is not null
-      and (prior_message.delivery_intent='follow' or prior_run.turn_id<>prior_message.steer_target_turn_id)
+      and current_message.delivery_intent='follow'
+      and prior_run.role=current_run.role and prior_run.sandbox_id=current_run.sandbox_id
+      and prior_run.harness is not null and prior_run.thread_id is not null
     order by prior_message.sequence desc
     limit 1
 )
@@ -95,8 +95,8 @@ where current_run.message_id=$1
   and (current_run.harness is null or current_run.harness=prior.harness)
 `
 
-func (q *Queries) BindPendingCodingMessageToPriorThread(ctx context.Context, messageID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindPendingCodingMessageToPriorThread, messageID)
+func (q *Queries) BindPendingFollowToPriorThread(ctx context.Context, messageID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindPendingFollowToPriorThread, messageID)
 	if err != nil {
 		return 0, err
 	}
@@ -265,29 +265,30 @@ func (q *Queries) GetAgentRunPreparation(ctx context.Context, runID string) (Get
 	return i, err
 }
 
-const getLatestImplementationThreadBinding = `-- name: GetLatestImplementationThreadBinding :one
+const getLatestAgentThreadBinding = `-- name: GetLatestAgentThreadBinding :one
 select coalesce(ar.harness,'') as harness,coalesce(ar.thread_id,'') as thread_id
 from dorf.agent_runs ar
 left join dorf.job_messages m on m.id=ar.message_id
-where ar.job_id=$1 and ar.role='implement'
-  and ar.sandbox_id=$2 and ar.thread_id is not null
+where ar.job_id=$1 and ar.role=$2
+  and ar.sandbox_id=$3 and ar.thread_id is not null
 order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
 limit 1
 `
 
-type GetLatestImplementationThreadBindingParams struct {
+type GetLatestAgentThreadBindingParams struct {
 	JobID     string
+	Role      string
 	SandboxID string
 }
 
-type GetLatestImplementationThreadBindingRow struct {
+type GetLatestAgentThreadBindingRow struct {
 	Harness  string
 	ThreadID string
 }
 
-func (q *Queries) GetLatestImplementationThreadBinding(ctx context.Context, arg GetLatestImplementationThreadBindingParams) (GetLatestImplementationThreadBindingRow, error) {
-	row := q.db.QueryRowContext(ctx, getLatestImplementationThreadBinding, arg.JobID, arg.SandboxID)
-	var i GetLatestImplementationThreadBindingRow
+func (q *Queries) GetLatestAgentThreadBinding(ctx context.Context, arg GetLatestAgentThreadBindingParams) (GetLatestAgentThreadBindingRow, error) {
+	row := q.db.QueryRowContext(ctx, getLatestAgentThreadBinding, arg.JobID, arg.Role, arg.SandboxID)
+	var i GetLatestAgentThreadBindingRow
 	err := row.Scan(&i.Harness, &i.ThreadID)
 	return i, err
 }
@@ -333,45 +334,6 @@ func (q *Queries) InsertAdmittedAgentRun(ctx context.Context, arg InsertAdmitted
 	return result.RowsAffected()
 }
 
-const insertImplementationAgentRun = `-- name: InsertImplementationAgentRun :execrows
-insert into dorf.agent_runs(id,job_id,message_id,harness,thread_id,role,state,input_revision,sandbox_id)
-select $1,j.id,$2,prior.harness,prior.thread_id,'implement','pending',$3,$4
-from dorf.jobs j
-left join lateral (
-    select ar.harness,ar.thread_id
-    from dorf.agent_runs ar
-    left join dorf.job_messages m on m.id=ar.message_id
-    where ar.job_id=j.id and ar.sandbox_id=$4
-      and ar.role='implement' and ar.thread_id is not null
-    order by m.sequence desc nulls last,ar.started_at desc nulls last,ar.id desc
-    limit 1
-) prior on true
-where j.id=$5
-on conflict do nothing
-`
-
-type InsertImplementationAgentRunParams struct {
-	ID            string
-	MessageID     string
-	InputRevision sql.NullString
-	SandboxID     string
-	JobID         string
-}
-
-func (q *Queries) InsertImplementationAgentRun(ctx context.Context, arg InsertImplementationAgentRunParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, insertImplementationAgentRun,
-		arg.ID,
-		arg.MessageID,
-		arg.InputRevision,
-		arg.SandboxID,
-		arg.JobID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const interruptAgentRun = `-- name: InterruptAgentRun :execrows
 update dorf.agent_runs
 set state='interrupted',
@@ -394,33 +356,34 @@ func (q *Queries) InterruptAgentRun(ctx context.Context, arg InterruptAgentRunPa
 	return result.RowsAffected()
 }
 
-const listImplementationThreadBindings = `-- name: ListImplementationThreadBindings :many
+const listAgentThreadBindings = `-- name: ListAgentThreadBindings :many
 select harness,thread_id
 from dorf.agent_runs
 where job_id=$1 and sandbox_id=$2
-  and role='implement' and thread_id is not null
+  and role=$3 and thread_id is not null
 order by id
 `
 
-type ListImplementationThreadBindingsParams struct {
+type ListAgentThreadBindingsParams struct {
 	JobID     string
 	SandboxID string
+	Role      string
 }
 
-type ListImplementationThreadBindingsRow struct {
+type ListAgentThreadBindingsRow struct {
 	Harness  sql.NullString
 	ThreadID sql.NullString
 }
 
-func (q *Queries) ListImplementationThreadBindings(ctx context.Context, arg ListImplementationThreadBindingsParams) ([]ListImplementationThreadBindingsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listImplementationThreadBindings, arg.JobID, arg.SandboxID)
+func (q *Queries) ListAgentThreadBindings(ctx context.Context, arg ListAgentThreadBindingsParams) ([]ListAgentThreadBindingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listAgentThreadBindings, arg.JobID, arg.SandboxID, arg.Role)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListImplementationThreadBindingsRow
+	var items []ListAgentThreadBindingsRow
 	for rows.Next() {
-		var i ListImplementationThreadBindingsRow
+		var i ListAgentThreadBindingsRow
 		if err := rows.Scan(&i.Harness, &i.ThreadID); err != nil {
 			return nil, err
 		}

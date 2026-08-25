@@ -195,14 +195,14 @@ func (h JobHandle) ensureSandbox(ctx context.Context, name string) (SandboxHandl
 }
 
 // Message admits one durable human Message through the exact bound Sandbox.
-// Module authorization remains in the supplied transaction; Core owns the
+// Its consumer resolves the execution envelope in the supplied transaction; Core owns the
 // caller-retained key, default-follow option semantics, receipt, and wake.
 func (h AgentHandle) Message(ctx context.Context, key, input string, options ...MessageOption) (MessageReceipt, error) {
 	if h.application == nil || h.application.Store == nil || h.jobID == "" || h.sandboxID == "" {
 		return MessageReceipt{}, fmt.Errorf("Agent handle is not bound to a Job Sandbox")
 	}
 	if h.application.AgentMessages == nil {
-		return MessageReceipt{}, fmt.Errorf("Agent Message authorization is not configured")
+		return MessageReceipt{}, fmt.Errorf("Agent Message execution-envelope resolution is not configured")
 	}
 	key = strings.TrimSpace(key)
 	if key == "" || strings.TrimSpace(input) == "" {

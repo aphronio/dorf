@@ -13,20 +13,6 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 )
 
-const closeAdmissionForOutcome = `-- name: CloseAdmissionForOutcome :execrows
-update dorf.jobs
-set admission_open=false
-where id=$1 and admission_open and cleanup_state='pending'
-`
-
-func (q *Queries) CloseAdmissionForOutcome(ctx context.Context, jobID string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, closeAdmissionForOutcome, jobID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const getOutcome = `-- name: GetOutcome :one
 select job_id,outcome,coalesce(observed_state,'') as observed_state,observed_merged,
        coalesce(merge_commit_oid,'') as merge_commit_oid,observed_at
@@ -152,9 +138,7 @@ select (
     join dorf.job_messages m on m.id=ar.message_id
     join dorf.coding_to_proposal_inputs c on c.job_id=ar.job_id
     where ar.job_id=$1 and ar.role='implement'
-      and (m.delivery_intent='follow' or (
-        m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
-      ))
+      and m.delivery_intent='follow'
     order by m.sequence desc
     limit 1
   ),false)

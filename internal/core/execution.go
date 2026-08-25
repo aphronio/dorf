@@ -4,11 +4,21 @@ import "context"
 
 type SandboxActionEffect func(context.Context, Job, Sandbox) error
 
+type AgentReconciliationProgress uint8
+
+const (
+	// AgentReconciliationIdle means no Message was selected.
+	AgentReconciliationIdle AgentReconciliationProgress = iota
+	// AgentReconciliationPending means one Message was selected, so the runtime
+	// should keep its active poll cadence until a later reconciliation is idle.
+	AgentReconciliationPending
+)
+
 // AgentReconciliation is the runtime-only Core contract for advancing at most
-// one workflow-selected Message for a Job. It is deliberately not embedded in
+// one generically selected Message for a Job. It is deliberately not embedded in
 // the workflow execution surface.
 type AgentReconciliation interface {
-	ReconcileJobAgent(context.Context, string) error
+	ReconcileJobAgent(context.Context, string) (AgentReconciliationProgress, error)
 }
 
 // AgentObservation exposes only the settled Message result needed by typed

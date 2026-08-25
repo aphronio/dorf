@@ -35,9 +35,7 @@ select (
     join dorf.job_messages m on m.id=ar.message_id
     join dorf.coding_to_proposal_inputs c on c.job_id=ar.job_id
     where ar.job_id=sqlc.arg(job_id) and ar.role='implement'
-      and (m.delivery_intent='follow' or (
-        m.delivery_intent='steer' and ar.turn_id is not null and ar.turn_id<>m.steer_target_turn_id
-      ))
+      and m.delivery_intent='follow'
     order by m.sequence desc
     limit 1
   ),false)
@@ -50,11 +48,6 @@ select exists(
   join dorf.coding_to_proposal_inputs c on c.job_id=a.job_id
   where a.job_id=sqlc.arg(job_id) and a.kind='github-pull-request' and a.scope_key=c.revision
 )::boolean;
-
--- name: CloseAdmissionForOutcome :execrows
-update dorf.jobs
-set admission_open=false
-where id=sqlc.arg(job_id) and admission_open and cleanup_state='pending';
 
 -- name: InsertOutcome :one
 insert into dorf.job_outcomes(

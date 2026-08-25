@@ -26,14 +26,15 @@ External clients                  Native workflows
 ```
 
 Dorf is a stateful, self-hosted control plane, not an agent framework or an embeddable runtime SDK.
-Native workflows consume Core in-process. External clients use the CLI today; a public network API
-and thin client SDKs are direction, not current support claims. Clients may eventually drive Core
-directly or delegate policy to a predefined workflow.
+Native workflows and the trusted CLI client consume Core in-process. The CLI can drive a Job
+directly or delegate policy to a predefined workflow. A public network API and thin client SDKs are
+direction, not current support claims.
 
-The built-in workflows currently cover coding to a verified pull-request Proposal and
-repository-grounded codebase investigation. See [Getting started](docs/getting-started.md) for the
-supported deployment, profiles, commands, and workflow inputs. To hand installation or operation to
-an agent, point it at the concise [Agent guide](docs/agent-guide.md).
+The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows cover
+coding to a verified pull-request Proposal and repository-grounded codebase investigation. See
+[Getting started](docs/getting-started.md) for supported deployment, profiles, commands, and inputs.
+To hand installation or operation to an agent, point it at the concise
+[Agent guide](docs/agent-guide.md).
 
 ## Build
 
