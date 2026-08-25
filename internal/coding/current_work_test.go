@@ -219,10 +219,11 @@ func TestUnchangedObservationMeaningComesFromItsMessages(t *testing.T) {
 	}
 }
 
-func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
+func TestUnchangedReviewFeedbackIgnoresSharedTurnSteer(t *testing.T) {
 	facts := readyFacts()
 	facts.Messages = []MessageRecord{
 		factMessage(core.Message{ID: "initial", Sequence: 1, FromKind: core.MessageFromHuman, Intent: core.MessageFollow}, core.AgentRun{ID: "initial-run", MessageID: "initial", Role: "implement", State: core.AgentRunCompleted, InputRevision: "rev-0"}),
+		factMessage(core.Message{ID: "active-steer", Sequence: 2, FromKind: core.MessageFromHuman, Intent: core.MessageSteer, TargetTurnID: "turn-1"}, core.AgentRun{ID: "steer-run", MessageID: "active-steer", Role: "implement", State: core.AgentRunCompleted, InputRevision: "rev-0", TurnID: "turn-1"}),
 		factMessage(core.Message{ID: "review-feedback", Sequence: 3, FromKind: core.MessageFromAgent, Intent: core.MessageFollow}, core.AgentRun{ID: "feedback-run", MessageID: "review-feedback", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision}),
 	}
 	facts.Evidence = []core.Evidence{
@@ -235,6 +236,16 @@ func TestUnchangedReviewFeedbackIgnoresReviewerRequestMessage(t *testing.T) {
 	}
 	if got := decideCurrentWork(facts); got.Kind != WorkPublishProposal {
 		t.Fatalf("CurrentWork = %#v, want unchanged review feedback to continue to publication", got)
+	}
+
+	fallback := factMessage(
+		core.Message{ID: "fallback-steer", Sequence: 1, FromKind: core.MessageFromHuman, Intent: core.MessageSteer, TargetTurnID: "turn-old"},
+		core.AgentRun{ID: "fallback-run", MessageID: "fallback-steer", Role: "implement", State: core.AgentRunCompleted, InputRevision: facts.Job.Revision, TurnID: "turn-new"},
+	)
+	facts.Messages = []MessageRecord{fallback}
+	facts.Evidence = []core.Evidence{{Kind: "git-revision", AgentRunID: fallback.ProducerID, Revision: facts.Job.Revision}}
+	if id, _ := unchangedAttention(facts); id != fallback.Message.ID {
+		t.Fatalf("terminal-target fallback attention ID = %q, want %q", id, fallback.Message.ID)
 	}
 }
 
