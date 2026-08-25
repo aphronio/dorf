@@ -401,9 +401,9 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	db, store, client := testDatabase(t)
 	ctx := context.Background()
 	var migrationCount int
-	var migrationName string
-	if err := db.QueryRowContext(ctx, `select count(*),min(name) from dorf.schema_migrations`).Scan(&migrationCount, &migrationName); err != nil || migrationCount != 1 || migrationName != "001_baseline.sql" {
-		t.Fatalf("baseline migrations count=%d name=%q err=%v", migrationCount, migrationName, err)
+	var migrationNames string
+	if err := db.QueryRowContext(ctx, `select count(*),string_agg(name,',' order by name) from dorf.schema_migrations`).Scan(&migrationCount, &migrationNames); err != nil || migrationCount != 2 || migrationNames != "001_baseline.sql,002_sandbox_custody.sql" {
+		t.Fatalf("Dorf migrations count=%d names=%q err=%v", migrationCount, migrationNames, err)
 	}
 	key := fmt.Sprintf("message-integration-%d", time.Now().UnixNano())
 	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")

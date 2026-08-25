@@ -67,11 +67,3 @@ type DorfReviewRunProjection struct {
 	OwnershipNonce        string
 	SubmissionNonce       string
 }
-
-// Job-owned isolated workstations used by one or more AgentRuns
-type DorfSandbox struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
-}

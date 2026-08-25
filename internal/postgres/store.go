@@ -35,7 +35,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_baseline.sql"}
+var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql"}
 
 type Store struct{ DB *sql.DB }
 
@@ -97,6 +97,23 @@ func (s Store) Migrate(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `select pg_advisory_xact_lock(hashtextextended('dorf-schema-baseline',0))`); err != nil {
 		return err
 	}
+	if err := migrateDorf(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	client, err := absurd.New(absurd.Options{DB: s.DB, QueueName: "dorf_jobs"})
+	if err != nil {
+		return err
+	}
+	if err := client.CreateQueue(ctx, "dorf_jobs"); err != nil {
+		return fmt.Errorf("create Absurd queue dorf_jobs: %w", err)
+	}
+	return nil
+}
+
+func migrateDorf(ctx context.Context, tx *sql.Tx) error {
 	var installed bool
 	if err := tx.QueryRowContext(ctx, `select to_regnamespace('dorf') is not null`).Scan(&installed); err != nil {
 		return err
@@ -153,16 +170,6 @@ func (s Store) Migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, string(contents)); err != nil {
 			return fmt.Errorf("apply Dorf migration %s: %w", name, err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	client, err := absurd.New(absurd.Options{DB: s.DB, QueueName: "dorf_jobs"})
-	if err != nil {
-		return err
-	}
-	if err := client.CreateQueue(ctx, "dorf_jobs"); err != nil {
-		return fmt.Errorf("create Absurd queue dorf_jobs: %w", err)
 	}
 	return nil
 }

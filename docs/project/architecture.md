@@ -296,6 +296,20 @@ Every added module must name the real terminal it enables and remain removable b
 boundary. Transitive dependency count is a design signal, not a score to optimize at the expense of
 correctness.
 
+## PostgreSQL schema evolution
+
+Published Dorf migrations are immutable and append-only. A retained deployment records each exact
+migration filename in `dorf.schema_migrations`; `dorf migrate` takes one PostgreSQL advisory lock and
+applies every missing known file in one transaction. A baseline is a historical starting point, not
+a mutable description that can silently drift after a release. Unsupported migration identities
+fail closed instead of guessing at schema state.
+
+Each migration owns any bounded transformation required by current durable facts and has a
+PostgreSQL integration proof from the previously published shape, including replay. Removing an
+obsolete product fact may deliberately drop its retired table when the owning decision already
+removed that contract; this is not a reason to retain dual reads or a compatibility facade. Dorf
+keeps this explicit runner until concrete migration volume proves a framework smaller.
+
 ## Replacement and portability
 
 - Do not build a Python compatibility facade, dual-write SQLite and PostgreSQL, or migrate old local

@@ -2453,3 +2453,31 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   earns a common integration contract, a Dorf web UI or cloud control plane can absorb the browser
   handoff behind an authenticated callback, or a real consumer needs authority that cannot be
   expressed as an exact repository, installation, and native permission floor.
+
+## D094 — Published PostgreSQL migrations are immutable and append-only
+
+- **Status:** Accepted upgrade correction — 2026-08-25
+- **Decision:** Freeze `001_baseline.sql` at the schema shipped in the v0.3 releases. Every later
+  PostgreSQL change is a new ordered migration whose exact filename is recorded in
+  `dorf.schema_migrations`. `dorf migrate` retains its small embedded runner, one transaction, and
+  deployment-wide advisory lock; it rejects unknown history rather than inferring a version from
+  today's table shape. Never edit an already-published migration to describe the latest schema.
+- **First upgrade:** `002_sandbox_custody.sql` converges both the released baseline and development
+  databases that were accidentally initialized from the edited baseline. It admits the explicit
+  requested-cleanup state, derives the main Sandbox name from implementation or investigation
+  AgentRuns and reviewer Sandbox names from their owning AgentRun, rebuilds the review projection,
+  and removes the Artifact and Investigation Draft tables already retired by D092. An unmappable
+  Sandbox fails the transaction instead of receiving invented custody.
+- **Proof:** PostgreSQL integration creates the exact published baseline inside a rollback-only
+  transaction, retains a main and reviewer Sandbox, applies and replays the current migration chain,
+  and proves their names, review projection, cleanup request, migration ledger, and retired-table
+  removal. The real self-hosted operator database supplied the failure terminal: its ledger said
+  `001_baseline.sql` while the live table lacked `sandboxes.name`, so the mutable baseline made
+  `dorf migrate` falsely report readiness.
+- **Refines:** D048's greenfield squash applied before the first released PostgreSQL schema. It does
+  not authorize changing a migration after that schema ships. The prohibition on Python/SQLite
+  compatibility facades and dual writes remains; this decision preserves Dorf-owned PostgreSQL
+  facts across ordinary Dorf upgrades.
+- **Reconsider when:** A major release deliberately declares a destructive database reset, retained
+  deployment data no longer has product value, or migration volume makes a maintained framework
+  materially smaller than the explicit ordered runner and its behavioral tests.

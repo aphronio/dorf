@@ -56,7 +56,7 @@ create table dorf.jobs (
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
     admission_open boolean not null default true,
-    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','requested','scheduled','complete')),
+    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
     workflow_attention text,
     workflow_attention_source text,
     workflow_attention_at timestamptz,
@@ -149,10 +149,8 @@ create unique index actions_one_scoped_job_effect
 create table dorf.sandboxes (
     id text primary key,
     job_id text not null references dorf.jobs(id),
-    name text not null check (name ~ '^[a-z][a-z0-9-]{0,126}$'),
     ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
-    unique(job_id,id),
-    unique(job_id,name)
+    unique(job_id,id)
 );
 create index sandboxes_by_job on dorf.sandboxes(job_id,id);
 
@@ -239,6 +237,32 @@ create table dorf.evidence (
 create unique index evidence_one_agent_run on dorf.evidence(agent_run_id)
     where agent_run_id is not null;
 
+create table dorf.artifacts (
+    id text primary key,
+    job_id text not null references dorf.jobs(id),
+    name text not null check (length(trim(name))>0 and length(name)<=255),
+    digest text not null check (digest ~ '^[0-9a-f]{64}$'),
+    byte_size bigint not null check (byte_size>=0),
+    media_type text not null check (length(trim(media_type))>0),
+    producer text not null check (length(trim(producer))>0),
+    agent_run_id text not null,
+    created_at timestamptz not null,
+    unique(job_id,name),
+    unique(job_id,id),
+    unique(job_id,id,agent_run_id),
+    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id)
+);
+
+create table dorf.codebase_investigation_drafts (
+    job_id text not null references dorf.codebase_investigation_sources(job_id),
+    agent_run_id text not null,
+    artifact_id text not null,
+    primary key(job_id,agent_run_id),
+    unique(job_id,artifact_id),
+    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id),
+    foreign key(job_id,artifact_id,agent_run_id) references dorf.artifacts(job_id,id,agent_run_id)
+);
+
 alter table dorf.revisions
     add constraint revisions_evidence_fk foreign key(evidence_id) references dorf.evidence(id);
 
@@ -278,7 +302,6 @@ select
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
     request.admitted_at as request_admitted_at,
     ar.sandbox_id as sandbox_id,
-    sandbox.name as sandbox_name,
     sandbox.ownership_nonce as ownership_nonce,
     coalesce(ar.submission_nonce,'') as submission_nonce
 from dorf.agent_runs ar
@@ -316,6 +339,7 @@ comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider
 comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
+comment on table dorf.codebase_investigation_drafts is 'Immutable investigator drafts; Markdown bytes live in the referenced Artifact';
 comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');
