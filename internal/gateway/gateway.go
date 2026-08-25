@@ -47,6 +47,13 @@ type Gateway struct {
 	UpstreamClient     *http.Client
 }
 
+type modelUnavailableError struct{ model string }
+
+func (e modelUnavailableError) Error() string {
+	return fmt.Sprintf("provider route does not currently advertise model %q", e.model)
+}
+func (modelUnavailableError) AttentionNeeded() bool { return true }
+
 func (g Gateway) BaseURL() (string, error) {
 	origin, err := g.origin()
 	if err != nil {
@@ -228,7 +235,7 @@ func (g Gateway) RequireModel(ctx context.Context, baseURL, apiKey, model string
 			return nil
 		}
 	}
-	return fmt.Errorf("provider route cannot route model %q", model)
+	return modelUnavailableError{model: model}
 }
 
 // DefaultConnection returns the one deployment-default AI connection. The

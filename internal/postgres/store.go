@@ -900,6 +900,23 @@ func (s Store) SetWorkflowAttention(ctx context.Context, jobID, source, detail s
 	return expectOneRows(dbsql.New(s.DB).SetWorkflowAttention(ctx, dbsql.SetWorkflowAttentionParams{JobID: jobID, Source: sql.NullString{String: source, Valid: true}, Detail: sql.NullString{String: detail, Valid: true}}))
 }
 
+func (s Store) ClearWorkflowAttention(ctx context.Context, jobID, source string) error {
+	source = strings.TrimSpace(source)
+	if jobID == "" || source == "" {
+		return fmt.Errorf("workflow attention clearing requires Job ID and exact source")
+	}
+	rows, err := dbsql.New(s.DB).ClearWorkflowAttention(ctx, dbsql.ClearWorkflowAttentionParams{
+		JobID: jobID, Source: sql.NullString{String: source, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if rows > 1 {
+		return fmt.Errorf("workflow attention source %s changed %d Jobs", source, rows)
+	}
+	return nil
+}
+
 func (s Store) RecordRevisionObservation(ctx context.Context, jobID, runID string, observation gitworkspace.Observation, evidence core.Evidence) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {

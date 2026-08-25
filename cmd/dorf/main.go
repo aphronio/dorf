@@ -1754,18 +1754,27 @@ func renderExecutionAttention(output io.Writer, job core.Job, execution taskResu
 	fmt.Fprintf(output, "  next: repair the cause, then run dorf retry %s\n", job.ID)
 }
 
-func renderExecutionRecovery(output io.Writer, job core.Job, execution taskResultView) {
-	if execution.State == absurd.TaskCompleted && job.CleanupState == core.CleanupPending {
-		fmt.Fprintf(output, "  next: run dorf cleanup %s to release resources\n", job.ID)
-	}
-}
-
 func renderJobAttention(output io.Writer, job core.Job, execution taskResultView) {
 	if job.WorkflowAttention == "" {
 		return
 	}
 	fmt.Fprintf(output, "  attention: %s\n", job.WorkflowAttention)
-	renderExecutionRecovery(output, job, execution)
+	if next := jobAttentionNext(job, execution); next != "" {
+		fmt.Fprintf(output, "  next: %s\n", next)
+	}
+}
+
+func jobAttentionNext(job core.Job, execution taskResultView) string {
+	if job.CleanupState != core.CleanupPending {
+		return ""
+	}
+	if execution.State == absurd.TaskCompleted {
+		return fmt.Sprintf("run dorf cleanup %s to release resources", job.ID)
+	}
+	if execution.State != absurd.TaskFailed {
+		return fmt.Sprintf("repair the cause while the worker retries, or run dorf cleanup %s", job.ID)
+	}
+	return ""
 }
 
 func usage(output io.Writer) error {

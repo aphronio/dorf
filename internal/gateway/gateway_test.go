@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -222,7 +223,9 @@ func TestProviderRouteRequiresAdvertisedExactModel(t *testing.T) {
 	if err := gateway.RequireModel(context.Background(), server.URL+"/v1", "scoped-key", "gpt-5.6-sol"); err != nil {
 		t.Fatal(err)
 	}
-	if err := gateway.RequireModel(context.Background(), server.URL+"/v1", "scoped-key", "gpt-5.6-codex"); err == nil || !strings.Contains(err.Error(), `cannot route model "gpt-5.6-codex"`) {
+	err := gateway.RequireModel(context.Background(), server.URL+"/v1", "scoped-key", "gpt-5.6-codex")
+	var attention interface{ AttentionNeeded() bool }
+	if err == nil || !strings.Contains(err.Error(), `does not currently advertise model "gpt-5.6-codex"`) || !errors.As(err, &attention) || !attention.AttentionNeeded() {
 		t.Fatalf("missing model error=%v", err)
 	}
 }

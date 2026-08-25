@@ -605,13 +605,19 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 }
 
-func TestCompletedDirectAttentionOffersCleanupInsteadOfRetry(t *testing.T) {
+func TestJobAttentionOffersTruthfulRecovery(t *testing.T) {
 	job := core.Job{ID: "job-123", AdmissionOpen: true, CleanupState: core.CleanupPending, WorkflowAttention: "E2B template is unavailable"}
 	execution := taskResultView{TaskID: "task-1", State: absurd.TaskCompleted}
 	var output strings.Builder
 	renderJobAttention(&output, job, execution)
 	if got := output.String(); got != "  attention: E2B template is unavailable\n  next: run dorf cleanup job-123 to release resources\n" || strings.Contains(got, "retry") {
 		t.Fatalf("recovery output=%q", got)
+	}
+
+	output.Reset()
+	renderJobAttention(&output, job, taskResultView{TaskID: "task-1", State: absurd.TaskSleeping})
+	if got := output.String(); got != "  attention: E2B template is unavailable\n  next: repair the cause while the worker retries, or run dorf cleanup job-123\n" {
+		t.Fatalf("retrying attention output=%q", got)
 	}
 }
 

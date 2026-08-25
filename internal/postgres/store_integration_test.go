@@ -54,6 +54,11 @@ type failOnceWorkflowBarrier struct {
 	failed bool
 }
 
+type actionAttentionError string
+
+func (e actionAttentionError) Error() string       { return string(e) }
+func (actionAttentionError) AttentionNeeded() bool { return true }
+
 func (*failOnceWorkflowBarrier) Reach(context.Context, string, core.Delivery) error { return nil }
 
 func (b *failOnceWorkflowBarrier) ReachWorkflow(_ context.Context, point, _, _ string) error {
@@ -2374,6 +2379,71 @@ func actionIntegrationJob(t *testing.T, suffix string) (*sql.DB, postgres.Store,
 		t.Fatalf("admit Job=%#v created=%t err=%v", job, created, err)
 	}
 	return db, store, job
+}
+
+func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.T) {
+	_, store, job := actionIntegrationJob(t, "attention-recovery")
+	ctx := context.Background()
+	sandboxID := core.MainSandboxName(job.ID)
+	actionID := core.ScopedActionID(job.ID, core.ActionRouteCreate, sandboxID)
+	externals := &integrationExternals{}
+	service := core.NewExecutionService(store, externals, nil, absurdruntime.RequireClaim)
+	client := newFaultClient(t, store, "dorf-action-attention-"+job.ID)
+	const taskName = "dorf-action-attention-v1"
+	attempts := 0
+	client.MustRegister(absurd.Task(taskName, func(taskCtx context.Context, _ core.JobTaskParams) (core.TaskResultV1, error) {
+		if err := service.ExecuteSandboxAction(taskCtx, job.ID, sandboxID, core.ActionSandboxCreate); err != nil {
+			return core.TaskResultV1{}, err
+		}
+		err := service.ExecuteSandboxActionEffect(taskCtx, job.ID, sandboxID, core.ActionRouteCreate, func(context.Context, core.Job, core.Sandbox) error {
+			attempts++
+			if attempts == 1 {
+				return actionAttentionError(`provider route does not currently advertise model "missing-model"`)
+			}
+			return nil
+		})
+		return core.TaskResultV1{JobID: job.ID, Outcome: "route-ready"}, err
+	}, absurd.TaskOptions{DefaultMaxAttempts: 1}))
+	spawned, err := client.Spawn(ctx, taskName, core.JobTaskParams{JobID: job.ID}, absurd.SpawnOptions{
+		IdempotencyKey: taskName + ":" + job.ID,
+		MaxAttempts:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AttachJobTask(ctx, job.ID, "", spawned.TaskID, taskName); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "action-attention-first", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := client.FetchTaskResult(ctx, client.QueueName(), spawned.TaskID)
+	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
+		t.Fatalf("failed task=%#v err=%v", failed, err)
+	}
+	attention, err := store.Job(ctx, job.ID)
+	if err != nil || attention.WorkflowAttention != `provider route does not currently advertise model "missing-model"` || attention.WorkflowAttentionSource != actionID || attention.WorkflowAttentionAt.IsZero() {
+		t.Fatalf("durable Action attention Job=%#v err=%v", attention, err)
+	}
+	unsettled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionRouteCreate)
+	if err != nil || unsettled.State != core.ActionUnsettled {
+		t.Fatalf("unsettled route Action=%#v err=%v", unsettled, err)
+	}
+
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "action-attention-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Job(ctx, job.ID)
+	if err != nil || recovered.WorkflowAttention != "" || recovered.WorkflowAttentionSource != "" || !recovered.WorkflowAttentionAt.IsZero() {
+		t.Fatalf("recovered Job retained Action attention: Job=%#v err=%v", recovered, err)
+	}
+	settled, err := store.GetOrCreateSandboxAction(ctx, sandboxID, core.ActionRouteCreate)
+	if err != nil || settled.State != core.ActionSucceeded || attempts != 2 {
+		t.Fatalf("recovered route Action=%#v attempts=%d err=%v", settled, attempts, err)
+	}
 }
 
 func TestJobHandleEnsuresStableDefaultAndNamedSandboxes(t *testing.T) {

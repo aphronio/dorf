@@ -20,6 +20,8 @@ type ExecutionStore interface {
 	WithJobFence(context.Context, string, func() error) error
 	AuthorizeSandboxAction(context.Context, string, string, string) (SandboxActionAuthorization, error)
 	RecordSandboxActionSuccess(context.Context, string) error
+	SetWorkflowAttention(context.Context, string, string, string) error
+	ClearWorkflowAttention(context.Context, string, string) error
 	PrepareAgentRun(context.Context, string, string, string) error
 	BindAgentRun(context.Context, string, string, string, string, string) error
 	BindSteer(context.Context, string, string, string) error
@@ -709,6 +711,14 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actio
 		}
 		err = effect(ctx, authorized)
 		if err != nil {
+			if attentionNeeded(err) {
+				if claimErr := s.requireClaim(ctx); claimErr != nil {
+					return errors.Join(err, claimErr)
+				}
+				if attentionErr := s.store.SetWorkflowAttention(ctx, jobID, actionID, err.Error()); attentionErr != nil {
+					return errors.Join(err, fmt.Errorf("record Sandbox Action attention: %w", attentionErr))
+				}
+			}
 			return err
 		}
 		point := ""
@@ -726,6 +736,9 @@ func (s ExecutionService) executeSandboxAction(ctx context.Context, jobID, actio
 			}
 		}
 		if err := s.requireClaim(ctx); err != nil {
+			return err
+		}
+		if err := s.store.ClearWorkflowAttention(ctx, jobID, actionID); err != nil {
 			return err
 		}
 		return s.store.RecordSandboxActionSuccess(ctx, authoritative.ID)

@@ -20,6 +20,9 @@ identity derivation and Action settlement state needed for reconciliation.
 Route creation asks the live scoped Gateway whether it advertises the Job's opaque model and fails
 before Harness submission when it cannot route it. Dorf retains no model catalog; the Harness and
 upstream Provider remain authoritative for actual execution.
+An unadvertised model remains visible as exact Action-sourced Job attention while the durable task
+retries. Inspection names the model and offers repair or cleanup; a later successful route check
+clears only that Action's attention.
 
 Remote Sandbox profiles supply one exact HTTPS `/v1` Gateway URL whose transport is owned by the
 deployment, not by the Sandbox adapter. An existing operator-owned URL is the universal contract.

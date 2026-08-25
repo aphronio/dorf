@@ -134,6 +134,13 @@ func TestFollowCompletedWorkflowAttentionOffersCleanupInsteadOfRetry(t *testing.
 	if got := output.String(); !strings.Contains(got, "Needs attention · E2B template is unavailable") || !strings.Contains(got, "next: run dorf cleanup job-123 to release resources") || strings.Contains(got, "dorf retry") {
 		t.Fatalf("completed attention output:\n%s", got)
 	}
+
+	output.Reset()
+	snapshot.Execution.State = absurd.TaskSleeping
+	newFollowRenderer(&output).Render(now, snapshot, false)
+	if got := output.String(); !strings.Contains(got, "Needs attention · E2B template is unavailable") || !strings.Contains(got, "next: repair the cause while the worker retries, or run dorf cleanup job-123") {
+		t.Fatalf("retrying attention output:\n%s", got)
+	}
 }
 
 func TestFollowDerivesCleanupProgressAndStopsOnlyOnFailedTask(t *testing.T) {
