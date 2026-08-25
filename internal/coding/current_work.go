@@ -476,7 +476,12 @@ func unchangedAttention(f Snapshot) (string, string) {
 		if message.Sequence <= previous || message.Sequence > last.sequence {
 			continue
 		}
-		if message.FromKind == core.MessageFromAgent || message.FromKind == core.MessageFromHuman && exactProposal {
+		// A steer bound to its active target settles inside an existing Turn. It
+		// shares that Turn's Git observation boundary and must not independently
+		// demand another committed Revision. A terminal-target fallback starts a
+		// Turn, remains a Revision boundary, and deliberately falls through.
+		sharedTurnSteer := message.Intent == core.MessageSteer && !record.StartsTurn
+		if message.FromKind == core.MessageFromAgent || sharedTurnSteer || message.FromKind == core.MessageFromHuman && exactProposal {
 			continue
 		}
 		return last.message.Message.ID, fmt.Sprintf("Message %s was handled without a new committed Revision", last.message.Message.ID)
