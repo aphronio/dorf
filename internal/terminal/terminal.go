@@ -58,6 +58,9 @@ func (e Externals) RouteCreate(ctx context.Context, job core.Job, sandbox core.S
 	if route.ID != expected.ID {
 		return fmt.Errorf("provider Gateway returned a foreign Route identity")
 	}
+	if err := e.Gateway.RequireModel(ctx, baseURL, route.APIKey, job.Model); err != nil {
+		return err
+	}
 	if err := e.Agent.InstallRoute(ctx, ownershipMetadata(sandbox), baseURL, route.APIKey, job.Model); err != nil {
 		return err
 	}

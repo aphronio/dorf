@@ -17,6 +17,9 @@ The Go Job path creates, observes, and revokes routes directly. AI connection da
 route configuration and keys, and the broker executable live under the configured
 `DORF_PROVIDER_GATEWAY_STATE`; they never enter a Sandbox image. Dorf retains only the exact route
 identity derivation and Action settlement state needed for reconciliation.
+Route creation asks the live scoped Gateway whether it advertises the Job's opaque model and fails
+before Harness submission when it cannot route it. Dorf retains no model catalog; the Harness and
+upstream Provider remain authoritative for actual execution.
 
 Remote Sandbox profiles supply one exact HTTPS `/v1` Gateway URL whose transport is owned by the
 deployment, not by the Sandbox adapter. An existing operator-owned URL is the universal contract.

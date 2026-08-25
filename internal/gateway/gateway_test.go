@@ -208,6 +208,25 @@ func TestExactRouteRevocationReconcilesBrokerAfterActivationFailure(t *testing.T
 	}
 }
 
+func TestProviderRouteRequiresAdvertisedExactModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer scoped-key" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "gpt-5.6-sol"}}})
+	}))
+	defer server.Close()
+	gateway := Gateway{Client: server.Client()}
+
+	if err := gateway.RequireModel(context.Background(), server.URL+"/v1", "scoped-key", "gpt-5.6-sol"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.RequireModel(context.Background(), server.URL+"/v1", "scoped-key", "gpt-5.6-codex"); err == nil || !strings.Contains(err.Error(), `cannot route model "gpt-5.6-codex"`) {
+		t.Fatalf("missing model error=%v", err)
+	}
+}
+
 func TestRouteFailsClosedWhenChatGPTWebSocketsAreNotVerified(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

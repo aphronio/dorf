@@ -193,6 +193,44 @@ func (g Gateway) Check(ctx context.Context, connectionName string) error {
 	return g.checkModels(ctx, origin+"/v1", auth.GuardKey, "provider gateway")
 }
 
+// RequireModel asks the live scoped route whether it can route the caller's
+// opaque model. The Gateway remains only a routing authority; the Harness is
+// still authoritative for actual model execution.
+func (g Gateway) RequireModel(ctx context.Context, baseURL, apiKey, model string) error {
+	model = strings.TrimSpace(model)
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(apiKey) == "" || model == "" {
+		return fmt.Errorf("provider route model check requires URL, route key, and model")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
+	response, err := g.client().Do(request)
+	if err != nil {
+		return fmt.Errorf("provider route model check is unavailable: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, response.Body)
+		return fmt.Errorf("provider route model check returned HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
+		return fmt.Errorf("provider route model list is unreadable")
+	}
+	for _, candidate := range payload.Data {
+		if candidate.ID == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("provider route cannot route model %q", model)
+}
+
 // DefaultConnection returns the one deployment-default AI connection. The
 // selected name is copied into each admitted Job; the connection's credential
 // remains in protected Gateway state.
