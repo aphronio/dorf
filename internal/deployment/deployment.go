@@ -203,8 +203,18 @@ func saveDeployment(directory *deploymentDirectory, name string, contents []byte
 		temporary.Close()
 		return fmt.Errorf("temporary Dorf deployment configuration is not one real operator-owned regular file with mode 0600")
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary Dorf deployment configuration: %w", err)
+	// Keep the inode alive after closing the writable handle so a process that
+	// replaces the temporary name cannot reuse its identity during the commit.
+	pinnedFD, pinErr := unix.FcntlInt(temporary.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	closeErr := temporary.Close()
+	if pinErr == nil {
+		defer unix.Close(pinnedFD)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close temporary Dorf deployment configuration: %w", closeErr)
+	}
+	if pinErr != nil {
+		return fmt.Errorf("pin temporary Dorf deployment configuration: %w", pinErr)
 	}
 	if err := directory.verifyProtected(); err != nil {
 		return err
