@@ -785,11 +785,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   without operating a public Incus daemon or a separate image-index service. Verifying every layer
   keeps the friendly alias out of the trust boundary and lets setup converge idempotently on one
   exact local fingerprint.
-- **Why local publication:** A GitHub-hosted runner would require moving or recreating a provider
-  credential to complete the real Job terminal, while a persistent self-hosted runner adds a
-  needless public-repository execution surface. The current manual release cadence does not justify
-  either cost. The version-controlled command retains deterministic CI-style proof without moving
-  the owner's ChatGPT subscription boundary.
+- **Publication ownership:** When the declared Incus image pin is reused, hosted GitHub Actions owns
+  application and GHCR publication with narrowly scoped `contents:write` and `packages:write`
+  permissions. The workflow checks out the exact dispatch commit and invokes the repository command;
+  it does not duplicate release logic. A pin advance remains an explicit local proof and
+  publication boundary because its real Codex/Pi proof requires the owner's Provider Gateway
+  credentials; those credentials are never moved to hosted Actions.
 - **Compatibility:** The repository path, release tag shape, asset names, manifest schema, and
   installer module are pre-release implementation details. Existing Sandboxes remain bound to the image
   they were created from. The first image is x86_64-only; GitHub Releases are not a claim of support
@@ -797,7 +798,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Reconsider when:** Release size or bandwidth makes GitHub unsuitable, a second architecture
   needs a real distribution index, Incus simplestreams materially reduces setup complexity, GitHub
   cannot preserve the required immutability/digest guarantees, or a concrete remote Environment
-  requires a different image authority. Reconsider unattended publication when a scoped
+  requires a different image authority. Reconsider hosted pin-advance publication when a scoped
   non-personal provider credential and isolated ephemeral runner make it safer without weakening the
   real Job terminal.
 
@@ -1592,8 +1593,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   neutral `dorf` alias on the manifest's immutable fingerprint.
 - **Promotion boundary:** One candidate fingerprint must complete separate real Codex and Pi
   no-change coding Jobs, including exact native Thread/Turn binding, Revision Evidence, route
-  revocation, and Sandbox cleanup, before publication. The repository release command is the only
-  procedure authority for that proof and publication.
+  revocation, and Sandbox cleanup, before publication. Pin-advance proof and publication remain an
+  explicit local boundary; when the proven pin is reused, hosted Actions owns application/GHCR
+  publication. The repository release command remains the only procedure authority for both paths.
 - **Proof:** The immutable v0.2.0 release targets source commit
   `c9d597f21068bacf5650939781b5f2ad8d3b854d`; its signed GitHub
   attestation binds the manifest and archive, and the manifest records combined-image fingerprint

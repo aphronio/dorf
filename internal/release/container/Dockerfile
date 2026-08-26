@@ -3,6 +3,7 @@ ARG DORF_RELEASE
 ARG DORF_BINARY_SHA256
 LABEL org.opencontainers.image.title="Dorf"
 LABEL org.opencontainers.image.version="${DORF_RELEASE}"
+LABEL org.opencontainers.image.source="https://github.com/aphronio/dorf"
 LABEL dev.dorf.binary-sha256="${DORF_BINARY_SHA256}"
 RUN sed -i \
         -e 's|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/20260713T000000Z|g' \

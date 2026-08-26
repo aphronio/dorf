@@ -1,19 +1,22 @@
 # Releasing Dorf
 
-From a clean source commit already available on GitHub, run the repository checks and the release
-authority:
+From a clean commit on `main` already available on GitHub, dispatch the Release workflow. The
+workflow runs the repository checks and invokes the release authority on that exact event commit:
 
 ```bash
-scripts/dev/setup.sh
-.dorf/bin/mise run check
-scripts/release.sh --publish
+gh workflow run release.yml --ref main
 ```
 
-[`scripts/release.sh`](../scripts/release.sh) is the source of truth for release inputs, artifacts,
-and publication. The release host must provide the repository toolchain installed by setup, a
-working Docker CLI and Buildx builder, and authenticated GitHub and GHCR publication. The authority
-rejects source changes before or during the build and verifies the release binary's Go VCS metadata
-against that exact clean commit.
+GitHub release immutability must already be enabled and the repository variable
+`DORF_IMMUTABLE_RELEASES_ENABLED` must record `true`. The existing `dorf` GHCR package must grant
+this repository Write access under **Manage Actions access**; the image's OCI source label keeps the
+package linked to the repository after publication.
+
+[`scripts/release.sh`](../scripts/release.sh) remains the source of truth for release inputs,
+artifacts, and publication. Hosted Actions supplies the repository toolchain, Docker/Buildx, and
+narrowly scoped `GITHUB_TOKEN` GitHub and GHCR publication permissions. The workflow checks out the
+exact event commit; the authority rejects source changes before or during the build and verifies the
+release binary's Go VCS metadata against that commit.
 
 Every run builds one x86_64 Linux application archive and the Linux/amd64 image
 `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` from the same exact binary and canonical container recipe.
@@ -34,8 +37,8 @@ Publication first prepares the image and application archive without changing Gi
 release, verifies the signed immutable release and every uploaded asset, and only then promotes it
 to `latest`. A failed verification leaves the prior latest release unchanged.
 
-The authority reuses the exact pinned Incus image unless that image's declared inputs changed.
-When the pin advances to the release being published, set `AI_CONNECTION` and
-ensure the configured GitHub integration covers the source repository; the authority then invokes
-the real Codex and Pi image proof before publication. Do not duplicate those details here or publish
-by bypassing that command.
+The hosted workflow accepts only a reused, already proven Incus image pin. When the pin advances,
+publication remains local: set `AI_CONNECTION`, ensure the configured GitHub integration covers the
+source repository, and run `scripts/release.sh --publish` so the authority performs the real Codex
+and Pi image proof before publication. Provider credentials do not move to hosted Actions. Do not
+bypass the repository command for either path.

@@ -66,8 +66,12 @@ if [[ "$PUBLISH" == true ]]; then
     echo "Official Dorf releases require a public GitHub repository." >&2
     exit 1
   fi
-  if [[ "$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
-    --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null | tail -n 1 || true)" != "true" ]]; then
+  immutable_releases_enabled="${DORF_IMMUTABLE_RELEASES_ENABLED:-}"
+  if [[ -z "$immutable_releases_enabled" ]]; then
+    immutable_releases_enabled="$(gh variable get DORF_IMMUTABLE_RELEASES_ENABLED \
+      --repo "$GITHUB_REPOSITORY" --json value --jq .value 2>/dev/null | tail -n 1 || true)"
+  fi
+  if [[ "$immutable_releases_enabled" != "true" ]]; then
     echo "Enable GitHub release immutability, then set DORF_IMMUTABLE_RELEASES_ENABLED=true." >&2
     exit 1
   fi

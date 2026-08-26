@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    name: Publish release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require the main branch
+        shell: bash
+        run: test "$GITHUB_REF" = refs/heads/main
+      - name: Check out the dispatched commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up the repository
+        run: scripts/dev/setup.sh
+      - name: Run the full repository check
+        run: .dorf/bin/mise run check
+      - name: Require an already proven Incus image pin
+        shell: bash
+        run: |
+          version="$(.dorf/bin/mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
+          image_release="$(jq -r .release_tag internal/release/official_image.json)"
+          if test "$image_release" = "v$version"; then
+            echo "Incus image pin advances require the local Codex/Pi proof and publication boundary." >&2
+            exit 1
+          fi
+      - name: Require immutable GitHub releases
+        shell: bash
+        env:
+          DORF_IMMUTABLE_RELEASES_ENABLED: ${{ vars.DORF_IMMUTABLE_RELEASES_ENABLED }}
+        run: |
+          if test "$DORF_IMMUTABLE_RELEASES_ENABLED" != true; then
+            echo "Set the repository variable DORF_IMMUTABLE_RELEASES_ENABLED=true after enabling release immutability." >&2
+            exit 1
+          fi
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Publish the verified release
+        env:
+          DORF_IMMUTABLE_RELEASES_ENABLED: ${{ vars.DORF_IMMUTABLE_RELEASES_ENABLED }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release.sh --publish
