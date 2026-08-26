@@ -10,10 +10,11 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 ```mermaid
 flowchart LR
-    Remote["Remote direct client"] --> HTTPS["Authenticated HTTPS projection"]
-    HTTPS --> Core["In-process Core application boundary"]
+    Remote["Remote client"] --> HTTPS["Authenticated fixed Job projections"]
+    HTTPS -->|direct| Core["In-process Core application boundary"]
     Client["Host-local client adapter"] --> Core
     Workflow["Native Dorf workflow"] --> Core
+    HTTPS -->|typed workflow| Workflow
     Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
@@ -26,8 +27,10 @@ flowchart LR
 
 Dorf runs as a stateful control-plane deployment. Native workflows and host-local client adapters
 compose one small application boundary in-process. A separate API service projects a deliberately
-narrow direct-Job subset over authenticated HTTPS; this is not a network exposure of Core itself, a
-client SDK, or an embeddable-runtime contract.
+narrow closed set over authenticated HTTPS: direct Jobs and typed admission for the compiled coding
+and codebase-investigation workflows, followed by their common Job interaction surface. This is not
+a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
+contract.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -183,12 +186,13 @@ needed, and when to request cleanup. Workflow clients delegate those decisions t
 workflow. Native workflows and host-local adapters compose the in-process Core contract and observe
 its durable facts.
 
-The first external projection serves one configured Dorf Deployment over authenticated HTTPS. Its
-surface covers the direct Job interaction loop: admission, canonical inspect/watch, invariant
-Messages, eligible retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup.
-It does not expose workflow admission, PostgreSQL, Absurd, provider or Harness operations,
-transcript resources, or Core as a generic network or embeddable runtime. Named deployment contexts,
-MCP, a control-plane UI, language SDKs, and a public workflow API remain deferred. The accepted
+The external projection serves one configured Dorf Deployment over authenticated HTTPS. It admits a
+direct Job or either of two fixed typed workflows—coding and codebase investigation—and returns one
+closed flat Job union. All three kinds share canonical inspect/watch, invariant Messages, eligible
+retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup. It does not expose a
+generic workflow payload or registry, PostgreSQL, Absurd, provider or Harness operations, transcript
+resources, or Core as a generic network or embeddable runtime. Named deployment contexts, MCP, a
+control-plane UI, language SDKs, and a generic public workflow API remain deferred. The accepted
 working transport design and slice boundaries live in the
 [Remote Control API design](../implementation/control-api-design.md) and
 [implementation slices](../implementation/control-api-slices.md).
@@ -207,6 +211,13 @@ the `direct` Agent role, and successful work remains open and idle until a calle
 The HTTPS projection reuses Core's Follow, Steer, retry, and exact Sandbox file mechanisms without
 changing their invariants or transferring result meaning and cleanup timing into Core. The
 client—not Core—decides what the work means and when retained resources may be released.
+
+The two remote workflow routes invoke the same compiled typed workflow admissions used on the host;
+they do not make the workflow module contract public. Coding retains its Proposal, Outcome, and
+policy that requests cleanup once a terminal Outcome is observed. Investigation retains its exact
+source and report-path policy and accepts only a credential-free HTTPS remote source through this
+boundary; retained local Git bundles remain host-local input. Their Job views add only their typed
+fields to the common projection.
 
 ## Native workflow composition
 

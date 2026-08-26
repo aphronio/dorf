@@ -13,11 +13,12 @@ ingress boundaries. It must pause for every password, secret, browser authorizat
 or consequential infrastructure choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
-authentication, admit, inspect, and watch a direct Job, send or inspect Messages, request eligible
-retry, read an exact Sandbox file, inspect Evidence, and request cleanup. It must not run `dorf
-setup`, `dorf serve`, `dorf worker`, database or migration commands, `dorf provider`, `dorf profile`,
-or GitHub integration setup. It must not use SSH or local-only commands to work around a missing
-remote capability. The deployment host owns all of those operations.
+authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
+Job, send or inspect Messages, request eligible retry, read an exact Sandbox file, inspect Evidence,
+and request cleanup. It must not run deployment-host commands such as `dorf setup`, `dorf serve`,
+`dorf worker`, database or migration commands, `dorf provider`, `dorf profile`, or GitHub integration
+setup. It must not use SSH or local-only commands to work around a missing remote capability. The
+deployment host owns all of those operations.
 
 ## Common installation protocol
 
@@ -54,8 +55,10 @@ Put the complete goal or Message in a file and use the exact remote commands in 
 Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
 flow. Follow may queue, while steer requires the exact active Turn and must not be resent as Follow
 after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after
-a successful Turn; do not create a replacement merely because it has no active execution. Remote Job
-listing and workflow admission are not delivered yet.
+a successful Turn; do not create a replacement merely because it has no active execution. Remote
+investigation accepts only its documented credential-free HTTPS source; never upload, copy, or
+reconstruct a host-local retained bundle through the remote boundary. Remote Job listing is not
+delivered yet.
 
 ## Safety and handback
 

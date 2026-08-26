@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/coding"
@@ -12,13 +13,13 @@ import (
 func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Job, bool, error) {
 	normalized, err := coding.NormalizeAdmission(input)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Job{}, false, fmt.Errorf("%w: %v", coding.ErrInvalidAdmission, err)
 	}
 	normalized.JobAdmission, err = normalizeCoreAdmission(normalized.JobAdmission)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Job{}, false, fmt.Errorf("%w: %v", coding.ErrInvalidAdmission, err)
 	}
-	return admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		if _, err := queries.InsertCodingToProposalInput(ctx, dbsql.InsertCodingToProposalInputParams{
 			JobID: ids.jobID, Repository: normalized.Repository, StartingRevision: normalized.Revision, Revision: normalized.Revision,
 			Branch: normalized.Branch, GithubRepository: normalized.GitHubRepository,
@@ -33,7 +34,7 @@ func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Jo
 		if stored.JobID != ids.jobID || stored.Repository != normalized.Repository || stored.StartingRevision != normalized.Revision ||
 			stored.Branch != normalized.Branch || stored.GithubRepository != normalized.GitHubRepository ||
 			stored.GithubInstallationID != normalized.GitHubInstallation || stored.BaseBranch != normalized.BaseBranch {
-			return fmt.Errorf("admission key %q is already bound to different complete Job input", normalized.AdmissionKey)
+			return fmt.Errorf("%w: %q", ErrAdmissionConflict, normalized.AdmissionKey)
 		}
 		if _, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: core.AgentRunID(ids.messageID), JobID: ids.jobID, MessageID: ids.messageID, Role: coding.InitialAgentRole,
@@ -43,4 +44,8 @@ func (s Store) AdmitCoding(ctx context.Context, input coding.Admission) (core.Jo
 		}
 		return queries.InsertInitialRevision(ctx, dbsql.InsertInitialRevisionParams{JobID: ids.jobID, OID: normalized.Revision, Branch: normalized.Branch})
 	})
+	if errors.Is(err, ErrAdmissionConflict) {
+		err = fmt.Errorf("%w: %w", coding.ErrAdmissionConflict, err)
+	}
+	return job, created, err
 }

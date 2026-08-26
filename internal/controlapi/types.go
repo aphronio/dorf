@@ -61,6 +61,39 @@ type AdmitJobRequest struct {
 	Reasoning string `json:"reasoning"`
 }
 
+// AdmitCodingJobRequest is the complete public input for the built-in coding
+// workflow. Deployment configuration supplies GitHub and provider authority;
+// those credentials and identifiers never cross this boundary.
+type AdmitCodingJobRequest struct {
+	Goal       string `json:"goal"`
+	Repository string `json:"repository"`
+	Revision   string `json:"revision"`
+	BaseBranch string `json:"base_branch"`
+	Branch     string `json:"branch,omitempty"`
+	Profile    string `json:"profile,omitempty"`
+	Model      string `json:"model"`
+	Reasoning  string `json:"reasoning,omitempty"`
+}
+
+// AdmitInvestigationJobRequest accepts only a remote repository source. Host-
+// local retained bundles remain an operator-only workflow input.
+type AdmitInvestigationJobRequest struct {
+	Brief      string `json:"brief"`
+	Repository string `json:"repository"`
+	Revision   string `json:"revision"`
+	Profile    string `json:"profile,omitempty"`
+	Model      string `json:"model"`
+	Reasoning  string `json:"reasoning,omitempty"`
+}
+
+const (
+	JobKindDirect        = "direct"
+	JobKindCoding        = "coding"
+	JobKindInvestigation = "codebase-investigation"
+)
+
+// Job contains only the fields common to every supported public Job kind.
+// Canonical reads return one of the concrete JobView implementations below.
 type Job struct {
 	ID               string     `json:"id"`
 	Kind             string     `json:"kind"`
@@ -74,6 +107,71 @@ type Job struct {
 	Attention        *Attention `json:"attention"`
 	Cleanup          State      `json:"cleanup"`
 	Sandboxes        []Sandbox  `json:"sandboxes"`
+}
+
+// JobView is the closed discriminated union returned by Job inspection and
+// watch. It deliberately has no generic workflow payload or extension map.
+type JobView interface {
+	Common() Job
+	jobKind() string
+}
+
+type DirectJob struct {
+	Job
+}
+
+func (j DirectJob) Common() Job   { return j.Job }
+func (DirectJob) jobKind() string { return JobKindDirect }
+
+type CodingJob struct {
+	Job
+	WorkflowRevision string          `json:"workflow_revision"`
+	Repository       string          `json:"repository"`
+	StartingRevision string          `json:"starting_revision"`
+	Revision         string          `json:"revision"`
+	Branch           string          `json:"branch"`
+	BaseBranch       string          `json:"base_branch"`
+	Proposal         *CodingProposal `json:"proposal"`
+	Outcome          *CodingOutcome  `json:"outcome"`
+}
+
+func (j CodingJob) Common() Job   { return j.Job }
+func (CodingJob) jobKind() string { return JobKindCoding }
+
+type CodingProposal struct {
+	Number   int64  `json:"number"`
+	URL      string `json:"url"`
+	Revision string `json:"revision"`
+}
+
+type CodingOutcome struct {
+	Kind           string    `json:"kind"`
+	ObservedState  string    `json:"observed_state"`
+	MergeCommitOID string    `json:"merge_commit_oid,omitempty"`
+	ObservedAt     time.Time `json:"observed_at"`
+}
+
+type InvestigationJob struct {
+	Job
+	WorkflowRevision string              `json:"workflow_revision"`
+	Source           InvestigationSource `json:"source"`
+	Report           InvestigationReport `json:"report"`
+}
+
+func (j InvestigationJob) Common() Job   { return j.Job }
+func (InvestigationJob) jobKind() string { return JobKindInvestigation }
+
+type InvestigationSource struct {
+	Kind       string `json:"kind"`
+	Repository string `json:"repository,omitempty"`
+	Revision   string `json:"revision"`
+}
+
+// InvestigationReport identifies the workflow's conventional report location.
+// The common cleanup state is the authority for whether Sandbox reads remain open.
+type InvestigationReport struct {
+	SandboxID string `json:"sandbox_id"`
+	Path      string `json:"path"`
 }
 
 type Admission struct {
@@ -161,15 +259,17 @@ type Auth interface {
 }
 
 // Jobs keeps domain admission, projection, and cleanup policy outside HTTP.
-// Implementations compose direct.Admit and Core handles and return only the
-// purpose-built public snapshot.
+// Implementations compose Core and the fixed workflow seams and return only
+// purpose-built public snapshots.
 type Jobs interface {
-	AdmitDirect(context.Context, string, AdmitJobRequest) (Job, bool, error)
-	Get(context.Context, string) (Job, error)
+	AdmitDirect(context.Context, string, AdmitJobRequest) (DirectJob, bool, error)
+	AdmitCoding(context.Context, string, AdmitCodingJobRequest) (CodingJob, bool, error)
+	AdmitInvestigation(context.Context, string, AdmitInvestigationJobRequest) (InvestigationJob, bool, error)
+	Get(context.Context, string) (JobView, error)
 	SendMessage(context.Context, string, string, SendMessageRequest) (Message, bool, error)
 	GetMessage(context.Context, string, string) (Message, error)
 	Retry(context.Context, string, string) (Retry, bool, error)
 	ReadSandboxFile(context.Context, string, string) ([]byte, error)
 	Evidence(context.Context, string) ([]Evidence, error)
-	RequestCleanup(context.Context, string) (Job, error)
+	RequestCleanup(context.Context, string) (JobView, error)
 }

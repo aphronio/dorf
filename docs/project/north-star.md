@@ -37,9 +37,10 @@ documents should link here rather than redefine it.
 Dorf Core is the product: a stateful, self-hostable control plane with one application boundary for
 supported existing Harnesses on chosen compatible infrastructure. Core remains an internal
 application boundary inside a deployment backed by its durable dependencies. Native workflows
-compose it in-process; external clients may receive deliberately narrower authenticated projections
-without turning Core into an embeddable runtime, generic public API, or workflow API. Portability is
-capability-based: admission selects a verified profile and rejects combinations whose configuration,
+compose it in-process; external clients may receive deliberately narrower authenticated projections,
+including fixed typed entry points for selected built-in workflows, without turning Core into an
+embeddable runtime, generic public API, or generic workflow API. Portability is capability-based:
+admission selects a verified profile and rejects combinations whose configuration,
 dependencies, credentials, host constraints, tools, isolation, recovery, or observation contract
 has not been proved.
 
@@ -229,12 +230,12 @@ new version must pass its checks and evaluations and receive any required capabi
 activation. Humans must be able to inspect, edit, fork, pin, and roll back what the agent built.
 
 Native workflows compose the intended Core contract in-process. External-client surfaces project
-only the operations their real use has earned; the first such projection covers direct Job
-admission, interaction, inspection, and requested cleanup through one configured deployment. Public
-workflow compatibility, thin SDKs, MCP, a control-plane UI, and named multi-deployment contexts remain
-uncommitted. Dynamic agent-authored recipes are a later UX layer, not the requirements driver for
-Core. Dorf does not become a generic automation canvas, graph framework, agent builder, or
-model/tool Harness.
+only the operations their real use has earned: one configured deployment now admits direct Jobs and
+the two fixed built-in workflows, then exposes their common interaction, inspection, and cleanup
+surface. Generic workflow compatibility, thin SDKs, MCP, a control-plane UI, and named
+multi-deployment contexts remain uncommitted. Dynamic agent-authored recipes are a later UX layer,
+not the requirements driver for Core. Dorf does not become a generic automation canvas, graph
+framework, agent builder, or model/tool Harness.
 
 Native workflows are demos and showcases of compositions available over Core, not compatibility
 constraints or privileged product contracts. They remain Core consumers even when compiled into the

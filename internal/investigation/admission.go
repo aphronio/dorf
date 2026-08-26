@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -48,6 +49,9 @@ func NormalizeAdmission(input Admission) (Admission, error) {
 		if input.Source.Repository == "" || input.Source.BundleDigest != "" || input.Source.BundleByteSize != 0 {
 			return Admission{}, fmt.Errorf("remote investigation source requires only a repository URL and exact Revision")
 		}
+		if err := validateRemoteRepository(input.Source.Repository); err != nil {
+			return Admission{}, err
+		}
 	case SourceGitBundle:
 		if input.Source.Repository != "" || !sha256Digest.MatchString(input.Source.BundleDigest) || input.Source.BundleByteSize <= 0 {
 			return Admission{}, fmt.Errorf("Git-bundle investigation source requires exact retained digest, byte size, and Revision")
@@ -56,4 +60,14 @@ func NormalizeAdmission(input Admission) (Admission, error) {
 		return Admission{}, fmt.Errorf("codebase-investigation requires a remote or git-bundle source")
 	}
 	return input, nil
+}
+
+func validateRemoteRepository(repository string) error {
+	parsed, err := url.Parse(repository)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(repository, "#") ||
+		parsed.Opaque != "" || strings.Trim(parsed.Path, "/") == "" {
+		return fmt.Errorf("remote investigation repository must be a credential-free HTTPS URL with a nonempty path and no query or fragment")
+	}
+	return nil
 }

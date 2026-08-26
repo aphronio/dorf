@@ -158,6 +158,35 @@ dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
 
+To delegate one of the two built-in workflows instead, save the complete coding goal or
+investigation brief in a file and use its typed admission command:
+
+```bash
+dorf workflow run coding \
+  --goal-file goal.txt \
+  --repo https://github.com/OWNER/REPOSITORY.git \
+  --revision FULL_COMMIT_OID \
+  --base main \
+  --model MODEL \
+  --reasoning high
+
+dorf workflow run codebase-investigation \
+  --brief-file brief.txt \
+  --repo https://github.com/OWNER/REPOSITORY.git \
+  --revision FULL_COMMIT_OID \
+  --model MODEL \
+  --reasoning high
+```
+
+Remote coding uses the deployment's GitHub integration; its request carries no integration
+credential. Remote investigation accepts only a credential-free HTTPS repository URL and exact
+Revision. `--local-repo` remains a deployment-host-only input that creates a retained Git bundle and
+is never sent through the remote API. Both workflow Jobs use the same remote inspect, watch,
+Message, retry, file, Evidence, and cleanup commands shown above. Investigation remains open and
+idle after settled work until the client requests cleanup. Coding requests cleanup once it observes
+a terminal GitHub Outcome, so retrieve any needed Sandbox file before that external decision;
+retained Evidence remains readable after cleanup.
+
 `job inspect` reports the initial Message ID and exact Sandbox IDs. Follow may queue before current
 work settles; steer targets only the exact active Turn and never becomes a Follow. `job watch`
 reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is accepted only for
@@ -167,8 +196,8 @@ bytes and must happen before cleanup, which closes Message admission and file re
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the
 exact request once after a retryable transport or HTTP server failure; a human does not need to
-configure a key. The Job remains open and idle after a successful Turn until the caller requests
-cleanup.
+configure a key. A direct Job remains open and idle after a successful Turn until the caller
+requests cleanup.
 
 The deployment operator can revoke exactly one Client at any time using the Client ID reported by
 `dorf connect` or `dorf auth status`:
@@ -218,7 +247,10 @@ Dorf owns durable delivery, recovery, the exact
 Job-owned Sandbox, and execution of explicit cleanup. No workflow identity, Git repository, or
 GitHub integration is required.
 
-## 5. Run a coding Job
+## 5. Run a coding Job on the deployment host
+
+This command stays host-local only when the deployment host has no saved remote Client connection;
+a connected CLI sends the same typed request to its configured Deployment.
 
 The selected profile owns the Harness. Omit `--profile` to use the verified deployment default.
 Create and verify a separate Pi profile when that Job should use Pi; both may reference the same
@@ -227,7 +259,7 @@ exact credential-free image.
 Save the complete goal in `goal.txt`, then admit it with stable authority:
 
 ```bash
-dorf admit \
+dorf workflow run coding \
   --key my-change-v1 \
   --goal-file goal.txt \
   --repo https://github.com/OWNER/REPOSITORY.git \

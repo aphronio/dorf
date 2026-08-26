@@ -19,7 +19,7 @@ import (
 func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T) {
 	const credential = "never-print-this-credential"
 	escapedGoal := strings.Repeat("\x00", 1<<20)
-	escapedJob, err := json.Marshal(controlapi.Job{ID: "job-1", Goal: escapedGoal})
+	escapedJob, err := json.Marshal(controlapi.DirectJob{Job: controlapi.Job{ID: "job-1", Kind: controlapi.JobKindDirect, Goal: escapedGoal}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +42,8 @@ func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T)
 			return jsonResponse(http.StatusOK, strings.Repeat("x", maxResponseBytes+1)), nil
 		case 5:
 			return nil, errors.New("transport echoed " + credential)
+		case 6:
+			return jsonResponse(http.StatusCreated, `{"id":"job-1","kind":"never-print-this-credential"}`), nil
 		default:
 			t.Fatal("redirect was followed or an unexpected request was issued")
 			return nil, nil
@@ -65,14 +67,17 @@ func TestProblemsRedirectsAndOversizedResponsesDoNotLeakCredential(t *testing.T)
 		t.Fatalf("problem=%#v err=%v", problem, err)
 	}
 	job, err := client.Job(context.Background(), "job-1")
-	if err != nil || job.Goal != escapedGoal {
-		t.Fatalf("escaped Job goal length=%d err=%v", len(job.Goal), err)
+	if err != nil || job.Common().Goal != escapedGoal {
+		t.Fatalf("escaped Job goal length=%d err=%v", len(job.Common().Goal), err)
 	}
 	if _, err := client.Me(context.Background()); err == nil || strings.Contains(err.Error(), credential) {
 		t.Fatalf("oversized response err=%v", err)
 	}
 	if _, err := client.Me(context.Background()); err == nil || strings.Contains(err.Error(), credential) {
 		t.Fatalf("transport error err=%v", err)
+	}
+	if _, err := client.AdmitJob(context.Background(), "request-key", controlapi.AdmitJobRequest{}); err == nil || strings.Contains(err.Error(), credential) {
+		t.Fatalf("wrong-kind response err=%v", err)
 	}
 }
 
@@ -95,12 +100,12 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 			if request.Header.Get("Last-Event-ID") != "" {
 				t.Fatalf("initial Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-1\",\"goal\":\"first\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader(": connected\nretry: 0\nevent: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"goal\":\"first\"}\n\n"))
 		case 2:
 			if request.Header.Get("Last-Event-ID") != "snapshot-1" {
 				t.Fatalf("reconnect Last-Event-ID=%q", request.Header.Get("Last-Event-ID"))
 			}
-			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"job-1\",\"goal\":\"second\"}\n\n"))
+			response.Body = io.NopCloser(strings.NewReader("event: snapshot\nid: snapshot-2\ndata: {\"id\":\"job-1\",\"kind\":\"direct\",\"goal\":\"second\"}\n\n"))
 		default:
 			t.Fatalf("unexpected watch reconnect %d", requests)
 		}
@@ -111,8 +116,8 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var goals []string
-	err = client.WatchJob(context.Background(), "job-1", func(job controlapi.Job) error {
-		goals = append(goals, job.Goal)
+	err = client.WatchJob(context.Background(), "job-1", func(job controlapi.JobView) error {
+		goals = append(goals, job.Common().Goal)
 		if len(goals) == 2 {
 			return stop
 		}
@@ -120,6 +125,58 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 	})
 	if !errors.Is(err, stop) || requests != 2 || strings.Join(goals, ",") != "first,second" {
 		t.Fatalf("Watch goals=%v requests=%d err=%v", goals, requests, err)
+	}
+}
+
+func TestTypedWorkflowAdmissionsAndJobUnion(t *testing.T) {
+	const credential = "workflow-credential"
+	codingJSON := `{"id":"job-coding","kind":"coding","workflow_revision":"3"}`
+	investigationJSON := `{"id":"job-investigation","kind":"codebase-investigation","workflow_revision":"2"}`
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Header.Get("Authorization") != "Bearer "+credential {
+			t.Fatalf("workflow request auth=%q", request.Header.Get("Authorization"))
+		}
+		switch request.Method + " " + request.URL.Path {
+		case "POST /v1/workflows/coding/jobs":
+			if request.Header.Get("Idempotency-Key") != "coding-key" {
+				t.Fatalf("coding key=%q", request.Header.Get("Idempotency-Key"))
+			}
+			return jsonResponse(http.StatusCreated, codingJSON), nil
+		case "POST /v1/workflows/codebase-investigation/jobs":
+			if request.Header.Get("Idempotency-Key") != "investigation-key" {
+				t.Fatalf("investigation key=%q", request.Header.Get("Idempotency-Key"))
+			}
+			return jsonResponse(http.StatusCreated, investigationJSON), nil
+		case "GET /v1/jobs/job-coding":
+			return jsonResponse(http.StatusOK, codingJSON), nil
+		case "GET /v1/jobs/job-investigation":
+			return jsonResponse(http.StatusOK, investigationJSON), nil
+		default:
+			t.Fatalf("unexpected workflow request %s %s", request.Method, request.URL.Path)
+			return nil, nil
+		}
+	})
+	client, err := New("https://dorf.example.test", credential, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCoding, err := client.AdmitCodingJob(context.Background(), "coding-key", controlapi.AdmitCodingJobRequest{Model: "model-1"})
+	if err != nil || gotCoding.Kind != controlapi.JobKindCoding {
+		t.Fatalf("coding Job=%#v err=%v", gotCoding, err)
+	}
+	gotInvestigation, err := client.AdmitInvestigationJob(context.Background(), "investigation-key", controlapi.AdmitInvestigationJobRequest{Model: "model-1"})
+	if err != nil || gotInvestigation.Kind != controlapi.JobKindInvestigation {
+		t.Fatalf("investigation Job=%#v err=%v", gotInvestigation, err)
+	}
+	if got, err := client.Job(context.Background(), "job-coding"); err != nil {
+		t.Fatal(err)
+	} else if typed, ok := got.(controlapi.CodingJob); !ok || typed.WorkflowRevision != "3" {
+		t.Fatalf("coding union=%T %#v", got, got)
+	}
+	if got, err := client.Job(context.Background(), "job-investigation"); err != nil {
+		t.Fatal(err)
+	} else if typed, ok := got.(controlapi.InvestigationJob); !ok || typed.WorkflowRevision != "2" {
+		t.Fatalf("investigation union=%T %#v", got, got)
 	}
 }
 

@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +19,6 @@ import (
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/controlclient"
 	"github.com/aphronio/dorf/internal/core"
-	"github.com/aphronio/dorf/internal/direct"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
@@ -26,12 +27,12 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		ID: "client-1", Name: "laptop",
 		CredentialExpiresAt: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC),
 	}}
-	jobs := &remoteCLIJobs{job: controlapi.Job{
+	jobs := &remoteCLIJobs{job: controlapi.DirectJob{Job: controlapi.Job{
 		ID: "job-1", Kind: "direct", Goal: "prove remote control", Profile: "default",
 		Model: "model-1", Reasoning: "high", InitialMessageID: "message-1", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
 		Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "main"}},
-	}}
+	}}}
 	api := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: "test", Capabilities: []string{"direct_jobs"},
 	}, auth, jobs)
@@ -168,42 +169,120 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkflowCLIUsesExplicitRoutesAndFencesLocalRepositories(t *testing.T) {
+	goal, brief := "  exact coding goal\n", "  exact investigation brief\n"
+	goalFile, briefFile := filepath.Join(t.TempDir(), "goal"), filepath.Join(t.TempDir(), "brief")
+	if err := os.WriteFile(goalFile, []byte(goal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(briefFile, []byte(brief), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var codingRequest controlapi.AdmitCodingJobRequest
+	var investigationRequest controlapi.AdmitInvestigationJobRequest
+	var paths, keys []string
+	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		paths = append(paths, request.URL.Path)
+		keys = append(keys, request.Header.Get("Idempotency-Key"))
+		response := httptest.NewRecorder()
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusCreated)
+		switch request.URL.Path {
+		case "/v1/workflows/coding/jobs":
+			if err := json.NewDecoder(request.Body).Decode(&codingRequest); err != nil {
+				return nil, err
+			}
+			_ = json.NewEncoder(response).Encode(controlapi.CodingJob{
+				Job:              controlapi.Job{ID: "coding-job", Kind: controlapi.JobKindCoding, Goal: codingRequest.Goal},
+				WorkflowRevision: "coding/v1", Repository: codingRequest.Repository, StartingRevision: codingRequest.Revision,
+				Revision: codingRequest.Revision, Branch: "dorf/coding-job", BaseBranch: codingRequest.BaseBranch,
+			})
+		case "/v1/workflows/codebase-investigation/jobs":
+			if err := json.NewDecoder(request.Body).Decode(&investigationRequest); err != nil {
+				return nil, err
+			}
+			_ = json.NewEncoder(response).Encode(controlapi.InvestigationJob{
+				Job:              controlapi.Job{ID: "investigation-job", Kind: controlapi.JobKindInvestigation, Goal: investigationRequest.Brief},
+				WorkflowRevision: "codebase-investigation/v1",
+				Source:           controlapi.InvestigationSource{Kind: "remote", Repository: investigationRequest.Repository, Revision: investigationRequest.Revision},
+				Report:           controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: "REPORT.md"},
+			})
+		default:
+			return nil, errors.New("unexpected workflow route " + request.URL.Path)
+		}
+		return response.Result(), nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := strings.Repeat("a", 40)
+	var codingOutput, investigationOutput strings.Builder
+	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
+		[]string{"run", "coding", "--key", "coding-key", "--goal-file", goalFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--base", "main", "--model", "model"},
+		&codingOutput, &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
+		[]string{"run", "codebase-investigation", "--key", "investigation-key", "--brief-file", briefFile, "--repo", "https://github.com/aphronio/dorf.git", "--revision", revision, "--model", "model", "--output", "json"},
+		&investigationOutput, &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+	if codingRequest.Goal != goal || investigationRequest.Brief != brief || !slices.Equal(paths, []string{"/v1/workflows/coding/jobs", "/v1/workflows/codebase-investigation/jobs"}) ||
+		!slices.Equal(keys, []string{"coding-key", "investigation-key"}) {
+		t.Fatalf("coding=%#v investigation=%#v paths=%q keys=%q", codingRequest, investigationRequest, paths, keys)
+	}
+	if !strings.Contains(codingOutput.String(), "repository: https://github.com/aphronio/dorf.git") ||
+		!strings.Contains(investigationOutput.String(), `"kind": "codebase-investigation"`) {
+		t.Fatalf("coding output=%q investigation output=%q", codingOutput.String(), investigationOutput.String())
+	}
+	if err := remoteWorkflowCommand(context.Background(), client, "https://dorf.example.test",
+		[]string{"run", "codebase-investigation", "--local-repo", "/deployment-only"}, &strings.Builder{}, &strings.Builder{}); err == nil ||
+		!strings.Contains(err.Error(), "deployment host") || len(paths) != 2 {
+		t.Fatalf("remote local-repo fence err=%v paths=%q", err, paths)
+	}
+}
+
 func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 	const privateMarker = "reconciling private provider resource"
 	tests := []struct {
 		name          string
 		cleanup       core.CleanupState
 		task          absurd.TaskResultState
-		execution     direct.ExecutionState
+		execution     string
 		wantExecution string
 		wantCleanup   string
 		wantCode      string
 	}{
-		{name: "healthy cleanup preserves idle", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: direct.ExecutionIdle, wantExecution: "idle", wantCleanup: "running"},
-		{name: "healthy cleanup stops active work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: direct.ExecutionAwaitingAgent, wantExecution: "stopped", wantCleanup: "running"},
-		{name: "healthy cleanup preserves attention", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: direct.ExecutionAttention, wantExecution: "stopped", wantCleanup: "running", wantCode: "agent_attention"},
-		{name: "failed cleanup", cleanup: core.CleanupScheduled, task: absurd.TaskFailed, execution: direct.ExecutionIdle, wantExecution: "idle", wantCleanup: "failed", wantCode: "cleanup_failed"},
-		{name: "requested cleanup preserves failure", cleanup: core.CleanupRequested, task: absurd.TaskFailed, execution: direct.ExecutionIdle, wantExecution: "failed", wantCleanup: "requested", wantCode: "execution_failed"},
-		{name: "requested cleanup accepts cancellation window", cleanup: core.CleanupRequested, task: absurd.TaskCancelled, execution: direct.ExecutionAwaitingAgent, wantExecution: "stopped", wantCleanup: "requested"},
-		{name: "missing task attachment", cleanup: core.CleanupPending, task: "", execution: direct.ExecutionProvisioningSandbox, wantExecution: "failed", wantCleanup: "not_requested", wantCode: "execution_failed"},
-		{name: "cancelled execution", cleanup: core.CleanupPending, task: absurd.TaskCancelled, execution: direct.ExecutionIdle, wantExecution: "failed", wantCleanup: "not_requested", wantCode: "execution_failed"},
+		{name: "healthy cleanup preserves idle", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "idle", wantExecution: "idle", wantCleanup: "running"},
+		{name: "healthy cleanup stops active work", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "running", wantExecution: "stopped", wantCleanup: "running"},
+		{name: "healthy cleanup preserves attention", cleanup: core.CleanupScheduled, task: absurd.TaskRunning, execution: "stopped", wantExecution: "stopped", wantCleanup: "running", wantCode: "agent_attention"},
+		{name: "failed cleanup", cleanup: core.CleanupScheduled, task: absurd.TaskFailed, execution: "idle", wantExecution: "idle", wantCleanup: "failed", wantCode: "cleanup_failed"},
+		{name: "requested cleanup preserves failure", cleanup: core.CleanupRequested, task: absurd.TaskFailed, execution: "idle", wantExecution: "failed", wantCleanup: "requested", wantCode: "execution_failed"},
+		{name: "requested cleanup accepts cancellation window", cleanup: core.CleanupRequested, task: absurd.TaskCancelled, execution: "running", wantExecution: "stopped", wantCleanup: "requested"},
+		{name: "missing task attachment", cleanup: core.CleanupPending, task: "", execution: "provisioning_sandbox", wantExecution: "failed", wantCleanup: "not_requested", wantCode: "execution_failed"},
+		{name: "cancelled execution", cleanup: core.CleanupPending, task: absurd.TaskCancelled, execution: "idle", wantExecution: "failed", wantCleanup: "not_requested", wantCode: "execution_failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			execution, cleanup, attention, err := publicJobStates(core.Job{
+			var inputAttention *controlapi.Attention
+			if test.wantCode == "agent_attention" {
+				inputAttention = &controlapi.Attention{Code: "agent_attention", Detail: "safe detail"}
+			}
+			view, err := publicCommonJob(core.Job{
 				ID: "job-1", CleanupState: test.cleanup, CleanupAttention: privateMarker,
-			}, direct.Projection{State: test.execution}, test.task)
+			}, controlapi.JobKindDirect, test.execution, inputAttention, test.task,
+				[]core.Sandbox{{ID: "sandbox-1", JobID: "job-1", Name: "default"}}, "message-1")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if execution != test.wantExecution || cleanup != test.wantCleanup {
-				t.Fatalf("execution=%q cleanup=%q, want %s/%s", execution, cleanup, test.wantExecution, test.wantCleanup)
+			if view.Execution.State != test.wantExecution || view.Cleanup.State != test.wantCleanup {
+				t.Fatalf("execution=%q cleanup=%q, want %s/%s", view.Execution.State, view.Cleanup.State, test.wantExecution, test.wantCleanup)
 			}
-			if test.wantCode == "" && attention != nil {
-				t.Fatalf("healthy cleanup exposed attention %#v", attention)
+			if test.wantCode == "" && view.Attention != nil {
+				t.Fatalf("healthy cleanup exposed attention %#v", view.Attention)
 			}
-			if test.wantCode != "" && (attention == nil || attention.Code != test.wantCode || strings.Contains(attention.Detail, privateMarker)) {
-				t.Fatalf("cleanup attention=%#v, want fixed %q", attention, test.wantCode)
+			if test.wantCode != "" && (view.Attention == nil || view.Attention.Code != test.wantCode || strings.Contains(view.Attention.Detail, privateMarker)) {
+				t.Fatalf("cleanup attention=%#v, want fixed %q", view.Attention, test.wantCode)
 			}
 		})
 	}
@@ -233,11 +312,32 @@ func TestAdmissionRetryUsesHTTPFailureClass(t *testing.T) {
 	if !retryableMutationError(background, ingress5xx) || retryableMutationError(background, definitive4xx) || retryableMutationError(background, context.Canceled) {
 		t.Fatal("admission retry must accept every 5xx and reject 4xx or cancellation")
 	}
+	var guidance strings.Builder
+	calls := 0
+	_, err := runKeyedMutation(background, "generated-key", true, &guidance, "Admission may have succeeded.", func() (struct{}, error) {
+		calls++
+		return struct{}{}, context.DeadlineExceeded
+	})
+	if !errors.Is(err, context.DeadlineExceeded) || calls != 1 || !strings.Contains(guidance.String(), "--key generated-key") {
+		t.Fatalf("ambiguous deadline err=%v calls=%d guidance=%q", err, calls, guidance.String())
+	}
+	guidance.Reset()
+	calls = 0
+	_, err = runKeyedMutation(background, "retry-key", true, &guidance, "Admission may have succeeded.", func() (struct{}, error) {
+		calls++
+		if calls == 1 {
+			return struct{}{}, ingress5xx
+		}
+		return struct{}{}, definitive4xx
+	})
+	if err != definitive4xx || calls != 2 || !strings.Contains(guidance.String(), "--key retry-key") {
+		t.Fatalf("ambiguous first attempt err=%v calls=%d guidance=%q", err, calls, guidance.String())
+	}
 }
 
 func TestRemoteJobWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\"}\n\n"), cancel: cancel}
+	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\",\"kind\":\"direct\"}\n\n"), cancel: cancel}
 	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Path != "/v1/jobs/job-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("watch request path=%q accept=%q", request.URL.Path, request.Header.Get("Accept"))
@@ -329,32 +429,40 @@ func (a *remoteCLIAuth) Authenticate(_ context.Context, credential string) (cont
 
 type remoteCLIJobs struct {
 	mu    sync.Mutex
-	job   controlapi.Job
+	job   controlapi.DirectJob
 	key   string
 	input controlapi.AdmitJobRequest
 }
 
-func (j *remoteCLIJobs) AdmitDirect(_ context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.Job, bool, error) {
+func (j *remoteCLIJobs) AdmitDirect(_ context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.key, j.input = key, input
 	return j.job, true, nil
 }
 
-func (j *remoteCLIJobs) Get(_ context.Context, id string) (controlapi.Job, error) {
+func (j *remoteCLIJobs) AdmitCoding(context.Context, string, controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+	return controlapi.CodingJob{}, false, controlapi.ErrInvalidInput
+}
+
+func (j *remoteCLIJobs) AdmitInvestigation(context.Context, string, controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+	return controlapi.InvestigationJob{}, false, controlapi.ErrInvalidInput
+}
+
+func (j *remoteCLIJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if id != j.job.ID {
-		return controlapi.Job{}, controlapi.ErrJobNotFound
+		return nil, controlapi.ErrJobNotFound
 	}
 	return j.job, nil
 }
 
-func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi.Job, error) {
+func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if id != j.job.ID {
-		return controlapi.Job{}, controlapi.ErrJobNotFound
+		return nil, controlapi.ErrJobNotFound
 	}
 	j.job.Cleanup.State = "requested"
 	return j.job, nil

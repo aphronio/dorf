@@ -18,9 +18,9 @@ The remote control API is a separate authority on a separate hostname from the P
 Its public boundary is one exact HTTPS Deployment origin backed by the private loopback-only
 `dorf serve` listener. After Enrollment, a remote CLI Client needs network and TLS access to that
 origin and only its own Dorf Client credential; it never needs PostgreSQL, provider, Harness,
-Gateway, or Sandbox credentials. The
-[remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
-host-service lifecycle and its limits.
+Gateway, or Sandbox credentials. Fixed remote coding and investigation admission reuse the same
+boundary. The [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client)
+owns the current workflow inputs, host-service lifecycle, and limits.
 
 Run the Go CLI's direct diagnostic boundary:
 
@@ -51,7 +51,8 @@ A watch reconnecting after API interruption is expected; its next value is a can
 not replay from an event log. `steer_unavailable` means the exact active Turn no longer exists and
 must not be resent as Follow. `retry_unavailable` means there is no eligible failed execution.
 `file_unavailable` after cleanup begins is expected. `evidence_unverified` or a file digest mismatch
-is a Dorf control-path integrity failure.
+is a Dorf control-path integrity failure. An `idempotency_conflict` means the same request key was
+reused with changed complete input; replay only the original request or choose a fresh key.
 
 Ownership guide:
 

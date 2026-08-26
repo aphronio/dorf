@@ -1469,7 +1469,7 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D063 — Dorf Core portability precedes general workflow authoring
 
 - **Status:** Accepted product direction — 2026-08-13; client composition refined by D088 —
-  2026-08-21; narrow external direct-Job projection added by D097 and expanded by D098 — 2026-08-26
+  2026-08-21; narrow external projection added by D097 and expanded by D098 and D099 — 2026-08-26
 - **Positioning:** Dorf is the open-source control plane for running agent Harnesses on infrastructure
   its owner controls: your agents, your infrastructure, one API. Core is the product. Whole-setup
   portability is direction; Codex and Pi with local Incus coding-to-PR on the supported host are the
@@ -1484,9 +1484,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   remains authoritative for its native session, transcript, and tool protocol.
 - **Composition:** Native workflows and trusted client adapters are Core dogfood and compose the
   same small ownership boundary without a privileged hidden path. D088 defines the in-process
-  Job/Sandbox/Agent composition; D097 and D098 add the deliberately narrower authenticated HTTPS
-  projection for the direct Job interaction loop. SDK and public workflow direction remain
-  uncommitted.
+  Job/Sandbox/Agent composition; D097 through D099 add the deliberately narrower authenticated HTTPS
+  projection for direct Jobs and two fixed typed workflows. SDK and generic public workflow
+  direction remain uncommitted.
   Dynamic agent-authored recipes remain a later UX layer; Dorf is not a generic automation canvas,
   graph framework, agent builder, or model/tool Harness.
 - **Proof order:** Starting from Codex on Incus, D065 proves Pi as the second supported Harness on
@@ -2269,7 +2269,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 ## D088 — Core is a small in-process custody contract organized by Job ownership
 
 - **Status:** Accepted application-boundary correction; file custody refined by D089 and message
-  semantics refined by D096 — 2026-08-25; external direct-Job projection added by D097 — 2026-08-26
+  semantics refined by D096 — 2026-08-25; external projection added by D097 and expanded through
+  D099 — 2026-08-26
 - **Decision:** The [North Star product boundary](north-star.md#product-boundary) remains the sole
   authority for product ownership, and [Architecture](architecture.md#execution-model) owns the
   current technical contract. Workflows, workflow modules, and trusted client adapters compose one
@@ -2290,18 +2291,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   until every collection has a durable settled receipt. Only a workflow, composed module, or client
   may request cleanup; Core reconciles that request but never derives it from execution outcome or
   interaction state.
-- **External projection (refined by D097 and D098):** This decision introduced no public transport,
+- **External projection (refined by D097 through D099):** This decision introduced no public transport,
   authentication contract, SDK, plugin system, workflow DSL, or embeddable-runtime promise.
-  Provider and Harness interfaces remain internal adapter seams. D097 and D098 later add one
-  deliberately narrower authenticated HTTPS projection for the direct Job interaction loop; it
-  does not expose the Core contract itself.
+  Provider and Harness interfaces remain internal adapter seams. D097 through D099 later add one
+  deliberately narrower authenticated HTTPS projection for direct Jobs and two fixed typed
+  workflows; it does not expose the Core contract itself.
 - **Reconciliation:** D076's separate Core and workflow facts remain, but workflow identity and
   workflow input apply only to workflow-driven Jobs. D080's workflow-specific Message admission as
   the only route is superseded by the generic Agent handle. Consumers supply typed execution
   envelopes and infrastructure readiness, while Core retains intent authorization, atomic identity,
   FIFO and priority order, Thread semantics, and recovery. D081's transport framing is superseded;
-  the stateful deployment and in-process Core boundary remain, while D097 owns the later external
-  projection. D082's consumer-facing capability-interface inventory is superseded by the
+  the stateful deployment and in-process Core boundary remain, while D097 through D099 own the later
+  external projection. D082's consumer-facing capability-interface inventory is superseded by the
   Job/Sandbox/Agent handle shape; provider-neutral interfaces remain internal.
   D085 still assigns domain records to their defining workflow and now treats AgentRun as internal
   custody and Artifact as Job-owned. D086 still keeps the implementation in one Core package without
@@ -2312,10 +2313,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   described a future transport before one existed. Following durable ownership produces a smaller
   contract for both direct clients and workflows, preserves recovery truth, and prevents shared Git
   or interaction needs from being mistaken for Core policy.
-- **Reconsider when:** A real consumer proves the external projection must expose more than direct
-  Job control, an independently distributed workflow proves loading and compatibility requirements,
-  or automatic artifact retention cannot preserve a real workflow's required deliverables and
-  provenance.
+- **Reconsider when:** A real consumer proves the external projection must exceed the current closed
+  direct-and-fixed-workflow surface, an independently distributed workflow proves loading and
+  compatibility requirements, or exact file reads cannot preserve a real workflow's required
+  deliverables and provenance.
 
 ## D089 — Core reads exact Sandbox files but does not retain generic deliverables
 
@@ -2541,12 +2542,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D097 — One authenticated HTTPS Deployment projects direct Job control
 
-- **Status:** Accepted and dogfooded — 2026-08-26; initial projection expanded by D098
+- **Status:** Accepted and dogfooded — 2026-08-26; initial projection expanded by D098 and D099
 - **Decision:** Expose one deliberately narrow external client boundary for a configured Dorf
-  Deployment over HTTPS. The first surface admits direct Jobs, returns their situation-first
-  projection, and accepts an explicit cleanup request. It does not expose Core as a generic network
-  API or add workflow admission, follow, steer, Sandbox files, a client SDK, MCP, a control-plane UI,
-  or named multi-deployment contexts.
+  Deployment over HTTPS. The initial surface admits direct Jobs, returns their situation-first
+  projection, and accepts an explicit cleanup request; D098 and D099 expand that same boundary. It
+  does not expose Core as a generic network API or add a client SDK, MCP, a control-plane UI, or
+  named multi-deployment contexts.
 - **Authentication:** The Deployment has one `deployment-operator` Principal. A host operator creates
   a short-lived, one-use Enrollment; redeeming it registers one Client with its own client-generated
   opaque credential. Dorf retains only credential digests, and each Client identity can be revoked
@@ -2564,13 +2565,13 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   local direct CLI. The accepted transport contract and staged expansion are documented in the
   [Remote Control API design](../implementation/control-api-design.md) and
   [implementation slices](../implementation/control-api-slices.md).
-- **Reconsider when:** A second real client earns a language SDK, remote workflow admission becomes a
-  concrete product need, the single-operator Principal cannot represent actual users, or managed
-  deployment evidence justifies Dorf-owned ingress and service lifecycle.
+- **Reconsider when:** A second real client earns a language SDK, the single-operator Principal
+  cannot represent actual users, or managed deployment evidence justifies Dorf-owned ingress and
+  service lifecycle.
 
 ## D098 — Remote direct Job control exposes the existing interaction loop
 
-- **Status:** Accepted and dogfooded — 2026-08-26
+- **Status:** Accepted and dogfooded — 2026-08-26; common interaction contract reused by D099
 - **Decision:** Extend D097's authenticated single-Deployment projection with conditional canonical
   Job observation and snapshot SSE, invariant follow and steer Message admission and inspection,
   caller-keyed retry of the existing eligible failed execution, exact Sandbox-level reads under the
@@ -2589,3 +2590,35 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   or provider operations into public resources.
 - **Reconsider when:** A real client earns durable event history or webhooks, streaming or writable
   files, Evidence-byte retrieval, or a broader recovery contract.
+
+## D099 — Fixed typed workflow admission reuses remote Job control
+
+- **Status:** Accepted and dogfooded — 2026-08-26
+- **Decision:** Add exactly two workflow admission resources to D097's authenticated Deployment:
+  `POST /v1/workflows/coding/jobs` and
+  `POST /v1/workflows/codebase-investigation/jobs`. Each accepts its complete typed input under the
+  existing caller-owned idempotency key. Canonical inspection and watch return one closed, flat Job
+  union discriminated as `direct`, `coding`, or `codebase-investigation`; there is no shared nullable
+  workflow payload, extension map, registry, dynamic schema, or workflow DSL.
+- **Common interaction:** Every Job kind inherits D098's canonical Message, watch, eligible retry,
+  exact Sandbox file, verified Evidence, and cleanup resources and invariants. The projection does
+  not expose workflow internals, credentials, provider or Harness operations, or an alternate
+  lifecycle.
+- **Workflow authority:** Coding retains its exact repository, Revision, branch, Proposal, GitHub
+  Outcome, and policy that conditionally requests cleanup after a terminal Outcome. Investigation
+  retains its exact source and `REPORT.md` policy and remains open and idle until its client requests
+  cleanup. Remote investigation accepts only a credential-free HTTPS repository at an exact full
+  commit OID; retained local Git bundles remain deployment-host-only input and never cross this API.
+- **Why:** Real off-host clients need the existing built-in workflows without SSH, but a generic
+  workflow surface would erase the typed policy and authority that make those workflows honest.
+  Fixed typed routes reuse the proven Job interaction contract while keeping each compiled workflow
+  as an ordinary Core consumer.
+- **Refines:** D097's initially direct-only admission, D098's interaction projection, D088's external
+  application boundary, D096's invariant Message semantics, and D069/D073/D092's investigation
+  input and report custody. The route and CLI contract live in the
+  [Remote Control API design](../implementation/control-api-design.md); the real HTTPS proof lives in
+  its [implementation slices](../implementation/control-api-slices.md).
+- **Reconsider when:** Another proved workflow cannot be expressed as a fixed typed admission and
+  closed Job member, independently distributed workflows earn a loading and compatibility contract,
+  or a real remote consumer requires retained local-source transport with an explicit bounded
+  credential and custody model.

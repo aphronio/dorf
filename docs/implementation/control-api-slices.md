@@ -13,7 +13,7 @@ and proof, not release availability.
 | --- | --- |
 | 1 — One authenticated remote direct Job | Delivered and dogfood-proven on 2026-08-26 |
 | 2 — Complete the direct Job interaction loop | Delivered and dogfood-proven on 2026-08-26 |
-| 3 — Typed workflow admission | Planned |
+| 3 — Typed workflow admission | Delivered and dogfood-proven on 2026-08-26 |
 | 4 — Automation-quality contract and operations | Planned |
 
 ## Required method for every slice
@@ -152,18 +152,39 @@ Do not add file writes, listing, archives, webhooks, or an externally replayable
 
 ## Slice 3 — Typed workflow admission
 
+**Status:** Delivered and dogfood-proven on 2026-08-26.
+
 **Client result:** The same authenticated API and CLI can admit and inspect coding and codebase
 investigation Jobs while preserving their typed contracts and existing runtime behavior.
 
-This slice adds workflow-specific admission resources over the same Job, Message, observation,
-error, and cleanup contracts. It should reuse deployment Profiles and integration authority without
-placing provider, Harness, GitHub, or workflow credentials in the public request.
+This slice adds exactly two workflow-specific admission resources over the same Job, Message,
+observation, error, retry, file, Evidence, and cleanup contracts. One closed flat Job union projects
+`direct`, `coding`, and `codebase-investigation` without a generic workflow payload. Deployment
+Profiles and integration authority remain server-side. Remote investigation accepts only a
+credential-free HTTPS repository at an exact Revision; deployment-host retained bundles remain
+local input.
 
-The proof must cover exact replay and changed-input conflict, a retained workflow result, workflow
-Message continuity, and each workflow's existing conditional cleanup behavior.
+The real HTTPS investigation admitted an exact Git Revision, completed an early sequence-2 Follow on
+the same workflow and retained Thread, and fetched the 5,105-byte `REPORT.md` with a verified digest.
+The Job remained open and idle; explicit cleanup immediately fenced another read with typed
+`file_unavailable` (`409`) before cleanup completed.
 
-Do not introduce dynamic workflow registration, a shared nullable workflow payload, a generic
-workflow schema, or a workflow DSL.
+The real coding proof replayed identical admission to the same Job and rejected changed input with
+typed `idempotency_conflict` (`409`). Its deterministic branch produced pull request #154 containing
+the one expected documentation file and nonempty verified `git-revision` Evidence. Closing the pull
+request unmerged and deleting its branch produced the observed rejected Outcome; the workflow's
+conditional cleanup request then revoked the route and deleted the Sandbox. The verified Evidence
+remained readable after cleanup.
+
+The final simplification kept each workflow's validation and policy in its existing module, reused
+those typed admission services from both local and remote adapters, and deleted the single-kind Job
+projection, duplicate outcome/report fields, and false hard-coded scheduling receipts. No workflow
+registry, shared nullable payload, generic workflow schema, or workflow DSL was introduced. From the
+Slice 2 checkpoint, the final delta is: handwritten production Go `+1,317/-343`, authored SQL
+`+0/-0`, generated Go `+0/-0`, tests `+948/-221`, and documentation `+208/-93`. The remaining
+code earns its keep by owning the two concrete admission policies and their closed typed Job
+representations. Future workflow-revision upgrade and drain compatibility remains unearned: the
+public union currently recognizes only the exact compiled revisions.
 
 ## Slice 4 — Automation-quality contract and operations
 

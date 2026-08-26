@@ -21,6 +21,7 @@ import (
 
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -28,6 +29,7 @@ import (
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gateway"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -73,6 +75,16 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 			return true, err
 		}
 		return true, remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+	case "workflow":
+		cfg, _, found, err := loadClientConfig()
+		if err != nil || !found {
+			return false, err
+		}
+		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
+		if err != nil {
+			return true, err
+		}
+		return true, remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
 	default:
 		return false, nil
 	}
@@ -211,15 +223,124 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 	request := controlapi.AdmitJobRequest{
 		Goal: goal, Profile: strings.TrimSpace(*profileName), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
-	job, err := client.AdmitJob(ctx, requestKey, request)
-	retried := retryableMutationError(ctx, err)
-	if retried {
-		job, err = client.AdmitJob(ctx, requestKey, request)
-	}
+	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.DirectJob, error) {
+		return client.AdmitJob(ctx, requestKey, request)
+	})
 	if err != nil {
-		if generated && retried {
-			fmt.Fprintf(stderr, "Admission may have succeeded. Retry the same request with --key %s.\n", requestKey)
-		}
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteJobReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job})
+	}
+	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
+	renderRemoteJob(stdout, job)
+	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
+	return nil
+}
+
+func remoteWorkflowCommand(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+	if len(args) < 2 || args[0] != "run" {
+		return fmt.Errorf("workflow requires: run coding or codebase-investigation")
+	}
+	switch args[1] {
+	case "coding":
+		return remoteCodingWorkflow(ctx, client, deploymentURL, args[2:], stdout, stderr)
+	case "codebase-investigation":
+		return remoteInvestigationWorkflow(ctx, client, deploymentURL, args[2:], stdout, stderr)
+	default:
+		return fmt.Errorf("unsupported workflow %q", args[1])
+	}
+}
+
+func remoteCodingWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable request identity for explicit replay")
+	goalFile := set.String("goal-file", "", "path containing the complete goal")
+	repository := set.String("repo", "", "credential-free GitHub clone URL")
+	revision := set.String("revision", "", "exact starting commit OID")
+	base := set.String("base", "", "immutable GitHub base branch")
+	branch := set.String("branch", "", "Job branch (default: dorf/<Job ID>)")
+	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	model := set.String("model", "", "Harness model")
+	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("workflow run coding does not accept positional arguments")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	goal, err := readInput(*goalFile, "workflow run coding", "goal")
+	if err != nil {
+		return err
+	}
+	requestKey, generated, err := operationKey("coding", *key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	request := controlapi.AdmitCodingJobRequest{
+		Goal: goal, Repository: *repository, Revision: *revision, BaseBranch: *base, Branch: *branch,
+		Profile: *profile, Model: *model, Reasoning: *reasoning,
+	}
+	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.CodingJob, error) {
+		return client.AdmitCodingJob(ctx, requestKey, request)
+	})
+	if err != nil {
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteJobReceipt{Deployment: deploymentURL, RequestID: requestKey, Job: job})
+	}
+	fmt.Fprintf(stdout, "Job %s accepted by %s\n", job.ID, deploymentURL)
+	renderRemoteJob(stdout, job)
+	fmt.Fprintf(stdout, "Next: dorf job inspect %s\n", job.ID)
+	return nil
+}
+
+func remoteInvestigationWorkflow(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable request identity for explicit replay")
+	briefFile := set.String("brief-file", "", "path containing the complete investigation brief")
+	repository := set.String("repo", "", "credential-free HTTPS repository URL")
+	localRepository := set.String("local-repo", "", "deployment-host-only local Git repository")
+	revision := set.String("revision", "", "exact repository commit OID")
+	profile := set.String("profile", "", "named Sandbox profile (default: deployment default)")
+	model := set.String("model", "", "Harness model")
+	reasoning := set.String("reasoning", "high", "Harness reasoning effort")
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("workflow run codebase-investigation does not accept positional arguments")
+	}
+	if strings.TrimSpace(*localRepository) != "" {
+		return fmt.Errorf("--local-repo is available only on the deployment host; remote admission requires --repo and --revision")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	brief, err := readInput(*briefFile, "workflow run codebase-investigation", "brief")
+	if err != nil {
+		return err
+	}
+	requestKey, generated, err := operationKey("investigation", *key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	request := controlapi.AdmitInvestigationJobRequest{
+		Brief: brief, Repository: *repository, Revision: *revision,
+		Profile: *profile, Model: *model, Reasoning: *reasoning,
+	}
+	job, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Admission may have succeeded.", func() (controlapi.InvestigationJob, error) {
+		return client.AdmitInvestigationJob(ctx, requestKey, request)
+	})
+	if err != nil {
 		return err
 	}
 	if *output == "json" {
@@ -271,7 +392,7 @@ func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *con
 	if err := validateOutput(*output); err != nil {
 		return err
 	}
-	var job controlapi.Job
+	var job controlapi.JobView
 	var err error
 	if args[0] == "inspect" {
 		job, err = client.Job(ctx, set.Arg(0))
@@ -281,6 +402,7 @@ func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *con
 	if err != nil {
 		return err
 	}
+	common := job.Common()
 	if *output == "json" {
 		if args[0] == "cleanup" {
 			return writeJSON(stdout, remoteJobReceipt{Deployment: cfg.DeploymentURL, Job: job})
@@ -288,7 +410,7 @@ func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *con
 		return writeJSON(stdout, job)
 	}
 	if args[0] == "cleanup" {
-		fmt.Fprintf(stdout, "Cleanup requested for Job %s on %s\n", job.ID, cfg.DeploymentURL)
+		fmt.Fprintf(stdout, "Cleanup requested for Job %s on %s\n", common.ID, cfg.DeploymentURL)
 	}
 	renderRemoteJob(stdout, job)
 	return nil
@@ -310,11 +432,11 @@ func remoteJobWatch(ctx context.Context, client *controlclient.Client, args []st
 	watchCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	encoder := json.NewEncoder(stdout)
-	err := client.WatchJob(watchCtx, set.Arg(0), func(job controlapi.Job) error {
+	err := client.WatchJob(watchCtx, set.Arg(0), func(job controlapi.JobView) error {
 		if *output == "jsonl" {
 			return encoder.Encode(job)
 		}
-		fmt.Fprintf(stdout, "Job %s\n", job.ID)
+		fmt.Fprintf(stdout, "Job %s\n", job.Common().ID)
 		renderRemoteJob(stdout, job)
 		return nil
 	})
@@ -352,15 +474,10 @@ func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *con
 		return err
 	}
 	request := controlapi.SendMessageRequest{Text: input, Intent: *intent}
-	message, err := client.SendMessage(ctx, set.Arg(0), requestKey, request)
-	retried := retryableMutationError(ctx, err)
-	if retried {
-		message, err = client.SendMessage(ctx, set.Arg(0), requestKey, request)
-	}
+	message, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Message may have been accepted.", func() (controlapi.Message, error) {
+		return client.SendMessage(ctx, set.Arg(0), requestKey, request)
+	})
 	if err != nil {
-		if generated && retried {
-			fmt.Fprintf(stderr, "Message may have been accepted. Retry the same request with --key %s.\n", requestKey)
-		}
 		return err
 	}
 	if *output == "json" {
@@ -415,15 +532,10 @@ func remoteJobRetry(ctx context.Context, cfg clientconfig.Config, client *contro
 	if err != nil {
 		return err
 	}
-	retry, err := client.Retry(ctx, set.Arg(0), requestKey)
-	retried := retryableMutationError(ctx, err)
-	if retried {
-		retry, err = client.Retry(ctx, set.Arg(0), requestKey)
-	}
+	retry, err := runKeyedMutation(ctx, requestKey, generated, stderr, "Retry may have been accepted.", func() (controlapi.Retry, error) {
+		return client.Retry(ctx, set.Arg(0), requestKey)
+	})
 	if err != nil {
-		if generated && retried {
-			fmt.Fprintf(stderr, "Retry may have been accepted. Retry the same request with --key %s.\n", requestKey)
-		}
 		return err
 	}
 	if *output == "json" {
@@ -505,12 +617,13 @@ type remoteRetryReceipt struct {
 }
 
 type remoteJobReceipt struct {
-	Deployment string         `json:"deployment"`
-	RequestID  string         `json:"request_id,omitempty"`
-	Job        controlapi.Job `json:"job"`
+	Deployment string             `json:"deployment"`
+	RequestID  string             `json:"request_id,omitempty"`
+	Job        controlapi.JobView `json:"job"`
 }
 
-func renderRemoteJob(output io.Writer, job controlapi.Job) {
+func renderRemoteJob(output io.Writer, view controlapi.JobView) {
+	job := view.Common()
 	fmt.Fprintf(output, "  goal: %q\n  profile: %s\n  model: %q (%s)\n  initial Message: %s\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
 		job.Goal, job.Profile, job.Model, job.Reasoning, job.InitialMessageID, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
 	if job.Attention != nil {
@@ -518,6 +631,27 @@ func renderRemoteJob(output io.Writer, job controlapi.Job) {
 	}
 	for _, sandbox := range job.Sandboxes {
 		fmt.Fprintf(output, "  Sandbox: %s (%s)\n", sandbox.ID, sandbox.Name)
+	}
+	switch typed := view.(type) {
+	case controlapi.DirectJob:
+	case controlapi.CodingJob:
+		fmt.Fprintf(output, "  workflow revision: %s\n  repository: %s\n  starting Revision: %s\n  current Revision: %s\n  branch: %s (base %s)\n",
+			typed.WorkflowRevision, typed.Repository, typed.StartingRevision, typed.Revision, typed.Branch, typed.BaseBranch)
+		if typed.Proposal == nil {
+			fmt.Fprintln(output, "  proposal: none")
+		} else {
+			fmt.Fprintf(output, "  proposal: #%d %s Revision=%s\n", typed.Proposal.Number, typed.Proposal.URL, typed.Proposal.Revision)
+		}
+		if typed.Outcome == nil {
+			fmt.Fprintln(output, "  outcome: none")
+		} else {
+			fmt.Fprintf(output, "  outcome: %s (GitHub %s) observed-at=%s\n",
+				typed.Outcome.Kind, typed.Outcome.ObservedState, typed.Outcome.ObservedAt.Format(time.RFC3339))
+		}
+	case controlapi.InvestigationJob:
+		fmt.Fprintf(output, "  workflow revision: %s\n  source: %s %s Revision=%s\n  report: Sandbox %s · %s\n",
+			typed.WorkflowRevision, typed.Source.Kind, typed.Source.Repository, typed.Source.Revision,
+			typed.Report.SandboxID, typed.Report.Path)
 	}
 }
 
@@ -608,6 +742,18 @@ func definitiveClientError(err error) bool {
 	return errors.As(err, &problem) && problem.Problem.Status >= 400 && problem.Problem.Status < 500
 }
 
+func runKeyedMutation[T any](ctx context.Context, key string, generated bool, output io.Writer, ambiguity string, mutate func() (T, error)) (T, error) {
+	result, err := mutate()
+	uncertain := ambiguousMutationError(err)
+	if retryableMutationError(ctx, err) {
+		result, err = mutate()
+	}
+	if err != nil && generated && (uncertain || ambiguousMutationError(err)) {
+		fmt.Fprintf(output, "%s Retry the same request with --key %s.\n", ambiguity, key)
+	}
+	return result, err
+}
+
 func retryableMutationError(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
@@ -619,12 +765,18 @@ func retryableMutationError(ctx context.Context, err error) bool {
 	return problem.Problem.Status >= 500 && problem.Problem.Status < 600
 }
 
+func ambiguousMutationError(err error) bool {
+	return err != nil && !definitiveClientError(err)
+}
+
 type controlAPIJobs struct {
-	store    postgres.Store
-	tasks    *absurd.Client
-	gateway  gateway.Gateway
-	runtimes core.SandboxRuntimeResolver
-	evidence blob.Store
+	store                   postgres.Store
+	tasks                   *absurd.Client
+	gateway                 gateway.Gateway
+	codingAdmissions        coding.AdmissionService
+	investigationAdmissions investigation.AdmissionService
+	runtimes                core.SandboxRuntimeResolver
+	evidence                blob.Store
 }
 
 func (a controlAPIJobs) application() core.Application {
@@ -633,74 +785,136 @@ func (a controlAPIJobs) application() core.Application {
 	return application
 }
 
-func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.Job, bool, error) {
-	if key == "" || key != strings.TrimSpace(key) || len(key) > 255 {
-		return controlapi.Job{}, false, controlapi.ErrInvalidInput
+func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
+	admission, err := newControlJobAdmission(key, input.Goal, input.Profile, input.Model, input.Reasoning)
+	if err != nil {
+		return controlapi.DirectJob{}, false, err
 	}
-	input.Profile = strings.TrimSpace(input.Profile)
-	input.Model = strings.TrimSpace(input.Model)
-	input.Reasoning = strings.TrimSpace(input.Reasoning)
-	if strings.TrimSpace(input.Goal) == "" || len(input.Goal) > 1<<20 || strings.ContainsRune(input.Goal, 0) ||
-		input.Model == "" || len(input.Model) > maxControlModelBytes || strings.ContainsRune(input.Model, 0) ||
-		strings.ContainsRune(input.Profile, 0) || strings.ContainsRune(input.Reasoning, 0) {
-		return controlapi.Job{}, false, controlapi.ErrInvalidInput
-	}
-	if input.Reasoning == "" {
-		input.Reasoning = "high"
-	}
-	if input.Reasoning != "low" && input.Reasoning != "medium" && input.Reasoning != "high" && input.Reasoning != "xhigh" {
-		return controlapi.Job{}, false, controlapi.ErrInvalidInput
-	}
-
-	admission := core.JobAdmission{AdmissionKey: key, Goal: input.Goal, Model: input.Model, ReasoningEffort: input.Reasoning}
 	profile := core.SandboxProfile{}
 	existing, err := a.store.Job(ctx, core.JobID(key))
 	switch {
 	case err == nil:
-		if existing.Workflow != "" || existing.WorkflowRevision != "" || (input.Profile != "" && input.Profile != existing.SandboxProfile) {
-			return controlapi.Job{}, false, controlapi.ErrIdempotencyConflict
+		if existing.Workflow != "" || existing.WorkflowRevision != "" || (admission.SandboxProfile != "" && admission.SandboxProfile != existing.SandboxProfile) {
+			return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
 		}
 		admission.SandboxProfile = existing.SandboxProfile
 		admission.ProviderConnection = existing.ProviderConnection
 	case errors.Is(err, postgres.ErrNotFound):
-		profile, err = selectedSandboxProfile(ctx, a.store, input.Profile)
+		profile, err = selectedSandboxProfile(ctx, a.store, admission.SandboxProfile)
 		if err != nil {
-			if input.Profile != "" && errors.Is(err, postgres.ErrProfileNotFound) {
-				return controlapi.Job{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
+			if admission.SandboxProfile != "" && errors.Is(err, postgres.ErrProfileNotFound) {
+				return controlapi.DirectJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
 			}
-			return controlapi.Job{}, false, err
+			return controlapi.DirectJob{}, false, err
 		}
 		admission.SandboxProfile = profile.Name
 		admission.ProviderConnection, err = selectedAIConnection(a.gateway, "")
 		if err != nil {
-			return controlapi.Job{}, false, err
+			return controlapi.DirectJob{}, false, err
 		}
 	default:
-		return controlapi.Job{}, false, err
+		return controlapi.DirectJob{}, false, err
 	}
 
 	job, created, err := direct.Admit(ctx, a.store, a.application(), a.gateway,
 		profileapp.Runtime{SandboxProfile: admission.SandboxProfile}, admission)
 	if errors.Is(err, postgres.ErrAdmissionConflict) {
-		return controlapi.Job{}, false, controlapi.ErrIdempotencyConflict
+		return controlapi.DirectJob{}, false, controlapi.ErrIdempotencyConflict
 	}
 	if err != nil {
-		return controlapi.Job{}, false, err
+		return controlapi.DirectJob{}, false, err
 	}
-	view, err := a.project(ctx, job)
+	view, err := a.projectDirect(ctx, job)
 	return view, created, err
 }
 
-func (a controlAPIJobs) Get(ctx context.Context, jobID string) (controlapi.Job, error) {
-	job, err := a.directJob(ctx, jobID)
+func (a controlAPIJobs) AdmitCoding(ctx context.Context, key string, input controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+	job, created, err := a.codingAdmissions.Admit(ctx, coding.AdmissionRequest{
+		AdmissionKey: key, Goal: input.Goal, SandboxProfile: input.Profile, Model: input.Model,
+		ReasoningEffort: input.Reasoning, Repository: input.Repository, Revision: input.Revision,
+		Branch: input.Branch, BaseBranch: input.BaseBranch,
+	})
+	if errors.Is(err, coding.ErrAdmissionConflict) {
+		return controlapi.CodingJob{}, false, controlapi.ErrIdempotencyConflict
+	}
+	if errors.Is(err, coding.ErrInvalidAdmission) {
+		return controlapi.CodingJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
+	}
 	if err != nil {
-		return controlapi.Job{}, err
+		return controlapi.CodingJob{}, false, err
+	}
+	view, err := a.projectCoding(ctx, job)
+	return view, created, err
+}
+
+func (a controlAPIJobs) AdmitInvestigation(ctx context.Context, key string, input controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+	job, created, err := a.investigationAdmissions.Admit(ctx, investigation.AdmissionRequest{
+		AdmissionKey: key, Brief: input.Brief, SandboxProfile: input.Profile, Model: input.Model,
+		ReasoningEffort: input.Reasoning,
+		Source:          investigation.Source{Kind: investigation.SourceRemote, Repository: input.Repository, Revision: input.Revision},
+	})
+	if errors.Is(err, investigation.ErrAdmissionConflict) {
+		return controlapi.InvestigationJob{}, false, controlapi.ErrIdempotencyConflict
+	}
+	if errors.Is(err, investigation.ErrInvalidAdmission) {
+		return controlapi.InvestigationJob{}, false, fmt.Errorf("%w: %v", controlapi.ErrInvalidInput, err)
+	}
+	if err != nil {
+		return controlapi.InvestigationJob{}, false, err
+	}
+	view, err := a.projectInvestigation(ctx, job)
+	return view, created, err
+}
+
+func validControlAdmissionKey(key string) bool {
+	return key != "" && key == strings.TrimSpace(key) && len(key) <= 255 && !strings.ContainsRune(key, 0)
+}
+
+func newControlJobAdmission(key, goal, profile, model, reasoning string) (core.JobAdmission, error) {
+	profile = strings.TrimSpace(profile)
+	model = strings.TrimSpace(model)
+	reasoning = strings.TrimSpace(reasoning)
+	if !validControlAdmissionKey(key) || invalidControlPrompt(goal, 1<<20) ||
+		invalidOptionalControlText(profile, 255) || invalidControlText(model, maxControlModelBytes) {
+		return core.JobAdmission{}, controlapi.ErrInvalidInput
+	}
+	if reasoning == "" {
+		reasoning = "high"
+	}
+	if !validControlReasoning(reasoning) {
+		return core.JobAdmission{}, controlapi.ErrInvalidInput
+	}
+	return core.JobAdmission{
+		AdmissionKey: key, Goal: goal, SandboxProfile: profile, Model: model, ReasoningEffort: reasoning,
+	}, nil
+}
+
+func invalidControlText(value string, limit int) bool {
+	return value == "" || len(value) > limit || strings.ContainsRune(value, 0)
+}
+
+func invalidControlPrompt(value string, limit int) bool {
+	return strings.TrimSpace(value) == "" || len(value) > limit || strings.ContainsRune(value, 0)
+}
+
+func invalidOptionalControlText(value string, limit int) bool {
+	return len(value) > limit || strings.ContainsRune(value, 0)
+}
+
+func validControlReasoning(reasoning string) bool {
+	return reasoning == "low" || reasoning == "medium" || reasoning == "high" || reasoning == "xhigh"
+}
+
+func (a controlAPIJobs) Get(ctx context.Context, jobID string) (controlapi.JobView, error) {
+	job, err := a.supportedJob(ctx, jobID)
+	if err != nil {
+		return nil, err
 	}
 	return a.project(ctx, job)
 }
 
 func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
-	job, err := a.directJob(ctx, jobID)
+	job, err := a.supportedJob(ctx, jobID)
 	if err != nil {
 		return controlapi.Message{}, false, err
 	}
@@ -732,18 +946,18 @@ func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, inpu
 }
 
 func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
-	job, err := a.directJob(ctx, jobID)
+	job, err := a.supportedJob(ctx, jobID)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
-	snapshot, err := direct.LoadSnapshot(ctx, a.store, job)
+	deliveries, err := a.store.Deliveries(ctx, job.ID)
 	if err != nil {
 		return controlapi.Message{}, err
 	}
 	var delivery *core.Delivery
-	for i := range snapshot.Deliveries {
-		if snapshot.Deliveries[i].Message.ID == messageID {
-			delivery = &snapshot.Deliveries[i]
+	for i := range deliveries {
+		if deliveries[i].Message.ID == messageID {
+			delivery = &deliveries[i]
 			break
 		}
 	}
@@ -760,14 +974,14 @@ func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string)
 		switch run.State {
 		case core.AgentRunCompleted:
 			if a.runtimes == nil {
-				return controlapi.Message{}, fmt.Errorf("direct Agent observation runtime is not configured")
+				return controlapi.Message{}, fmt.Errorf("Agent observation runtime is not configured")
 			}
 			runtime, resolveErr := a.runtimes.ResolveSandbox(ctx, job.SandboxProfile)
 			if resolveErr != nil {
 				return controlapi.Message{}, resolveErr
 			}
 			if runtime.SandboxProfile != job.SandboxProfile || runtime.Execution == nil {
-				return controlapi.Message{}, fmt.Errorf("direct Agent observation runtime does not match Job profile %q", job.SandboxProfile)
+				return controlapi.Message{}, fmt.Errorf("Agent observation runtime does not match Job profile %q", job.SandboxProfile)
 			}
 			observed, observeErr := runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, message.ID)
 			if observeErr != nil {
@@ -808,7 +1022,7 @@ func publicMessageDeliveryState(state core.AgentRunState) (string, error) {
 }
 
 func (a controlAPIJobs) Retry(ctx context.Context, jobID, key string) (controlapi.Retry, bool, error) {
-	job, err := a.directJob(ctx, jobID)
+	job, err := a.supportedJob(ctx, jobID)
 	if err != nil {
 		return controlapi.Retry{}, false, err
 	}
@@ -851,7 +1065,7 @@ func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relative
 }
 
 func (a controlAPIJobs) Evidence(ctx context.Context, jobID string) ([]controlapi.Evidence, error) {
-	job, err := a.directJob(ctx, jobID)
+	job, err := a.supportedJob(ctx, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -897,63 +1111,65 @@ func controlRetryError(err error) error {
 	}
 }
 
-func (a controlAPIJobs) RequestCleanup(ctx context.Context, jobID string) (controlapi.Job, error) {
-	job, err := a.directJob(ctx, jobID)
+func (a controlAPIJobs) RequestCleanup(ctx context.Context, jobID string) (controlapi.JobView, error) {
+	job, err := a.supportedJob(ctx, jobID)
 	if err != nil {
-		return controlapi.Job{}, err
+		return nil, err
 	}
 	handle, err := a.application().OpenJob(ctx, job.ID)
 	if err != nil {
-		return controlapi.Job{}, err
+		return nil, err
 	}
 	if err := handle.RequestCleanup(ctx); err != nil {
-		return controlapi.Job{}, err
+		return nil, err
 	}
 	return a.Get(ctx, job.ID)
 }
 
-func (a controlAPIJobs) directJob(ctx context.Context, jobID string) (core.Job, error) {
+func (a controlAPIJobs) supportedJob(ctx context.Context, jobID string) (core.Job, error) {
 	job, err := a.store.Job(ctx, jobID)
-	if errors.Is(err, postgres.ErrNotFound) || (err == nil && (job.Workflow != "" || job.WorkflowRevision != "")) {
+	if errors.Is(err, postgres.ErrNotFound) {
 		return core.Job{}, controlapi.ErrJobNotFound
 	}
-	return job, err
+	if err != nil {
+		return core.Job{}, err
+	}
+	switch {
+	case job.Workflow == "" && job.WorkflowRevision == "":
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+	default:
+		return core.Job{}, controlapi.ErrJobNotFound
+	}
+	return job, nil
 }
 
-func (a controlAPIJobs) project(ctx context.Context, job core.Job) (controlapi.Job, error) {
+func (a controlAPIJobs) project(ctx context.Context, job core.Job) (controlapi.JobView, error) {
+	switch {
+	case job.Workflow == "" && job.WorkflowRevision == "":
+		return a.projectDirect(ctx, job)
+	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
+		return a.projectCoding(ctx, job)
+	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		return a.projectInvestigation(ctx, job)
+	default:
+		return nil, controlapi.ErrJobNotFound
+	}
+}
+
+func (a controlAPIJobs) projectDirect(ctx context.Context, job core.Job) (controlapi.DirectJob, error) {
 	snapshot, err := direct.LoadSnapshot(ctx, a.store, job)
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
-			return controlapi.Job{}, controlapi.ErrJobNotFound
+			return controlapi.DirectJob{}, controlapi.ErrJobNotFound
 		}
-		return controlapi.Job{}, err
+		return controlapi.DirectJob{}, err
 	}
 	projection := snapshot.Project()
 	task, err := fetchTaskResult(ctx, a.tasks, job.CurrentTaskID)
 	if err != nil {
-		return controlapi.Job{}, err
+		return controlapi.DirectJob{}, err
 	}
-	executionState, cleanupState, attention, err := publicJobStates(job, projection, task.State)
-	if err != nil {
-		return controlapi.Job{}, err
-	}
-	sandboxes := make([]controlapi.Sandbox, 0, len(snapshot.Sandboxes))
-	for _, sandbox := range snapshot.Sandboxes {
-		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
-	}
-	if len(snapshot.Deliveries) == 0 || snapshot.Deliveries[0].Message.ID == "" || snapshot.Deliveries[0].Message.Sequence != 1 {
-		return controlapi.Job{}, fmt.Errorf("direct Job %s has no initial Message", job.ID)
-	}
-	initialMessageID := snapshot.Deliveries[0].Message.ID
-	return controlapi.Job{
-		ID: job.ID, Kind: "direct", Goal: job.Goal, Profile: job.SandboxProfile, Model: job.Model, Reasoning: job.ReasoningEffort,
-		InitialMessageID: initialMessageID,
-		Admission:        controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
-		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
-	}, nil
-}
-
-func publicJobStates(job core.Job, projection direct.Projection, taskState absurd.TaskResultState) (string, string, *controlapi.Attention, error) {
 	executionState := map[direct.ExecutionState]string{
 		direct.ExecutionProvisioningSandbox: "provisioning_sandbox",
 		direct.ExecutionConnectingRoute:     "connecting_model_access",
@@ -962,29 +1178,157 @@ func publicJobStates(job core.Job, projection direct.Projection, taskState absur
 		direct.ExecutionIdle:                "idle",
 	}[projection.State]
 	if executionState == "" {
-		return "", "", nil, fmt.Errorf("Job %s has unknown direct execution state %q", job.ID, projection.State)
-	}
-	cleanupState := map[core.CleanupState]string{
-		core.CleanupPending: "not_requested", core.CleanupRequested: "requested",
-		core.CleanupScheduled: "running", core.CleanupComplete: "complete",
-	}[job.CleanupState]
-	if cleanupState == "" {
-		return "", "", nil, fmt.Errorf("Job %s has unknown cleanup state %q", job.ID, job.CleanupState)
+		return controlapi.DirectJob{}, fmt.Errorf("Job %s has unknown direct execution state %q", job.ID, projection.State)
 	}
 	var attention *controlapi.Attention
-	if (job.CleanupState == core.CleanupPending && failedExecutionTask(taskState)) ||
-		(job.CleanupState == core.CleanupRequested && taskState == absurd.TaskFailed) {
-		executionState = "failed"
-		attention = &controlapi.Attention{Code: "execution_failed", Detail: "Job execution stopped; inspect the deployment service logs, repair the cause, then retry."}
-	} else if projection.State == direct.ExecutionAttention {
+	if projection.State == direct.ExecutionAttention {
 		code := "agent_attention"
 		if job.WorkflowAttention != "" {
 			code = "job_attention"
 		}
 		attention = &controlapi.Attention{Code: code, Detail: "Job execution needs operator attention; inspect the deployment service logs."}
 	}
+	initial, err := initialDeliveryMessage(job.ID, snapshot.Deliveries)
+	if err != nil {
+		return controlapi.DirectJob{}, err
+	}
+	common, err := publicCommonJob(job, controlapi.JobKindDirect, executionState, attention, task.State, snapshot.Sandboxes, initial)
+	return controlapi.DirectJob{Job: common}, err
+}
+
+func (a controlAPIJobs) projectCoding(ctx context.Context, job core.Job) (controlapi.CodingJob, error) {
+	snapshot, err := coding.LoadSnapshot(ctx, a.store, job.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			return controlapi.CodingJob{}, controlapi.ErrJobNotFound
+		}
+		return controlapi.CodingJob{}, err
+	}
+	projection, err := snapshot.Project(a.evidence)
+	if err != nil {
+		return controlapi.CodingJob{}, err
+	}
+	job = snapshot.Job.Job
+	task, err := fetchTaskResult(ctx, a.tasks, job.CurrentTaskID)
+	if err != nil {
+		return controlapi.CodingJob{}, err
+	}
+	executionState := "running"
+	var attention *controlapi.Attention
+	if snapshot.Outcome != nil {
+		executionState = "complete"
+	} else if projection.CurrentWork.Kind == coding.WorkAttention {
+		executionState = "stopped"
+		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
+	}
+	messages := make([]core.Message, 0, len(snapshot.Messages))
+	for _, record := range snapshot.Messages {
+		messages = append(messages, record.Message)
+	}
+	initial, err := initialMessage(job.ID, messages)
+	if err != nil {
+		return controlapi.CodingJob{}, err
+	}
+	common, err := publicCommonJob(job, controlapi.JobKindCoding, executionState, attention, task.State, snapshot.Sandboxes, initial)
+	if err != nil {
+		return controlapi.CodingJob{}, err
+	}
+	view := controlapi.CodingJob{
+		Job: common, WorkflowRevision: job.WorkflowRevision,
+		Repository: snapshot.Job.Repository, StartingRevision: snapshot.Job.StartingRevision,
+		Revision: snapshot.Job.Revision, Branch: snapshot.Job.Branch, BaseBranch: snapshot.Job.BaseBranch,
+	}
+	if snapshot.Proposal != nil {
+		view.Proposal = &controlapi.CodingProposal{
+			Number: snapshot.Proposal.Number, URL: snapshot.Proposal.URL, Revision: snapshot.Proposal.ProposedRevision,
+		}
+	}
+	if snapshot.Outcome != nil {
+		view.Outcome = &controlapi.CodingOutcome{
+			Kind: string(snapshot.Outcome.Kind), ObservedState: snapshot.Outcome.ObservedState,
+			MergeCommitOID: snapshot.Outcome.MergeCommitOID, ObservedAt: snapshot.Outcome.ObservedAt,
+		}
+	}
+	return view, nil
+}
+
+func (a controlAPIJobs) projectInvestigation(ctx context.Context, job core.Job) (controlapi.InvestigationJob, error) {
+	snapshot, err := investigation.LoadSnapshot(ctx, a.store, job.ID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			return controlapi.InvestigationJob{}, controlapi.ErrJobNotFound
+		}
+		return controlapi.InvestigationJob{}, err
+	}
+	job = snapshot.Job
+	work := snapshot.Project()
+	task, err := fetchTaskResult(ctx, a.tasks, job.CurrentTaskID)
+	if err != nil {
+		return controlapi.InvestigationJob{}, err
+	}
+	executionState := "running"
+	var attention *controlapi.Attention
+	switch {
+	case work.Kind == investigation.WorkAttention:
+		executionState = "stopped"
+		attention = &controlapi.Attention{Code: "job_attention", Detail: "Job execution needs operator attention; inspect the deployment service logs."}
+	case work.Kind == "":
+		executionState = "idle"
+	}
+	common, err := publicCommonJob(job, controlapi.JobKindInvestigation, executionState, attention, task.State,
+		[]core.Sandbox{snapshot.MainSandbox}, snapshot.InitialMessageID)
+	if err != nil {
+		return controlapi.InvestigationJob{}, err
+	}
+	return controlapi.InvestigationJob{
+		Job: common, WorkflowRevision: job.WorkflowRevision,
+		Source: controlapi.InvestigationSource{
+			Kind: string(snapshot.Source.Kind), Repository: snapshot.Source.Repository, Revision: snapshot.Source.Revision,
+		},
+		Report: controlapi.InvestigationReport{
+			SandboxID: snapshot.MainSandbox.ID, Path: investigation.ReportPath,
+		},
+	}, nil
+}
+
+func initialDeliveryMessage(jobID string, deliveries []core.Delivery) (string, error) {
+	messages := make([]core.Message, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		if delivery.AgentRun.JobID != jobID || delivery.AgentRun.MessageID != delivery.Message.ID {
+			return "", fmt.Errorf("Job %s has a mismatched Message delivery", jobID)
+		}
+		messages = append(messages, delivery.Message)
+	}
+	return initialMessage(jobID, messages)
+}
+
+func initialMessage(jobID string, messages []core.Message) (string, error) {
+	for _, message := range messages {
+		if message.JobID == jobID && message.ID != "" && message.Sequence == 1 {
+			return message.ID, nil
+		}
+	}
+	return "", fmt.Errorf("Job %s has no initial Message", jobID)
+}
+
+func publicCommonJob(job core.Job, kind, executionState string, attention *controlapi.Attention, taskState absurd.TaskResultState, owned []core.Sandbox, initialMessageID string) (controlapi.Job, error) {
+	if executionState == "" || initialMessageID == "" {
+		return controlapi.Job{}, fmt.Errorf("Job %s has an incomplete public projection", job.ID)
+	}
+	cleanupState := map[core.CleanupState]string{
+		core.CleanupPending: "not_requested", core.CleanupRequested: "requested",
+		core.CleanupScheduled: "running", core.CleanupComplete: "complete",
+	}[job.CleanupState]
+	if cleanupState == "" {
+		return controlapi.Job{}, fmt.Errorf("Job %s has unknown cleanup state %q", job.ID, job.CleanupState)
+	}
+	if (job.CleanupState == core.CleanupPending && failedExecutionTask(taskState)) ||
+		(job.CleanupState == core.CleanupRequested && taskState == absurd.TaskFailed) {
+		executionState = "failed"
+		attention = &controlapi.Attention{Code: "execution_failed", Detail: "Job execution stopped; inspect the deployment service logs, repair the cause, then retry."}
+	}
 	if job.CleanupState != core.CleanupPending {
-		if executionState == "provisioning_sandbox" || executionState == "connecting_model_access" || executionState == "awaiting_agent" {
+		if executionState == "provisioning_sandbox" || executionState == "connecting_model_access" || executionState == "awaiting_agent" || executionState == "running" {
 			executionState = "stopped"
 		}
 		if job.CleanupState == core.CleanupScheduled && failedExecutionTask(taskState) {
@@ -992,7 +1336,19 @@ func publicJobStates(job core.Job, projection direct.Projection, taskState absur
 			attention = &controlapi.Attention{Code: "cleanup_failed", Detail: "Cleanup stopped before all resources were released; inspect the deployment service logs."}
 		}
 	}
-	return executionState, cleanupState, attention, nil
+	sandboxes := make([]controlapi.Sandbox, 0, len(owned))
+	for _, sandbox := range owned {
+		if sandbox.ID == "" || sandbox.JobID != job.ID {
+			return controlapi.Job{}, fmt.Errorf("Job %s has a mismatched Sandbox projection", job.ID)
+		}
+		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
+	}
+	return controlapi.Job{
+		ID: job.ID, Kind: kind, Goal: job.Goal, Profile: job.SandboxProfile,
+		Model: job.Model, Reasoning: job.ReasoningEffort, InitialMessageID: initialMessageID,
+		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
+		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
+	}, nil
 }
 
 func failedExecutionTask(state absurd.TaskResultState) bool {
@@ -1051,11 +1407,12 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
 	jobs := controlAPIJobs{
 		store: store, tasks: tasks, gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath},
+		codingAdmissions: runtimes.CodingAdmissions(), investigationAdmissions: runtimes.InvestigationAdmissions(),
 		runtimes: runtimes, evidence: blob.Store{Root: cfg.BlobRoot},
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
 	}, auth, jobs)
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/aphronio/dorf/internal/blob"
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/gateway"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -65,7 +67,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	restartedTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
 	restarted := controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
 	replay := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, input)
-	var replayed controlapi.Job
+	var replayed controlapi.DirectJob
 	controlTestJSON(t, replay, http.StatusOK, &replayed)
 	afterReplay, err := store.Job(ctx, committed.ID)
 	if err != nil || replayed.ID != committed.ID || replayed.InitialMessageID == "" || afterReplay.CurrentTaskID != committed.CurrentTaskID {
@@ -132,7 +134,7 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	cleanup := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
-	var cleaning controlapi.Job
+	var cleaning controlapi.DirectJob
 	controlTestJSON(t, cleanup, http.StatusOK, &cleaning)
 	cleaningFact, err := store.Job(ctx, committed.ID)
 	if err != nil || cleaning.Admission.Open || cleaning.Cleanup.State != "running" || cleaningFact.CurrentTaskID == committed.CurrentTaskID {
@@ -153,6 +155,134 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	finalFact, err := store.Job(ctx, committed.ID)
 	if err != nil || finalFact.CurrentTaskID != cleaningFact.CurrentTaskID || finalFact.CleanupState != core.CleanupScheduled {
 		t.Fatalf("replayed cleanup durable=%#v err=%v", finalFact, err)
+	}
+}
+
+func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
+	ctx := context.Background()
+	store, tasks, profileName := controlTestStore(t)
+	provider := controlTestGateway(t)
+	auth := controlauth.Service{Store: store}
+	enrollment, err := auth.CreateEnrollment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := controlauth.GenerateCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installations := &controlTestGitHub{installation: "42"}
+	handler := controlTestHandlerWithGitHub(store, tasks, provider, auth,
+		controlTestRuntimes{profile: profileName}, blob.Store{Root: t.TempDir()}, installations)
+	redeem := controlTestRequest(t, handler, http.MethodPost, "/v1/auth/enrollments/redeem", "", "", controlapi.RedeemRequest{
+		EnrollmentCode: enrollment.Token, ClientName: profileName, Credential: credential,
+	})
+	if redeem.Code != http.StatusCreated {
+		t.Fatalf("redeem status=%d body=%s", redeem.Code, redeem.Body.String())
+	}
+
+	codingKey := fmt.Sprintf("control-coding-%d", time.Now().UnixNano())
+	codingInput := controlapi.AdmitCodingJobRequest{
+		Goal: "  preserve this exact coding goal\n", Repository: "https://github.com/aphronio/dorf.git",
+		Revision: strings.Repeat("a", 40), BaseBranch: "main", Profile: profileName, Model: "model-test",
+	}
+	codingResponse := controlTestRequest(t, handler, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
+	var codingJob controlapi.CodingJob
+	controlTestJSON(t, codingResponse, http.StatusCreated, &codingJob)
+	if codingJob.Kind != controlapi.JobKindCoding || codingJob.Goal != codingInput.Goal ||
+		codingJob.Branch != "dorf/"+core.JobID(codingKey) || codingJob.StartingRevision != codingInput.Revision ||
+		codingJob.Revision != codingInput.Revision || codingJob.WorkflowRevision == "" || codingJob.Outcome != nil {
+		t.Fatalf("coding Job=%#v", codingJob)
+	}
+	if installations.calls != 1 {
+		t.Fatalf("coding installation discoveries=%d, want 1", installations.calls)
+	}
+	codingFact, err := store.Job(ctx, codingJob.ID)
+	if err != nil || codingFact.CurrentTaskID == "" {
+		t.Fatalf("coding durable Job=%#v err=%v", codingFact, err)
+	}
+
+	// A restarted API must replay the retained GitHub installation without
+	// consulting current external discovery.
+	restartedTasks := controlTestTasks(t, store.DB, tasks.QueueName(), false)
+	unavailableGitHub := &controlTestGitHub{err: fmt.Errorf("GitHub must not be consulted during replay")}
+	restarted := controlTestHandlerWithGitHub(store, restartedTasks, provider, controlauth.Service{Store: store},
+		controlTestRuntimes{profile: profileName}, blob.Store{Root: t.TempDir()}, unavailableGitHub)
+	replayCoding := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, codingInput)
+	var sameCoding controlapi.CodingJob
+	controlTestJSON(t, replayCoding, http.StatusOK, &sameCoding)
+	replayedCodingFact, replayedCodingErr := store.Job(ctx, codingJob.ID)
+	if sameCoding.ID != codingJob.ID || unavailableGitHub.calls != 0 || replayedCodingErr != nil || replayedCodingFact.CurrentTaskID != codingFact.CurrentTaskID {
+		t.Fatalf("coding replay=%#v GitHub calls=%d durable=%#v err=%v", sameCoding, unavailableGitHub.calls, replayedCodingFact, replayedCodingErr)
+	}
+	changedCoding := codingInput
+	changedCoding.BaseBranch = "develop"
+	var codingConflict controlapi.Problem
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, codingKey, changedCoding), http.StatusConflict, &codingConflict)
+	if codingConflict.Code != "idempotency_conflict" {
+		t.Fatalf("coding replay conflict=%#v", codingConflict)
+	}
+
+	investigationKey := fmt.Sprintf("control-investigation-%d", time.Now().UnixNano())
+	investigationInput := controlapi.AdmitInvestigationJobRequest{
+		Brief: "  preserve this exact investigation brief\n", Repository: "https://github.com/aphronio/dorf.git",
+		Revision: strings.Repeat("b", 40), Profile: profileName, Model: "model-test",
+	}
+	investigationResponse := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
+	var investigationJob controlapi.InvestigationJob
+	controlTestJSON(t, investigationResponse, http.StatusCreated, &investigationJob)
+	if investigationJob.Kind != controlapi.JobKindInvestigation || investigationJob.Goal != investigationInput.Brief ||
+		investigationJob.Source.Repository != investigationInput.Repository || investigationJob.Source.Revision != investigationInput.Revision ||
+		investigationJob.Report.Path != "REPORT.md" || investigationJob.Report.SandboxID == "" {
+		t.Fatalf("investigation Job=%#v", investigationJob)
+	}
+	replayInvestigation := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, investigationInput)
+	var sameInvestigation controlapi.InvestigationJob
+	controlTestJSON(t, replayInvestigation, http.StatusOK, &sameInvestigation)
+	if sameInvestigation.ID != investigationJob.ID {
+		t.Fatalf("investigation replay=%#v", sameInvestigation)
+	}
+	foreignKind := codingInput
+	foreignKind.Profile = "missing-profile-must-not-be-resolved"
+	foreignKindConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/coding/jobs", credential, investigationKey, foreignKind)
+	var foreignKindProblem controlapi.Problem
+	controlTestJSON(t, foreignKindConflict, http.StatusConflict, &foreignKindProblem)
+	if foreignKindProblem.Code != "idempotency_conflict" || unavailableGitHub.calls != 0 {
+		t.Fatalf("foreign-kind replay conflict=%#v GitHub calls=%d", foreignKindProblem, unavailableGitHub.calls)
+	}
+	changedInvestigation := investigationInput
+	changedInvestigation.Revision = strings.Repeat("c", 40)
+	var investigationConflict controlapi.Problem
+	controlTestJSON(t, controlTestRequest(t, restarted, http.MethodPost, "/v1/workflows/codebase-investigation/jobs", credential, investigationKey, changedInvestigation), http.StatusConflict, &investigationConflict)
+	if investigationConflict.Code != "idempotency_conflict" {
+		t.Fatalf("investigation replay conflict=%#v", investigationConflict)
+	}
+
+	message := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+codingJob.ID+"/messages", credential,
+		"message-"+codingJob.ID, controlapi.SendMessageRequest{Text: "continue", Intent: "follow"})
+	var accepted controlapi.Message
+	controlTestJSON(t, message, http.StatusCreated, &accepted)
+	if accepted.JobID != codingJob.ID || accepted.Sequence != 2 {
+		t.Fatalf("workflow Message=%#v", accepted)
+	}
+
+	retainedOutcome, created, err := store.RecordOutcome(ctx, coding.Outcome{
+		JobID: codingJob.ID, Kind: coding.OutcomeAbandoned, ObservedAt: time.Now().UTC(),
+	})
+	if err != nil || !created || retainedOutcome.Kind != coding.OutcomeAbandoned {
+		t.Fatalf("record coding Outcome=%#v created=%t err=%v", retainedOutcome, created, err)
+	}
+	completedCodingResponse := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+codingJob.ID, credential, "", nil)
+	var completedCoding controlapi.CodingJob
+	controlTestJSON(t, completedCodingResponse, http.StatusOK, &completedCoding)
+	if completedCoding.Execution.State != "complete" || completedCoding.Outcome == nil || completedCoding.Outcome.Kind != string(coding.OutcomeAbandoned) {
+		t.Fatalf("completed coding Job=%#v", completedCoding)
+	}
+	cleanupInvestigation := controlTestRequest(t, restarted, http.MethodPut, "/v1/jobs/"+investigationJob.ID+"/cleanup", credential, "", nil)
+	var cleaningInvestigation controlapi.InvestigationJob
+	controlTestJSON(t, cleanupInvestigation, http.StatusOK, &cleaningInvestigation)
+	if cleaningInvestigation.Cleanup.State != "running" || cleaningInvestigation.Execution.State != "stopped" {
+		t.Fatalf("cleanup-fenced investigation Job=%#v", cleaningInvestigation)
 	}
 }
 
@@ -248,8 +378,30 @@ func controlTestGateway(t *testing.T) gateway.Gateway {
 }
 
 func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store) http.Handler {
+	return controlTestHandlerWithGitHub(store, tasks, provider, auth, runtimes, evidence,
+		&controlTestGitHub{installation: "42"})
+}
+
+func controlTestHandlerWithGitHub(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store, github coding.InstallationDiscovery) http.Handler {
+	application := coreApplication(store, tasks)
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
-		controlAPIJobs{store: store, tasks: tasks, gateway: provider, runtimes: runtimes, evidence: evidence}).Handler
+		controlAPIJobs{
+			store: store, tasks: tasks, gateway: provider,
+			codingAdmissions:        coding.NewAdmissionService(store, application, provider, github),
+			investigationAdmissions: investigation.NewAdmissionService(store, application, provider),
+			runtimes:                runtimes, evidence: evidence,
+		}).Handler
+}
+
+type controlTestGitHub struct {
+	installation string
+	err          error
+	calls        int
+}
+
+func (g *controlTestGitHub) DiscoverInstallation(context.Context, string) (string, error) {
+	g.calls++
+	return g.installation, g.err
 }
 
 type controlTestRuntimes struct {

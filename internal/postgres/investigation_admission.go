@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aphronio/dorf/internal/core"
@@ -12,13 +13,13 @@ import (
 func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admission) (core.Job, bool, error) {
 	normalized, err := investigation.NormalizeAdmission(input)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Job{}, false, fmt.Errorf("%w: %v", investigation.ErrInvalidAdmission, err)
 	}
 	normalized.JobAdmission, err = normalizeCoreAdmission(normalized.JobAdmission)
 	if err != nil {
-		return core.Job{}, false, err
+		return core.Job{}, false, fmt.Errorf("%w: %v", investigation.ErrInvalidAdmission, err)
 	}
-	return admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
+	job, created, err := admitJob(ctx, s, normalized.JobAdmission, func(ctx context.Context, queries *dbsql.Queries, ids admittedJobIDs) error {
 		if _, err := queries.InsertCodebaseInvestigationSource(ctx, investigationSourceParams(ids.jobID, normalized.Source)); err != nil {
 			return err
 		}
@@ -27,7 +28,7 @@ func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admis
 			return err
 		}
 		if stored.JobID != ids.jobID || investigationSourceFromValues("", stored.Kind, stored.Repository, stored.Revision, stored.BundleDigest, stored.BundleByteSize) != normalized.Source {
-			return fmt.Errorf("admission key %q is already bound to different complete Job input", normalized.AdmissionKey)
+			return fmt.Errorf("%w: %q", ErrAdmissionConflict, normalized.AdmissionKey)
 		}
 		if _, err := queries.InsertAdmittedAgentRun(ctx, dbsql.InsertAdmittedAgentRunParams{
 			ID: core.AgentRunID(ids.messageID), JobID: ids.jobID, MessageID: ids.messageID, Role: investigation.InitialAgentRole,
@@ -37,4 +38,8 @@ func (s Store) AdmitInvestigation(ctx context.Context, input investigation.Admis
 		}
 		return nil
 	})
+	if errors.Is(err, ErrAdmissionConflict) {
+		err = fmt.Errorf("%w: %w", investigation.ErrAdmissionConflict, err)
+	}
+	return job, created, err
 }

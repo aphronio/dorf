@@ -9,10 +9,10 @@ delete this working design.
 
 ## Delivery status
 
-Slices 1 and 2 are implemented and dogfood-proven: one CLI Client can enroll, connect to one
-Deployment, authenticate, and operate the complete direct Job interaction loop over HTTPS. The
-delivered HTTP and CLI surfaces are listed separately below. Job listing, workflow admission,
-OpenAPI publication, and managed service packaging remain planned work.
+Slices 1 through 3 are implemented and dogfood-proven: one CLI Client can enroll, connect to one
+Deployment, authenticate, admit a direct Job or either fixed built-in workflow, and operate their
+common interaction loop over HTTPS. The delivered HTTP and CLI surfaces are listed separately
+below. Job listing, OpenAPI publication, and managed service packaging remain Slice 4 work.
 
 ## Outcome
 
@@ -47,9 +47,9 @@ publication. MCP, A2A, and a matrix of hand-written SDKs are deliberately deferr
 | Messages | Existing follow and steer invariants; adapters do not redefine them. |
 | Files | Exact Sandbox-level reads only; no Job nesting, uploads, listing, or arbitrary writes. |
 | Authentication | Short-lived Enrollment creates one Client with an independently revocable opaque credential. |
-| Agent access | Structured CLI and HTTP first; OpenAPI in Slice 4; no required agent-specific transport. |
+| Agent access | Structured CLI and HTTP are delivered; OpenAPI follows in Slice 4; no required agent-specific transport. |
 | Deployment | Private API listener behind HTTPS ingress and a separate worker; managed packaging in Slice 4. |
-| Expansion | Workflows follow the direct Job proof; UI, OIDC, contexts, SDK families, and webhooks wait. |
+| Expansion | Two fixed typed workflows follow the direct Job proof; registries, UI, OIDC, contexts, SDK families, and webhooks wait. |
 
 ## Vocabulary
 
@@ -102,6 +102,8 @@ POST  /v1/auth/enrollments/redeem          redeem one Enrollment
 GET   /v1/me                               effective Principal and Client
 
 POST  /v1/jobs                             admit or replay a direct Job
+POST  /v1/workflows/coding/jobs            admit or replay a coding Job
+POST  /v1/workflows/codebase-investigation/jobs  admit or replay an investigation Job
 GET   /v1/jobs/{job}                       inspect one canonical Job snapshot
 GET   /v1/jobs/{job}/watch                 observe newer canonical snapshots
 POST  /v1/jobs/{job}/messages              follow or steer
@@ -112,16 +114,15 @@ GET   /v1/jobs/{job}/evidence              inspect verified Evidence metadata
 PUT   /v1/jobs/{job}/cleanup               request cleanup idempotently
 ```
 
-Later slices plan:
+Slice 4 plans:
 
 ```text
 GET   /v1/jobs
-POST  /v1/workflows/coding/jobs
-POST  /v1/workflows/codebase-investigation/jobs
 ```
 
-The direct Job path is proven. Typed workflow admissions follow without turning workflow
-identity into a generic plugin or DSL.
+The two workflow routes are fixed typed projections of the compiled coding and investigation
+workflows, not a registry, generic schema, plugin contract, or DSL. All three Job kinds reuse the
+same inspect/watch, Message, retry, exact-file, Evidence, and cleanup resources and invariants.
 
 There is no public Task, Run, Operation, Thread, Turn, Action, provider, or Harness endpoint. A Job
 is the one long-running resource. Retry, Message admission, exact file retrieval, and cleanup are
@@ -130,7 +131,11 @@ operations on resources Dorf already owns.
 ## Jobs and state
 
 A Job representation is a purpose-built API contract rather than a serialization of PostgreSQL rows
-or internal Go structs. It keeps independent facts independent:
+or internal Go structs. It is one closed, flat union discriminated by `kind`: `direct`, `coding`, or
+`codebase-investigation`. Common fields retain common custody; coding adds its workflow revision,
+repository, starting and current Revisions, branch and base branch, Proposal, and Outcome fields,
+while investigation adds its workflow revision, exact source, and report location. There is no
+generic workflow payload or extension map. The direct member keeps independent facts independent:
 
 ```json
 {
@@ -151,9 +156,10 @@ or internal Go structs. It keeps independent facts independent:
 }
 ```
 
-These meanings are not collapsed into one synthetic status. A successful direct Turn may leave its
-Job open and idle. Attention does not mean cleanup was requested. A future workflow Outcome must not
-itself mean cleanup completed.
+These meanings are not collapsed into one synthetic status. A successful direct or investigation
+Turn may leave its Job open and idle. Attention does not mean cleanup was requested. Coding owns the
+conditional policy that requests cleanup after observing its terminal Outcome; the Outcome itself
+does not mean Core cleanup completed.
 
 When Job listing is added, its responses will be paginated from the start. JSON field names, enum
 values, error codes, and exit behavior are compatibility surface; human CLI prose is not.
@@ -314,6 +320,10 @@ dorf sandbox file get SANDBOX PATH --output DESTINATION
 dorf job cleanup JOB
 ```
 
+The fixed coding and codebase-investigation admissions also have delivered typed `workflow run`
+commands. [Getting started](../getting-started.md#3-connect-one-remote-cli-client) owns their exact
+inputs and remote procedure.
+
 The deployment host creates and revokes remote Clients with `dorf client enroll` and
 `dorf client revoke CLIENT_ID`; it keeps `dorf serve` on an exact private loopback address. There is
 one saved Deployment and no named multi-Deployment switching. `dorf connect` accepts an Enrollment
@@ -324,8 +334,10 @@ transport or HTTP server failure, and reveals the recovery key in human output o
 remains. Structured mutation receipts include the request identity. Mutations return the effective
 Deployment, canonical resource identity, and accepted state. Cleanup names one exact Job.
 
-Later slices add `job list` and typed workflow admissions. `watch` is used instead of overloading
-`inspect --follow`, because Follow already has a precise Message meaning.
+Slice 4 adds `job list`; the two typed workflow admissions are delivered. Remote investigation
+accepts only a credential-free HTTPS repository and exact Revision. Retained local Git bundles stay
+behind the deployment-host workflow command and never cross the remote API. `watch` is used instead
+of overloading `inspect --follow`, because Follow already has a precise Message meaning.
 
 Agents initially use the same CLI with structured output or call the described HTTP API directly
 from code mode. OpenAPI publication remains Slice 4 work. MCP and A2A are not part of the first
@@ -347,9 +359,9 @@ HTTPS API                    worker
             PostgreSQL + Absurd
 ```
 
-The API composes existing direct application handles; later typed workflow adapters use the same
-boundary. It does not shell out to the Dorf CLI, expose PostgreSQL, hand out task claims, or expose
-provider/Harness operations.
+The API composes the direct application handle and the two compiled workflows through their typed
+admission adapters. It does not shell out to the Dorf CLI, expose PostgreSQL, hand out task claims,
+or expose provider/Harness operations.
 
 Slices 1 and 2 proved independent API and worker restart, plus watch reconnection after API loss,
 with transient, separately supervised processes.

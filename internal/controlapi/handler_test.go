@@ -60,6 +60,8 @@ func TestHandlerBoundary(t *testing.T) {
 		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
 		{http.MethodGet, "/v1/jobs/job-1/evidence", nil},
 		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
+		{http.MethodPost, "/v1/workflows/coding/jobs", strings.NewReader(`{}`)},
+		{http.MethodPost, "/v1/workflows/codebase-investigation/jobs", strings.NewReader(`{}`)},
 	} {
 		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
 	}
@@ -198,6 +200,50 @@ func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
 	if jobs.cleanupCalls != 0 {
 		t.Fatal("unsupported cleanup precondition reached the mutation")
 	}
+}
+
+func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
+	credential := "dcr_control-client"
+	base := controlapi.Job{
+		ID: "job-coding", Kind: controlapi.JobKindCoding, Goal: "ship",
+	}
+	coding := controlapi.CodingJob{
+		Job: base, WorkflowRevision: "3", Repository: "https://github.com/acme/widget.git", Revision: strings.Repeat("b", 40),
+	}
+	jobs := &fakeJobs{job: base, view: coding}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	get := func(etag string) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-coding", nil)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		if etag != "" {
+			request.Header.Set("If-None-Match", etag)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	first := get("")
+	requireStatusType(t, first, http.StatusOK, "application/json")
+	firstETag := first.Header().Get("ETag")
+	coding.Proposal = &controlapi.CodingProposal{Number: 42, URL: "https://github.com/acme/widget/pull/42", Revision: coding.Revision}
+	jobs.mu.Lock()
+	jobs.view = coding
+	jobs.mu.Unlock()
+	changed := get(firstETag)
+	requireStatusType(t, changed, http.StatusOK, "application/json")
+	var gotCoding controlapi.CodingJob
+	decode(t, changed, &gotCoding)
+	if gotCoding.ID != base.ID || gotCoding.Kind != controlapi.JobKindCoding || gotCoding.Proposal == nil || gotCoding.Proposal.Number != 42 || changed.Header().Get("ETag") == firstETag {
+		t.Fatalf("changed coding Job/etag=%#v/%q after %q", gotCoding, changed.Header().Get("ETag"), firstETag)
+	}
+
+	coding.Kind = controlapi.JobKindDirect
+	jobs.mu.Lock()
+	jobs.view = coding
+	jobs.mu.Unlock()
+	requireProblem(t, get(""), http.StatusInternalServerError, "internal_error")
 }
 
 func TestSandboxFileIsExactAndSelfVerifying(t *testing.T) {
@@ -406,11 +452,11 @@ func readSnapshotEvent(t *testing.T, reader *bufio.Reader) (string, controlapi.J
 			if event != "snapshot" || id == "" || data == "" {
 				t.Fatalf("SSE event/type/id/data=%q/%q/%q", event, id, data)
 			}
-			var job controlapi.Job
+			var job controlapi.DirectJob
 			if err := json.Unmarshal([]byte(data), &job); err != nil {
 				t.Fatalf("decode snapshot %q: %v", data, err)
 			}
-			return id, job
+			return id, job.Job
 		case strings.HasPrefix(line, "event: "):
 			event = strings.TrimPrefix(line, "event: ")
 		case strings.HasPrefix(line, "id: "):
@@ -448,6 +494,7 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 type fakeJobs struct {
 	mu             sync.Mutex
 	job            controlapi.Job
+	view           controlapi.JobView
 	gotInput       controlapi.AdmitJobRequest
 	message        controlapi.Message
 	retry          controlapi.Retry
@@ -461,20 +508,34 @@ type fakeJobs struct {
 	cleanupCalls   int
 }
 
-func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.AdmitJobRequest) (controlapi.Job, bool, error) {
+func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.gotInput = input
-	return j.job, true, nil
+	return controlapi.DirectJob{Job: j.job}, true, nil
 }
 
-func (j *fakeJobs) Get(_ context.Context, id string) (controlapi.Job, error) {
+func (j *fakeJobs) AdmitCoding(_ context.Context, _ string, _ controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	job, _ := j.current().(controlapi.CodingJob)
+	return job, true, nil
+}
+
+func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, _ controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	job, _ := j.current().(controlapi.InvestigationJob)
+	return job, true, nil
+}
+
+func (j *fakeJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if id != j.job.ID {
-		return controlapi.Job{}, controlapi.ErrJobNotFound
+		return nil, controlapi.ErrJobNotFound
 	}
-	return j.job, nil
+	return j.current(), nil
 }
 
 func (j *fakeJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
@@ -526,14 +587,21 @@ func (j *fakeJobs) Evidence(_ context.Context, jobID string) ([]controlapi.Evide
 	return nil, nil
 }
 
-func (j *fakeJobs) RequestCleanup(_ context.Context, id string) (controlapi.Job, error) {
+func (j *fakeJobs) RequestCleanup(_ context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cleanupCalls++
 	if id != j.job.ID {
-		return controlapi.Job{}, controlapi.ErrJobNotFound
+		return nil, controlapi.ErrJobNotFound
 	}
-	return j.job, nil
+	return j.current(), nil
+}
+
+func (j *fakeJobs) current() controlapi.JobView {
+	if j.view != nil {
+		return j.view
+	}
+	return controlapi.DirectJob{Job: j.job}
 }
 
 func requireStatusType(t *testing.T, response *httptest.ResponseRecorder, status int, contentType string) {

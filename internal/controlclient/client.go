@@ -115,29 +115,59 @@ func (c *Client) Me(ctx context.Context) (controlapi.Identity, error) {
 }
 
 // AdmitJob admits or replays one direct Job using the caller-generated key.
-func (c *Client) AdmitJob(ctx context.Context, key string, request controlapi.AdmitJobRequest) (controlapi.Job, error) {
+func (c *Client) AdmitJob(ctx context.Context, key string, request controlapi.AdmitJobRequest) (controlapi.DirectJob, error) {
 	if strings.TrimSpace(key) == "" {
-		return controlapi.Job{}, fmt.Errorf("Idempotency-Key is empty")
+		return controlapi.DirectJob{}, fmt.Errorf("Idempotency-Key is empty")
 	}
-	var response controlapi.Job
+	var response controlapi.DirectJob
 	err := c.do(ctx, http.MethodPost, []string{"v1", "jobs"}, request, true, key, &response)
+	if err == nil && response.Kind != controlapi.JobKindDirect {
+		return controlapi.DirectJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
+	}
+	return response, err
+}
+
+// AdmitCodingJob admits or replays one built-in coding workflow Job.
+func (c *Client) AdmitCodingJob(ctx context.Context, key string, request controlapi.AdmitCodingJobRequest) (controlapi.CodingJob, error) {
+	if strings.TrimSpace(key) == "" {
+		return controlapi.CodingJob{}, fmt.Errorf("Idempotency-Key is empty")
+	}
+	var response controlapi.CodingJob
+	err := c.do(ctx, http.MethodPost, []string{"v1", "workflows", "coding", "jobs"}, request, true, key, &response)
+	if err == nil && response.Kind != controlapi.JobKindCoding {
+		return controlapi.CodingJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
+	}
+	return response, err
+}
+
+// AdmitInvestigationJob admits or replays one built-in codebase investigation
+// workflow Job.
+func (c *Client) AdmitInvestigationJob(ctx context.Context, key string, request controlapi.AdmitInvestigationJobRequest) (controlapi.InvestigationJob, error) {
+	if strings.TrimSpace(key) == "" {
+		return controlapi.InvestigationJob{}, fmt.Errorf("Idempotency-Key is empty")
+	}
+	var response controlapi.InvestigationJob
+	err := c.do(ctx, http.MethodPost, []string{"v1", "workflows", "codebase-investigation", "jobs"}, request, true, key, &response)
+	if err == nil && response.Kind != controlapi.JobKindInvestigation {
+		return controlapi.InvestigationJob{}, fmt.Errorf("Dorf API Job response has unexpected kind")
+	}
 	return response, err
 }
 
 // Job retrieves one canonical Job snapshot.
-func (c *Client) Job(ctx context.Context, id string) (controlapi.Job, error) {
+func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error) {
 	if id == "" {
-		return controlapi.Job{}, fmt.Errorf("Job ID is empty")
+		return nil, fmt.Errorf("Job ID is empty")
 	}
-	var job controlapi.Job
-	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", id}, nil, true, "", &job)
-	return job, err
+	var response jobResponse
+	err := c.do(ctx, http.MethodGet, []string{"v1", "jobs", id}, nil, true, "", &response)
+	return response.JobView, err
 }
 
 // WatchJob delivers complete canonical snapshots and reconnects an interrupted
 // stream using the last successfully delivered event ID. The caller's context
 // is the only lifetime limit on the stream.
-func (c *Client) WatchJob(ctx context.Context, id string, deliver func(controlapi.Job) error) error {
+func (c *Client) WatchJob(ctx context.Context, id string, deliver func(controlapi.JobView) error) error {
 	if id == "" {
 		return fmt.Errorf("Job ID is empty")
 	}
@@ -262,13 +292,23 @@ func (c *Client) Evidence(ctx context.Context, jobID string) (controlapi.Evidenc
 }
 
 // Cleanup idempotently requests exact cleanup of one Job.
-func (c *Client) Cleanup(ctx context.Context, id string) (controlapi.Job, error) {
+func (c *Client) Cleanup(ctx context.Context, id string) (controlapi.JobView, error) {
 	if id == "" {
-		return controlapi.Job{}, fmt.Errorf("Job ID is empty")
+		return nil, fmt.Errorf("Job ID is empty")
 	}
-	var response controlapi.Job
+	var response jobResponse
 	err := c.do(ctx, http.MethodPut, []string{"v1", "jobs", id, "cleanup"}, nil, true, "", &response)
-	return response, err
+	return response.JobView, err
+}
+
+type jobResponse struct {
+	controlapi.JobView
+}
+
+func (r *jobResponse) UnmarshalJSON(contents []byte) error {
+	job, err := decodeJob(contents)
+	r.JobView = job
+	return err
 }
 
 func (c *Client) do(ctx context.Context, method string, path []string, input any, authenticated bool, key string, output any) error {
@@ -375,7 +415,7 @@ func (c *Client) endpoint(parts []string) string {
 	return endpoint.String()
 }
 
-func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *string, retryAfter *time.Duration, deliver func(controlapi.Job) error) (bool, error) {
+func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *string, retryAfter *time.Duration, deliver func(controlapi.JobView) error) (bool, error) {
 	request, err := c.request(ctx, http.MethodGet, []string{"v1", "jobs", id, "watch"}, nil, true, "")
 	if err != nil {
 		return false, err
@@ -415,8 +455,8 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 		line := scanner.Text()
 		if line == "" {
 			if len(data) != 0 && (eventType == "" || eventType == "snapshot") {
-				var job controlapi.Job
-				if err := json.Unmarshal([]byte(strings.Join(data, "\n")), &job); err != nil {
+				job, err := decodeJob([]byte(strings.Join(data, "\n")))
+				if err != nil {
 					return false, fmt.Errorf("decode Dorf API watch snapshot")
 				}
 				if err := deliver(job); err != nil {
@@ -468,6 +508,37 @@ func (c *Client) watchJobOnce(ctx context.Context, id string, lastEventID *strin
 		return true, fmt.Errorf("read Dorf API watch stream")
 	}
 	return true, nil
+}
+
+func decodeJob(contents []byte) (controlapi.JobView, error) {
+	var discriminator struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(contents, &discriminator); err != nil {
+		return nil, fmt.Errorf("decode Dorf API Job response")
+	}
+	switch discriminator.Kind {
+	case controlapi.JobKindDirect:
+		var job controlapi.DirectJob
+		if err := json.Unmarshal(contents, &job); err != nil {
+			return nil, fmt.Errorf("decode Dorf API Job response")
+		}
+		return job, nil
+	case controlapi.JobKindCoding:
+		var job controlapi.CodingJob
+		if err := json.Unmarshal(contents, &job); err != nil {
+			return nil, fmt.Errorf("decode Dorf API Job response")
+		}
+		return job, nil
+	case controlapi.JobKindInvestigation:
+		var job controlapi.InvestigationJob
+		if err := json.Unmarshal(contents, &job); err != nil {
+			return nil, fmt.Errorf("decode Dorf API Job response")
+		}
+		return job, nil
+	default:
+		return nil, fmt.Errorf("Dorf API Job response has unsupported kind")
+	}
 }
 
 func verifyContentDigest(values []string, contents []byte) error {

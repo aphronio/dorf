@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -44,6 +45,8 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown conte
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
 	h.mux.HandleFunc("/v1/me", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs", h.protectedRoute)
+	h.mux.HandleFunc("/v1/workflows/coding/jobs", h.protectedRoute)
+	h.mux.HandleFunc("/v1/workflows/codebase-investigation/jobs", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.protectedRoute)
@@ -195,7 +198,43 @@ func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
 			h.serviceError(w, r, err)
 			return
 		}
-		h.reply(w, createdStatus(created), job)
+		h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+	case "/v1/workflows/coding/jobs":
+		if !h.exact(w, r, http.MethodPost, true) {
+			return
+		}
+		key, ok := h.idempotencyKey(w, r)
+		if !ok {
+			return
+		}
+		var input AdmitCodingJobRequest
+		if !h.decode(w, r, &input) {
+			return
+		}
+		job, created, err := h.jobs.AdmitCoding(r.Context(), key, input)
+		if err != nil {
+			h.serviceError(w, r, err)
+			return
+		}
+		h.jobResponseStatus(w, r, job, nil, createdStatus(created))
+	case "/v1/workflows/codebase-investigation/jobs":
+		if !h.exact(w, r, http.MethodPost, true) {
+			return
+		}
+		key, ok := h.idempotencyKey(w, r)
+		if !ok {
+			return
+		}
+		var input AdmitInvestigationJobRequest
+		if !h.decode(w, r, &input) {
+			return
+		}
+		job, created, err := h.jobs.AdmitInvestigation(r.Context(), key, input)
+		if err != nil {
+			h.serviceError(w, r, err)
+			return
+		}
+		h.jobResponseStatus(w, r, job, nil, createdStatus(created))
 	case "/v1/jobs/{job}/watch":
 		h.watchRoute(w, r, client.CredentialExpiresAt)
 	case "/v1/jobs/{job}/messages":
@@ -266,7 +305,11 @@ func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *handler) jobResponse(w http.ResponseWriter, r *http.Request, job Job, err error) {
+func (h *handler) jobResponse(w http.ResponseWriter, r *http.Request, job JobView, err error) {
+	h.jobResponseStatus(w, r, job, err, http.StatusOK)
+}
+
+func (h *handler) jobResponseStatus(w http.ResponseWriter, r *http.Request, job JobView, err error, status int) {
 	if err != nil {
 		h.serviceError(w, r, err)
 		return
@@ -282,7 +325,7 @@ func (h *handler) jobResponse(w http.ResponseWriter, r *http.Request, job Job, e
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	h.replyJSON(w, http.StatusOK, body)
+	h.replyJSON(w, status, body)
 }
 
 func (h *handler) exact(w http.ResponseWriter, r *http.Request, method string, hasJSON bool) bool {
@@ -488,7 +531,11 @@ func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(contents)
 }
 
-func jobRepresentation(job Job) ([]byte, string, error) {
+func jobRepresentation(job JobView) ([]byte, string, error) {
+	common := job.Common()
+	if common.ID == "" || common.Kind != job.jobKind() {
+		return nil, "", fmt.Errorf("control API Job representation has invalid identity or kind")
+	}
 	body, err := json.Marshal(job)
 	if err != nil {
 		return nil, "", err

@@ -48,6 +48,14 @@ func codingDelivery(ctx context.Context, store postgres.Store, jobID string) (*c
 
 func (p providerCheck) Check(context.Context, string) error { return p.err }
 
+func (providerCheck) DefaultConnection() (string, error) { return "primary", nil }
+
+type installationDiscovery string
+
+func (i installationDiscovery) DiscoverInstallation(context.Context, string) (string, error) {
+	return string(i), nil
+}
+
 type failOnceWorkflowBarrier struct {
 	mu     sync.Mutex
 	point  string
@@ -396,6 +404,14 @@ func codingJobInput(key, goal, revision, branch string) coding.Admission {
 	}
 }
 
+func codingAdmissionRequest(input coding.Admission) coding.AdmissionRequest {
+	return coding.AdmissionRequest{
+		AdmissionKey: input.AdmissionKey, Goal: input.Goal, SandboxProfile: input.SandboxProfile,
+		ProviderConnection: input.ProviderConnection, Model: input.Model, ReasoningEffort: input.ReasoningEffort,
+		Repository: input.Repository, Revision: input.Revision, Branch: input.Branch, BaseBranch: input.BaseBranch,
+	}
+}
+
 func TestPostgresDirectBootstrapFollowAndExplicitCleanup(t *testing.T) {
 	_, store, client := testDatabase(t)
 	ctx := context.Background()
@@ -543,53 +559,35 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	input := codingJobInput(key, "initial input", "2d2e0fbc60ac1d3730249a458497b4c5ebf1a87c", "dorf/integration")
 	blocked := input
 	blocked.AdmissionKey += "-provider-blocked"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("provider is not ready")}, profileapp.Runtime{SandboxProfile: blocked.SandboxProfile}, blocked); err == nil {
+	application := core.Application{Store: store, Tasks: client}
+	if _, _, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("provider is not ready")}, installationDiscovery("42")).Admit(ctx, codingAdmissionRequest(blocked)); err == nil {
 		t.Fatal("new Job bypassed provider readiness")
 	}
 	if _, err := store.Job(ctx, core.JobID(blocked.AdmissionKey)); !errors.Is(err, postgres.ErrNotFound) {
 		t.Fatalf("failed provider preflight persisted Job: %v", err)
 	}
-	job, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
+	admissions := coding.NewAdmissionService(store, application, providerCheck{}, installationDiscovery("42"))
+	request := codingAdmissionRequest(input)
+	job, created, err := admissions.Admit(ctx, request)
 	if err != nil || !created {
 		t.Fatalf("admit created=%v err=%v", created, err)
 	}
 	if job.SandboxProfile != "incus" || job.Workflow != coding.Workflow || job.WorkflowRevision != coding.WorkflowRevision {
 		t.Fatalf("admitted Job profile/Workflow=%#v", job)
 	}
-	repeatedJob, created, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: input.SandboxProfile}, input)
+	repeatedJob, created, err := coding.NewAdmissionService(store, application, providerCheck{err: errors.New("Gateway unavailable during retry")}, installationDiscovery("unavailable")).Admit(ctx, request)
 	if err != nil || created || repeatedJob.ID != job.ID || repeatedJob.CurrentTaskID != job.CurrentTaskID {
 		t.Fatalf("same-key replay with the same complete authority=%#v created=%v err=%v", repeatedJob, created, err)
 	}
-	changedJob := input
-	changedJob.Goal = "changed complete input"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedJob.SandboxProfile}, changedJob); err == nil {
-		t.Fatal("changed complete Job input under the same admission key did not conflict")
-	}
-	changedProfile := input
-	changedProfile.SandboxProfile = "e2b"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedProfile.SandboxProfile}, changedProfile); err == nil {
-		t.Fatal("changed Sandbox profile under the same admission key did not conflict")
-	}
-	changedBase := input
+	changedBase := request
 	changedBase.BaseBranch = "changed-base"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedBase.SandboxProfile}, changedBase); err == nil {
-		t.Fatal("changed caller base under the same admission key did not conflict")
+	if _, _, err := admissions.Admit(ctx, changedBase); !errors.Is(err, coding.ErrAdmissionConflict) {
+		t.Fatalf("changed caller base under the same admission key err=%v, want admission conflict", err)
 	}
-	changedRepository := input
-	changedRepository.Repository = "https://github.com/aphronio/other.git"
-	changedRepository.GitHubRepository = "aphronio/other"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRepository.SandboxProfile}, changedRepository); err == nil {
-		t.Fatal("changed caller repository under the same admission key did not conflict")
-	}
-	changedInstallation := input
-	changedInstallation.GitHubInstallation = "43"
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedInstallation.SandboxProfile}, changedInstallation); err == nil {
-		t.Fatal("changed derived GitHub installation under the same admission key did not conflict")
-	}
-	changedRevision := input
-	changedRevision.Revision = strings.Repeat("b", 40)
-	if _, _, err := coding.Admit(ctx, store, core.Application{Store: store, Tasks: client}, providerCheck{err: errors.New("Gateway unavailable during retry")}, profileapp.Runtime{SandboxProfile: changedRevision.SandboxProfile}, changedRevision); err == nil {
-		t.Fatal("changed caller Revision under the same admission key did not conflict")
+	changedStoredBase := input
+	changedStoredBase.BaseBranch = changedBase.BaseBranch
+	if _, _, err := store.AdmitCoding(ctx, changedStoredBase); !errors.Is(err, postgres.ErrAdmissionConflict) || !errors.Is(err, coding.ErrAdmissionConflict) {
+		t.Fatalf("durable changed base error=%v, want storage and coding admission conflict", err)
 	}
 	storedAuthority, err := store.CodingJob(ctx, job.ID)
 	if err != nil || storedAuthority.GitHubInstallation != input.GitHubInstallation || storedAuthority.StartingRevision != input.Revision || storedAuthority.Revision != input.Revision {

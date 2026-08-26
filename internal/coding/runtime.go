@@ -20,10 +20,6 @@ const (
 
 func TaskKey(jobID string) string { return "coding-job:v3:" + jobID }
 
-type ProviderChecker interface {
-	Check(context.Context, string) error
-}
-
 type Runtime struct {
 	Profile  profile.Runtime
 	Agent    core.AgentReconciliation
@@ -140,32 +136,4 @@ func wakeOptions(work Work, sequence int64, proposalPollInterval time.Duration) 
 		stepName, timeout = fmt.Sprintf("dorf/agent-run-wake/v1/%s/%020d", work.FactID, sequence), activeAgentPollInterval
 	}
 	return stepName, timeout
-}
-
-func Admit(ctx context.Context, store Store, application core.Application, providers ProviderChecker, runtime profile.Runtime, input Admission) (core.Job, bool, error) {
-	key := strings.TrimSpace(input.AdmissionKey)
-	if key != "" {
-		exists, err := store.JobExists(ctx, core.JobID(key))
-		if err != nil {
-			return core.Job{}, false, err
-		}
-		if !exists {
-			definition := WorkflowDefinition()
-			if err := runtime.Require(definition.Name, definition.Revision, definition.RequiredProviderCapabilities); err != nil {
-				return core.Job{}, false, err
-			}
-			if providers == nil {
-				return core.Job{}, false, fmt.Errorf("provider readiness is not configured")
-			}
-			if err := providers.Check(ctx, strings.TrimSpace(input.ProviderConnection)); err != nil {
-				return core.Job{}, false, fmt.Errorf("AI connection %q is not ready: %w", strings.TrimSpace(input.ProviderConnection), err)
-			}
-		}
-	}
-	job, created, err := store.AdmitCoding(ctx, input)
-	if err != nil || !job.AdmissionOpen {
-		return job, created, err
-	}
-	job, err = application.ScheduleJobTask(ctx, job, TaskName, TaskKey(job.ID))
-	return job, created, err
 }

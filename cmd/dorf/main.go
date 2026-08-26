@@ -134,8 +134,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return serveCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "run":
 		return runDirect(ctx, store, client, cfg, args[1:], stdout, stderr)
-	case "admit":
-		return admit(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "workflow":
 		return workflowCommand(ctx, store, client, cfg, args[1:], stdout, stderr)
 	case "message":
@@ -946,8 +944,8 @@ func runDoctor(ctx context.Context, db *sql.DB, cfg config.Config, args []string
 	return nil
 }
 
-func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
-	set := flag.NewFlagSet("admit", flag.ContinueOnError)
+func runCodingWorkflow(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("workflow run coding", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable caller admission identity")
 	goalFile := set.String("goal-file", "", "path containing the complete goal")
@@ -962,79 +960,40 @@ func admit(ctx context.Context, store postgres.Store, client *absurd.Client, cfg
 	if err := set.Parse(args); err != nil {
 		return err
 	}
-	goal, err := readInput(*goalFile, "admit", "goal")
+	goal, err := readInput(*goalFile, "workflow run coding", "goal")
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(*branch) == "" && strings.TrimSpace(*key) != "" {
-		*branch = "dorf/" + core.JobID(strings.TrimSpace(*key))
-	}
-	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	profile, err := selectedSandboxProfile(ctx, store, *profileName)
-	if err != nil {
-		return err
-	}
-	if err := requireRemoteGitAccess(profile); err != nil {
-		return err
-	}
-	selectedConnection, err := selectedAIConnection(providers, *connection)
-	if err != nil {
-		return err
-	}
-	codingRuntime := (profileRuntimeResolver{cfg: cfg}).ResolveCodingAdmission(profile)
-	input := coding.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: goal, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
-		Repository:   *repository, Revision: *revision, Branch: *branch, BaseBranch: *base,
-	}
-	job, created, err := resolveAndAdmitCoding(ctx, store, codingRuntime.Installations, input, func(ctx context.Context, resolved coding.Admission) (core.Job, bool, error) {
-		return coding.Admit(ctx, store, coreApplication(store, client), providers, codingRuntime.Profile, resolved)
+	admissions := (profileRuntimeResolver{cfg: cfg, store: store, client: client}).CodingAdmissions()
+	job, created, err := admissions.Admit(ctx, coding.AdmissionRequest{
+		AdmissionKey: *key, Goal: goal, SandboxProfile: *profileName, ProviderConnection: *connection,
+		Model: *model, ReasoningEffort: *effort, Repository: *repository, Revision: *revision,
+		Branch: *branch, BaseBranch: *base,
 	})
 	if err != nil {
 		return err
 	}
-	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.CurrentTaskID, "scheduled": true})
-}
-
-type codingAdmission func(context.Context, coding.Admission) (core.Job, bool, error)
-
-type codingAdmissionJobs interface {
-	CodingJob(context.Context, string) (coding.Job, error)
-}
-
-func resolveAndAdmitCoding(ctx context.Context, jobs codingAdmissionJobs, github githubInstallationDiscovery, input coding.Admission, admit codingAdmission) (core.Job, bool, error) {
-	repository, err := githubapi.RepositoryFromCloneURL(input.Repository)
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	input.GitHubRepository = repository
-	if key := strings.TrimSpace(input.AdmissionKey); key != "" {
-		existing, err := jobs.CodingJob(ctx, core.JobID(key))
-		if err == nil {
-			input.GitHubInstallation = existing.GitHubInstallation
-			return admit(ctx, input)
-		}
-		if !errors.Is(err, postgres.ErrNotFound) {
-			return core.Job{}, false, err
-		}
-	}
-	installation, err := github.DiscoverInstallation(ctx, input.GitHubRepository)
-	if err != nil {
-		return core.Job{}, false, err
-	}
-	input.GitHubInstallation = installation
-	return admit(ctx, input)
+	return writeJSON(stdout, map[string]any{"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision, "created": created, "task_id": job.CurrentTaskID})
 }
 
 func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("workflow requires: run codebase-investigation")
+		return fmt.Errorf("workflow requires: run coding or codebase-investigation")
 	}
 	if len(args) < 2 || args[0] != "run" {
-		return fmt.Errorf("workflow requires: run codebase-investigation")
+		return fmt.Errorf("workflow requires: run coding or codebase-investigation")
 	}
-	if args[1] != string(investigation.Workflow) {
+	switch args[1] {
+	case "coding":
+		return runCodingWorkflow(ctx, store, client, cfg, args[2:], stdout, stderr)
+	case string(investigation.Workflow):
+		return runInvestigationWorkflow(ctx, store, client, cfg, args[2:], stdout, stderr)
+	default:
 		return fmt.Errorf("unsupported workflow %q", args[1])
 	}
+}
+
+func runInvestigationWorkflow(ctx context.Context, store postgres.Store, client *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("workflow run codebase-investigation", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	key := set.String("key", "", "stable caller admission identity")
@@ -1046,19 +1005,10 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	model := set.String("model", "", "Harness model")
 	effort := set.String("reasoning", "high", "Harness reasoning effort")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
-	if err := set.Parse(args[2:]); err != nil {
+	if err := set.Parse(args); err != nil {
 		return err
 	}
 	brief, err := readInput(*briefFile, "workflow run codebase-investigation", "brief")
-	if err != nil {
-		return err
-	}
-	profile, err := selectedSandboxProfile(ctx, store, *profileName)
-	if err != nil {
-		return err
-	}
-	providers := gateway.Gateway{StatePath: cfg.GatewayStatePath}
-	selectedConnection, err := selectedAIConnection(providers, *connection)
 	if err != nil {
 		return err
 	}
@@ -1066,32 +1016,20 @@ func workflowCommand(ctx context.Context, store postgres.Store, client *absurd.C
 	if err != nil {
 		return err
 	}
-	if source.Kind == investigation.SourceRemote {
-		if err := requireRemoteGitAccess(profile); err != nil {
-			return err
-		}
-	}
-	input := investigation.Admission{
-		JobAdmission: core.JobAdmission{AdmissionKey: *key, Goal: brief, SandboxProfile: profile.Name, ProviderConnection: selectedConnection, Model: *model, ReasoningEffort: *effort},
-		Source:       source,
-	}
-	job, created, err := investigation.Admit(ctx, store, coreApplication(store, client), providers, profileapp.Runtime{SandboxProfile: profile.Name}, input)
+	admissions := (profileRuntimeResolver{cfg: cfg, store: store, client: client}).InvestigationAdmissions()
+	job, created, err := admissions.Admit(ctx, investigation.AdmissionRequest{
+		AdmissionKey: *key, Brief: brief, SandboxProfile: *profileName, ProviderConnection: *connection,
+		Model: *model, ReasoningEffort: *effort, Source: source,
+	})
 	if err != nil {
 		return err
 	}
 	return writeJSON(stdout, map[string]any{
 		"job_id": job.ID, "workflow": job.Workflow, "workflow_revision": job.WorkflowRevision,
 		"required_provider_capabilities": investigation.WorkflowDefinition().RequiredProviderCapabilities,
-		"created":                        created, "task_id": job.CurrentTaskID, "scheduled": true,
+		"created":                        created, "task_id": job.CurrentTaskID,
 		"source": source, "working_tree_changes_excluded": workingTreeChangesExcluded,
 	})
-}
-
-func requireRemoteGitAccess(profile core.SandboxProfile) error {
-	if profile.Provider == core.SandboxProviderE2B && !profile.E2BAllowInternet {
-		return fmt.Errorf("Sandbox profile %q blocks internet access and cannot use a remote Git source; use --local-repo when supported, or update and reverify the profile with internet access", profile.Name)
-	}
-	return nil
 }
 
 func message(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
@@ -1741,6 +1679,6 @@ func jobAttentionNext(job core.Job, execution taskResultView) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|admit|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }
