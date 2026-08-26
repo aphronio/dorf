@@ -13,8 +13,10 @@ curl -fsSL https://github.com/aphronio/dorf/releases/latest/download/install.sh 
 The installer downloads the matching x86_64 Linux archive and checksum, verifies the archive before
 atomically installing `dorf` to `~/.local/bin`, and prints a `PATH` handoff when needed. It does not
 run setup. A standalone install prints the next-step `dorf setup` guidance; `dorf update` uses the
-same verified installer while omitting that fresh-install hint. Install an exact release by using
-its pinned installer asset:
+same verified installer while omitting that fresh-install hint. On a deployment host with Dorf's
+managed API and worker already installed, update also hands those services to the new binary for
+reconciliation and restart; a remote CLI-only installation remains service-free. Install an exact
+release by using its pinned installer asset:
 
 ```bash
 RELEASE_TAG=YOUR_RELEASE_TAG
@@ -58,11 +60,18 @@ Cloudflare-managed domain. Interactive setup discovers the hostname's DNS provid
 guided Tunnel only when it finds Cloudflare nameservers and no existing address records; every
 other domain stays on the existing-HTTPS-ingress path.
 
+After persisting deployment configuration, setup shows and reconciles the supported managed API and
+worker pair. This happens even when the operator selects no Sandbox provider yet, so the control
+plane is ready while Job admission waits for a verified Profile. Use `--yes` to approve the shown
+service plan in automation. The public HTTPS ingress remains an independent operator responsibility;
+the [Remote Control API](control-api.md#deployment-services) owns the exact service boundary.
+
 When supported Ubuntu 24.04 host changes are needed, setup previews and applies only those exact
 changes after approval. `--yes` approves the same host and Cloudflare plans for automation. Setup
 reuses one unambiguous ready AI connection when it already exists; otherwise automation must name
 one with `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices
-remain explicit. `dorf setup --yes` alone prepares only the common foundation.
+remain explicit. `dorf setup --yes` alone prepares the common durable foundation and managed
+services; it does not silently select a Sandbox provider.
 
 Sign out and back in if setup adds Docker or Incus group access, then run the same command again.
 Setup initializes a pristine Incus daemon only when Incus was selected and preserves operator-owned
@@ -110,17 +119,21 @@ Replacing the configured credential bundle retains its explicit `--yes` approval
 ## 3. Connect one remote CLI Client
 
 The deployment host owns setup, Profiles, provider and Harness credentials, PostgreSQL, and the
-worker. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS Deployment URL,
-and one short-lived Enrollment; it does not run `dorf setup`.
+managed worker. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS
+Deployment URL, and one short-lived Enrollment; it does not run `dorf setup`.
 
-The control API URL must be an operator-owned HTTPS origin backed by the plain HTTP, loopback-only
-`dorf serve` listener. The operator must give it a different origin from the Provider Gateway: that
-separate `/v1` service provides model access to Sandboxes, not Dorf client operations. Dorf does not
-provision or infer this ingress separation. Current setup does not install or supervise the control
-API and worker as managed services. Until Slice 4 delivers that lifecycle, the deployment operator
-must supervise `dorf serve` and `dorf worker` separately. The repository's
-`scripts/dev/control-services.sh` is only a transient dogfood helper, not a supported deployment
-interface.
+The control API URL must be an operator-owned HTTPS origin backed by the managed API's private
+listener. The operator must give it a different origin from the Provider Gateway: that separate
+`/v1` service provides model access to Sandboxes, not Dorf client operations. Dorf installs and
+supervises the private API and worker, but does not provision or infer public ingress. Verify the
+host pair before Enrollment:
+
+```bash
+dorf service status
+```
+
+See the [Remote Control API](control-api.md#deployment-services) for the exact service boundary and
+host lifecycle commands.
 
 On the deployment host, create a one-use Enrollment:
 
@@ -136,6 +149,10 @@ dorf connect https://control.example.com
 dorf auth status
 ```
 
+Use `dorf auth status --output json` for a stable non-interactive identity receipt. The Deployment's
+public discovery links its embedded OpenAPI 3.1 document; direct HTTP callers should use that
+document and its published Problem catalog rather than infer schemas from CLI prose.
+
 For non-interactive enrollment, put only the code in a protected file and pass
 `--enrollment-file PATH`, or use `--enrollment-file -` to read it from standard input. The CLI keeps
 one normalized Deployment URL and its client-generated credential in a dedicated owner-only file;
@@ -146,6 +163,8 @@ HTTPS:
 
 ```bash
 dorf run --goal-file goal.txt --model MODEL --reasoning high
+dorf job list
+dorf job list --limit 25 --output json
 dorf job inspect JOB_ID
 dorf job watch JOB_ID
 dorf job watch --output jsonl JOB_ID
@@ -199,15 +218,18 @@ exact request once after a retryable transport or HTTP server failure; a human d
 configure a key. A direct Job remains open and idle after a successful Turn until the caller
 requests cleanup.
 
-The deployment operator can revoke exactly one Client at any time using the Client ID reported by
-`dorf connect` or `dorf auth status`:
+The deployment operator can inspect the host-owned Client inventory and revoke exactly one Client at
+any time using the Client ID reported by `dorf connect` or `dorf auth status`:
 
 ```bash
+dorf client list
+dorf client show CLIENT_ID
 dorf client revoke CLIENT_ID
 ```
 
-Revocation makes subsequent authenticated requests from that Client fail without changing other
-Clients or Jobs.
+All three commands accept `--output json` before the Client ID where applicable. Revocation is
+idempotent and makes subsequent authenticated requests from that Client fail without changing other
+Clients or Jobs. Client administration is deliberately not a remote API.
 
 ## 4. Run a direct Job on the deployment host
 
@@ -221,9 +243,11 @@ dorf run \
   --model MODEL \
   --reasoning high
 
-dorf worker
 dorf inspect --follow JOB_ID
 ```
+
+The managed worker claims the Job; do not start a competing foreground worker in the ordinary
+deployment flow.
 
 For a human invocation, `--key` is optional: Dorf generates and prints an admission key before
 accepting the Job; reuse that key if the command is interrupted. Automation or deliberate replay
@@ -269,7 +293,6 @@ dorf workflow run coding \
   --model MODEL \
   --reasoning high
 
-dorf worker
 dorf inspect JOB_ID
 ```
 
@@ -288,8 +311,9 @@ dorf inspect --follow JOB_ID
 The follower shows current status and durable Job history until attention appears or cleanup
 completes. `Ctrl-C` stops only the local view, not the Job.
 
-`worker` may be restarted after process loss. Use `dorf message` for later input and `--intent steer`
-to target active work. The coding workflow observes the exact pull request for acceptance or
+The managed worker recovers after process loss; use the [service diagnostics](support.md) when an
+operator action is needed. Use `dorf message` for later input and `--intent steer` to target active
+work. The coding workflow observes the exact pull request for acceptance or
 rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub
 decision:
 

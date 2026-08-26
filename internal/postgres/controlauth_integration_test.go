@@ -93,14 +93,40 @@ func TestControlAuthDurableBoundary(t *testing.T) {
 	if err != nil || authenticated != client {
 		t.Fatalf("authenticate=(%#v,%v), want %#v", authenticated, err, client)
 	}
+	record, err := service.GetClient(ctx, client.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.ID != client.ID || record.Name != client.Name || record.State != controlauth.ClientStateActive ||
+		record.CreatedAt.IsZero() || !record.ExpiresAt.Equal(client.CredentialExpiresAt) || record.RevokedAt != nil {
+		t.Fatalf("active Client record=%#v", record)
+	}
 	if _, err := service.Authenticate(ctx, "not-a-credential"); !errors.Is(err, controlauth.ErrUnauthenticated) {
 		t.Fatalf("malformed credential error=%v, want generic unauthenticated", err)
 	}
-	if err := service.Revoke(ctx, client.ID); err != nil {
+	revoked, err := service.Revoke(ctx, client.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Revoke(ctx, "cli_AAAAAAAAAAAAAAAAAAAAAA"); !errors.Is(err, controlauth.ErrClientNotFound) {
+	if revoked.State != controlauth.ClientStateRevoked || revoked.RevokedAt == nil {
+		t.Fatalf("revoked Client record=%#v", revoked)
+	}
+	replayedRevocation, err := service.Revoke(ctx, client.ID)
+	if err != nil || !sameControlClientRecord(replayedRevocation, revoked) {
+		t.Fatalf("replayed revocation=(%#v,%v), want stable %#v", replayedRevocation, err, revoked)
+	}
+	listed, err := service.ListClients(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listedRecord, ok := findControlClient(listed, client.ID); !ok || !sameControlClientRecord(listedRecord, revoked) {
+		t.Fatalf("listed revoked Client=(%#v,%t), want %#v", listedRecord, ok, revoked)
+	}
+	if _, err := service.Revoke(ctx, "cli_AAAAAAAAAAAAAAAAAAAAAA"); !errors.Is(err, controlauth.ErrClientNotFound) {
 		t.Fatalf("missing Client revoke error=%v", err)
+	}
+	if _, err := service.GetClient(ctx, "cli_AAAAAAAAAAAAAAAAAAAAAA"); !errors.Is(err, controlauth.ErrClientNotFound) {
+		t.Fatalf("missing Client show error=%v", err)
 	}
 	if _, err := service.Authenticate(ctx, credentials[winner]); !errors.Is(err, controlauth.ErrUnauthenticated) {
 		t.Fatalf("revoked credential error=%v, want generic unauthenticated", err)
@@ -167,9 +193,35 @@ where e.id=$1`, enrollment.ID).Scan(&storedEnrollment, &storedCredential); err !
 	if _, err := service.Authenticate(ctx, shortCredential); !errors.Is(err, controlauth.ErrUnauthenticated) {
 		t.Fatalf("expired credential error=%v, want generic unauthenticated", err)
 	}
+	expired, err := service.GetClient(ctx, shortClient.ID)
+	if err != nil || expired.State != controlauth.ClientStateExpired || expired.RevokedAt != nil {
+		t.Fatalf("expired Client record=(%#v,%v)", expired, err)
+	}
+	revokedExpired, err := service.Revoke(ctx, shortClient.ID)
+	if err != nil || revokedExpired.State != controlauth.ClientStateRevoked || revokedExpired.RevokedAt == nil {
+		t.Fatalf("revoked expired Client record=(%#v,%v)", revokedExpired, err)
+	}
 	if _, _, err := service.Redeem(ctx, credentialEnrollment.Token, shortClient.Name, shortCredential); !errors.Is(err, controlauth.ErrEnrollmentUnavailable) {
 		t.Fatalf("expired Client replay error=%v, want generic unavailable", err)
 	}
+}
+
+func findControlClient(clients []controlauth.ClientRecord, id string) (controlauth.ClientRecord, bool) {
+	for _, client := range clients {
+		if client.ID == id {
+			return client, true
+		}
+	}
+	return controlauth.ClientRecord{}, false
+}
+
+func sameControlClientRecord(left, right controlauth.ClientRecord) bool {
+	if left.ID != right.ID || left.Name != right.Name || left.State != right.State ||
+		!left.CreatedAt.Equal(right.CreatedAt) || !left.ExpiresAt.Equal(right.ExpiresAt) {
+		return false
+	}
+	return left.RevokedAt == nil && right.RevokedAt == nil ||
+		left.RevokedAt != nil && right.RevokedAt != nil && left.RevokedAt.Equal(*right.RevokedAt)
 }
 
 func mustControlCredential(t *testing.T) string {

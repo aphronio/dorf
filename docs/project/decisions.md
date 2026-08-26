@@ -2542,7 +2542,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 ## D097 — One authenticated HTTPS Deployment projects direct Job control
 
-- **Status:** Accepted and dogfooded — 2026-08-26; initial projection expanded by D098 and D099
+- **Status:** Accepted and dogfooded — 2026-08-26; projection expanded by D098 and D099; automation
+  contract and service lifecycle refined by D100
 - **Decision:** Expose one deliberately narrow external client boundary for a configured Dorf
   Deployment over HTTPS. The initial surface admits direct Jobs, returns their situation-first
   projection, and accepts an explicit cleanup request; D098 and D099 expand that same boundary. It
@@ -2555,19 +2556,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   organization membership.
 - **Deployment:** The API service binds a host-private HTTP listener behind operator-owned HTTPS
   ingress. It authenticates clients, admits and projects Jobs, and requests cleanup, but it registers
-  no execution handlers. A separate durable worker owns task execution and recovery. Managed
-  service/ingress packaging and a hosted control-plane topology remain deferred.
+  no execution handlers. A separate durable worker owns task execution and recovery. D100 later
+  packages those two processes as managed services while keeping ingress operator-owned.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
   access and preserves the in-process Core ownership boundary.
 - **Refines:** D063's client composition, D088's in-process-only external posture, and D095's original
-  local direct CLI. The accepted transport contract and staged expansion are documented in the
-  [Remote Control API design](../implementation/control-api-design.md) and
-  [implementation slices](../implementation/control-api-slices.md).
+  local direct CLI. The current transport contract is the
+  [Remote Control API](../control-api.md); its staged design and proof record is
+  [archived](../history/control-api-slices.md).
 - **Reconsider when:** A second real client earns a language SDK, the single-operator Principal
-  cannot represent actual users, or managed deployment evidence justifies Dorf-owned ingress and
-  service lifecycle.
+  cannot represent actual users, or deployment evidence justifies Dorf-owned ingress.
 
 ## D098 — Remote direct Job control exposes the existing interaction loop
 
@@ -2582,9 +2582,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   have no Evidence. Message delivery remains D096's universal FIFO Follow and exact-active-Turn
   Steer contract; the caller still decides result meaning and cleanup timing.
 - **Refines:** D097's initial external projection, D095's direct client, D088's application boundary,
-  D096's Message invariants, and D089's pre-cleanup file custody. The proof and current command/route
-  inventory live in the [remote implementation slices](../implementation/control-api-slices.md) and
-  [design](../implementation/control-api-design.md).
+  D096's Message invariants, and D089's pre-cleanup file custody. The current contract lives in the
+  [Remote Control API](../control-api.md); the staged proof is
+  [archived](../history/control-api-slices.md).
 - **Why:** A remote client is not useful if ordinary interaction falls back to SSH after the first
   Turn. Projecting the already-owned primitives completes that loop without promoting recovery facts
   or provider operations into public resources.
@@ -2616,9 +2616,42 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Refines:** D097's initially direct-only admission, D098's interaction projection, D088's external
   application boundary, D096's invariant Message semantics, and D069/D073/D092's investigation
   input and report custody. The route and CLI contract live in the
-  [Remote Control API design](../implementation/control-api-design.md); the real HTTPS proof lives in
-  its [implementation slices](../implementation/control-api-slices.md).
+  [Remote Control API](../control-api.md); the real HTTPS proof is
+  [archived](../history/control-api-slices.md).
 - **Reconsider when:** Another proved workflow cannot be expressed as a fixed typed admission and
   closed Job member, independently distributed workflows earn a loading and compatibility contract,
   or a real remote consumer requires retained local-source transport with an explicit bounded
   credential and custody model.
+
+## D100 — Automation contract and managed host services stay narrow
+
+- **Status:** Accepted and dogfooded — 2026-08-26
+- **Decision:** Publish one embedded OpenAPI 3.1 document for the exact remote surface and derive the
+  runtime RFC 9457 Problem responses and its `x-dorf-problems` catalog from one central authority.
+  Add newest-first keyset listing of bounded Job summaries, stable JSON authentication status, and
+  host-only Client list, show, and idempotent revoke commands. Do not add a generator dependency,
+  SDK family, remote Client administration, or another status or event model.
+- **Service lifecycle:** `dorf setup` and `dorf service reconcile` own exactly two compiled systemd
+  system units: the private loopback API and durable worker. Units bind the exact operator, resolved
+  Dorf binary, protected persisted deployment configuration, required state paths, readiness
+  notification, restart policy, and a bounded hardening envelope. Reconciliation refuses foreign or
+  locally edited unit authority. `dorf update` asks the installed new binary to reconcile and restart
+  an existing pair, while remaining inert on a CLI-only machine. HTTPS ingress remains an
+  operator-owned, separately named authority and is not installed or inferred by Dorf.
+- **Proof:** The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived the Job-list
+  operation from the published OpenAPI document, traversed a page, and received the catalogued
+  `invalid_cursor` response for an altered cursor. A temporary Client appeared in host list and show,
+  an idempotent revoke returned the same revoked identity, and the next request received `401`. A
+  clean managed-service install passed `systemd-analyze verify`; a real Job completed across a worker
+  restart, remained available across an API restart, and cleaned up successfully. Both units then
+  remained enabled, current, and ready.
+- **Why:** Automation needs one discoverable schema, bounded enumeration, stable machine failures,
+  and a supported process-loss boundary. Keeping Client administration host-local and ingress
+  operator-owned completes those needs without inventing OAuth, roles, deployment contexts, an SDK
+  ecosystem, or an ingress product.
+- **Refines:** D097's authentication and deployment split, D098's common remote interaction, and
+  D099's closed Job union. The shipped boundary is documented in the
+  [Remote Control API](../control-api.md).
+- **Reconsider when:** A second concrete client earns generated distribution artifacts, a real
+  organization needs identity federation or roles, a supported non-systemd host needs an equivalent
+  lifecycle, or repeated ingress deployment evidence justifies Dorf owning that separate product.

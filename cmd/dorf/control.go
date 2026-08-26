@@ -30,6 +30,7 @@ import (
 	"github.com/aphronio/dorf/internal/direct"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/investigation"
+	"github.com/aphronio/dorf/internal/managedservice"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -37,7 +38,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-const defaultControlAddress = "127.0.0.1:8745"
+const defaultControlAddress = managedservice.ControlAddress
 
 const maxControlModelBytes = 1024
 
@@ -52,7 +53,7 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 	case "connect":
 		return true, connectCommand(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "auth":
-		return true, authCommand(ctx, args[1:], stdout)
+		return true, authCommand(ctx, args[1:], stdout, stderr)
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
 	case "sandbox":
@@ -179,9 +180,21 @@ func connectCommand(ctx context.Context, args []string, stdin io.Reader, stdout,
 	return renderConnection(stdout, deploymentURL, path, identity, false)
 }
 
-func authCommand(ctx context.Context, args []string, stdout io.Writer) error {
-	if len(args) != 1 || args[0] != "status" {
+func authCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 || args[0] != "status" {
 		return fmt.Errorf("auth requires: status")
+	}
+	set := flag.NewFlagSet("auth status", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args[1:]); err != nil {
+		return err
+	}
+	if set.NArg() != 0 {
+		return fmt.Errorf("auth status does not accept positional arguments")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
 	}
 	cfg, path, client, err := loadConnectedClient()
 	if err != nil {
@@ -191,7 +204,20 @@ func authCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if *output == "json" {
+		return writeJSON(stdout, authStatusReceipt{
+			Deployment: cfg.DeploymentURL, Principal: identity.Principal, Client: identity.Client,
+			CredentialSource: "client_config",
+		})
+	}
 	return renderConnection(stdout, cfg.DeploymentURL, path, identity, true)
+}
+
+type authStatusReceipt struct {
+	Deployment       string               `json:"deployment"`
+	Principal        controlapi.Principal `json:"principal"`
+	Client           controlapi.Client    `json:"client"`
+	CredentialSource string               `json:"credential_source"`
 }
 
 func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL string, args []string, stdout, stderr io.Writer) error {
@@ -358,9 +384,11 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("job requires: inspect, watch, message, retry, evidence, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, or cleanup")
 	}
 	switch args[0] {
+	case "list":
+		return remoteJobList(ctx, client, args[1:], stdout, stderr)
 	case "inspect", "cleanup":
 		return remoteJobSnapshot(ctx, cfg, client, args, stdout, stderr)
 	case "watch":
@@ -375,7 +403,7 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	case "evidence":
 		return remoteJobEvidence(ctx, client, args[1:], stdout, stderr)
 	default:
-		return fmt.Errorf("job requires: inspect, watch, message, retry, evidence, or cleanup")
+		return fmt.Errorf("job requires: list, inspect, watch, message, retry, evidence, or cleanup")
 	}
 }
 
@@ -1041,6 +1069,9 @@ func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relative
 	if err != nil {
 		return nil, err
 	}
+	if _, err := a.supportedJob(ctx, owned.JobID); err != nil {
+		return nil, err
+	}
 	handle, err := a.application().OpenJob(ctx, owned.JobID)
 	if err != nil {
 		return nil, err
@@ -1138,6 +1169,13 @@ func (a controlAPIJobs) supportedJob(ctx context.Context, jobID string) (core.Jo
 	case job.Workflow == "" && job.WorkflowRevision == "":
 	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
 	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+		source, sourceErr := a.store.CodebaseInvestigationSource(ctx, job.ID)
+		if errors.Is(sourceErr, postgres.ErrNotFound) || sourceErr == nil && source.Kind != investigation.SourceRemote {
+			return core.Job{}, controlapi.ErrJobNotFound
+		}
+		if sourceErr != nil {
+			return core.Job{}, sourceErr
+		}
 	default:
 		return core.Job{}, controlapi.ErrJobNotFound
 	}
@@ -1355,36 +1393,6 @@ func failedExecutionTask(state absurd.TaskResultState) bool {
 	return state == "" || state == "missing" || state == absurd.TaskFailed || state == absurd.TaskCancelled
 }
 
-func clientCommand(ctx context.Context, store postgres.Store, args []string, stdout io.Writer) error {
-	if len(args) == 0 {
-		return fmt.Errorf("client requires: enroll or revoke CLIENT_ID")
-	}
-	auth := controlauth.Service{Store: store}
-	switch args[0] {
-	case "enroll":
-		if len(args) != 1 {
-			return fmt.Errorf("client enroll does not accept arguments")
-		}
-		enrollment, err := auth.CreateEnrollment(ctx)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "One-time Dorf enrollment (expires %s):\n%s\n", enrollment.ExpiresAt.Format(time.RFC3339), enrollment.Token)
-		return nil
-	case "revoke":
-		if len(args) != 2 {
-			return fmt.Errorf("client revoke requires one Client ID")
-		}
-		if err := auth.Revoke(ctx, args[1]); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "Dorf Client revoked: %s\n", strings.TrimSpace(args[1]))
-		return nil
-	default:
-		return fmt.Errorf("client requires: enroll or revoke CLIENT_ID")
-	}
-}
-
 func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Client, cfg config.Config, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("serve", flag.ContinueOnError)
 	set.SetOutput(stderr)
@@ -1412,8 +1420,11 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	server := controlapi.NewServer(controlapi.Discovery{
 		Product: "dorf", Version: version.Version,
-		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
 	}, auth, jobs)
+	if err := managedservice.NotifyReady(); err != nil {
+		return err
+	}
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan struct{})

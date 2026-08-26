@@ -1,20 +1,23 @@
-# Remote Control API Implementation Slices
+# Archived Remote Control API Implementation Slices
 
-This is the high-level execution plan for the
-[Remote Control API Design](control-api-design.md). That design owns the intended vocabulary,
-external behavior, and deferred scope. This document deliberately avoids prescribing packages,
-tables, helper types, or internal call graphs; each slice must first discover the smallest truthful
-shape in the code that exists when the slice starts.
+> Historical, non-normative implementation record completed on 2026-08-26. The shipped contract now
+> lives in [Remote Control API](../control-api.md); operator procedures live in
+> [Getting started](../getting-started.md). This record preserves the discovery, proof, test, and
+> simplification discipline used by the four completed slices.
 
-This plan is temporary implementation guidance. Its status markers record completed implementation
-and proof, not release availability.
+This was the high-level execution plan for the
+[Remote Control API Design](control-api-design.md). It deliberately avoided prescribing packages,
+tables, helper types, or internal call graphs; each slice first had to discover the smallest truthful
+shape in the code that existed when the slice started.
+
+Its status markers record completed implementation and proof, not release availability.
 
 | Slice | Status |
 | --- | --- |
 | 1 — One authenticated remote direct Job | Delivered and dogfood-proven on 2026-08-26 |
 | 2 — Complete the direct Job interaction loop | Delivered and dogfood-proven on 2026-08-26 |
 | 3 — Typed workflow admission | Delivered and dogfood-proven on 2026-08-26 |
-| 4 — Automation-quality contract and operations | Planned |
+| 4 — Automation-quality contract and operations | Delivered and dogfood-proven on 2026-08-26 |
 
 ## Required method for every slice
 
@@ -107,9 +110,8 @@ the same canonical Job after independent worker and API restarts. Cleanup comple
 worker restart, and revoking the Client caused the next authenticated request to be denied. No
 provider, Harness, database, or Gateway credential crossed the client boundary.
 
-The API and worker were separately supervised for the proof; this did not claim managed packaging.
-Installing, upgrading, diagnosing, and supervising production services remains Slice 4. Current
-operator limits are documented in [Getting started](../getting-started.md#3-connect-one-remote-cli-client).
+The API and worker were separately supervised for that proof; this did not yet claim managed
+packaging. Slice 4 subsequently delivered the supported lifecycle recorded below.
 
 Do not add workflow admissions, watch streaming, named contexts, multi-user identity, or a browser
 UI in this slice.
@@ -188,24 +190,51 @@ public union currently recognizes only the exact compiled revisions.
 
 ## Slice 4 — Automation-quality contract and operations
 
+**Status:** Delivered and dogfood-proven on 2026-08-26.
+
 **Client result:** A human, shell script, and coding agent can depend on the same documented API and
 CLI behavior without hidden terminal or deployment assumptions.
 
-This slice completes the compatibility surface that real dogfood has earned: OpenAPI publication,
+This slice completed the compatibility surface that real dogfood earned: OpenAPI publication,
 pagination, a published Problem Details catalog and compatibility proof, consistent JSON and JSONL
 behavior, Client credential lifecycle, and operator diagnostics for the managed API and worker
 services. It reconciles setup, support, release, and agent guidance with the now-proven remote path.
 
-The proof must include generated-client or direct-HTTP use from the OpenAPI description, non-TTY
-operation, pagination continuity, authentication expiry/revocation, and a clean install or upgrade of
-the managed deployment services.
+The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived the Job-list operation
+from `GET /v1/openapi.json`, traversed a bounded page, and received the catalogued `invalid_cursor`
+Problem for an altered cursor. The CLI independently exercised structured Job listing and
+authentication status. A temporary Client appeared in host `list` and `show`, repeated revoke
+returned the same revoked record, and its next authenticated request received `401`.
+
+A clean systemd installation passed `systemd-analyze verify`. A real Job completed across a
+managed worker restart, remained canonical across an independent API restart, and completed cleanup.
+Both units remained enabled, exactly current, runtime-ready, and healthy under the private discovery
+and authentication probes. HTTPS ingress stayed operator-owned and separate from the Provider
+Gateway; proof credentials and the temporary public route were removed.
+
+The simplification pass kept one embedded OpenAPI document, one runtime Problem catalog, one bounded
+Job listing, the existing Client credential authority, and two compiled service units. It deleted
+the transient dogfood supervisor, excluded host-local investigation bundles from every remote path,
+and avoided a generator dependency, SDK family, remote Client administration, deployment contexts,
+new event state, or a Dorf ingress product.
+
+From the Slice 3 checkpoint, the final delta is: handwritten production Go `+2,420/-124`, authored
+OpenAPI JSON `+1,053/-0`, authored SQL `+53/-2`, generated Go `+190/-7`, tests `+1,763/-19`,
+documentation `+405/-142`, and shell `+0/-111`.
+
+The remaining additions earn their keep by owning one discoverable compatibility document and
+failure catalog, one bounded durable listing query, the existing credential lifecycle's host view,
+and the privileged two-service convergence boundary. Tests are retained where they protect cursor
+continuity and exclusion, authentication lifecycle, OpenAPI/runtime drift, unit ownership and stale
+plans, readiness notification, or bounded live probes. Accepted pressure remains a systemd-only
+managed lifecycle, operator-owned ingress, one operator Principal, and an authored OpenAPI document
+checked structurally and through direct live use rather than a new generator or validator dependency.
 
 Do not add MCP, A2A, a hand-written SDK family, OIDC, RBAC, multiple saved Deployment contexts,
 webhooks, or a web UI. Let subsequent real clients decide which of those is the smallest next step.
 
 ## Completion
 
-After the final slice, replace temporary implementation narration with concise shipped product,
-architecture, API, setup, support, and Agent Guide authorities. Preserve consequential decisions and
-reconsideration triggers; archive or delete this plan and any superseded design text rather than
-leaving a second roadmap behind.
+The final slice consolidated current behavior into the product, architecture, API, setup, support,
+and Agent Guide authorities. This plan and its working design are retained only as non-normative
+history rather than a second roadmap.

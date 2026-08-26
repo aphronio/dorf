@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/aphronio/dorf/internal/hostsetup"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
+	"github.com/aphronio/dorf/internal/managedservice"
 	outcomeapp "github.com/aphronio/dorf/internal/outcome"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
@@ -61,9 +63,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("update does not accept arguments")
 		}
+		binary, err := currentDorfBinary()
+		if err != nil {
+			return err
+		}
 		result, err := releaseapp.UpdateApplication(ctx, stdout, stderr)
 		if err != nil {
 			return err
+		}
+		command := exec.CommandContext(ctx, binary, "service", "reconcile", "--yes", "--existing")
+		command.Stdin, command.Stdout, command.Stderr = os.Stdin, stdout, stderr
+		if err := command.Run(); err != nil {
+			installed := result.From
+			if result.Updated {
+				installed = result.Latest
+			}
+			return fmt.Errorf("Dorf %s is installed, but managed services were not reconciled: %w; run dorf service reconcile --yes", installed, err)
 		}
 		if result.Updated {
 			fmt.Fprintf(stdout, "Dorf update complete: %s -> %s\n", result.From, result.Latest)
@@ -73,6 +88,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "No update available: running %s; latest published release is %s\n", result.From, result.Latest)
 		}
 		return nil
+	}
+	if handled, err := managedServiceRootCommand(ctx, args, stdout, stderr); handled || err != nil {
+		return err
 	}
 	if handled, err := remoteCommand(ctx, args, stdout, stderr); handled || err != nil {
 		return err
@@ -98,7 +116,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	store := postgres.Store{DB: db}
 	switch args[0] {
 	case "client":
-		return clientCommand(ctx, store, args[1:], stdout)
+		return clientCommand(ctx, store, args[1:], stdout, stderr)
 	case "migrate":
 		return migrate(ctx, store, args[1:], stdout, stderr)
 	case "doctor":
@@ -823,10 +841,11 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	providers, err := selectSetupSandboxProviders(ctx, cfg, options, presenter)
 	if err != nil {
 		if errors.Is(err, errSetupCancelled) {
-			presenter.Note("Setup paused", "Foundation is ready; no Sandbox provider was prepared")
-			return nil
+			presenter.Note("Sandbox setup", "Skipped; no Sandbox provider was prepared")
+			providers = nil
+		} else {
+			return err
 		}
-		return err
 	}
 	if containsSandboxProvider(providers, core.SandboxProviderIncus) {
 		providerPlan, err := hostsetup.ObserveHost(ctx, false, true)
@@ -843,9 +862,22 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	if len(providers) == 0 {
 		presenter.Note("Agent Sandboxes", "Skipped for now · run dorf setup again when you’re ready")
-		return nil
+	} else if err := completeGuidedSetup(ctx, store, &cfg, options, providers, presenter, stdout, stderr); err != nil {
+		return err
 	}
-	return completeGuidedSetup(ctx, store, &cfg, options, providers, presenter, stdout, stderr)
+	managed, err := reconcileSetupManagedServices(ctx, cfg, options.Yes, presenter, stdout, stderr)
+	if err != nil {
+		return err
+	}
+	presenter.Section("Ready")
+	if !managed {
+		presenter.Ready("Dorf", "Deployment configured · start dorf serve and dorf worker under your supervisor")
+	} else if len(providers) == 0 {
+		presenter.Ready("Dorf", "Control plane ready · configure a Sandbox profile before admitting Jobs")
+	} else {
+		presenter.Ready("Dorf", "Control plane and durable Job worker ready")
+	}
+	return nil
 }
 
 var errSetupCancelled = errors.New("setup cancelled")
@@ -1104,8 +1136,18 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 			cancel()
 		}
 	}()
+	workerDone := make(chan error, 1)
+	go func() {
+		workerDone <- client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	}()
+	if err := managedservice.NotifyReady(); err != nil {
+		cancel()
+		<-workerDone
+		<-recoveryDone
+		return err
+	}
 	fmt.Fprintln(stdout, "Dorf durable worker started")
-	err := client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+	err := <-workerDone
 	cancel()
 	recoveryErr := <-recoveryDone
 	if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
@@ -1679,6 +1721,6 @@ func jobAttentionNext(job core.Job, execution taskResultView) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|service|serve|integration|migrate|doctor|provider|profile|run|job|workflow|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

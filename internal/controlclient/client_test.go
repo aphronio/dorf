@@ -180,6 +180,29 @@ func TestTypedWorkflowAdmissionsAndJobUnion(t *testing.T) {
 	}
 }
 
+func TestListJobsEncodesOneOpaquePageRequest(t *testing.T) {
+	const credential = "list-credential"
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/jobs" ||
+			request.URL.Query().Get("limit") != "2" || request.URL.Query().Get("cursor") != "opaque+/cursor" ||
+			request.Header.Get("Authorization") != "Bearer "+credential {
+			t.Fatalf("list request=%s %s auth=%q", request.Method, request.URL, request.Header.Get("Authorization"))
+		}
+		return jsonResponse(http.StatusOK, `{"jobs":[{"id":"job-2","kind":"coding","admitted_at":"2026-08-26T12:00:00Z"}],"next_cursor":"next-page"}`), nil
+	})
+	client, err := New("https://dorf.example.test", credential, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ListJobs(context.Background(), 2, "opaque+/cursor")
+	if err != nil || len(page.Jobs) != 1 || page.Jobs[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != "next-page" {
+		t.Fatalf("Job page=%#v err=%v", page, err)
+	}
+	if _, err := client.ListJobs(context.Background(), 101, ""); err == nil {
+		t.Fatal("out-of-range client limit was accepted")
+	}
+}
+
 func TestSandboxFileReturnsExactVerifiedBytesWithoutJSONLimit(t *testing.T) {
 	const credential = "file-credential"
 	contents := append(bytes.Repeat([]byte{0, 0xff, '\n', '\r'}, maxResponseBytes/4+1), []byte("exact tail")...)

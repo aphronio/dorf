@@ -48,6 +48,42 @@ func (q *Queries) BindControlEnrollment(ctx context.Context, arg BindControlEnro
 	return err
 }
 
+const getControlClient = `-- name: GetControlClient :one
+with db_time as (select clock_timestamp() as now)
+select id,name,
+       case
+           when revoked_at is not null then 'revoked'
+           when credential_expires_at<=db_time.now then 'expired'
+           else 'active'
+       end as state,
+       created_at,credential_expires_at as expires_at,revoked_at
+from dorf.control_clients cross join db_time
+where id=$1
+`
+
+type GetControlClientRow struct {
+	ID        string
+	Name      string
+	State     string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt sql.NullTime
+}
+
+func (q *Queries) GetControlClient(ctx context.Context, id string) (GetControlClientRow, error) {
+	row := q.db.QueryRowContext(ctx, getControlClient, id)
+	var i GetControlClientRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.State,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
 const getControlEnrollmentForUpdate = `-- name: GetControlEnrollmentForUpdate :one
 select secret_digest,expires_at>clock_timestamp() as active,consumed_at,client_id
 from dorf.control_enrollments
@@ -128,16 +164,85 @@ func (q *Queries) InsertControlEnrollment(ctx context.Context, arg InsertControl
 	return expires_at, err
 }
 
-const revokeControlClient = `-- name: RevokeControlClient :execrows
+const listControlClients = `-- name: ListControlClients :many
+with db_time as (select clock_timestamp() as now)
+select id,name,
+       case
+           when revoked_at is not null then 'revoked'
+           when credential_expires_at<=db_time.now then 'expired'
+           else 'active'
+       end as state,
+       created_at,credential_expires_at as expires_at,revoked_at
+from dorf.control_clients cross join db_time
+order by created_at desc,id desc
+`
+
+type ListControlClientsRow struct {
+	ID        string
+	Name      string
+	State     string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt sql.NullTime
+}
+
+func (q *Queries) ListControlClients(ctx context.Context) ([]ListControlClientsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listControlClients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListControlClientsRow
+	for rows.Next() {
+		var i ListControlClientsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.State,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokeControlClient = `-- name: RevokeControlClient :one
 update dorf.control_clients
 set revoked_at=coalesce(revoked_at,clock_timestamp())
 where id=$1
+returning id,name,'revoked'::text as state,created_at,
+          credential_expires_at as expires_at,revoked_at
 `
 
-func (q *Queries) RevokeControlClient(ctx context.Context, id string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, revokeControlClient, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+type RevokeControlClientRow struct {
+	ID        string
+	Name      string
+	State     string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	RevokedAt sql.NullTime
+}
+
+func (q *Queries) RevokeControlClient(ctx context.Context, id string) (RevokeControlClientRow, error) {
+	row := q.db.QueryRowContext(ctx, revokeControlClient, id)
+	var i RevokeControlClientRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.State,
+		&i.CreatedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
 }

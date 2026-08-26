@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -283,6 +284,126 @@ func TestControlAPIWorkflowAdmissionsProjectAndReplay(t *testing.T) {
 	controlTestJSON(t, cleanupInvestigation, http.StatusOK, &cleaningInvestigation)
 	if cleaningInvestigation.Cleanup.State != "running" || cleaningInvestigation.Execution.State != "stopped" {
 		t.Fatalf("cleanup-fenced investigation Job=%#v", cleaningInvestigation)
+	}
+}
+
+func TestControlAPIJobListKeepsKeysetContinuity(t *testing.T) {
+	ctx := context.Background()
+	store, _, profileName := controlTestStore(t)
+	auth := controlauth.Service{Store: store}
+	enrollment, err := auth.CreateEnrollment(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := controlauth.GenerateCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := auth.Redeem(ctx, enrollment.Token, "pagination-client", credential); err != nil || !created {
+		t.Fatalf("redeem pagination Client: created=%t err=%v", created, err)
+	}
+
+	base := fmt.Sprintf("job-page-%d", time.Now().UnixNano())
+	tiedAt := time.Now().UTC().AddDate(100, 0, 0).Truncate(time.Microsecond)
+	type listedFixture struct {
+		id       string
+		workflow string
+		revision string
+		source   string
+		at       time.Time
+	}
+	fixtures := []listedFixture{
+		{base + "-z", "", "", "", tiedAt},
+		{base + "-y", string(coding.Workflow), coding.WorkflowRevision, "", tiedAt},
+		{base + "-x", string(investigation.Workflow), investigation.WorkflowRevision, string(investigation.SourceRemote), tiedAt.Add(-time.Second)},
+		{base + "-w", "", "", "", tiedAt.Add(-2 * time.Second)},
+		// A retained but unrecognized workflow revision must not consume a page slot.
+		{base + "-unsupported", string(coding.Workflow), "unrecognized", "", tiedAt.Add(time.Second)},
+		// Host-local retained bundles are intentionally absent from the remote API.
+		{base + "-local", string(investigation.Workflow), investigation.WorkflowRevision, string(investigation.SourceGitBundle), tiedAt.Add(2 * time.Second)},
+	}
+	insert := func(fixture listedFixture) {
+		t.Helper()
+		_, err := store.DB.ExecContext(ctx, `
+insert into dorf.jobs(
+    id,admission_key,workflow_name,workflow_revision,goal,
+    sandbox_profile,provider_connection,model,reasoning_effort,admitted_at
+) values($1,$2,$3,$4,'pagination fixture',$5,'primary','model-test','high',$6)
+`, fixture.id, "admission-"+fixture.id, fixture.workflow, fixture.revision, profileName, fixture.at)
+		if err != nil {
+			t.Fatalf("insert Job list fixture %s: %v", fixture.id, err)
+		}
+		switch fixture.source {
+		case string(investigation.SourceRemote):
+			_, err = store.DB.ExecContext(ctx, `
+insert into dorf.codebase_investigation_sources(job_id,workflow_name,kind,repository,revision)
+values($1,$2,'remote','https://github.com/aphronio/dorf.git',$3)
+`, fixture.id, string(investigation.Workflow), strings.Repeat("a", 40))
+		case string(investigation.SourceGitBundle):
+			_, err = store.DB.ExecContext(ctx, `
+insert into dorf.codebase_investigation_sources(
+    job_id,workflow_name,kind,repository,revision,bundle_digest,bundle_byte_size
+) values($1,$2,'git-bundle','',$3,$4,1)
+`, fixture.id, string(investigation.Workflow), strings.Repeat("b", 40), strings.Repeat("c", 64))
+		}
+		if err != nil {
+			t.Fatalf("insert Job list source fixture %s: %v", fixture.id, err)
+		}
+	}
+	for _, fixture := range fixtures {
+		insert(fixture)
+	}
+	t.Cleanup(func() {
+		for _, fixture := range fixtures {
+			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.codebase_investigation_sources where job_id=$1`, fixture.id); err != nil {
+				t.Errorf("delete Job list source fixture %s: %v", fixture.id, err)
+			}
+			if _, err := store.DB.ExecContext(context.Background(), `delete from dorf.jobs where id=$1`, fixture.id); err != nil {
+				t.Errorf("delete Job list fixture %s: %v", fixture.id, err)
+			}
+		}
+	})
+
+	handler := controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth, controlAPIJobs{store: store}).Handler
+	hidden := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[5].id, credential, "", nil)
+	var hiddenProblem controlapi.Problem
+	controlTestJSON(t, hidden, http.StatusNotFound, &hiddenProblem)
+	if hiddenProblem.Code != "job_not_found" {
+		t.Fatalf("local-bundle Job Problem=%#v", hiddenProblem)
+	}
+	firstResponse := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs?limit=2", credential, "", nil)
+	var first controlapi.JobList
+	controlTestJSON(t, firstResponse, http.StatusOK, &first)
+	if len(first.Jobs) != 2 || first.Jobs[0].ID != fixtures[0].id || first.Jobs[1].ID != fixtures[1].id || first.NextCursor == nil {
+		t.Fatalf("first Job page=%#v", first)
+	}
+
+	newer := listedFixture{base + "-new", "", "", "", tiedAt.Add(3 * time.Second)}
+	fixtures = append(fixtures, newer)
+	insert(newer)
+	secondResponse := controlTestRequest(t, handler, http.MethodGet,
+		"/v1/jobs?limit=2&cursor="+url.QueryEscape(*first.NextCursor), credential, "", nil)
+	var second controlapi.JobList
+	controlTestJSON(t, secondResponse, http.StatusOK, &second)
+	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[1].ID != fixtures[3].id {
+		t.Fatalf("second Job page=%#v", second)
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(*first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = bytes.Replace(payload, []byte(`"v":1`), []byte(`"v":2`), 1)
+	tamperedCursor := base64.RawURLEncoding.EncodeToString(payload)
+	if tamperedCursor == *first.NextCursor {
+		t.Fatal("cursor version tamper did not change the token")
+	}
+	tampered := controlTestRequest(t, handler, http.MethodGet,
+		"/v1/jobs?cursor="+url.QueryEscape(tamperedCursor), credential, "", nil)
+	var problem controlapi.Problem
+	controlTestJSON(t, tampered, http.StatusBadRequest, &problem)
+	if problem.Code != "invalid_cursor" {
+		t.Fatalf("tampered cursor Problem=%#v", problem)
 	}
 }
 

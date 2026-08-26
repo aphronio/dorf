@@ -164,6 +164,35 @@ func (c *Client) Job(ctx context.Context, id string) (controlapi.JobView, error)
 	return response.JobView, err
 }
 
+// ListJobs retrieves one bounded page of immutable Job references. A zero
+// limit asks the server to apply its default.
+func (c *Client) ListJobs(ctx context.Context, limit int, cursor string) (controlapi.JobList, error) {
+	if limit < 0 || limit > 100 {
+		return controlapi.JobList{}, fmt.Errorf("Job list limit must be between 1 and 100, or zero for the server default")
+	}
+	request, err := c.request(ctx, http.MethodGet, []string{"v1", "jobs"}, nil, true, "")
+	if err != nil {
+		return controlapi.JobList{}, err
+	}
+	query := request.URL.Query()
+	if limit != 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	request.URL.RawQuery = query.Encode()
+	response, err := send(c.http, request)
+	if err != nil {
+		return controlapi.JobList{}, err
+	}
+	var list controlapi.JobList
+	if err := decodeJSONResponse(response, &list); err != nil {
+		return controlapi.JobList{}, err
+	}
+	return list, nil
+}
+
 // WatchJob delivers complete canonical snapshots and reconnects an interrupted
 // stream using the last successfully delivered event ID. The caller's context
 // is the only lifetime limit on the stream.

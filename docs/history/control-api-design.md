@@ -1,22 +1,24 @@
-# Remote Control API Design
+# Archived Remote Control API Design
 
-This document records the accepted design direction for Dorf's remote client boundary. It is an
-implementation authority, not an enduring project principle. The
-[implementation slices](control-api-slices.md) record proof details. This document distinguishes the
-delivered contract from accepted future surface. Once the work is complete, retain only the facts
-that remain useful in the ordinary product, architecture, operator, and API authorities; archive or
-delete this working design.
+> Historical, non-normative working design completed on 2026-08-26. The shipped contract now lives
+> in [Remote Control API](../control-api.md); operator procedures live in
+> [Getting started](../getting-started.md). This record intentionally preserves the staged design
+> and its original rationale.
+
+This document records the accepted working direction used to build Dorf's remote client boundary.
+The [implementation slices](control-api-slices.md) record its proof details. It is retained to
+explain staged choices, not as a current implementation authority.
 
 ## Delivery status
 
-Slices 1 through 3 are implemented and dogfood-proven: one CLI Client can enroll, connect to one
+All four slices are implemented and dogfood-proven: one CLI Client can enroll, connect to one
 Deployment, authenticate, admit a direct Job or either fixed built-in workflow, and operate their
-common interaction loop over HTTPS. The delivered HTTP and CLI surfaces are listed separately
-below. Job listing, OpenAPI publication, and managed service packaging remain Slice 4 work.
+common interaction loop over HTTPS. Job listing, OpenAPI publication, the Problem catalog, Client
+lifecycle commands, and managed API/worker services completed the automation boundary.
 
 ## Outcome
 
-A person or agent should be able to operate a self-hosted Dorf deployment without SSH, knowledge of
+A person or agent can operate a self-hosted Dorf deployment without SSH, knowledge of
 its database, or access to its provider and Harness credentials:
 
 ```text
@@ -32,14 +34,15 @@ one Dorf Deployment
 ```
 
 The first useful client is still the Dorf CLI. The same API should also be comfortable for an agent
-using the CLI with structured output or direct HTTP. Generated code follows planned OpenAPI
-publication. MCP, A2A, and a matrix of hand-written SDKs are deliberately deferred.
+using the CLI with structured output or direct HTTP. The published OpenAPI permits generated clients
+without making a generator or generated SDK part of Dorf. MCP, A2A, and a matrix of hand-written
+SDKs are deliberately deferred.
 
 ## Decision summary
 
 | Question | Decision |
 | --- | --- |
-| Remote transport | HTTPS with stable JSON; SSH is not a client transport. OpenAPI follows in Slice 4. |
+| Remote transport | HTTPS with stable JSON and a published OpenAPI 3.1 document; SSH is not a client transport. |
 | Client targeting | One configured Deployment; no named contexts in version one. |
 | Long-running work | Job is the resource; do not expose a generic Task, Run, or Operation. |
 | Job creation retries | The caller creates request identity before sending; the CLI hides it from humans. |
@@ -47,8 +50,8 @@ publication. MCP, A2A, and a matrix of hand-written SDKs are deliberately deferr
 | Messages | Existing follow and steer invariants; adapters do not redefine them. |
 | Files | Exact Sandbox-level reads only; no Job nesting, uploads, listing, or arbitrary writes. |
 | Authentication | Short-lived Enrollment creates one Client with an independently revocable opaque credential. |
-| Agent access | Structured CLI and HTTP are delivered; OpenAPI follows in Slice 4; no required agent-specific transport. |
-| Deployment | Private API listener behind HTTPS ingress and a separate worker; managed packaging in Slice 4. |
+| Agent access | Structured CLI, direct HTTP, and published OpenAPI; no required agent-specific transport. |
+| Deployment | Managed private API and worker services behind separately operator-owned HTTPS ingress. |
 | Expansion | Two fixed typed workflows follow the direct Job proof; registries, UI, OIDC, contexts, SDK families, and webhooks wait. |
 
 ## Vocabulary
@@ -101,6 +104,7 @@ GET   /v1                                  deployment/version/capability discove
 POST  /v1/auth/enrollments/redeem          redeem one Enrollment
 GET   /v1/me                               effective Principal and Client
 
+GET   /v1/jobs                             list bounded newest-first Job summaries
 POST  /v1/jobs                             admit or replay a direct Job
 POST  /v1/workflows/coding/jobs            admit or replay a coding Job
 POST  /v1/workflows/codebase-investigation/jobs  admit or replay an investigation Job
@@ -112,12 +116,6 @@ POST  /v1/jobs/{job}/retries               retry eligible failed work
 GET   /v1/sandboxes/{sandbox}/files?path=REPORT.md
 GET   /v1/jobs/{job}/evidence              inspect verified Evidence metadata
 PUT   /v1/jobs/{job}/cleanup               request cleanup idempotently
-```
-
-Slice 4 plans:
-
-```text
-GET   /v1/jobs
 ```
 
 The two workflow routes are fixed typed projections of the compiled coding and investigation
@@ -161,8 +159,9 @@ Turn may leave its Job open and idle. Attention does not mean cleanup was reques
 conditional policy that requests cleanup after observing its terminal Outcome; the Outcome itself
 does not mean Core cleanup completed.
 
-When Job listing is added, its responses will be paginated from the start. JSON field names, enum
-values, error codes, and exit behavior are compatibility surface; human CLI prose is not.
+Job listing is paginated from the start and returns only Job identity, kind, and admission time.
+JSON field names, enum values, error codes, and exit behavior are compatibility surface; human CLI
+prose is not.
 
 ## Messages
 
@@ -243,8 +242,8 @@ The observation CLI mirrors that separation incrementally:
 Dorf-origin API failures use Problem Details with a stable Dorf code, retryability, and structured
 details. Clients never need to parse its prose. An ingress or other non-Dorf failure may not be a
 Problem response, so mutation retry also recognizes transport and HTTP server failure directly.
-Message, steer, retry, file, Evidence, and idempotency failures have stable typed codes; Slice 4 will
-publish the full catalog.
+Message, steer, retry, file, Evidence, cursor, authentication, and idempotency failures have stable
+typed codes published from one catalog in the OpenAPI document.
 
 ```json
 {
@@ -305,9 +304,10 @@ The delivered remote CLI vocabulary is:
 
 ```text
 dorf connect https://dorf.example.com
-dorf auth status
+dorf auth status [--output json]
 
 dorf run --goal-file goal.md --model MODEL
+dorf job list [--limit N] [--cursor CURSOR] [--output json]
 dorf job inspect JOB
 dorf job watch JOB
 dorf job watch --output jsonl JOB
@@ -324,25 +324,25 @@ The fixed coding and codebase-investigation admissions also have delivered typed
 commands. [Getting started](../getting-started.md#3-connect-one-remote-cli-client) owns their exact
 inputs and remote procedure.
 
-The deployment host creates and revokes remote Clients with `dorf client enroll` and
-`dorf client revoke CLIENT_ID`; it keeps `dorf serve` on an exact private loopback address. There is
-one saved Deployment and no named multi-Deployment switching. `dorf connect` accepts an Enrollment
-interactively or through `--enrollment-file PATH|-` for non-interactive use.
+The deployment host enrolls, lists, shows, and revokes remote Clients with `dorf client`; Client
+administration does not cross the remote API. The managed API listens on an exact private loopback
+address. There is one saved Deployment and no named multi-Deployment switching. `dorf connect`
+accepts an Enrollment interactively or through `--enrollment-file PATH|-` for non-interactive use.
 
 The CLI creates mutation identity internally, retries the exact request once after a retryable
 transport or HTTP server failure, and reveals the recovery key in human output only if ambiguity
 remains. Structured mutation receipts include the request identity. Mutations return the effective
 Deployment, canonical resource identity, and accepted state. Cleanup names one exact Job.
 
-Slice 4 adds `job list`; the two typed workflow admissions are delivered. Remote investigation
+`job list` and the two typed workflow admissions are delivered. Remote investigation
 accepts only a credential-free HTTPS repository and exact Revision. Retained local Git bundles stay
 behind the deployment-host workflow command and never cross the remote API. `watch` is used instead
 of overloading `inspect --follow`, because Follow already has a precise Message meaning.
 
-Agents initially use the same CLI with structured output or call the described HTTP API directly
-from code mode. OpenAPI publication remains Slice 4 work. MCP and A2A are not part of the first
-transport: they would add another protocol and capability translation before the resource model has
-been proven by real clients.
+Agents use the same CLI with structured output or call the described HTTP API directly from code
+mode using the Deployment-published OpenAPI and Problem catalog. MCP and A2A are not part of the
+first transport: they would add another protocol and capability translation before a real client
+earns it.
 
 ## Deployment boundary
 
@@ -364,9 +364,10 @@ admission adapters. It does not shell out to the Dorf CLI, expose PostgreSQL, ha
 or expose provider/Harness operations.
 
 Slices 1 and 2 proved independent API and worker restart, plus watch reconnection after API loss,
-with transient, separately supervised processes.
-A supported managed lifecycle, diagnostics, and upgrade path remain Slice 4 work; current operator
-limits are documented once in [Getting started](../getting-started.md#3-connect-one-remote-cli-client).
+with transient processes. Slice 4 replaced that proof seam with two compiled systemd units,
+convergent setup and update handoff, readiness and convergence diagnostics, targeted restart, and
+bounded logs. HTTPS ingress remains an operator-owned responsibility. Current procedures are
+documented once in [Getting started](../getting-started.md#3-connect-one-remote-cli-client).
 The Provider Gateway's HTTPS `/v1` route is a different authority on a different hostname from this
 control API and must not be used as the Deployment URL.
 

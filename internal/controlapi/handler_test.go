@@ -55,6 +55,7 @@ func TestHandlerBoundary(t *testing.T) {
 		body   io.Reader
 	}{
 		{http.MethodGet, "/v1/jobs/job-1/watch", nil},
+		{http.MethodGet, "/v1/jobs?limit=1", nil},
 		{http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{}`)},
 		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
 		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
@@ -124,6 +125,44 @@ func TestHandlerBoundary(t *testing.T) {
 	if unrelated.Code == http.StatusTooManyRequests {
 		t.Fatal("one Enrollment exhausted another Enrollment's rate limit")
 	}
+}
+
+func TestJobListUsesStrictBoundedQueryAndExplicitEmptyCollection(t *testing.T) {
+	credential := "dcr_job-list"
+	next := "next-page"
+	admittedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	jobs := &fakeJobs{list: controlapi.JobList{
+		Jobs:       []controlapi.JobSummary{{ID: "job-2", Kind: controlapi.JobKindDirect, AdmittedAt: admittedAt}},
+		NextCursor: &next,
+	}}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	do := func(target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	response := do("/v1/jobs?limit=2&cursor=page-one")
+	requireStatusType(t, response, http.StatusOK, "application/json")
+	var page controlapi.JobList
+	decode(t, response, &page)
+	if jobs.listLimit != 2 || jobs.listCursor != "page-one" || len(page.Jobs) != 1 || page.Jobs[0].ID != "job-2" || page.NextCursor == nil || *page.NextCursor != next {
+		t.Fatalf("request limit/cursor=%d/%q page=%#v", jobs.listLimit, jobs.listCursor, page)
+	}
+
+	jobs.list = controlapi.JobList{}
+	empty := do("/v1/jobs")
+	requireStatusType(t, empty, http.StatusOK, "application/json")
+	if body := empty.Body.String(); !strings.Contains(body, `"jobs":[]`) || !strings.Contains(body, `"next_cursor":null`) {
+		t.Fatalf("empty page omitted explicit collection/cursor: %s", body)
+	}
+	requireProblem(t, do("/v1/jobs?limit=101"), http.StatusBadRequest, "invalid_query")
+	requireProblem(t, do("/v1/jobs?cursor="), http.StatusBadRequest, "invalid_cursor")
+
+	jobs.listErr = controlapi.ErrInvalidCursor
+	requireProblem(t, do("/v1/jobs?cursor=tampered"), http.StatusBadRequest, "invalid_cursor")
 }
 
 func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
@@ -369,6 +408,20 @@ func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
 	requireProblem(t, rejected, http.StatusUnauthorized, "unauthenticated")
 }
 
+func TestJobWatchReturnsAuthenticationProblemWhenCredentialExpiresBeforeStreaming(t *testing.T) {
+	credential := "dcr_expiring-before-stream"
+	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(25 * time.Millisecond)}}
+	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct"}, waitForGetContext: true}
+	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	request.Header.Set("Authorization", "Bearer "+credential)
+	request.Header.Set("Accept", "text/event-stream")
+	response := httptest.NewRecorder()
+
+	controlapi.NewServer(controlapi.Discovery{}, auth, jobs).Handler.ServeHTTP(response, request)
+
+	requireProblem(t, response, http.StatusUnauthorized, "unauthenticated")
+}
+
 type streamResponse struct {
 	mu              sync.Mutex
 	header          http.Header
@@ -492,20 +545,32 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 }
 
 type fakeJobs struct {
-	mu             sync.Mutex
-	job            controlapi.Job
-	view           controlapi.JobView
-	gotInput       controlapi.AdmitJobRequest
-	message        controlapi.Message
-	retry          controlapi.Retry
-	file           []byte
-	filePath       string
-	messageKey     string
-	retryKey       string
-	messageInput   controlapi.SendMessageRequest
-	messageCreated bool
-	retryCreated   bool
-	cleanupCalls   int
+	mu                sync.Mutex
+	job               controlapi.Job
+	view              controlapi.JobView
+	list              controlapi.JobList
+	listErr           error
+	listLimit         int
+	listCursor        string
+	gotInput          controlapi.AdmitJobRequest
+	message           controlapi.Message
+	retry             controlapi.Retry
+	file              []byte
+	filePath          string
+	messageKey        string
+	retryKey          string
+	messageInput      controlapi.SendMessageRequest
+	messageCreated    bool
+	retryCreated      bool
+	cleanupCalls      int
+	waitForGetContext bool
+}
+
+func (j *fakeJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.listLimit, j.listCursor = limit, cursor
+	return j.list, j.listErr
 }
 
 func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
@@ -529,13 +594,20 @@ func (j *fakeJobs) AdmitInvestigation(_ context.Context, _ string, _ controlapi.
 	return job, true, nil
 }
 
-func (j *fakeJobs) Get(_ context.Context, id string) (controlapi.JobView, error) {
+func (j *fakeJobs) Get(ctx context.Context, id string) (controlapi.JobView, error) {
 	j.mu.Lock()
-	defer j.mu.Unlock()
+	wait := j.waitForGetContext
 	if id != j.job.ID {
+		j.mu.Unlock()
 		return nil, controlapi.ErrJobNotFound
 	}
-	return j.current(), nil
+	view := j.current()
+	j.mu.Unlock()
+	if wait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return view, nil
 }
 
 func (j *fakeJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {

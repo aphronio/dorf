@@ -86,6 +86,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		{"connect", "--name", "laptop", "--enrollment-file", enrollmentFile, deploymentURL},
 		{"auth", "status"},
 		{"run", "--goal-file", goalFile, "--model", jobs.job.Model},
+		{"job", "list"},
 		{"job", "inspect", jobs.job.ID},
 		{"job", "message", "--input-file", messageFile, jobs.job.ID},
 		{"job", "message", "inspect", jobs.job.ID, "message-2"},
@@ -102,6 +103,16 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		}
 		output.WriteString(stdout.String())
 		output.WriteString(stderr.String())
+	}
+	var authJSON strings.Builder
+	if err := run(context.Background(), []string{"auth", "status", "--output", "json"}, &authJSON, &strings.Builder{}); err != nil {
+		t.Fatal(err)
+	}
+	var authStatus authStatusReceipt
+	if err := json.Unmarshal([]byte(authJSON.String()), &authStatus); err != nil ||
+		authStatus.Deployment != deploymentURL || authStatus.Client.ID != auth.client.ID ||
+		authStatus.Principal.ID != controlauth.DeploymentOperatorPrincipalID || authStatus.CredentialSource != "client_config" {
+		t.Fatalf("machine auth status=%#v err=%v", authStatus, err)
 	}
 
 	auth.mu.Lock()
@@ -432,6 +443,14 @@ type remoteCLIJobs struct {
 	job   controlapi.DirectJob
 	key   string
 	input controlapi.AdmitJobRequest
+}
+
+func (j *remoteCLIJobs) List(_ context.Context, limit int, cursor string) (controlapi.JobList, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return controlapi.JobList{Jobs: []controlapi.JobSummary{{
+		ID: j.job.ID, Kind: j.job.Kind, AdmittedAt: time.Date(2026, 8, 26, 11, 0, 0, 0, time.UTC),
+	}}}, nil
 }
 
 func (j *remoteCLIJobs) AdmitDirect(_ context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {

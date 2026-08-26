@@ -15,6 +15,7 @@ import (
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
@@ -54,6 +55,33 @@ func TestOpenAIConnectionReadsAProtectedFileOrStandardInput(t *testing.T) {
 	}
 	if _, err := readSecretFile("-", strings.NewReader(" \n")); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("empty secret error=%v", err)
+	}
+}
+
+func TestSetupRetainsVerifiedE2BCredentialForManagedServices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deployment.json")
+	durable := deployment.Config{Database: deployment.Database{
+		Host: "127.0.0.1", Port: 5432, Name: "dorf", User: "dorf", Password: "secret",
+		Image: "postgres:17", ImageID: "sha256:test",
+	}}
+	if err := deployment.Save(path, durable); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeploymentPath: path, E2BAPIKey: "verified-environment-key"}
+	if err := retainSetupE2BCredential(&cfg, cfg.E2BAPIKey, false); err != nil {
+		t.Fatal(err)
+	}
+	stored, found, err := deployment.Load(path)
+	if err != nil || !found || stored.E2B == nil || stored.E2B.APIKey != cfg.E2BAPIKey {
+		t.Fatalf("retained E2B credential: found=%t config=%#v err=%v", found, stored, err)
+	}
+
+	external := config.Config{DatabaseExternal: true, E2BAPIKey: "environment-key"}
+	if err := retainSetupE2BCredential(&external, external.E2BAPIKey, false); err != nil {
+		t.Fatalf("existing external credential: %v", err)
+	}
+	if err := retainSetupE2BCredential(&external, "new-key", true); err == nil {
+		t.Fatal("setup accepted an E2B credential it could not retain for an external deployment")
 	}
 }
 

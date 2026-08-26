@@ -31,6 +31,7 @@ var (
 	enrollmentIDPattern     = regexp.MustCompile(`^enr_[A-Za-z0-9_-]{22}$`)
 	enrollmentSecretPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 	credentialPattern       = enrollmentSecretPattern
+	clientIDPattern         = regexp.MustCompile(`^cli_[A-Za-z0-9_-]{22}$`)
 )
 
 type Digest [sha256.Size]byte
@@ -47,11 +48,32 @@ type Client struct {
 	CredentialExpiresAt time.Time
 }
 
+type ClientState string
+
+const (
+	ClientStateActive  ClientState = "active"
+	ClientStateExpired ClientState = "expired"
+	ClientStateRevoked ClientState = "revoked"
+)
+
+// ClientRecord is the operator view of one enrolled Client. It never contains
+// the Client's plaintext credential or stored credential digest.
+type ClientRecord struct {
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	State     ClientState `json:"state"`
+	CreatedAt time.Time   `json:"created_at"`
+	ExpiresAt time.Time   `json:"expires_at"`
+	RevokedAt *time.Time  `json:"revoked_at"`
+}
+
 type Store interface {
 	CreateEnrollment(context.Context, string, Digest, time.Duration) (time.Time, error)
 	RedeemEnrollment(context.Context, string, Digest, string, Digest, time.Duration) (Client, bool, error)
 	AuthenticateCredential(context.Context, Digest) (Client, error)
-	RevokeClient(context.Context, string) error
+	ListClients(context.Context) ([]ClientRecord, error)
+	GetClient(context.Context, string) (ClientRecord, error)
+	RevokeClient(context.Context, string) (ClientRecord, error)
 }
 
 type Service struct {
@@ -121,10 +143,22 @@ func (s Service) Authenticate(ctx context.Context, credential string) (Client, e
 	return client, nil
 }
 
-func (s Service) Revoke(ctx context.Context, clientID string) error {
-	clientID = strings.TrimSpace(clientID)
-	if clientID == "" || len(clientID) > 128 {
-		return fmt.Errorf("%w: Client ID is required", ErrInvalidInput)
+func (s Service) ListClients(ctx context.Context) ([]ClientRecord, error) {
+	return s.Store.ListClients(ctx)
+}
+
+func (s Service) GetClient(ctx context.Context, clientID string) (ClientRecord, error) {
+	clientID, err := validClientID(clientID)
+	if err != nil {
+		return ClientRecord{}, err
+	}
+	return s.Store.GetClient(ctx, clientID)
+}
+
+func (s Service) Revoke(ctx context.Context, clientID string) (ClientRecord, error) {
+	clientID, err := validClientID(clientID)
+	if err != nil {
+		return ClientRecord{}, err
 	}
 	return s.Store.RevokeClient(ctx, clientID)
 }
@@ -134,6 +168,14 @@ func digest(value string) Digest { return sha256.Sum256([]byte(value)) }
 func enrollmentID(token string) (string, bool) {
 	id, secret, ok := strings.Cut(token, ".")
 	return id, ok && enrollmentIDPattern.MatchString(id) && enrollmentSecretPattern.MatchString(secret)
+}
+
+func validClientID(id string) (string, error) {
+	id = strings.TrimSpace(id)
+	if !clientIDPattern.MatchString(id) {
+		return "", fmt.Errorf("%w: malformed Client ID", ErrInvalidInput)
+	}
+	return id, nil
 }
 
 func randomText(prefix string, byteCount int) (string, error) {

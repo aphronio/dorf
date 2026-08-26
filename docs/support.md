@@ -16,11 +16,12 @@ that combination before admitting a Job.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
 Its public boundary is one exact HTTPS Deployment origin backed by the private loopback-only
-`dorf serve` listener. After Enrollment, a remote CLI Client needs network and TLS access to that
-origin and only its own Dorf Client credential; it never needs PostgreSQL, provider, Harness,
-Gateway, or Sandbox credentials. Fixed remote coding and investigation admission reuse the same
-boundary. The [remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client)
-owns the current workflow inputs, host-service lifecycle, and limits.
+managed API; the managed worker separately owns durable task execution and recovery. After
+Enrollment, a remote CLI Client needs network and TLS access to that origin and only its own Dorf
+Client credential; it never needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials.
+Fixed remote coding and investigation admission reuse the same boundary. The
+[remote-client setup procedure](getting-started.md#3-connect-one-remote-cli-client) owns the current
+workflow inputs; the [Remote Control API](control-api.md) owns the service and transport contract.
 
 Run the Go CLI's direct diagnostic boundary:
 
@@ -43,9 +44,26 @@ repository access and least permission scope are verified by the runtime operati
 For a remote Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
 failure belongs to DNS, TLS, ingress, or the private control listener. An `unauthenticated` response
 means the saved Client credential is invalid, expired, or revoked; a deployment-host operator must
-issue a new Enrollment. If admission succeeds but a Job does not progress, inspect the separately
-supervised worker on the deployment host. The remote client must not repair host services, Profiles,
-integrations, or storage.
+issue a new Enrollment. Use `dorf auth status --output json` for automation. `invalid_cursor` means a
+Job-list cursor was not passed back unchanged; begin a fresh traversal rather than altering it.
+
+On the deployment host, start service diagnosis with:
+
+```bash
+dorf service status --output json
+```
+
+This fails unless both managed units are current, enabled, runtime-ready, and the private API passes
+discovery and authentication probes. Use `dorf service logs api` or `dorf service logs worker` for
+bounded journal output, `dorf service restart <api|worker|all>` for an explicit restart, and
+`dorf service reconcile` to preview and repair Dorf-owned unit drift. A foreign or locally edited
+unit is refused rather than overwritten. If setup reports that process-only configuration prevents
+managed services, that custom deployment must repair its own supervisor and configuration custody.
+A remote client must not perform any of these host actions.
+
+If admission succeeds but a Job does not progress while the managed pair is ready, continue with the
+Profile, Sandbox, Harness, Provider Gateway, and integration checks below rather than attributing the
+failure to ingress.
 
 A watch reconnecting after API interruption is expected; its next value is a canonical snapshot,
 not replay from an event log. `steer_unavailable` means the exact active Turn no longer exists and
@@ -63,6 +81,7 @@ Ownership guide:
   problem;
 - broker authentication failing independently is Provider Gateway/upstream provider work;
 - control discovery or TLS failing independently is control ingress or deployment-service work;
+- a non-current, inactive, failed, or non-notifying Dorf systemd unit is managed-service work;
 - an expired or revoked Client being denied is expected control authentication behavior;
 - incorrect durable facts, duplicate effects, leaked secrets, or incomplete cleanup are Dorf bugs;
 - absent KVM or disabled virtualization is host configuration;

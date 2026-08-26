@@ -8,17 +8,18 @@ authority. [Getting started](getting-started.md) owns procedures and
 ## Role boundary
 
 The **deployment-host agent** may install Dorf, run setup, manage Profiles and optional integrations,
-operate diagnostics, and coordinate the operator-owned API, worker, storage, provider, Harness, and
-ingress boundaries. It must pause for every password, secret, browser authorization, paid service,
-or consequential infrastructure choice.
+operate diagnostics, reconcile Dorf's managed API and worker units, and coordinate storage,
+provider, Harness, and operator-owned ingress boundaries. It must pause for every password, secret,
+browser authorization, paid service, or consequential infrastructure choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
 authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
-Job, send or inspect Messages, request eligible retry, read an exact Sandbox file, inspect Evidence,
-and request cleanup. It must not run deployment-host commands such as `dorf setup`, `dorf serve`,
-`dorf worker`, database or migration commands, `dorf provider`, `dorf profile`, or GitHub integration
-setup. It must not use SSH or local-only commands to work around a missing remote capability. The
-deployment host owns all of those operations.
+Job, list bounded Job references, send or inspect Messages, request eligible retry, read an exact
+Sandbox file, inspect Evidence, and request cleanup. It must not run deployment-host commands such
+as `dorf setup`, `dorf serve`, `dorf worker`, `dorf service`, `dorf client`, database or migration
+commands, `dorf provider`, `dorf profile`, or GitHub integration setup. It must not use SSH or
+local-only commands to work around a missing remote capability. The deployment host owns all of
+those operations.
 
 ## Common installation protocol
 
@@ -34,22 +35,26 @@ deployment host owns all of those operations.
 
 Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
 prepare the approved Sandbox and Harness path; do not substitute direct Docker, Incus, PostgreSQL,
-systemd, E2B, Cloudflare, or Gateway mutations for its recovery. Run the documented Profile,
-Provider Gateway, and `dorf doctor` checks with the exact selected names.
+systemd, E2B, Cloudflare, or Gateway mutations for its recovery. Prove the managed pair with the
+[service diagnostic](support.md), and use only its documented reconcile, restart, and bounded-log
+commands. Run the documented Profile, Provider Gateway, and `dorf doctor` checks with the exact
+selected names.
 
 Optional integrations remain host concerns. Pause while the human completes browser authorization,
 and return a short-lived code only to its waiting command. Let runtime composition supply integration
 authority instead of putting credentials or integration settings in a Job request.
 
-Follow the host-service boundary and current lifecycle limits in the remote-client section of
-Getting started. Do not turn a repository dogfood helper into an operator interface or infer
-readiness from a terminal merely remaining open.
+Keep the operator-owned HTTPS ingress distinct from both the managed private control API and the
+Provider Gateway origin. Do not infer service readiness from a process or terminal merely remaining
+open; use the factual status result.
 
 ## Remote-client protocol
 
 Receive the exact HTTPS Deployment origin and Enrollment through the human-approved private handoff,
 then follow the remote-client procedure in Getting started. One successful `dorf connect` saves one
 Deployment; there are no contexts to choose or switch. Prove the binding with `dorf auth status`.
+Use `--output json` for a non-interactive receipt, and use `dorf job list` with its opaque returned
+cursor when the human has not supplied a Job ID.
 
 Put the complete goal or Message in a file and use the exact remote commands in Getting started.
 Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
@@ -57,8 +62,8 @@ flow. Follow may queue, while steer requires the exact active Turn and must not 
 after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after
 a successful Turn; do not create a replacement merely because it has no active execution. Remote
 investigation accepts only its documented credential-free HTTPS source; never upload, copy, or
-reconstruct a host-local retained bundle through the remote boundary. Remote Job listing is not
-delivered yet.
+reconstruct a host-local retained bundle through the remote boundary. Use the Deployment-published
+OpenAPI and Problem catalog for direct code-mode HTTP; do not invent an MCP or SDK layer.
 
 ## Safety and handback
 

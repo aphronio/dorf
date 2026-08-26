@@ -30,7 +30,33 @@ where credential_digest=sqlc.arg(credential_digest)
   and revoked_at is null
   and credential_expires_at>clock_timestamp();
 
--- name: RevokeControlClient :execrows
+-- name: ListControlClients :many
+with db_time as (select clock_timestamp() as now)
+select id,name,
+       case
+           when revoked_at is not null then 'revoked'
+           when credential_expires_at<=db_time.now then 'expired'
+           else 'active'
+       end as state,
+       created_at,credential_expires_at as expires_at,revoked_at
+from dorf.control_clients cross join db_time
+order by created_at desc,id desc;
+
+-- name: GetControlClient :one
+with db_time as (select clock_timestamp() as now)
+select id,name,
+       case
+           when revoked_at is not null then 'revoked'
+           when credential_expires_at<=db_time.now then 'expired'
+           else 'active'
+       end as state,
+       created_at,credential_expires_at as expires_at,revoked_at
+from dorf.control_clients cross join db_time
+where id=sqlc.arg(id);
+
+-- name: RevokeControlClient :one
 update dorf.control_clients
 set revoked_at=coalesce(revoked_at,clock_timestamp())
-where id=sqlc.arg(id);
+where id=sqlc.arg(id)
+returning id,name,'revoked'::text as state,created_at,
+          credential_expires_at as expires_at,revoked_at;

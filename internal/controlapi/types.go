@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrInvalidInput        = errors.New("invalid control API input")
+	ErrInvalidCursor       = errors.New("invalid control API Job cursor")
 	ErrJobNotFound         = errors.New("control API Job not found")
 	ErrMessageNotFound     = errors.New("control API Message not found")
 	ErrSandboxNotFound     = errors.New("control API Sandbox not found")
@@ -27,9 +28,10 @@ var (
 )
 
 type Discovery struct {
-	Product      string   `json:"product"`
-	Version      string   `json:"version"`
-	Capabilities []string `json:"capabilities"`
+	Product      string         `json:"product"`
+	Version      string         `json:"version"`
+	Capabilities []string       `json:"capabilities"`
+	Links        DiscoveryLinks `json:"links"`
 }
 
 type Principal struct {
@@ -58,7 +60,7 @@ type AdmitJobRequest struct {
 	Goal      string `json:"goal"`
 	Profile   string `json:"profile"`
 	Model     string `json:"model"`
-	Reasoning string `json:"reasoning"`
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // AdmitCodingJobRequest is the complete public input for the built-in coding
@@ -91,6 +93,19 @@ const (
 	JobKindCoding        = "coding"
 	JobKindInvestigation = "codebase-investigation"
 )
+
+// JobSummary is the deliberately narrow representation returned by the Job
+// index. Mutable execution and cleanup state belong to canonical Job reads.
+type JobSummary struct {
+	ID         string    `json:"id"`
+	Kind       string    `json:"kind"`
+	AdmittedAt time.Time `json:"admitted_at"`
+}
+
+type JobList struct {
+	Jobs       []JobSummary `json:"jobs"`
+	NextCursor *string      `json:"next_cursor"`
+}
 
 // Job contains only the fields common to every supported public Job kind.
 // Canonical reads return one of the concrete JobView implementations below.
@@ -262,6 +277,7 @@ type Auth interface {
 // Implementations compose Core and the fixed workflow seams and return only
 // purpose-built public snapshots.
 type Jobs interface {
+	List(context.Context, int, string) (JobList, error)
 	AdmitDirect(context.Context, string, AdmitJobRequest) (DirectJob, bool, error)
 	AdmitCoding(context.Context, string, AdmitCodingJobRequest) (CodingJob, bool, error)
 	AdmitInvestigation(context.Context, string, AdmitInvestigationJobRequest) (InvestigationJob, bool, error)

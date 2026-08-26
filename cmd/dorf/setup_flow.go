@@ -97,8 +97,6 @@ func completeGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.
 		return fmt.Errorf("verify AI connection %q: %w", connection, err)
 	}
 	presenter.Ready("Default profile", defaultProfile.Name+" · "+string(defaultProfile.Provider)+" · "+defaultProfile.Harness)
-	presenter.Section("Ready")
-	presenter.Ready("Dorf", "Agents can now run with "+defaultProfile.Name)
 	return nil
 }
 
@@ -302,6 +300,7 @@ func unambiguousSetupConnection(check func(string) error) string {
 
 func setupE2BCredential(ctx context.Context, cfg *config.Config, options setupOptions, presenter setupPresenter) error {
 	key := strings.TrimSpace(cfg.E2BAPIKey)
+	configured := key != ""
 	var err error
 	if options.E2BKeyFile != "" {
 		key, err = readSecretFile(options.E2BKeyFile, os.Stdin)
@@ -317,10 +316,14 @@ func setupE2BCredential(ctx context.Context, cfg *config.Config, options setupOp
 	if err := (e2b.Client{APIKey: key}).Check(ctx); err != nil {
 		return fmt.Errorf("verify E2B project credential: %w", err)
 	}
-	if options.E2BKeyFile == "" && strings.TrimSpace(cfg.E2BAPIKey) != "" {
-		return nil
-	}
+	return retainSetupE2BCredential(cfg, key, !configured || options.E2BKeyFile != "")
+}
+
+func retainSetupE2BCredential(cfg *config.Config, key string, suppliedDuringSetup bool) error {
 	if cfg.DatabaseExternal {
+		if !suppliedDuringSetup {
+			return nil
+		}
 		return fmt.Errorf("guided E2B credential storage is unavailable with external PostgreSQL; set E2B_API_KEY on the deployment")
 	}
 	if err := deployment.SaveE2BAPIKey(cfg.DeploymentPath, key); err != nil {

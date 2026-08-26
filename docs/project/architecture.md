@@ -10,11 +10,12 @@ Product direction and vocabulary live in the [North Star](north-star.md).
 
 ```mermaid
 flowchart LR
-    Remote["Remote client"] --> HTTPS["Authenticated fixed Job projections"]
-    HTTPS -->|direct| Core["In-process Core application boundary"]
+    Remote["Remote client"] --> Ingress["Operator-owned HTTPS ingress"]
+    Ingress --> API["Managed API · fixed Job projections"]
+    API -->|direct| Core["In-process Core application boundary"]
     Client["Host-local client adapter"] --> Core
     Workflow["Native Dorf workflow"] --> Core
-    HTTPS -->|typed workflow| Workflow
+    API -->|typed workflow| Workflow
     Core --> Custody["Durable execution custody"]
     Custody --> PG[("PostgreSQL facts")]
     Custody --> Absurd["Absurd durable execution"]
@@ -30,7 +31,8 @@ compose one small application boundary in-process. A separate API service projec
 narrow closed set over authenticated HTTPS: direct Jobs and typed admission for the compiled coding
 and codebase-investigation workflows, followed by their common Job interaction surface. This is not
 a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
-contract.
+contract. Setup and update converge that API and the durable worker as separate systemd units;
+operator-owned HTTPS ingress remains outside their lifecycle.
 
 Absurd owns when durable work is eligible, claimed, checkpointed, retried, sleeping, waiting, or
 cancelled. It does not own Dorf's product vocabulary or become the only place where a Job's truth can
@@ -189,13 +191,13 @@ its durable facts.
 The external projection serves one configured Dorf Deployment over authenticated HTTPS. It admits a
 direct Job or either of two fixed typed workflows—coding and codebase investigation—and returns one
 closed flat Job union. All three kinds share canonical inspect/watch, invariant Messages, eligible
-retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup. It does not expose a
-generic workflow payload or registry, PostgreSQL, Absurd, provider or Harness operations, transcript
-resources, or Core as a generic network or embeddable runtime. Named deployment contexts, MCP, a
-control-plane UI, language SDKs, and a generic public workflow API remain deferred. The accepted
-working transport design and slice boundaries live in the
-[Remote Control API design](../implementation/control-api-design.md) and
-[implementation slices](../implementation/control-api-slices.md).
+retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup. Its bounded Job index
+contains only immutable identity, kind, and admission time; canonical Job reads own mutable state.
+The Deployment publishes the exact OpenAPI 3.1 schema and one central Problem catalog. It does not
+expose a generic workflow payload or registry, PostgreSQL, Absurd, provider or Harness operations,
+transcript resources, or Core as a generic network or embeddable runtime. Named deployment contexts,
+MCP, a control-plane UI, language SDKs, and a generic public workflow API remain deferred. The
+[Remote Control API](../control-api.md) is the current transport and service authority.
 
 The deployment has one operator Principal. An operator-issued, short-lived, one-use Enrollment lets
 a Client register a client-generated opaque credential; only its digest is retained server-side,
@@ -203,8 +205,9 @@ and each Client can be revoked independently. The CLI retains one Deployment ori
 credential rather than implementing multi-deployment context selection. The API listens on a
 host-private HTTP address behind operator-owned HTTPS ingress. It admits and projects Jobs but does
 not register execution handlers; a separate durable worker claims and reconciles the attached
-Absurd tasks. Managed service and ingress packaging, multi-user identity, roles, organizations,
-billing, and quotas remain separate work.
+Absurd tasks. Setup converges both responsibilities as fixed, separately supervised systemd units;
+status distinguishes exact unit convergence from runtime readiness and probes the API boundary.
+Ingress, multi-user identity, roles, organizations, billing, and quotas remain separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
 the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.

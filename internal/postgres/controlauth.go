@@ -96,12 +96,38 @@ func (s Store) AuthenticateCredential(ctx context.Context, credentialDigest cont
 	return controlClient(row.ID, row.Name, row.CredentialExpiresAt), nil
 }
 
-func (s Store) RevokeClient(ctx context.Context, clientID string) error {
-	rows, err := dbsql.New(s.DB).RevokeControlClient(ctx, clientID)
-	if err == nil && rows == 0 {
-		return controlauth.ErrClientNotFound
+func (s Store) ListClients(ctx context.Context) ([]controlauth.ClientRecord, error) {
+	rows, err := dbsql.New(s.DB).ListControlClients(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return err
+	clients := make([]controlauth.ClientRecord, 0, len(rows))
+	for _, row := range rows {
+		clients = append(clients, controlClientRecord(row.ID, row.Name, row.State, row.CreatedAt, row.ExpiresAt, row.RevokedAt))
+	}
+	return clients, nil
+}
+
+func (s Store) GetClient(ctx context.Context, clientID string) (controlauth.ClientRecord, error) {
+	row, err := dbsql.New(s.DB).GetControlClient(ctx, clientID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return controlauth.ClientRecord{}, controlauth.ErrClientNotFound
+	}
+	if err != nil {
+		return controlauth.ClientRecord{}, err
+	}
+	return controlClientRecord(row.ID, row.Name, row.State, row.CreatedAt, row.ExpiresAt, row.RevokedAt), nil
+}
+
+func (s Store) RevokeClient(ctx context.Context, clientID string) (controlauth.ClientRecord, error) {
+	row, err := dbsql.New(s.DB).RevokeControlClient(ctx, clientID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return controlauth.ClientRecord{}, controlauth.ErrClientNotFound
+	}
+	if err != nil {
+		return controlauth.ClientRecord{}, err
+	}
+	return controlClientRecord(row.ID, row.Name, row.State, row.CreatedAt, row.ExpiresAt, row.RevokedAt), nil
 }
 
 func sameDigest(stored []byte, expected controlauth.Digest) bool {
@@ -112,6 +138,16 @@ func controlClient(id, name string, credentialExpiresAt time.Time) controlauth.C
 	return controlauth.Client{
 		ID: id, Name: name, CredentialExpiresAt: credentialExpiresAt,
 	}
+}
+
+func controlClientRecord(id, name, state string, createdAt, expiresAt time.Time, revokedAt sql.NullTime) controlauth.ClientRecord {
+	client := controlauth.ClientRecord{
+		ID: id, Name: name, State: controlauth.ClientState(state), CreatedAt: createdAt, ExpiresAt: expiresAt,
+	}
+	if revokedAt.Valid {
+		client.RevokedAt = &revokedAt.Time
+	}
+	return client
 }
 
 func randomClientID() (string, error) {
