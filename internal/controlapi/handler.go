@@ -106,7 +106,7 @@ func (h *handler) redeemRoute(w http.ResponseWriter, r *http.Request) {
 	if !h.decode(w, r, &input) {
 		return
 	}
-	if retryAfter := h.redeem.take(redemptionKey(input.EnrollmentCode), time.Now()); retryAfter > 0 {
+	if retryAfter := h.redeem.take(time.Now()); retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int((retryAfter+time.Second-1)/time.Second)))
 		h.fail(w, problem(http.StatusTooManyRequests, "rate_limited"))
 		return
@@ -120,53 +120,24 @@ func (h *handler) redeemRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 type redemptionLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]redemptionBucket
-}
-
-type redemptionBucket struct {
+	mu       sync.Mutex
 	window   time.Time
 	attempts int
 }
 
-func (l *redemptionLimiter) take(key string, now time.Time) time.Duration {
+func (l *redemptionLimiter) take(now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	const window, limit, maxBuckets = time.Minute, 10, 1024
-	if l.buckets == nil {
-		l.buckets = make(map[string]redemptionBucket)
+	const window, limit = time.Minute, 10
+	if l.window.IsZero() || now.Sub(l.window) >= window {
+		l.window = now
+		l.attempts = 0
 	}
-	bucket := l.buckets[key]
-	if bucket.window.IsZero() || now.Sub(bucket.window) >= window {
-		bucket = redemptionBucket{window: now}
+	if l.attempts >= limit {
+		return window - now.Sub(l.window)
 	}
-	if bucket.attempts >= limit {
-		return window - now.Sub(bucket.window)
-	}
-	if _, exists := l.buckets[key]; !exists && len(l.buckets) >= maxBuckets {
-		for candidate, value := range l.buckets {
-			if now.Sub(value.window) >= window {
-				delete(l.buckets, candidate)
-			}
-		}
-		if len(l.buckets) >= maxBuckets {
-			for candidate := range l.buckets {
-				delete(l.buckets, candidate)
-				break
-			}
-		}
-	}
-	bucket.attempts++
-	l.buckets[key] = bucket
+	l.attempts++
 	return 0
-}
-
-func redemptionKey(token string) string {
-	id, _, found := strings.Cut(token, ".")
-	if !found || len(id) != len("enr_")+22 || !strings.HasPrefix(id, "enr_") {
-		return "invalid"
-	}
-	return id
 }
 
 func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {

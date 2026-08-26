@@ -104,26 +104,41 @@ func TestHandlerBoundary(t *testing.T) {
 	if redirectSpelling.Header().Get("Location") != "" {
 		t.Fatalf("non-canonical path redirected to %q", redirectSpelling.Header().Get("Location"))
 	}
-	var limited *httptest.ResponseRecorder
-	for attempts := 0; attempts < 100; attempts++ {
-		limited = do(http.MethodPost, "/v1/auth/enrollments/redeem", "", "", strings.NewReader(redeemBody))
-		if limited.Code == http.StatusTooManyRequests {
-			break
-		}
+}
+
+func TestEnrollmentRedemptionUsesDeploymentWideRateLimit(t *testing.T) {
+	auth := &fakeAuth{
+		client:    controlauth.Client{Name: "laptop"},
+		redeemErr: controlauth.ErrEnrollmentUnavailable,
 	}
-	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") == "" {
-		t.Fatalf("enrollment rate limit status=%d retry-after=%q", limited.Code, limited.Header().Get("Retry-After"))
+	handler := controlapi.NewServer(controlapi.Discovery{}, auth, &fakeJobs{}).Handler
+	redeem := func(enrollment string) *httptest.ResponseRecorder {
+		t.Helper()
+		body := fmt.Sprintf(`{"enrollment_code":%q,"client_name":"laptop","credential":"dcr_attacker-generated"}`, enrollment)
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/enrollments/redeem", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	for attempt := 0; attempt < 10; attempt++ {
+		response := redeem(fmt.Sprintf("enr_%022d.fake-secret", attempt))
+		requireProblem(t, response, http.StatusUnauthorized, "enrollment_unavailable")
+	}
+
+	limited := redeem("entirely-fake-and-different")
+	requireProblem(t, limited, http.StatusTooManyRequests, "rate_limited")
+	if limited.Header().Get("Retry-After") == "" {
+		t.Fatal("rate-limited enrollment response omitted Retry-After")
 	}
 	var rateProblem controlapi.Problem
 	decode(t, limited, &rateProblem)
 	if !rateProblem.Retryable {
 		t.Fatal("rate-limited enrollment was not marked retryable")
 	}
-	otherEnrollment := strings.Replace(enrollment, "enr_A", "enr_B", 1)
-	otherBody := fmt.Sprintf(`{"enrollment_code":%q,"client_name":"laptop","credential":%q}`, otherEnrollment, credential)
-	unrelated := do(http.MethodPost, "/v1/auth/enrollments/redeem", "", "", strings.NewReader(otherBody))
-	if unrelated.Code == http.StatusTooManyRequests {
-		t.Fatal("one Enrollment exhausted another Enrollment's rate limit")
+	if auth.redeemCalls != 10 {
+		t.Fatalf("authentication service received %d redemption attempts after the shared limit, want 10", auth.redeemCalls)
 	}
 }
 
@@ -526,6 +541,7 @@ type fakeAuth struct {
 	redeemedCode       string
 	redeemedCredential string
 	redeemCalls        int
+	redeemErr          error
 }
 
 func (a *fakeAuth) Authenticate(_ context.Context, credential string) (controlauth.Client, error) {
@@ -540,6 +556,9 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 	a.redeemCalls++
 	if name != a.client.Name {
 		return controlauth.Client{}, false, controlauth.ErrInvalidInput
+	}
+	if a.redeemErr != nil {
+		return controlauth.Client{}, false, a.redeemErr
 	}
 	return a.client, a.redeemCalls == 1, nil
 }

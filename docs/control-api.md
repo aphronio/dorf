@@ -30,6 +30,10 @@ dorf client revoke [--output json] CLIENT_ID
 Revoke is idempotent. There are no remote Client-administration routes, Dorf passwords, Dorf-issued
 JWTs, OIDC, RBAC, teams, or organizations.
 
+Revocation rejects new authenticated requests immediately. An already-authenticated Job watch may
+remain open only until its existing authentication deadline, at most one minute after connection;
+afterward the watch closes and reconnecting with the revoked credential fails.
+
 Agents use this same boundary: an ordinary skill or runbook can invoke the structured CLI, while
 code mode can consume the OpenAPI document and call HTTPS directly. Dorf does not require a second
 agent-specific protocol.
