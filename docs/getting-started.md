@@ -253,11 +253,12 @@ idle after settled work until the client requests cleanup. Coding requests clean
 a terminal GitHub Outcome, so retrieve any needed Sandbox file before that external decision;
 retained Evidence remains readable after cleanup.
 
-`job inspect` reports the initial Message ID and exact Sandbox IDs. Follow may queue before current
-work settles; steer targets only the exact active Turn and never becomes a Follow. `job watch`
-reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is accepted only for
-eligible failed execution. Evidence is verified metadata; Sandbox file retrieval returns exact
-bytes and must happen before cleanup, which closes Message admission and file reads.
+`job inspect` reports the Job ID, initial Message ID, and exact Sandbox IDs. For an investigation,
+it also prints the exact report retrieval command followed by the cleanup command. Follow may queue
+before current work settles. Steer targets only the exact active Turn and never becomes a Follow.
+`job watch` reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is
+accepted only for eligible failed execution. Evidence is verified metadata. Sandbox file retrieval
+returns exact bytes and must happen before cleanup, which closes Message admission and file reads.
 
 Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
 stable machine output. The ordinary mutation flow creates retry identity internally and retries the

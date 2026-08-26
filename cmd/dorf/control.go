@@ -54,7 +54,7 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return true, authCommand(ctx, args[1:], stdout, stderr)
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
-	case "sandbox":
+	case "sandbox", "run", "workflow":
 		cfg, _, found, err := loadClientConfig()
 		if err != nil || !found {
 			return false, err
@@ -63,27 +63,14 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		if err != nil {
 			return true, err
 		}
-		return true, remoteSandboxCommand(ctx, client, args[1:], stdout)
-	case "run":
-		cfg, _, found, err := loadClientConfig()
-		if err != nil || !found {
-			return false, err
+		switch args[0] {
+		case "sandbox":
+			return true, remoteSandboxCommand(ctx, client, args[1:], stdout)
+		case "run":
+			return true, remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
+		default:
+			return true, remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
 		}
-		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
-		if err != nil {
-			return true, err
-		}
-		return true, remoteRun(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
-	case "workflow":
-		cfg, _, found, err := loadClientConfig()
-		if err != nil || !found {
-			return false, err
-		}
-		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
-		if err != nil {
-			return true, err
-		}
-		return true, remoteWorkflowCommand(ctx, client, cfg.DeploymentURL, args[1:], stdout, stderr)
 	default:
 		return false, nil
 	}
@@ -437,8 +424,10 @@ func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *con
 	}
 	if args[0] == "cleanup" {
 		fmt.Fprintf(stdout, "Cleanup requested for Job %s on %s\n", common.ID, cfg.DeploymentURL)
+		renderRemoteJob(stdout, job)
+		return nil
 	}
-	renderRemoteJob(stdout, job)
+	renderRemoteJobInspection(stdout, job)
 	return nil
 }
 
@@ -675,10 +664,27 @@ func renderRemoteJob(output io.Writer, view controlapi.JobView) {
 				typed.Outcome.Kind, typed.Outcome.ObservedState, typed.Outcome.ObservedAt.Format(time.RFC3339))
 		}
 	case controlapi.InvestigationJob:
-		fmt.Fprintf(output, "  workflow revision: %s\n  source: %s %s Revision=%s\n  report: Sandbox %s · %s\n",
+		fmt.Fprintf(output, "  workflow revision: %s\n  source: %s %s Revision=%s\n  report: Sandbox %s · %s (workspace file; not durably retained)\n",
 			typed.WorkflowRevision, typed.Source.Kind, typed.Source.Repository, typed.Source.Revision,
 			typed.Report.SandboxID, typed.Report.Path)
 	}
+}
+
+func renderRemoteJobInspection(output io.Writer, view controlapi.JobView) {
+	job := view.Common()
+	fmt.Fprintf(output, "Job %s\n", job.ID)
+	renderRemoteJob(output, view)
+	investigation, ok := view.(controlapi.InvestigationJob)
+	if !ok {
+		return
+	}
+	if job.Cleanup.State != "not_requested" {
+		fmt.Fprintln(output, "  report retrieval: unavailable after cleanup began")
+		return
+	}
+	fmt.Fprintf(output, "  retrieve before cleanup: dorf sandbox file get %s %s --output %s\n",
+		investigation.Report.SandboxID, investigation.Report.Path, investigation.Report.Path)
+	fmt.Fprintf(output, "  release resources: dorf job cleanup %s\n", job.ID)
 }
 
 func renderConnection(output io.Writer, deploymentURL, path string, identity controlapi.Identity, existing bool) error {
@@ -815,6 +821,32 @@ type controlReader interface {
 
 func (a controlAPIJobs) application() core.Application {
 	return coreApplication(a.store, a.tasks)
+}
+
+type controlJobKind string
+
+const (
+	controlDirectJob        controlJobKind = controlapi.JobKindDirect
+	controlCodingJob        controlJobKind = controlapi.JobKindCoding
+	controlInvestigationJob controlJobKind = controlapi.JobKindInvestigation
+)
+
+type supportedControlJob struct {
+	core.Job
+	kind controlJobKind
+}
+
+func classifyControlJob(workflow core.WorkflowName, revision string) (controlJobKind, bool) {
+	switch {
+	case workflow == "" && revision == "":
+		return controlDirectJob, true
+	case workflow == coding.Workflow && revision == coding.WorkflowRevision:
+		return controlCodingJob, true
+	case workflow == investigation.Workflow && revision == investigation.WorkflowRevision:
+		return controlInvestigationJob, true
+	default:
+		return "", false
+	}
 }
 
 func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.DirectJob, bool, error) {
@@ -1130,39 +1162,38 @@ func (a controlAPIJobs) RequestCleanup(ctx context.Context, jobID string) (contr
 	return a.Get(ctx, job.ID)
 }
 
-func (a controlAPIJobs) supportedJob(ctx context.Context, jobID string) (core.Job, error) {
+func (a controlAPIJobs) supportedJob(ctx context.Context, jobID string) (supportedControlJob, error) {
 	job, err := a.store.Job(ctx, jobID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		return core.Job{}, controlapi.ErrJobNotFound
+		return supportedControlJob{}, controlapi.ErrJobNotFound
 	}
 	if err != nil {
-		return core.Job{}, err
+		return supportedControlJob{}, err
 	}
-	switch {
-	case job.Workflow == "" && job.WorkflowRevision == "":
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
+	kind, ok := classifyControlJob(job.Workflow, job.WorkflowRevision)
+	if !ok {
+		return supportedControlJob{}, controlapi.ErrJobNotFound
+	}
+	if kind == controlInvestigationJob {
 		source, sourceErr := a.store.CodebaseInvestigationSource(ctx, job.ID)
 		if errors.Is(sourceErr, postgres.ErrNotFound) || sourceErr == nil && source.Kind != investigation.SourceRemote {
-			return core.Job{}, controlapi.ErrJobNotFound
+			return supportedControlJob{}, controlapi.ErrJobNotFound
 		}
 		if sourceErr != nil {
-			return core.Job{}, sourceErr
+			return supportedControlJob{}, sourceErr
 		}
-	default:
-		return core.Job{}, controlapi.ErrJobNotFound
 	}
-	return job, nil
+	return supportedControlJob{Job: job, kind: kind}, nil
 }
 
-func (a controlAPIJobs) project(ctx context.Context, job core.Job) (controlapi.JobView, error) {
-	switch {
-	case job.Workflow == "" && job.WorkflowRevision == "":
-		return a.projectDirect(ctx, job)
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		return a.projectCoding(ctx, job)
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		return a.projectInvestigation(ctx, job)
+func (a controlAPIJobs) project(ctx context.Context, job supportedControlJob) (controlapi.JobView, error) {
+	switch job.kind {
+	case controlDirectJob:
+		return a.projectDirect(ctx, job.Job)
+	case controlCodingJob:
+		return a.projectCoding(ctx, job.Job)
+	case controlInvestigationJob:
+		return a.projectInvestigation(ctx, job.Job)
 	default:
 		return nil, controlapi.ErrJobNotFound
 	}

@@ -17,12 +17,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
 	"github.com/aphronio/dorf/internal/controlclient"
 	"github.com/aphronio/dorf/internal/controlreader"
 	"github.com/aphronio/dorf/internal/core"
+	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -393,6 +395,57 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 				t.Fatalf("cleanup attention=%#v, want fixed %q", view.Attention, test.wantCode)
 			}
 		})
+	}
+}
+
+func TestControlJobClassificationIsClosed(t *testing.T) {
+	tests := []struct {
+		workflow core.WorkflowName
+		revision string
+		want     controlJobKind
+		ok       bool
+	}{
+		{want: controlDirectJob, ok: true},
+		{workflow: coding.Workflow, revision: coding.WorkflowRevision, want: controlCodingJob, ok: true},
+		{workflow: investigation.Workflow, revision: investigation.WorkflowRevision, want: controlInvestigationJob, ok: true},
+		{workflow: coding.Workflow},
+		{workflow: coding.Workflow, revision: "unrecognized"},
+		{workflow: "unrecognized", revision: "1"},
+	}
+	for _, test := range tests {
+		got, ok := classifyControlJob(test.workflow, test.revision)
+		if got != test.want || ok != test.ok {
+			t.Fatalf("workflow %q revision %q classified as %q/%t, want %q/%t", test.workflow, test.revision, got, ok, test.want, test.ok)
+		}
+	}
+}
+
+func TestRemoteInvestigationInspectionGuidesReportRetrievalBeforeCleanup(t *testing.T) {
+	job := controlapi.InvestigationJob{
+		Job: controlapi.Job{
+			ID: "job-investigation", Kind: controlapi.JobKindInvestigation,
+			Cleanup: controlapi.State{State: "not_requested"},
+		},
+		Report: controlapi.InvestigationReport{SandboxID: "sandbox-investigation", Path: investigation.ReportPath},
+	}
+	var output strings.Builder
+	renderRemoteJobInspection(&output, job)
+	for _, want := range []string{
+		"Job job-investigation\n",
+		"report: Sandbox sandbox-investigation · REPORT.md (workspace file; not durably retained)",
+		"retrieve before cleanup: dorf sandbox file get sandbox-investigation REPORT.md --output REPORT.md",
+		"release resources: dorf job cleanup job-investigation",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("remote investigation inspection missing %q: %q", want, output.String())
+		}
+	}
+
+	job.Cleanup.State = "requested"
+	output.Reset()
+	renderRemoteJobInspection(&output, job)
+	if strings.Contains(output.String(), "dorf sandbox file get") || !strings.Contains(output.String(), "report retrieval: unavailable after cleanup began") {
+		t.Fatalf("cleanup-fenced investigation inspection=%q", output.String())
 	}
 }
 

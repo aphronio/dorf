@@ -75,10 +75,12 @@ Put the complete goal or Message in a file and use the exact remote commands in 
 Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
 flow. Follow may queue, while steer requires the exact active Turn and must not be resent as Follow
 after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after
-a successful Turn; do not create a replacement merely because it has no active execution. Remote
-investigation accepts only its documented credential-free HTTPS source; never upload, copy, or
-reconstruct a host-local retained bundle through the remote boundary. Use the Deployment-published
-OpenAPI and Problem catalog for direct code-mode HTTP; do not invent an MCP or SDK layer.
+a successful Turn; do not create a replacement merely because it has no active execution. For a
+remote investigation, run the report retrieval command printed by `dorf job inspect` before its
+printed cleanup command. Remote investigation accepts only its documented credential-free HTTPS
+source. Never upload, copy, or reconstruct a host-local retained bundle through the remote boundary.
+Use the Deployment-published OpenAPI and Problem catalog for direct code-mode HTTP. Do not invent an
+MCP or SDK layer.
 
 ## Safety and handback
 

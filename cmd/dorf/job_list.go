@@ -12,11 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlclient"
-	"github.com/aphronio/dorf/internal/investigation"
-	"github.com/aphronio/dorf/internal/postgres"
 )
 
 const maxJobListCursorBytes = 1024
@@ -55,26 +52,13 @@ func (a controlAPIJobs) List(ctx context.Context, limit int, cursor string) (con
 	}
 	jobs := make([]controlapi.JobSummary, 0, len(rows))
 	for _, row := range rows {
-		kind, err := listedJobKind(row)
-		if err != nil {
-			return controlapi.JobList{}, err
+		kind, ok := classifyControlJob(row.Workflow, row.WorkflowRevision)
+		if !ok {
+			return controlapi.JobList{}, fmt.Errorf("unsupported retained Job workflow %q revision %q", row.Workflow, row.WorkflowRevision)
 		}
-		jobs = append(jobs, controlapi.JobSummary{ID: row.ID, Kind: kind, AdmittedAt: row.AdmittedAt.UTC()})
+		jobs = append(jobs, controlapi.JobSummary{ID: row.ID, Kind: string(kind), AdmittedAt: row.AdmittedAt.UTC()})
 	}
 	return controlapi.JobList{Jobs: jobs, NextCursor: next}, nil
-}
-
-func listedJobKind(job postgres.ListedJob) (string, error) {
-	switch {
-	case job.Workflow == "" && job.WorkflowRevision == "":
-		return controlapi.JobKindDirect, nil
-	case job.Workflow == coding.Workflow && job.WorkflowRevision == coding.WorkflowRevision:
-		return controlapi.JobKindCoding, nil
-	case job.Workflow == investigation.Workflow && job.WorkflowRevision == investigation.WorkflowRevision:
-		return controlapi.JobKindInvestigation, nil
-	default:
-		return "", fmt.Errorf("unsupported retained Job workflow %q revision %q", job.Workflow, job.WorkflowRevision)
-	}
 }
 
 func encodeJobListCursor(admittedAt time.Time, jobID string) (string, error) {

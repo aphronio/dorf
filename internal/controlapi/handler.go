@@ -58,7 +58,7 @@ func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown conte
 	h.mux.HandleFunc("/v1/jobs/{job}", h.protectedRoute)
 	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.protectedRoute)
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		h.fail(w, problem(http.StatusNotFound, "not_found"))
+		h.fail(w, problem("not_found"))
 	})
 	return h
 }
@@ -80,7 +80,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	clean := path.Clean(r.URL.Path)
 	if r.URL.Path == "" || clean != r.URL.Path || strings.Contains(strings.ToLower(r.URL.EscapedPath()), "%2f") {
-		h.fail(w, problem(http.StatusNotFound, "not_found"))
+		h.fail(w, problem("not_found"))
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -108,7 +108,7 @@ func (h *handler) redeemRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if retryAfter := h.redeem.take(time.Now()); retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int((retryAfter+time.Second-1)/time.Second)))
-		h.fail(w, problem(http.StatusTooManyRequests, "rate_limited"))
+		h.fail(w, problem("rate_limited"))
 		return
 	}
 	client, created, err := h.auth.Redeem(r.Context(), input.EnrollmentCode, input.ClientName, input.Credential)
@@ -186,7 +186,7 @@ func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
 			h.jobResponseStatus(w, r, job, nil, createdStatus(created))
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-			h.fail(w, problem(http.StatusMethodNotAllowed, "method_not_allowed"))
+			h.fail(w, problem("method_not_allowed"))
 		}
 	case "/v1/workflows/coding/jobs":
 		if !h.exact(w, r, http.MethodPost, true) {
@@ -296,29 +296,29 @@ func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) jobListRoute(w http.ResponseWriter, r *http.Request) {
 	if contentTypes := r.Header.Values("Content-Type"); len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		h.fail(w, problem(http.StatusUnsupportedMediaType, "body_not_allowed"))
+		h.fail(w, problem("body_not_allowed"))
 		return
 	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+		h.fail(w, problem("invalid_query"))
 		return
 	}
 	for key := range query {
 		if key != "limit" && key != "cursor" {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+			h.fail(w, problem("invalid_query"))
 			return
 		}
 	}
 	limit := 50
 	if values, found := query["limit"]; found {
 		if len(values) != 1 {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+			h.fail(w, problem("invalid_query"))
 			return
 		}
 		parsed, err := strconv.ParseUint(values[0], 10, 8)
 		if err != nil || parsed < 1 || parsed > 100 {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+			h.fail(w, problem("invalid_query"))
 			return
 		}
 		limit = int(parsed)
@@ -326,12 +326,12 @@ func (h *handler) jobListRoute(w http.ResponseWriter, r *http.Request) {
 	cursor := ""
 	if values, found := query["cursor"]; found {
 		if len(values) != 1 {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+			h.fail(w, problem("invalid_query"))
 			return
 		}
 		cursor = values[0]
 		if cursor == "" {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_cursor"))
+			h.fail(w, problem("invalid_cursor"))
 			return
 		}
 	}
@@ -372,24 +372,24 @@ func (h *handler) jobResponseStatus(w http.ResponseWriter, r *http.Request, job 
 func (h *handler) exact(w http.ResponseWriter, r *http.Request, method string, hasJSON bool) bool {
 	if r.Method != method {
 		w.Header().Set("Allow", method)
-		h.fail(w, problem(http.StatusMethodNotAllowed, "method_not_allowed"))
+		h.fail(w, problem("method_not_allowed"))
 		return false
 	}
 	if r.URL.RawQuery != "" {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+		h.fail(w, problem("invalid_query"))
 		return false
 	}
 	if method != http.MethodGet && hasConditionalHeader(r) {
-		h.fail(w, problem(http.StatusBadRequest, "unsupported_precondition"))
+		h.fail(w, problem("unsupported_precondition"))
 		return false
 	}
 	contentTypes := r.Header.Values("Content-Type")
 	if hasJSON && (len(contentTypes) != 1 || contentTypes[0] != "application/json") {
-		h.fail(w, problem(http.StatusUnsupportedMediaType, "unsupported_media_type"))
+		h.fail(w, problem("unsupported_media_type"))
 		return false
 	}
 	if !hasJSON && (len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0) {
-		h.fail(w, problem(http.StatusUnsupportedMediaType, "body_not_allowed"))
+		h.fail(w, problem("body_not_allowed"))
 		return false
 	}
 	return true
@@ -398,7 +398,7 @@ func (h *handler) exact(w http.ResponseWriter, r *http.Request, method string, h
 func (h *handler) idempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	keys := r.Header.Values("Idempotency-Key")
 	if len(keys) != 1 || keys[0] != strings.TrimSpace(keys[0]) || keys[0] == "" || len(keys[0]) > 255 {
-		h.fail(w, problem(http.StatusBadRequest, "idempotency_key_required"))
+		h.fail(w, problem("idempotency_key_required"))
 		return "", false
 	}
 	return keys[0], true
@@ -410,12 +410,12 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialE
 	}
 	accept := r.Header.Values("Accept")
 	if len(accept) != 1 || accept[0] != "text/event-stream" {
-		h.fail(w, problem(http.StatusNotAcceptable, "not_acceptable"))
+		h.fail(w, problem("not_acceptable"))
 		return
 	}
 	lastIDs := r.Header.Values("Last-Event-ID")
 	if len(lastIDs) > 1 || len(lastIDs) == 1 && lastIDs[0] != strings.TrimSpace(lastIDs[0]) {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_last_event_id"))
+		h.fail(w, problem("invalid_last_event_id"))
 		return
 	}
 	lastID := ""
@@ -423,7 +423,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialE
 		lastID = lastIDs[0]
 		decoded, err := hex.DecodeString(lastID)
 		if err != nil || len(decoded) != sha256.Size {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_last_event_id"))
+			h.fail(w, problem("invalid_last_event_id"))
 			return
 		}
 	}
@@ -441,7 +441,7 @@ func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialE
 	if err != nil {
 		if ctx.Err() != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) && r.Context().Err() == nil {
-				h.fail(w, problem(http.StatusUnauthorized, "unauthenticated"))
+				h.fail(w, problem("unauthenticated"))
 			}
 			return
 		}
@@ -541,25 +541,25 @@ func streamWrite(controller *http.ResponseController, write func() error) error 
 func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		h.fail(w, problem(http.StatusMethodNotAllowed, "method_not_allowed"))
+		h.fail(w, problem("method_not_allowed"))
 		return
 	}
 	if contentTypes := r.Header.Values("Content-Type"); len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
-		h.fail(w, problem(http.StatusUnsupportedMediaType, "body_not_allowed"))
+		h.fail(w, problem("body_not_allowed"))
 		return
 	}
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if err != nil {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+		h.fail(w, problem("invalid_query"))
 		return
 	}
 	paths, found := query["path"]
 	if !found || len(paths) == 0 || paths[0] == "" {
-		h.fail(w, problem(http.StatusBadRequest, "file_path_required"))
+		h.fail(w, problem("file_path_required"))
 		return
 	}
 	if len(query) != 1 || len(paths) != 1 {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_query"))
+		h.fail(w, problem("invalid_query"))
 		return
 	}
 	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), paths[0])
@@ -612,7 +612,7 @@ func hasConditionalHeader(r *http.Request) bool {
 
 func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) bool {
 	if r.ContentLength > maxBodyBytes {
-		h.fail(w, problem(http.StatusRequestEntityTooLarge, "body_too_large"))
+		h.fail(w, problem("body_too_large"))
 		return false
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -620,14 +620,14 @@ func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) boo
 	if err := decoder.Decode(output); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			h.fail(w, problem(http.StatusRequestEntityTooLarge, "body_too_large"))
+			h.fail(w, problem("body_too_large"))
 		} else {
-			h.fail(w, problem(http.StatusBadRequest, "invalid_json"))
+			h.fail(w, problem("invalid_json"))
 		}
 		return false
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		h.fail(w, problem(http.StatusBadRequest, "invalid_json"))
+		h.fail(w, problem("invalid_json"))
 		return false
 	}
 	return true
@@ -640,46 +640,46 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		h.authError(w)
 		return
 	case errors.Is(err, controlauth.ErrEnrollmentUnavailable):
-		value = problem(http.StatusUnauthorized, "enrollment_unavailable")
+		value = problem("enrollment_unavailable")
 	case errors.Is(err, controlauth.ErrClientConflict):
-		value = problem(http.StatusConflict, "client_conflict")
+		value = problem("client_conflict")
 	case errors.Is(err, controlauth.ErrInvalidInput), errors.Is(err, ErrInvalidInput):
-		value = problem(http.StatusUnprocessableEntity, "invalid_input")
+		value = problem("invalid_input")
 	case errors.Is(err, ErrInvalidCursor):
-		value = problem(http.StatusBadRequest, "invalid_cursor")
+		value = problem("invalid_cursor")
 	case errors.Is(err, ErrJobNotFound):
-		value = problem(http.StatusNotFound, "job_not_found")
+		value = problem("job_not_found")
 	case errors.Is(err, ErrMessageNotFound):
-		value = problem(http.StatusNotFound, "message_not_found")
+		value = problem("message_not_found")
 	case errors.Is(err, ErrSandboxNotFound):
-		value = problem(http.StatusNotFound, "sandbox_not_found")
+		value = problem("sandbox_not_found")
 	case errors.Is(err, ErrInvalidFilePath):
-		value = problem(http.StatusUnprocessableEntity, "invalid_file_path")
+		value = problem("invalid_file_path")
 	case errors.Is(err, ErrFileNotFound):
-		value = problem(http.StatusNotFound, "file_not_found")
+		value = problem("file_not_found")
 	case errors.Is(err, ErrFileUnavailable):
-		value = problem(http.StatusConflict, "file_unavailable")
+		value = problem("file_unavailable")
 	case errors.Is(err, ErrSteerUnavailable):
-		value = problem(http.StatusConflict, "steer_unavailable")
+		value = problem("steer_unavailable")
 	case errors.Is(err, ErrMessageUnavailable):
-		value = problem(http.StatusConflict, "message_unavailable")
+		value = problem("message_unavailable")
 	case errors.Is(err, ErrRetryUnavailable):
-		value = problem(http.StatusConflict, "retry_unavailable")
+		value = problem("retry_unavailable")
 	case errors.Is(err, ErrEvidenceUnverified):
 		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
-		value = problem(http.StatusInternalServerError, "evidence_unverified")
+		value = problem("evidence_unverified")
 	case errors.Is(err, ErrIdempotencyConflict):
-		value = problem(http.StatusConflict, "idempotency_conflict")
+		value = problem("idempotency_conflict")
 	default:
 		log.Printf("Dorf control API internal failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
-		value = problem(http.StatusInternalServerError, "internal_error")
+		value = problem("internal_error")
 	}
 	h.fail(w, value)
 }
 
 func (h *handler) authError(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="dorf"`)
-	h.fail(w, problem(http.StatusUnauthorized, "unauthenticated"))
+	h.fail(w, problem("unauthenticated"))
 }
 
 func (h *handler) reply(w http.ResponseWriter, status int, value any) {
@@ -700,10 +700,10 @@ func (h *handler) fail(w http.ResponseWriter, value Problem) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func problem(status int, code string) Problem {
+func problem(code string) Problem {
 	value, found := ProblemForCode(code)
-	if !found || value.Status != status {
-		panic(fmt.Sprintf("control API Problem catalog mismatch for %q status %d", code, status))
+	if !found {
+		panic(fmt.Sprintf("unknown control API Problem %q", code))
 	}
 	return value
 }

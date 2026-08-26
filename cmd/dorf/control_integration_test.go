@@ -379,10 +379,17 @@ insert into dorf.codebase_investigation_sources(
 	if hiddenProblem.Code != "job_not_found" {
 		t.Fatalf("local-bundle Job Problem=%#v", hiddenProblem)
 	}
+	unsupported := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs/"+fixtures[4].id, credential, "", nil)
+	var unsupportedProblem controlapi.Problem
+	controlTestJSON(t, unsupported, http.StatusNotFound, &unsupportedProblem)
+	if unsupportedProblem.Code != "job_not_found" {
+		t.Fatalf("unsupported-revision Job Problem=%#v", unsupportedProblem)
+	}
 	firstResponse := controlTestRequest(t, handler, http.MethodGet, "/v1/jobs?limit=2", credential, "", nil)
 	var first controlapi.JobList
 	controlTestJSON(t, firstResponse, http.StatusOK, &first)
-	if len(first.Jobs) != 2 || first.Jobs[0].ID != fixtures[0].id || first.Jobs[1].ID != fixtures[1].id || first.NextCursor == nil {
+	if len(first.Jobs) != 2 || first.Jobs[0].ID != fixtures[0].id || first.Jobs[0].Kind != controlapi.JobKindDirect ||
+		first.Jobs[1].ID != fixtures[1].id || first.Jobs[1].Kind != controlapi.JobKindCoding || first.NextCursor == nil {
 		t.Fatalf("first Job page=%#v", first)
 	}
 
@@ -393,7 +400,8 @@ insert into dorf.codebase_investigation_sources(
 		"/v1/jobs?limit=2&cursor="+url.QueryEscape(*first.NextCursor), credential, "", nil)
 	var second controlapi.JobList
 	controlTestJSON(t, secondResponse, http.StatusOK, &second)
-	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[1].ID != fixtures[3].id {
+	if len(second.Jobs) != 2 || second.Jobs[0].ID != fixtures[2].id || second.Jobs[0].Kind != controlapi.JobKindInvestigation ||
+		second.Jobs[1].ID != fixtures[3].id || second.Jobs[1].Kind != controlapi.JobKindDirect {
 		t.Fatalf("second Job page=%#v", second)
 	}
 
