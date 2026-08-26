@@ -21,8 +21,8 @@ investigation work that must clone a remote Git source; Dorf rejects that combin
 admitting a Job.
 
 The remote control API is a separate authority on a separate hostname from the Provider Gateway.
-Its public boundary is one exact HTTPS Deployment origin backed by the private loopback-only
-Compose API; the Compose-managed worker separately owns durable task execution and recovery. After
+Its public boundary is one exact HTTPS Deployment origin backed by Compose host port `8745`; the
+Compose-managed worker separately owns durable task execution and recovery. After
 Enrollment, a remote CLI Client needs network and TLS access to that origin and only its own Dorf
 Client credential; it never needs PostgreSQL, provider, Harness, Gateway, or Sandbox credentials.
 Fixed remote coding and investigation admission reuse the same boundary. The
@@ -49,17 +49,18 @@ repository access and least permission scope are verified by the runtime operati
 [Getting started](getting-started.md) contains the setup procedure.
 
 For a remote Client, start with `dorf auth status`. If `dorf connect` fails during discovery, the
-failure belongs to DNS, TLS, ingress, or the private control listener. An `unauthenticated` response
-means the saved Client credential is invalid, expired, or revoked; a deployment-host operator must
-issue a new Enrollment. Use `dorf auth status --output json` for automation. `invalid_cursor` means a
-Job-list cursor was not passed back unchanged; begin a fresh traversal rather than altering it.
+failure belongs to DNS, TLS, ingress, or the control API on host port `8745`. An `unauthenticated`
+response means the saved Client credential is invalid, expired, or revoked; a deployment-host
+operator must issue a new Enrollment. Use `dorf auth status --output json` for automation.
+`invalid_cursor` means a Job-list cursor was not passed back unchanged; begin a fresh traversal
+rather than altering it.
 
 On the deployment host, start service diagnosis with the direct Compose status and log operations in
 the [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host).
 The Compose-owned PostgreSQL service must be healthy, the one-shot migration must have succeeded,
-and the worker and private API must be healthy. Worker readiness includes its narrow authenticated
+and the worker and control API must be healthy. Worker readiness includes its narrow authenticated
 reader. A configured Gateway or Cloudflare Tunnel must also be running under its selected Compose
-profile. Rerun `dorf setup` to apply the exact installed project as needed and probe the private API
+profile. Rerun `dorf setup` to apply the exact installed project as needed and probe the control API
 and other prepared authorities. Setup does not install host prerequisites, repair arbitrary Docker
 resources, or replace the direct advanced Compose operations in the deployment-host procedure.
 

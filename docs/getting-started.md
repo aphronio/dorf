@@ -69,7 +69,7 @@ the binary; `.env` points Docker Compose at the base manifest and, for a local I
 static overlay. As configuration becomes sufficient and whenever those protected inputs change,
 setup automatically applies that exact installed project and waits for it to become healthy before
 continuing the same guided flow. Its one-shot `migrate` service must complete successfully before
-the worker and private API start. Calling `dorf setup` is the deployment intent; there is no extra
+the worker and control API start. Calling `dorf setup` is the deployment intent; there is no extra
 Compose permission prompt, manual start handoff, separate `dorf start`, or setup-start-setup loop.
 That invoking identity may be root or non-root. Public HTTPS control ingress remains an independent
 operator responsibility.
@@ -170,10 +170,10 @@ The deployment host owns setup, Profiles, provider and Harness credentials, Post
 managed Compose project. A remote client machine needs only the Dorf CLI, an operator-provided HTTPS
 Deployment URL, and one short-lived Enrollment; it does not run `dorf setup`.
 
-The control API URL must be an operator-owned HTTPS origin backed by the Compose API's private
-listener. The operator must give it a different origin from the Provider Gateway: that separate
+The control API URL must be an operator-owned HTTPS origin backed by the Compose API on host port
+`8745`. The operator must give it a different origin from the Provider Gateway: that separate
 `/v1` service provides model access to Sandboxes, not Dorf client operations. Compose supervises the
-private API and worker, but Dorf does not provision or infer public ingress. Before Enrollment,
+control API and worker, but Dorf does not provision or infer public ingress. Before Enrollment,
 complete the continuous setup flow in
 [the deployment-host procedure](#1-install-the-application-initialize-a-deployment-host). The
 [Remote Control API](control-api.md#deployment-services) owns the exact capability and service

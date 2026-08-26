@@ -2563,11 +2563,11 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   opaque credential. Dorf retains only credential digests, and each Client identity can be revoked
   independently. This is a single-operator trust boundary, not multi-user identity, roles, or
   organization membership.
-- **Deployment:** The API service binds a host-private HTTP listener behind operator-owned HTTPS
-  ingress. It authenticates clients, admits and projects Jobs, and requests cleanup, but it registers
-  no execution handlers. A separate durable worker owns task execution and recovery. D100 later
-  proved their independent process-loss boundary; D101 now supervises both in one static Compose
-  project applied by the continuous setup flow while keeping ingress operator-owned.
+- **Deployment:** Compose maps the API service's HTTP listener directly to host port `8745` behind
+  operator-owned HTTPS ingress. It authenticates clients, admits and projects Jobs, and requests
+  cleanup, but it registers no execution handlers. A separate durable worker owns task execution and
+  recovery. D100 later proved their independent process-loss boundary; D101 now supervises both in
+  one static Compose project applied by the continuous setup flow while keeping ingress operator-owned.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
@@ -2693,17 +2693,18 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   `pull_policy: always`. There is no production Docker image tar, local image cache, OCI parser,
   tag-to-image receipt, or Go-owned image loading and attestation path.
 - **Project topology:** The base project contains Compose-owned PostgreSQL, a one-shot migration,
-  the durable worker, and the private control API. Successful migration gates the worker and API.
+  the durable worker, and the control API. Successful migration gates the worker and API.
   The Provider Gateway and guided Cloudflare Tunnel are optional profiled foreground services. The
-  default project uses bridge networking, publishes PostgreSQL and the control API only on host
-  loopback, and never uses host networking or mounts the host Docker socket into a Dorf workload or
-  Sandbox.
+  default project uses bridge networking, publishes PostgreSQL only on host loopback and the control
+  API on host port `8745`, and never uses host networking or mounts the host Docker socket into a
+  Dorf workload or Sandbox. The fresh one-shot migration reaches its checksum-pinned Absurd schema
+  through the existing runtime-egress bridge before it exits.
 - **Database boundary:** The Compose-managed deployment defined here always uses the PostgreSQL
   service and named volume in the project. Its fixed PostgreSQL image belongs in the static manifest,
   not mutable deployment state. `DORF_DATABASE_URL` remains a development, test, and explicitly
   manually supervised process override; it does not select another managed topology. There is no
   standalone PostgreSQL custody or released database handoff to preserve.
-- **Capability custody:** The private control API keeps database and HTTP admission authority but
+- **Capability custody:** The control API keeps database and HTTP admission authority but
   receives no Sandbox-provider, GitHub, Gateway, or Incus credential or socket. The already
   credentialed worker hosts one independently authenticated narrow reader exposing only the fixed
   read operations required by that API; it is not a standalone service. The exact capability and
@@ -2746,6 +2747,12 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   at the cost of the accepted zero-friction setup experience. Setup therefore owns the narrow exact
   project application above; that does not transfer general Docker lifecycle or host custody to
   Dorf.
+- **Compose dogfood correction:** Fresh `v0.5.5` setup proved two invalid manifest assumptions:
+  migration could not download its pinned Absurd schema from an internal-only network, and Docker
+  did not realize published ports for services attached only to internal networks. The corrected
+  project reuses its ordinary runtime bridge for migration and host publication, maps the control
+  API directly as `8745:8745`, and keeps PostgreSQL's host mapping on loopback. Setup also selects
+  quiet Compose progress so transport events do not replace its own concise presentation.
 - **Why:** The API and worker need durable supervision, not a custom privileged service manager or
   a custom Compose manager. PostgreSQL is already containerized, while the systemd,
   standalone-container, image-acquisition, and Compose-manager implementations duplicate lifecycle,

@@ -216,11 +216,11 @@ MCP, a control-plane UI, language SDKs, and a generic public workflow API remain
 The deployment has one operator Principal. An operator-issued, short-lived, one-use Enrollment lets
 a Client register a client-generated opaque credential; only its digest is retained server-side,
 and each Client can be revoked independently. The CLI retains one Deployment origin and Client
-credential rather than implementing multi-deployment context selection. The API listens on a
-host-private HTTP address behind operator-owned HTTPS ingress. It admits and projects Jobs but does
-not register execution handlers; a separate durable worker claims and reconciles the attached
-Absurd tasks and hosts the fixed authenticated reads the API cannot perform without provider
-authority. The static Compose project supervises both long-running responsibilities after its
+credential rather than implementing multi-deployment context selection. Compose maps the API's
+HTTP listener to host port `8745`; operator-owned HTTPS ingress fronts that port. The API admits and
+projects Jobs but does not register execution handlers; a separate durable worker claims and
+reconciles the attached Absurd tasks and hosts the fixed authenticated reads the API cannot perform
+without provider authority. The static Compose project supervises both long-running responsibilities after its
 one-shot migration completes. Setup prepares protected `.env`, applies that exact project, waits for
 its services, and verifies readiness. The operator or deployment agent uses ordinary Compose
 directly only for advanced observation and process operations.

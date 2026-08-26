@@ -19,6 +19,7 @@ services:
       retries: 15
     networks:
       - database
+      - worker-egress
 
   migrate:
     image: "${DORF_IMAGE_REF}"
@@ -41,6 +42,7 @@ services:
         condition: service_healthy
     networks:
       - database
+      - worker-egress
 
   worker:
     image: "${DORF_IMAGE_REF}"
@@ -126,7 +128,7 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,mode=1777
     ports:
-      - "127.0.0.1:8745:8745"
+      - "8745:8745"
     volumes:
       - type: bind
         source: "${DORF_STATE_DIR}"
@@ -142,6 +144,7 @@ services:
     networks:
       - database
       - reader
+      - worker-egress
 
   provider-gateway:
     profiles: ["gateway", "cloudflare"]

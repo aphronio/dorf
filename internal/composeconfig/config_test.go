@@ -247,6 +247,19 @@ func TestStaticComposeManifestKeepsThePublicTopologyAndCapabilityBoundary(t *tes
 	if condition(t, serviceMap(t, services, "migrate"), "depends_on", "postgres") != "service_healthy" {
 		t.Fatal("migration does not wait for healthy PostgreSQL")
 	}
+	if got := serviceMap(t, services, "migrate")["networks"]; !jsonEqual(got, []any{"database", "worker-egress"}) {
+		t.Fatalf("migration networks=%v, want database plus bounded egress", got)
+	}
+	if got := postgres["networks"]; !jsonEqual(got, []any{"database", "worker-egress"}) {
+		t.Fatalf("PostgreSQL networks=%v, want database plus runtime egress", got)
+	}
+	controlAPI := serviceMap(t, services, "control-api")
+	if got := controlAPI["networks"]; !jsonEqual(got, []any{"database", "reader", "worker-egress"}) {
+		t.Fatalf("control API networks=%v, want database, reader, and runtime egress", got)
+	}
+	if got := controlAPI["ports"]; !jsonEqual(got, []any{"8745:8745"}) {
+		t.Fatalf("control API ports=%v, want direct host mapping", got)
+	}
 	if condition(t, serviceMap(t, services, "worker"), "depends_on", "migrate") != "service_completed_successfully" {
 		t.Fatal("worker does not wait for the one-shot migration")
 	}

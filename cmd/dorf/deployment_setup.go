@@ -316,7 +316,7 @@ func applyComposeProject(ctx context.Context, projectDir string) error {
 }
 
 func dockerComposeUpOutput(ctx context.Context, executable, projectDir string, environment []string) (string, error) {
-	command := exec.CommandContext(ctx, executable, "compose", "up", "--detach", "--wait", "--remove-orphans")
+	command := exec.CommandContext(ctx, executable, "compose", "--progress", "quiet", "up", "--detach", "--wait", "--remove-orphans")
 	command.Dir = projectDir
 	command.Env = environment
 	output, err := command.CombinedOutput()

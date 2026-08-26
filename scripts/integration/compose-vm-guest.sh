@@ -373,9 +373,14 @@ one_service_container() {
 }
 
 assert_compose_runtime() {
-	local worker api migrate receipt="$EVIDENCE_DIR/compose-runtime.txt"
+	local postgres worker api migrate receipt="$EVIDENCE_DIR/compose-runtime.txt"
+	postgres=$(one_service_container postgres)
 	worker=$(one_service_container worker)
 	api=$(one_service_container control-api)
+	local postgres_inspection="$WORK_ROOT/docker-inspect-$postgres.json"
+	docker inspect "$postgres" >"$postgres_inspection"
+	jq -e 'any((.[0].NetworkSettings.Ports["5432/tcp"] // [])[]; .HostIp == "127.0.0.1" and .HostPort == "54329")' "$postgres_inspection" >/dev/null ||
+		die "PostgreSQL is not published on host loopback"
 	local worker_inspection="$WORK_ROOT/docker-inspect-$worker.json"
 	docker inspect "$worker" >"$worker_inspection"
 	jq -e '.[0].State.Health.Status == "healthy"' "$worker_inspection" >/dev/null ||
@@ -384,6 +389,8 @@ assert_compose_runtime() {
 	docker inspect "$api" >"$api_inspection"
 	jq -e '.[0].State.Health.Status == "healthy"' "$api_inspection" >/dev/null ||
 		die "control API is not healthy"
+	jq -e 'any((.[0].NetworkSettings.Ports["8745/tcp"] // [])[]; .HostPort == "8745" and (.HostIp == "0.0.0.0" or .HostIp == "::"))' "$api_inspection" >/dev/null ||
+		die "control API is not published on host port 8745"
 	jq -e '[.[0].Config.Env[]? | select(startswith("E2B_API_KEY=") or startswith("DORF_INCUS_") or startswith("DORF_PROVIDER_GATEWAY_") or startswith("DORF_CONFIG_DIR=") or startswith("DORF_DATA_DIR="))] | length == 0' "$api_inspection" >/dev/null ||
 		die "control API received provider environment authority"
 	jq -e '[.[0].Mounts[]? | select(.Destination == "/var/lib/dorf/.config/dorf" or .Destination == "/var/lib/dorf/.local/share/dorf")] | length == 0' "$api_inspection" >/dev/null ||
@@ -396,7 +403,7 @@ assert_compose_runtime() {
 	docker inspect "$migrate" >"$migrate_inspection"
 	jq -e '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' "$migrate_inspection" >/dev/null ||
 		die "one-shot migration did not complete successfully"
-	printf 'migrate=complete\nworker=healthy\napi=healthy-provider-authority-absent\nreader=worker-hosted\n' >"$receipt"
+	printf 'migrate=complete\npostgres=host-loopback\nworker=healthy\napi=healthy-host-port-provider-authority-absent\nreader=worker-hosted\n' >"$receipt"
 	chmod 0600 "$receipt"
 }
 

@@ -195,7 +195,7 @@ func TestDockerComposeUpUsesGeneratedProjectAndWaitsForHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "dir=" + projectDir + "\narg=compose\narg=up\narg=--detach\narg=--wait\narg=--remove-orphans\n"
+	want := "dir=" + projectDir + "\narg=compose\narg=--progress\narg=quiet\narg=up\narg=--detach\narg=--wait\narg=--remove-orphans\n"
 	if string(contents) != want {
 		t.Fatalf("Compose invocation:\n%s\nwant:\n%s", contents, want)
 	}

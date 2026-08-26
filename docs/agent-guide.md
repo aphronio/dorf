@@ -57,7 +57,7 @@ Optional integrations remain host concerns. Pause while the human completes brow
 and return a short-lived code only to its waiting command. Let runtime composition supply integration
 authority instead of putting credentials or integration settings in a Job request.
 
-Keep the operator-owned HTTPS ingress distinct from both the Compose-managed private control API and
+Keep the operator-owned HTTPS ingress distinct from both the Compose-managed control API and
 the Provider Gateway origin. Do not infer service readiness from a process or terminal merely
 remaining open; use Compose state and setup's factual readiness result.
 

@@ -105,7 +105,7 @@ terminal remains gated by
 operator-owned HTTPS ingress
             |
             v
-127.0.0.1:8745
+host port 8745
             |
             v
 Docker Compose project
@@ -117,7 +117,7 @@ Docker Compose project
                         cloudflared          (when guided Tunnel is configured)
 ```
 
-PostgreSQL, the one-shot migration, the private API, and the durable worker are always in the base
+PostgreSQL, the one-shot migration, the control API, and the durable worker are always in the base
 project, even when no Sandbox provider is selected. Migration must complete successfully before
 the worker or API starts. The worker hosts the independently authenticated, fixed read endpoint
 needed by the API; it is not another service or lifecycle. The Provider Gateway and guided named
@@ -130,12 +130,13 @@ only default and named AI-connection observation, GitHub installation discovery,
 Job-owned Sandbox file read, and one settled Message result. It has no generic proxy, provider
 selector, credential response, or mutation operation.
 
-Bridge networks separate database access, API-to-worker reads, worker-to-Gateway calls, worker
-egress, and Gateway ingress. `cloudflared` can reach only the Gateway. PostgreSQL and the control API
-publish only on host loopback; the Gateway publishes only an explicitly selected Profile route.
-The project uses no host networking and mounts no host Docker socket. The optional local-Incus
-overlay gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses
-its explicit HTTPS and mTLS adapter instead.
+Bridge networks keep database access, API-to-worker reads, worker-to-Gateway calls, runtime egress,
+and Gateway ingress explicit. PostgreSQL publishes only on host loopback, while the control API maps
+host port `8745`; the Gateway publishes only an explicitly selected Profile route. The one-shot
+migration uses runtime egress only to retrieve its checksum-pinned Absurd schema before exiting. The
+project uses no host networking and mounts no host Docker socket. The optional local-Incus overlay
+gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses its
+explicit HTTPS and mTLS adapter instead.
 
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. One continuous `dorf setup` flow writes the protected `.env`, applies only those exact
