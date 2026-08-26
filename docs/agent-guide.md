@@ -36,8 +36,8 @@ capability. The deployment host owns all of those operations.
 
 Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
 prepare the approved Sandbox and Harness path and write the protected `.env` for the installed
-static Compose manifests. Setup's host-prerequisite checks are read-only. If it
-offers an administrator helper, follow the exact handoff in
+static Compose manifests. Setup's host-prerequisite checks are read-only. If it offers an administrator
+helper, follow the exact identity and privilege handoff in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pause
 for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
 escalation prompt appears.

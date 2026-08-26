@@ -59,8 +59,9 @@ prepares both Engine and Compose on its stated clean Ubuntu 24.04 noble amd64 ta
 command an administrator may inspect and run and links the upstream
 [Docker Engine](https://docs.docker.com/engine/install/) and
 [Compose plugin](https://docs.docker.com/compose/install/linux/) authorities. Dorf never runs the
-helper or invokes `sudo`. After an operator prepares Docker, rerun `dorf setup`. Docker-daemon access
-is root-equivalent authority even though Dorf does not escalate itself. On another host, follow the
+helper, invokes `sudo`, elevates, or changes identity. After the invoking operator prepares Docker,
+rerun `dorf setup`. Docker-daemon access may be root-equivalent authority, but Dorf does not acquire
+it. On another host, follow the
 linked upstream procedure. If the later direct lifecycle command reports a missing Compose plugin,
 use that plugin authority or the inspectable `bootstrap/docker.sh` shipped in the release archive.
 
@@ -70,7 +71,8 @@ the binary; `.env` points Docker Compose at the base manifest and, for a local I
 static overlay. Dorf Go code and setup never construct or execute Compose lifecycle commands, and
 they do not inspect or reconcile Docker resources. Setup only prepares `.env` and probes readiness.
 
-Apply the handoff as the same ordinary user who ran setup:
+Apply the handoff as the same invoking operator identity that ran setup. That identity may be root or
+non-root; setup and direct Compose must not be split across identities:
 
 ```bash
 compose_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dorf-compose"
@@ -107,8 +109,9 @@ instead of a host recipe. Guided HTTPS Incus setup remains gated while remote pr
 although the adapter retains its explicit HTTPS and mTLS boundary. Dorf does not install Incus or
 QEMU, enable a service, change group membership, initialize the daemon, or mutate a host network.
 The manual authority is the upstream [Incus installation
-guide](https://linuxcontainers.org/incus/docs/main/installing/). The helper owns any administrator
-action and login handoff; rerun setup afterward.
+guide](https://linuxcontainers.org/incus/docs/main/installing/). The invoking operator owns any
+administrator action and login handoff; Dorf never runs the helper, elevates, or changes identity.
+Rerun setup afterward as that same operator identity.
 
 A Dorf Deployment configures at most one Incus endpoint, while each Incus Profile owns its
 restricted project, pool, network, exact image, disk contract, and guest-reachable Provider Gateway

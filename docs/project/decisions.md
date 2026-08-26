@@ -2705,7 +2705,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
   and its equivalent manual authorities. The release ships the same small, inspectable helpers from
   `scripts/bootstrap/`; they remain explicit, idempotent recipes for their stated proven host, not a
-  universal package manager or a second runtime reconciler. Cloudflare remains in the existing
+  universal package manager or a second runtime reconciler. Setup and direct Compose use the same
+  invoking operator identity, root or non-root; Dorf never elevates, changes identity, runs helpers,
+  or manages host privilege. Cloudflare remains in the existing
   guided browser/DNS/Tunnel flow; a shell wrapper would only duplicate that authority.
 - **Sandbox boundary:** Incus remains a provider behind the existing Sandbox adapter rather than a
   universal deployment dependency. One Dorf Deployment configures at most one Incus endpoint and
@@ -2742,8 +2744,9 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   does not change their Job, Sandbox, Gateway, or authenticated-client authorities.
 - **Proof gate:** Before this becomes the supported deployment, the repository-owned
   [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) must let
-  an administrator prepare Docker, Compose, and an Incus endpoint, then let a fresh ordinary user
-  run setup without Dorf invoking `sudo`, apply the static project with ordinary Compose, complete a
+  an administrator prepare Docker, Compose, and an Incus endpoint, then let a deployment operator
+  run setup without Dorf invoking `sudo`, apply the static project under that same identity with
+  direct Compose, complete a
   real Job, survive direct worker and API restart, retrieve required state, and clean up.
   E2B/remote-Gateway behavior needs the cloud-controller terminal; local Incus behavior needs the
   workstation terminal; remote Incus remains unsupported until HTTPS client identity,

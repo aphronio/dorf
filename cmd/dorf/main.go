@@ -908,9 +908,6 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if cfg.DatabaseExternal {
 		return fmt.Errorf("managed dorf setup does not accept DORF_DATABASE_URL; unset it or supervise the development deployment explicitly")
 	}
-	if err := requireOrdinaryDeploymentOperator(); err != nil {
-		return err
-	}
 	presenter := newSetupPresenter(stdout)
 	presenter.Welcome()
 	if err := checkDockerEngine(ctx); err != nil {

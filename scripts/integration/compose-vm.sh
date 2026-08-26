@@ -45,8 +45,8 @@ Usage:
 refresh-cache is the explicit administrator phase. It freezes Docker, Compose,
 and an empty restricted local Incus project into a keyed Ubuntu 24.04 VM image.
 
-prove launches one disposable VM from that cache and runs Dorf as an ordinary
-user. It never installs host dependencies or reuses Dorf state.
+prove launches one disposable VM from that cache and runs Dorf as the prepared
+operator. It never installs host dependencies or reuses Dorf state.
 EOF
 }
 
@@ -445,7 +445,7 @@ prove() {
 	guest_inbox=$guest_root/inbox
 	guest_evidence=$guest_root/evidence
 
-	printf 'FROZEN CACHE -> fresh VM -> ordinary user -> public Dorf CLI\n'
+	printf 'FROZEN CACHE -> fresh VM -> prepared operator -> public Dorf CLI\n'
 	ACTIVE_INSTANCE=$instance
 	ACTIVE_ROLE=run
 	ACTIVE_CACHE_KEY=$CACHE_KEY
@@ -466,7 +466,7 @@ prove() {
 	wait_for_guest "$instance"
 	uid=$(outer_incus exec "$instance" -- id -u "$GUEST_USER")
 	gid=$(outer_incus exec "$instance" -- id -g "$GUEST_USER")
-	[[ "$uid" =~ ^[0-9]+$ && "$uid" -ne 0 && "$gid" =~ ^[0-9]+$ ]] || die "cached guest ordinary-user identity is invalid"
+	[[ "$uid" =~ ^[0-9]+$ && "$uid" -ne 0 && "$gid" =~ ^[0-9]+$ ]] || die "cached guest operator identity is invalid"
 	outer_incus exec "$instance" -- install -d -o "$uid" -g "$gid" -m 0700 \
 		"$guest_root" "$guest_inbox" "$guest_evidence"
 	outer_incus file push --uid "$uid" --gid "$gid" --mode 0700 \
@@ -505,7 +505,7 @@ prove() {
 		ACTIVE_INSTANCE=
 		cleanup_temp_root
 		trap - EXIT
-		die "ordinary-user proof failed; bounded evidence retained at $evidence_dir"
+		die "operator proof failed; bounded evidence retained at $evidence_dir"
 	fi
 	delete_owned_instance "$instance" run "$CACHE_KEY" "$run_id"
 	ACTIVE_INSTANCE=

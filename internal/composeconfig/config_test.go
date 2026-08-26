@@ -51,6 +51,22 @@ func TestRenderProjectsOneProtectedComposeEnvironment(t *testing.T) {
 	}
 }
 
+func TestRenderAcceptsRootContainerIdentity(t *testing.T) {
+	spec := testSpec(t)
+	spec.UID, spec.GID = 0, 0
+
+	config, err := Render(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dotenvValue(t, config.environment, "DORF_UID"); got != "0" {
+		t.Fatalf("DORF_UID=%q want=0", got)
+	}
+	if got := dotenvValue(t, config.environment, "DORF_GID"); got != "0" {
+		t.Fatalf("DORF_GID=%q want=0", got)
+	}
+}
+
 func TestRenderSelectsStaticIncusOverlayForOneRealLocalSocket(t *testing.T) {
 	spec := testSpec(t)
 	socketPath := filepath.Join(t.TempDir(), "incus.socket")

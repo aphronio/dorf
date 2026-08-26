@@ -87,7 +87,6 @@ test_invalid_image_ref_fails_before_incus() {
 }
 
 test_guest_rejects_invalid_image_ref() {
-	[[ "$(id -u)" -ne 0 ]] || return 0
 	local output="$TEST_ROOT/guest-image-ref.txt"
 	if "$GUEST" prove --image-ref 'not a ref' >"$output" 2>&1; then
 		fail "guest accepted an invalid image reference"

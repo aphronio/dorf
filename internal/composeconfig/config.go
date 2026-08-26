@@ -304,9 +304,6 @@ func validateSpec(spec Spec) error {
 	if err := spec.Image.Validate(); err != nil {
 		return err
 	}
-	if spec.UID <= 0 || spec.GID <= 0 {
-		return fmt.Errorf("Dorf Compose requires one ordinary operator with positive UID and GID")
-	}
 	for label, path := range map[string]string{
 		"Dorf configuration directory": spec.ConfigDir,
 		"Dorf data directory":          spec.DataDir,

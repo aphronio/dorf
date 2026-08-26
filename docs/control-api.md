@@ -140,11 +140,11 @@ its explicit HTTPS and mTLS adapter instead.
 The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
 binary. `dorf setup` writes only the protected `.env` consumed by those manifests, then probes
 readiness. Dorf Go code neither constructs nor executes Compose lifecycle commands and does not
-reconcile Docker state. A human or deployment agent owns the ordinary Compose lifecycle directly
-from the generated project directory. The
+reconcile Docker state. A human or deployment agent owns the Compose lifecycle directly from the
+generated project directory. The
 [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
-is the sole authority for installation, start, update, status, restart, logs, and the resumable
-setup handoff.
+is the sole authority for operator identity, privilege, installation, start, update, status,
+restart, logs, and the resumable setup handoff.
 
 The managed project always uses its PostgreSQL service and the protected persisted deployment
 configuration as authority. `DORF_DATABASE_URL` remains only a development, test, or explicitly

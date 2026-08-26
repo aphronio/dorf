@@ -13,7 +13,7 @@ connection candidates and the selected default; a deployment currently admits on
 OpenAI authentication mode at a time.
 `provider connect` first prepares that retained candidate and publishes its protected environment
 and profile facts for the shipped static Compose project. When the running project does not yet
-reflect those facts, it stops at the ordinary operator/agent Compose handoff. Rerunning the command
+reflect those facts, it stops at the invoking operator's Compose handoff. Rerunning the command
 after that handoff verifies the candidate through the live Gateway; only complete success selects it
 as the deployment default. Publication or verification failure preserves the previous healthy
 default. The command neither runs Compose nor treats prepared state as runtime readiness.

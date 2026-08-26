@@ -40,7 +40,7 @@ func TestDockerHelperMakesAuthorityAndRefusalBoundaryExplicit(t *testing.T) {
 		"/usr/local/bin/docker",
 		"DOCKER_EXECUTABLE",
 		"/usr/bin/stat -c '%u:%a'",
-		"as_user \"$DOCKER_EXECUTABLE\"",
+		"docker_for_operator",
 		"context show",
 		"unix:///var/run/docker.sock",
 		"https://docs.docker.com/engine/install/ubuntu/",

@@ -9,11 +9,12 @@ set -eu
 
 usage() {
 	cat <<'EOF'
-Usage: docker.sh --user SAFE_NONROOT_USER \
+Usage: docker.sh --user SAFE_OPERATOR_USER \
   --acknowledge-docker-root-authority --acknowledge-firewall-impact
 
-The docker group is root-equivalent. Docker also changes host forwarding and
-firewall behavior. The user must re-login after group membership changes.
+For a non-root operator, the docker group is root-equivalent and the user must
+re-login after group membership changes. A root operator needs no group change.
+Docker also changes host forwarding and firewall behavior.
 Only Ubuntu 24.04 noble amd64 with apt and systemd is supported.
 EOF
 }
@@ -34,12 +35,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run this reviewed recipe as root"
-[ -n "$TARGET_USER" ] || die "--user SAFE_NONROOT_USER is required"
+[ -n "$TARGET_USER" ] || die "--user SAFE_OPERATOR_USER is required"
 [ "$ACK_AUTHORITY" -eq 1 ] || die "--acknowledge-docker-root-authority is required"
 [ "$ACK_FIREWALL" -eq 1 ] || die "--acknowledge-firewall-impact is required"
 printf '%s\n' "$TARGET_USER" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "unsafe user name"
 TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null || true)
-[ -n "$TARGET_UID" ] && [ "$TARGET_UID" -ne 0 ] || die "--user must be an existing non-root user"
+[ -n "$TARGET_UID" ] || die "--user must name an existing operator user"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | awk -F: '{print $6}')
 [ -d "$TARGET_HOME" ] || die "the named user has no home directory"
 
@@ -81,40 +82,67 @@ case "$AMBIENT_DOCKER" in
 esac
 resolve_docker
 
-as_user() {
-	runuser -u "$TARGET_USER" -- env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
-		PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
+docker_for_operator() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
+			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+			"$DOCKER_EXECUTABLE" "$@"
+	else
+		runuser -u "$TARGET_USER" -- env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
+			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+			"$DOCKER_EXECUTABLE" "$@"
+	fi
 }
 
 docker_ready() {
-	[ "$(as_user "$DOCKER_EXECUTABLE" context show 2>/dev/null || true)" = default ] &&
-		[ "$(as_user "$DOCKER_EXECUTABLE" context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null || true)" = unix:///var/run/docker.sock ] &&
+	[ "$(docker_for_operator context show 2>/dev/null || true)" = default ] &&
+		[ "$(docker_for_operator context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null || true)" = unix:///var/run/docker.sock ] &&
 		systemctl is-enabled --quiet docker.service && systemctl is-active --quiet docker.service &&
-		as_user "$DOCKER_EXECUTABLE" info >/dev/null 2>&1 &&
-		as_user "$DOCKER_EXECUTABLE" compose version >/dev/null 2>&1
+		docker_for_operator info >/dev/null 2>&1 &&
+		docker_for_operator compose version >/dev/null 2>&1
 }
 
 docker_installation_ready() {
-	[ "$(as_user "$DOCKER_EXECUTABLE" context show 2>/dev/null || true)" = default ] &&
-		[ "$(as_user "$DOCKER_EXECUTABLE" context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null || true)" = unix:///var/run/docker.sock ] &&
-		systemctl is-enabled --quiet docker.service && systemctl is-active --quiet docker.service &&
-		"$DOCKER_EXECUTABLE" --host unix:///var/run/docker.sock info >/dev/null 2>&1 &&
-		as_user "$DOCKER_EXECUTABLE" compose version >/dev/null 2>&1
+	if [ "$TARGET_UID" -eq 0 ]; then
+		docker_ready
+	else
+		[ "$(docker_for_operator context show 2>/dev/null || true)" = default ] &&
+			[ "$(docker_for_operator context inspect default --format '{{(index .Endpoints "docker").Host}}' 2>/dev/null || true)" = unix:///var/run/docker.sock ] &&
+			systemctl is-enabled --quiet docker.service && systemctl is-active --quiet docker.service &&
+			"$DOCKER_EXECUTABLE" --host unix:///var/run/docker.sock info >/dev/null 2>&1 &&
+			docker_for_operator compose version >/dev/null 2>&1
+	fi
 }
 
 in_group() { id -nG "$TARGET_USER" | tr ' ' '\n' | grep -Fx "$1" >/dev/null; }
+
+ensure_operator_access() {
+	if docker_ready; then
+		return 0
+	fi
+	docker_installation_ready || die "an existing Docker installation is partial, remote, or inaccessible"
+	[ "$TARGET_UID" -ne 0 ] || die "the root operator cannot reach the local Docker Engine"
+	in_group docker && die "the named docker-group user still cannot reach the local Docker Engine"
+	usermod -aG docker "$TARGET_USER"
+	docker_ready || die "the named user cannot reach Docker after the acknowledged group change"
+}
+
+report_ready() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		printf 'Docker Engine and Compose are ready for the root operator; no group change or re-login is required.\n'
+	else
+		printf 'Docker is ready. The docker group is root-equivalent; re-login is required.\n'
+	fi
+	printf 'Review Docker firewall/network behavior before publishing ports.\n'
+}
 
 if [ -n "$DOCKER_EXECUTABLE" ]; then
 	if docker_ready; then
 		printf 'Docker Engine and Compose are already ready; no changes made.\n'
 		exit 0
 	fi
-	docker_installation_ready || die "an existing Docker installation is partial, remote, or inaccessible"
-	in_group docker && die "the named docker-group user still cannot reach the local Docker Engine"
-	usermod -aG docker "$TARGET_USER"
-	docker_ready || die "the named user cannot reach Docker after the acknowledged group change"
-	printf 'Docker is ready. The docker group is root-equivalent; re-login is required.\n'
-	printf 'Review Docker firewall/network behavior before publishing ports.\n'
+	ensure_operator_access
+	report_ready
 	exit 0
 fi
 
@@ -148,9 +176,7 @@ chmod 0644 /etc/apt/sources.list.d/docker.sources
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable --now docker.service
-usermod -aG docker "$TARGET_USER"
 resolve_docker
 [ -n "$DOCKER_EXECUTABLE" ] || die "Docker installation did not publish an accepted protected executable"
-docker_ready || die "local Docker Engine or Compose verification failed"
-printf 'Docker is ready. The docker group is root-equivalent; re-login is required.\n'
-printf 'Review Docker firewall/network behavior before publishing ports.\n'
+ensure_operator_access
+report_ready

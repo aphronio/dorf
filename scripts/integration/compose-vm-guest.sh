@@ -30,8 +30,8 @@ Usage:
     --image-ref REF --sandbox-archive PATH --sandbox-manifest PATH \
     --openai-key-file PATH --work-root PATH --evidence-dir PATH
 
-cache-prep is an explicit administrator phase. prove refuses root and exercises
-Dorf's public setup handoff, Docker Compose, and the public Job CLI.
+cache-prep is an explicit administrator phase. prove runs as the current
+deployment operator when Docker, Compose, Incus, and KVM are ready for that identity.
 EOF
 }
 
@@ -76,8 +76,8 @@ cache_prep() {
 		*) die "cache-prep received unknown argument '$1'" ;;
 		esac
 	done
-	[[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "cache-prep requires one safe ordinary user"
-	[[ "$(id -u "$user")" -ne 0 ]] || die "cache-prep user must be ordinary"
+	[[ "$user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "cache-prep requires one safe operator account"
+	[[ "$(id -u "$user")" -ne 0 ]] || die "cache-prep helpers require a separate non-root operator account"
 	require_nested_kvm
 	require_sha256 "$docker_helper" "$docker_sha" docker.sh
 	require_sha256 "$incus_helper" "$incus_sha" incus.sh
@@ -91,20 +91,20 @@ cache_prep() {
 		--acknowledge-kvm-device-access \
 		--initialize-pristine
 
-	id -nG "$user" | tr ' ' '\n' | grep -Fx docker >/dev/null || die "$user did not receive Docker authority"
-	id -nG "$user" | tr ' ' '\n' | grep -Fx incus-admin >/dev/null || die "$user did not receive Incus authority"
-	id -nG "$user" | tr ' ' '\n' | grep -Fx kvm >/dev/null || die "$user did not receive KVM access"
+	id -nG "$user" | tr ' ' '\n' | grep -Fx docker >/dev/null || die "operator account $user did not receive Docker authority"
+	id -nG "$user" | tr ' ' '\n' | grep -Fx incus-admin >/dev/null || die "operator account $user did not receive Incus authority"
+	id -nG "$user" | tr ' ' '\n' | grep -Fx kvm >/dev/null || die "operator account $user did not receive KVM access"
 	as_user "$user" test -r "$KVM_DEVICE"
 	as_user "$user" test -w "$KVM_DEVICE"
 	as_user "$user" docker info >/dev/null
 	as_user "$user" docker compose version >/dev/null
 
 	local docker_containers docker_images docker_volumes incus_instances incus_images
-	docker_containers=$(as_user "$user" docker ps -aq) || die "$user cannot inventory Docker containers"
-	docker_images=$(as_user "$user" docker image ls -q) || die "$user cannot inventory Docker images"
-	docker_volumes=$(as_user "$user" docker volume ls -q) || die "$user cannot inventory Docker volumes"
-	incus_instances=$(as_user "$user" incus --force-local --project dorf list --format csv -c n) || die "$user cannot inventory the restricted Incus project"
-	incus_images=$(as_user "$user" incus --force-local --project dorf image list --format csv -c f) || die "$user cannot inventory restricted Incus images"
+	docker_containers=$(as_user "$user" docker ps -aq) || die "operator account $user cannot inventory Docker containers"
+	docker_images=$(as_user "$user" docker image ls -q) || die "operator account $user cannot inventory Docker images"
+	docker_volumes=$(as_user "$user" docker volume ls -q) || die "operator account $user cannot inventory Docker volumes"
+	incus_instances=$(as_user "$user" incus --force-local --project dorf list --format csv -c n) || die "operator account $user cannot inventory the restricted Incus project"
+	incus_images=$(as_user "$user" incus --force-local --project dorf image list --format csv -c f) || die "operator account $user cannot inventory restricted Incus images"
 	[[ -z "$docker_containers" ]] || die "cache contains Docker containers"
 	[[ -z "$docker_images" ]] || die "cache contains Docker images"
 	[[ -z "$docker_volumes" ]] || die "cache contains Docker volumes"
@@ -266,9 +266,9 @@ parse_proof_options() {
 
 assert_fresh_cache() {
 	local containers images volumes
-	containers=$(docker ps -aq) || die "ordinary proof user cannot inventory Docker containers"
-	images=$(docker image ls -q) || die "ordinary proof user cannot inventory Docker images"
-	volumes=$(docker volume ls -q) || die "ordinary proof user cannot inventory Docker volumes"
+	containers=$(docker ps -aq) || die "proof operator cannot inventory Docker containers"
+	images=$(docker image ls -q) || die "proof operator cannot inventory Docker images"
+	volumes=$(docker volume ls -q) || die "proof operator cannot inventory Docker volumes"
 	[[ -z "$containers" ]] || die "fresh proof VM already contains Docker containers"
 	[[ -z "$images" ]] || die "fresh release-proof VM already contains Docker images"
 	[[ -z "$volumes" ]] || die "fresh proof VM already contains Docker volumes"
@@ -491,17 +491,17 @@ wait_for_cleanup() {
 }
 
 prove() {
-	[[ "$(id -u)" -ne 0 ]] || die "prove must run as an ordinary user"
 	arm_ephemeral_key_cleanup "$@"
 	parse_proof_options "$@"
 	for command in docker incus jq od realpath sha256sum tar; do
 		require_command "$command"
 	done
 	require_nested_kvm
-	id -nG | tr ' ' '\n' | grep -Fx docker >/dev/null || die "ordinary proof user lacks Docker authority"
-	id -nG | tr ' ' '\n' | grep -Fx incus-admin >/dev/null || die "ordinary proof user lacks Incus authority"
-	id -nG | tr ' ' '\n' | grep -Fx kvm >/dev/null || die "ordinary proof user lacks KVM device access"
-	[[ -r "$KVM_DEVICE" && -w "$KVM_DEVICE" ]] || die "ordinary proof user cannot open the KVM device"
+	docker info >/dev/null || die "proof operator cannot reach the local Docker daemon"
+	docker compose version >/dev/null || die "Docker Compose is unavailable to the proof operator"
+	incus --force-local --project dorf query /1.0 >/dev/null ||
+		die "proof operator cannot reach the restricted local Incus project"
+	[[ -r "$KVM_DEVICE" && -w "$KVM_DEVICE" ]] || die "proof operator cannot open the KVM device"
 	assert_fresh_cache
 	prepare_release
 	run_setup

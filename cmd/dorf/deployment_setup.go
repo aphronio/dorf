@@ -438,13 +438,6 @@ func controlAPIReady(ctx context.Context, releaseVersion string, client *http.Cl
 	return true, "ready"
 }
 
-func requireOrdinaryDeploymentOperator() error {
-	if os.Geteuid() == 0 {
-		return fmt.Errorf("Dorf deployment setup must run as the ordinary operator, not root")
-	}
-	return nil
-}
-
 type setupBootstrapKind = bootstraphelper.Name
 
 const (
@@ -453,7 +446,8 @@ const (
 )
 
 func setupBootstrapHandoff(kind setupBootstrapKind, cause error, output io.Writer) error {
-	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
+	euid := os.Geteuid()
+	account, err := user.LookupId(strconv.Itoa(euid))
 	if err != nil {
 		return fmt.Errorf("resolve current Dorf operator for %s handoff: %w", kind, err)
 	}
@@ -468,7 +462,10 @@ func setupBootstrapHandoff(kind setupBootstrapKind, cause error, output io.Write
 	if err != nil {
 		return fmt.Errorf("materialize exact %s bootstrap helper: %w", kind, err)
 	}
-	arguments := []string{"sudo", "--", artifact.Path, "--user", account.Username}
+	arguments := []string{artifact.Path, "--user", account.Username}
+	if euid != 0 {
+		arguments = append([]string{"sudo", "--"}, arguments...)
+	}
 	manual := []string{}
 	warning := ""
 	switch kind {

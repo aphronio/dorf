@@ -9,11 +9,13 @@ set -eu
 
 usage() {
 	cat <<'EOF'
-Usage: incus.sh --user SAFE_NONROOT_USER \
+Usage: incus.sh --user SAFE_OPERATOR_USER \
   --acknowledge-incus-root-authority --acknowledge-kvm-device-access \
   [--initialize-pristine]
 
-incus-admin is root-equivalent and kvm grants virtualization-device access.
+For a non-root operator, incus-admin is root-equivalent and kvm grants
+virtualization-device access; the user must re-login after group changes.
+A root operator needs no group change or re-login.
 Only Ubuntu 24.04 noble amd64 with systemd, apt, and /dev/kvm is supported.
 --initialize-pristine runs "incus admin init --minimal" only when the daemon
 has zero storage pools and zero managed networks. Complete daemons and remote
@@ -39,12 +41,12 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "run this reviewed recipe as root"
-[ -n "$TARGET_USER" ] || die "--user SAFE_NONROOT_USER is required"
+[ -n "$TARGET_USER" ] || die "--user SAFE_OPERATOR_USER is required"
 [ "$ACK_AUTHORITY" -eq 1 ] || die "--acknowledge-incus-root-authority is required"
 [ "$ACK_KVM" -eq 1 ] || die "--acknowledge-kvm-device-access is required"
 printf '%s\n' "$TARGET_USER" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || die "unsafe user name"
 TARGET_UID=$(id -u "$TARGET_USER" 2>/dev/null || true)
-[ -n "$TARGET_UID" ] && [ "$TARGET_UID" -ne 0 ] || die "--user must be an existing non-root user"
+[ -n "$TARGET_UID" ] || die "--user must name an existing operator user"
 TARGET_HOME=$(getent passwd "$TARGET_USER" | awk -F: '{print $6}')
 [ -d "$TARGET_HOME" ] || die "the named user has no home directory"
 
@@ -65,9 +67,13 @@ guided_install() {
 		[ -f "$KEY" ] &&
 		[ "$(gpg --batch --with-colons --show-keys --fingerprint "$KEY" | awk -F: '$1 == "fpr" {print $10; exit}')" = 4EFC590696CB15B87C73A3AD82CC8797C838DCFD ]
 }
-as_user() {
-	runuser -u "$TARGET_USER" -- env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
-		PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin incus --force-local "$@"
+incus_for_operator() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		local_incus "$@"
+	else
+		runuser -u "$TARGET_USER" -- env -i HOME="$TARGET_HOME" USER="$TARGET_USER" \
+			PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin incus --force-local "$@"
+	fi
 }
 has_extension() { local_incus query /1.0 2>/dev/null | grep -F '"instance_port_forward"' >/dev/null; }
 project_ready() {
@@ -84,6 +90,32 @@ count_resources() {
 	NETWORK_COUNT=$(local_incus query '/1.0/networks?recursion=1&all-projects=true' | grep -o '"managed"[[:space:]]*:[[:space:]]*true' | wc -l)
 }
 in_group() { id -nG "$TARGET_USER" | tr ' ' '\n' | grep -Fx "$1" >/dev/null; }
+operator_access_ready() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		local_incus query /1.0 >/dev/null 2>&1
+	else
+		in_group incus-admin && in_group kvm && incus_for_operator query /1.0 >/dev/null 2>&1
+	fi
+}
+
+ensure_operator_access() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		local_incus query /1.0 >/dev/null || die "the root operator cannot reach the local Incus daemon"
+		return 0
+	fi
+	usermod -aG incus-admin "$TARGET_USER"
+	usermod -aG kvm "$TARGET_USER"
+	incus_for_operator query /1.0 >/dev/null || die "the named user cannot reach the local Incus daemon"
+}
+
+report_ready() {
+	if [ "$TARGET_UID" -eq 0 ]; then
+		printf 'Incus/QEMU is ready with instance_port_forward for the root operator; no group change or re-login is required.\n'
+	else
+		printf 'Incus/QEMU is ready with instance_port_forward. Re-login is required.\n'
+	fi
+	printf 'incus-admin is root-equivalent; remote API configuration was not changed.\n'
+}
 
 if guided_install && command -v qemu-system-x86_64 >/dev/null 2>&1 && systemctl is-enabled --quiet incus.service &&
 	systemctl is-active --quiet incus.service && has_extension; then
@@ -92,7 +124,7 @@ if guided_install && command -v qemu-system-x86_64 >/dev/null 2>&1 && systemctl 
 		local_incus storage show default >/dev/null 2>&1 &&
 		local_incus query /1.0/networks/incusbr0 | grep -E '"managed"[[:space:]]*:[[:space:]]*true' >/dev/null &&
 		project_ready &&
-		in_group incus-admin && in_group kvm && as_user query /1.0 >/dev/null 2>&1; then
+		operator_access_ready; then
 		printf 'Incus/QEMU is already ready; no changes made.\n'
 		exit 0
 	fi
@@ -154,8 +186,5 @@ if ! local_incus project show dorf >/dev/null 2>&1; then
 		--config restricted.storage-pools.access=default
 fi
 project_ready || die "existing project 'dorf' has incompatible restricted authority"
-usermod -aG incus-admin "$TARGET_USER"
-usermod -aG kvm "$TARGET_USER"
-as_user query /1.0 >/dev/null || die "the named user cannot reach the local Incus daemon"
-printf 'Incus/QEMU is ready with instance_port_forward. Re-login is required.\n'
-printf 'incus-admin is root-equivalent; remote API configuration was not changed.\n'
+ensure_operator_access
+report_ready
