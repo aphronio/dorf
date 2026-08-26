@@ -179,26 +179,6 @@ func testDatabase(t *testing.T) (*sql.DB, postgres.Store, *absurd.Client) {
 		db.Close()
 		t.Fatal(err)
 	}
-	// The shared local test database may retain the pre-007 fixture across
-	// branch upgrades. Test data has no operator-owned compatibility boundary;
-	// converge only that exact fixture before exercising current behavior.
-	fixture := completeIncusProfile("incus", "codex", strings.Repeat("a", 64))
-	fixture.DefinitionHash = fixture.CurrentDefinitionHash()
-	if _, err := db.ExecContext(context.Background(), `
-delete from dorf.sandbox_profile_verifications
-where profile_name='incus'
-  and exists(select 1 from dorf.sandbox_profiles where name='incus' and definition_hash is null)`); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(context.Background(), `update dorf.sandbox_profiles
-set definition_hash=$1,incus_endpoint_authority_hash=$2,incus_project=$3,incus_storage_pool=$4,
-    incus_network=$5,incus_disk_size=$6,incus_gateway_url=$7
-where name='incus' and definition_hash is null`, fixture.DefinitionHash, fixture.IncusEndpointAuthorityHash,
-		fixture.IncusProject, fixture.IncusStoragePool, fixture.IncusNetwork, fixture.IncusDiskSize, fixture.IncusGatewayURL); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
 	profile, _, err := store.CreateSandboxProfile(context.Background(), completeIncusProfile("incus", "codex", strings.Repeat("a", 64)))
 	if err != nil {
 		db.Close()
@@ -916,7 +896,10 @@ func TestSandboxProfileVerificationTransitionSerializesNewAdmission(t *testing.T
 		t.Fatal(err)
 	}
 	nonce := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
-	if _, err := transition.ExecContext(ctx, `insert into dorf.sandbox_profile_verifications(profile_name,contract_version,sandbox_id,ownership_nonce) values($1,$2,$3,$4)`, name, core.BaseProfileContract, "transition-"+name, nonce); err != nil {
+	if _, err := transition.ExecContext(ctx, `
+insert into dorf.sandbox_profile_verifications(profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce)
+select name,$2,definition_hash,$3,$4 from dorf.sandbox_profiles where name=$1
+`, name, core.BaseProfileContract, "transition-"+name, nonce); err != nil {
 		t.Fatal(err)
 	}
 	if err := transition.Commit(); err != nil {
@@ -1163,9 +1146,11 @@ func TestSandboxProfileSchemaRejectsNullRequiredFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `
-		insert into dorf.sandbox_profile_verifications(
-			profile_name,contract_version,sandbox_id,ownership_nonce,probe_completed_at
-		) values($1,'base-1',$2,$3,clock_timestamp())`, name, "sandbox-"+name, strings.Repeat("f", 64)); err == nil {
+			insert into dorf.sandbox_profile_verifications(
+				profile_name,contract_version,definition_hash,sandbox_id,ownership_nonce,probe_completed_at
+			)
+			select name,'base-1',definition_hash,$2,$3,clock_timestamp()
+			from dorf.sandbox_profiles where name=$1`, name, "sandbox-"+name, strings.Repeat("f", 64)); err == nil {
 		t.Fatal("schema accepted a completed profile probe without a Harness version")
 	}
 }

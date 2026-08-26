@@ -340,7 +340,7 @@ func (t Tunnel) verifyPinnedBinary(path string) error {
 	}
 	digest := sha256.Sum256(raw)
 	if hex.EncodeToString(digest[:]) != t.expectedBinarySHA256() {
-		return fmt.Errorf("cloudflared %s checksum mismatch; rerun dorf service reconcile", BinaryVersion)
+		return fmt.Errorf("cloudflared %s checksum mismatch; rerun dorf setup", BinaryVersion)
 	}
 	return nil
 }

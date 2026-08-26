@@ -1,0 +1,220 @@
+name: dorf
+
+services:
+  postgres:
+    image: postgres:17.10-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${DORF_POSTGRES_DB}"
+      POSTGRES_USER: "${DORF_POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${DORF_POSTGRES_PASSWORD}"
+    ports:
+      - "127.0.0.1:${DORF_POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - database
+
+  migrate:
+    image: "${DORF_IMAGE_REF}"
+    pull_policy: "${DORF_IMAGE_PULL_POLICY}"
+    command: ["migrate"]
+    user: "${DORF_UID}:${DORF_GID}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    environment:
+      XDG_CONFIG_HOME: /var/lib/dorf/.config
+      XDG_DATA_HOME: /var/lib/dorf/.local/share
+      XDG_STATE_HOME: /var/lib/dorf/.local/state
+      DORF_DATABASE_URL: "${DORF_DATABASE_URL}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - database
+
+  worker:
+    image: "${DORF_IMAGE_REF}"
+    pull_policy: "${DORF_IMAGE_PULL_POLICY}"
+    command: ["worker"]
+    user: "${DORF_UID}:${DORF_GID}"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dorf", "_container-control-reader-health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    environment:
+      XDG_CONFIG_HOME: /var/lib/dorf/.config
+      XDG_DATA_HOME: /var/lib/dorf/.local/share
+      XDG_STATE_HOME: /var/lib/dorf/.local/state
+      DORF_DATABASE_URL: "${DORF_DATABASE_URL}"
+      DORF_CONTROL_READER_TOKEN: "${DORF_CONTROL_READER_TOKEN}"
+      DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN: "${DORF_PROVIDER_GATEWAY_INTERNAL_ORIGIN:-}"
+      E2B_API_KEY: "${E2B_API_KEY:-}"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+    volumes:
+      - type: bind
+        source: "${DORF_CONFIG_DIR}"
+        target: /var/lib/dorf/.config/dorf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${DORF_DATA_DIR}"
+        target: /var/lib/dorf/.local/share/dorf
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${DORF_STATE_DIR}"
+        target: /var/lib/dorf/.local/state/dorf
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      application:
+      database:
+      reader:
+        aliases:
+          - control-reader-rpc
+      worker-egress:
+
+  control-api:
+    image: "${DORF_IMAGE_REF}"
+    pull_policy: "${DORF_IMAGE_PULL_POLICY}"
+    command: ["serve", "--listen", "0.0.0.0:8745", "--allow-container-listen"]
+    user: "${DORF_UID}:${DORF_GID}"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/dorf", "_container-control-api-health"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    environment:
+      XDG_CONFIG_HOME: /var/lib/dorf/.config
+      XDG_DATA_HOME: /var/lib/dorf/.local/share
+      XDG_STATE_HOME: /var/lib/dorf/.local/state
+      DORF_DATABASE_URL: "${DORF_DATABASE_URL}"
+      DORF_CONTROL_READER_ORIGIN: http://control-reader-rpc:8756
+      DORF_CONTROL_READER_TOKEN: "${DORF_CONTROL_READER_TOKEN}"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+    ports:
+      - "127.0.0.1:8745:8745"
+    volumes:
+      - type: bind
+        source: "${DORF_STATE_DIR}"
+        target: /var/lib/dorf/.local/state/dorf
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      worker:
+        condition: service_healthy
+    networks:
+      - database
+      - reader
+
+  provider-gateway:
+    profiles: ["gateway", "cloudflare"]
+    image: "${DORF_IMAGE_REF}"
+    pull_policy: "${DORF_IMAGE_PULL_POLICY}"
+    command: ["_container-provider-gateway"]
+    user: "${DORF_UID}:${DORF_GID}"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DORF_PROVIDER_GATEWAY_STATE: "${DORF_PROVIDER_GATEWAY_HOST_STATE_PATH}"
+      DORF_PROVIDER_GATEWAY_CONFIG_DIGEST: "${DORF_PROVIDER_GATEWAY_DIGEST}"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+    ports:
+      - "${DORF_PROVIDER_GATEWAY_PUBLISH}:8317:8317"
+    volumes:
+      - type: bind
+        source: "${DORF_PROVIDER_GATEWAY_HOST_STATE_PATH}"
+        target: "${DORF_PROVIDER_GATEWAY_HOST_STATE_PATH}"
+        bind:
+          create_host_path: false
+    networks:
+      - application
+      - ingress
+
+  cloudflared:
+    profiles: ["cloudflare"]
+    image: "${DORF_IMAGE_REF}"
+    pull_policy: "${DORF_IMAGE_PULL_POLICY}"
+    command: ["_container-cloudflared"]
+    user: "${DORF_UID}:${DORF_GID}"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DORF_CLOUDFLARE_STATE: "${DORF_CLOUDFLARE_HOST_STATE_PATH}"
+      DORF_CLOUDFLARE_CONFIG_DIGEST: "${DORF_CLOUDFLARE_DIGEST}"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+    volumes:
+      - type: bind
+        source: "${DORF_CLOUDFLARE_HOST_STATE_PATH}"
+        target: "${DORF_CLOUDFLARE_HOST_STATE_PATH}"
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      provider-gateway:
+        condition: service_started
+    networks:
+      - ingress
+
+volumes:
+  postgres-data:
+
+networks:
+  application:
+    internal: true
+  database:
+    internal: true
+  reader:
+    internal: true
+  worker-egress:
+  ingress:

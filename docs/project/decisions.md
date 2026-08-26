@@ -2562,8 +2562,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 - **Deployment:** The API service binds a host-private HTTP listener behind operator-owned HTTPS
   ingress. It authenticates clients, admits and projects Jobs, and requests cleanup, but it registers
   no execution handlers. A separate durable worker owns task execution and recovery. D100 later
-  fixed their narrow lifecycle interface; D101 now supervises both in one Compose project while
-  keeping ingress operator-owned.
+  proved their independent process-loss boundary; D101 now supervises both in one static Compose
+  project with a direct operator-owned lifecycle while keeping ingress operator-owned.
 - **Why:** SSH grants host authority that ordinary Job control neither needs nor should imply, while
   exposing every Core mechanism would be premature. The smaller authenticated projection makes a
   self-hosted deployment useful off-host without granting database, executor, provider, or host
@@ -2638,9 +2638,10 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   Add newest-first keyset listing of bounded Job summaries, stable JSON authentication status, and
   host-only Client list, show, and idempotent revoke commands. Do not add a generator dependency,
   SDK family, remote Client administration, or another status or event model.
-- **Service lifecycle:** Superseded by D101's one Compose project. D100's narrow setup, status,
-  restart, logs, reconcile, update, and operator-owned HTTPS ingress interfaces remain accepted;
-  systemd units, notification, fragment custody, and journal facts do not.
+- **Service lifecycle:** Superseded by D101's static operator-owned Compose lifecycle. D100's
+  operator-owned HTTPS ingress remains accepted; its Dorf-specific status, restart, logs,
+  reconciliation, update handoff, systemd units, notification, fragment custody, and journal facts
+  are historical rather than current interfaces.
 - **Historical proof:** The full live PostgreSQL suite passed. A non-TTY direct HTTPS client derived
   the Job-list operation from the published OpenAPI document, traversed a page, and received the
   catalogued `invalid_cursor` response for an altered cursor. A temporary Client appeared in host
@@ -2664,30 +2665,40 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
 
 - **Status:** Accepted implementation direction — 2026-08-26; live terminal proof pending
 - **Decision:** Replace D071's standalone PostgreSQL container and D100's systemd units with one
-  versioned Dorf Docker Compose project. The
+  versioned static Dorf Docker Compose project. The
   [Remote Control API](../control-api.md#deployment-services) owns its exact service and network
-  topology. Each long-running responsibility has one
-  foreground container process and Compose is its only supervisor. The default project uses bridge
-  networking, publishes PostgreSQL and the control API only on host loopback, keeps the Gateway
-  private, and never mounts the host Docker socket into a Dorf workload or Sandbox.
+  topology. Each long-running responsibility has one foreground container process and Compose is
+  its only supervisor.
+- **Static delivery and operator lifecycle:** The application archive carries
+  `dorf-compose.yaml` and `dorf-compose-incus.yaml`, and the installer places them beside the binary.
+  Setup derives and atomically writes the protected `.env` in the generated project directory, then
+  probes readiness. Dorf Go code does not render Compose YAML, construct or execute Compose CLI
+  commands, or inspect and reconcile Docker resources. Setup's only Docker command is a read-only
+  Engine readiness probe.
+  The human or deployment agent runs the ordinary Compose lifecycle directly;
+  [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
+  is its sole procedural authority. Updating replaces the binary and static manifests; rerunning
+  setup refreshes `.env`, and the same direct Compose start/update operation applies it.
+- **Release image:** The release authority builds and pushes one exact Linux/amd64 semantic-version
+  image at `ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH`. Official setup selects that reference with
+  `pull_policy: always`. There is no production Docker image tar, local image cache, OCI parser,
+  tag-to-image receipt, or Go-owned image loading and attestation path.
+- **Project topology:** The base project contains Compose-owned PostgreSQL, a one-shot migration,
+  the durable worker, and the private control API. Successful migration gates the worker and API.
+  The Provider Gateway and guided Cloudflare Tunnel are optional profiled foreground services. The
+  default project uses bridge networking, publishes PostgreSQL and the control API only on host
+  loopback, and never uses host networking or mounts the host Docker socket into a Dorf workload or
+  Sandbox.
 - **Database boundary:** The Compose-managed deployment defined here always uses the PostgreSQL
-  service in the project. `DORF_DATABASE_URL` remains a development, test, and explicitly manually supervised
-  process override; it does not select a second `dorf setup` or Compose topology.
-- **Operator lifecycle:** Preserve `dorf setup`, `dorf update`, `dorf service status`, `restart`,
-  `logs`, and `reconcile` as the human and agent interfaces, backed only by the exact Compose
-  project. Status reports project/service convergence and actual API readiness without fabricating
-  facts belonging to a superseded supervisor. Migrations settle once before the API and worker
-  start. The deployment uses the protected persisted configuration as authority and derives
-  container-only addresses and secrets from it rather than creating a second editable
-  configuration source. The supported release ships one immutable, checksummed Docker-loadable
-  container image archive; Compose loads and runs that exact image identity. A local image build
-  remains a contributor and disposable-test path rather than a second production release authority.
-  Setup's `--local-image` and paired `--incus-manifest`/`--incus-archive` inputs are explicit
-  transports for that contributor or disposable-proof path, not configurable release channels.
+  service and named volume in the project. Its fixed PostgreSQL image belongs in the static manifest,
+  not mutable deployment state. `DORF_DATABASE_URL` remains a development, test, and explicitly
+  manually supervised process override; it does not select another managed topology. There is no
+  standalone PostgreSQL custody or released database handoff to preserve.
 - **Capability custody:** The private control API keeps database and HTTP admission authority but
-  receives no Sandbox-provider, GitHub, Gateway, or Incus credential or socket. One independently
-  keyed, authenticated control reader exposes only the fixed read operations required by that API.
-  The exact capability and network separation lives in the
+  receives no Sandbox-provider, GitHub, Gateway, or Incus credential or socket. The already
+  credentialed worker hosts one independently authenticated narrow reader exposing only the fixed
+  read operations required by that API; it is not a standalone service. The exact capability and
+  network separation lives in the
   [deployment-service authority](../control-api.md#deployment-services).
 - **Privilege and helpers:** Host prerequisites remain outside Dorf's runtime custody. The exact
   no-hidden-privilege and administrator-handoff contract lives in
@@ -2707,33 +2718,36 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   the separate guest-to-Provider-Gateway path. Guided local setup follows D036's one-time route
   rule; every other topology requires an explicit guest-reachable private/VPN address or public
   HTTPS ingress, and profile verification must prove it before admission. Dorf mounts neither a
-  general operator CLI configuration nor an invented data-plane proxy. Guided setup may adopt only
-  the exact pre-endpoint-custody Profile shape into the new local scope and must require a fresh
-  live proof; [Getting started](../getting-started.md) owns that migration procedure.
+  general operator CLI configuration nor an invented data-plane proxy. Guided remote HTTPS setup
+  remains gated until its complete topology passes the accepted live proof. No unreleased legacy
+  Profile adoption or migration path remains.
 - **Guided experience:** Missing infrastructure is not a documentation dead end. Interactive setup
   keeps its deliberate choices, exact plans, secret/browser pauses, profile creation, functional
   verification, default selection, and resumable progress. Humans receive concise explanation and
   a manual path; agents receive an exact command and must still pause for consequential authority.
-- **Why:** The API and worker need durable supervision, not a custom privileged service manager.
-  PostgreSQL is already containerized, while the systemd and standalone-container implementations
-  duplicate lifecycle, identity, readiness, update, and recovery concerns that Compose can own as
-  one deployment. Separating explicit bootstrap convenience from product runtime custody preserves
-  the deliberately low-friction setup experience without making Dorf responsible for a host's
-  package manager, init system, virtualization policy, or ingress product.
+- **Why:** The API and worker need durable supervision, not a custom privileged service manager or
+  a Go wrapper around Compose. PostgreSQL is already containerized, while the systemd,
+  standalone-container, image-acquisition, and Compose-manager implementations duplicate lifecycle,
+  identity, readiness, update, and recovery concerns already owned by release artifacts and
+  Compose. Separating explicit bootstrap convenience from product runtime custody preserves the
+  deliberately low-friction setup experience without making Dorf responsible for a host's package
+  manager, init system, virtualization policy, container lifecycle, or ingress product.
 - **Supersedes:** D041's automatic host mutation, D071's deliberate Compose omission and standalone
-  database reconciler, and only D100's systemd service-lifecycle choice. D100's OpenAPI,
+  database reconciler, and D100's entire Dorf-owned service-lifecycle interface. D100's OpenAPI,
   authentication, Job-list, Problem, API/worker separation, and operator-owned public control
-  ingress decisions remain accepted.
+  ingress decisions remain accepted. Unreleased systemd, standalone-database, image-archive,
+  Compose-manager, and legacy-Profile compatibility shapes are deleted rather than migrated.
 - **Refines:** D012's local-Incus assumption, D036's Gateway and Cloudflare supervision, D067's
   provider-route wording, D070's Incus profile custody, and D097's API/worker deployment shape. It
   does not change their Job, Sandbox, Gateway, or authenticated-client authorities.
 - **Proof gate:** Before this becomes the supported deployment, the repository-owned
   [frozen Compose VM harness](../../scripts/integration/compose-vm.sh) must let
   an administrator prepare Docker, Compose, and an Incus endpoint, then let a fresh ordinary user
-  run setup without Dorf invoking `sudo`, complete a real Job, survive worker and API restart,
-  retrieve required state, and clean up. E2B/remote-Gateway behavior needs the cloud-controller
-  terminal; local Incus behavior needs the workstation terminal; remote Incus remains unsupported
-  until HTTPS client identity, instance-port forwarding, and the guest-to-Gateway path pass together.
+  run setup without Dorf invoking `sudo`, apply the static project with ordinary Compose, complete a
+  real Job, survive direct worker and API restart, retrieve required state, and clean up.
+  E2B/remote-Gateway behavior needs the cloud-controller terminal; local Incus behavior needs the
+  workstation terminal; remote Incus remains unsupported until HTTPS client identity,
+  instance-port forwarding, and the guest-to-Gateway path pass together.
 - **Reconsider when:** Compose cannot preserve deterministic migration and recovery under real
   process loss, a supported non-Docker deployment earns equal proof, rootless container operation
   materially changes the Docker authority boundary, or repeated routed-Incus deployments justify

@@ -36,7 +36,7 @@ const (
 	initialFromID       = "dorf:initial"
 )
 
-var dorfMigrations = []string{"001_baseline.sql", "002_sandbox_custody.sql", "003_client_directed_jobs.sql", "004_control_auth.sql", "005_job_retry_requests.sql", "006_job_listing.sql", "007_profile_endpoint_custody.sql"}
+var dorfMigrations = []string{"001_baseline.sql"}
 
 type Store struct{ DB *sql.DB }
 

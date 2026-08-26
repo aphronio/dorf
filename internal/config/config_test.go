@@ -103,7 +103,6 @@ func TestLoadUsesPersistedE2BCredentialForManagedDeployment(t *testing.T) {
 	if err := deployment.Save(path, deployment.Config{
 		Database: deployment.Database{
 			Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret",
-			Image: "postgres:17.10-bookworm", ImageID: "sha256:" + strings.Repeat("a", 64),
 		},
 		E2B: &deployment.E2B{APIKey: "persisted-managed-key"},
 	}); err != nil {
@@ -241,7 +240,6 @@ func TestDatabaseURLOverrideDoesNotErasePersistedIncusAuthority(t *testing.T) {
 	if err := deployment.Save(path, deployment.Config{
 		Database: deployment.Database{
 			Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret",
-			Image: "postgres:17.10-bookworm", ImageID: "sha256:exact",
 		},
 		Incus: &want,
 	}); err != nil {

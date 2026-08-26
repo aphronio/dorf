@@ -7,19 +7,20 @@ authority. [Getting started](getting-started.md) owns procedures and
 
 ## Role boundary
 
-The **deployment-host agent** may install Dorf, run setup, manage Profiles and optional integrations,
-operate diagnostics, reconcile Dorf's managed Compose project, and coordinate storage,
-provider, Harness, and operator-owned ingress boundaries. It must pause for every password, secret,
-browser authorization, paid service, administrator helper, or consequential infrastructure choice.
+The **deployment-host agent** may install Dorf, run setup, apply the documented static Compose
+project directly, manage Profiles and optional integrations, operate diagnostics, and coordinate
+storage, provider, Harness, and operator-owned ingress boundaries. It must pause for every password,
+secret, browser authorization, paid service, administrator helper, or consequential infrastructure
+choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
 authentication, admit a direct Job or either documented built-in workflow, inspect and watch the
 Job, list bounded Job references, send or inspect Messages, request eligible retry, read an exact
 Sandbox file, inspect Evidence, and request cleanup. It must not run deployment-host commands such
-as `dorf setup`, `dorf serve`, `dorf worker`, `dorf service`, `dorf client`, database or migration
-commands, `dorf provider`, `dorf profile`, or GitHub integration setup. It must not use SSH or
-local-only commands to work around a missing remote capability. The deployment host owns all of
-those operations.
+as `dorf setup`, `dorf serve`, `dorf worker`, `dorf client`, database or migration commands,
+`dorf provider`, `dorf profile`, or GitHub integration setup, and it must not operate the deployment
+host's Compose project. It must not use SSH or local-only commands to work around a missing remote
+capability. The deployment host owns all of those operations.
 
 ## Common installation protocol
 
@@ -34,21 +35,22 @@ those operations.
 ## Deployment-host protocol
 
 Follow the complete setup and readiness procedure in Getting started. Let `dorf setup` select and
-prepare the approved Sandbox and Harness path. Setup's host-prerequisite checks are read-only. If it
+prepare the approved Sandbox and Harness path and write the protected `.env` for the installed
+static Compose manifests. Setup's host-prerequisite checks are read-only. If it
 offers an administrator helper, follow the exact handoff in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pause
 for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
 escalation prompt appears.
 
-Use setup's local image transport options only when the human explicitly requests the contributor
-or disposable-proof path documented in Getting started.
+When setup reports its Compose handoff, run only the ordinary Compose lifecycle documented in
+Getting started, then rerun setup so it can probe readiness and resume. Dorf never runs or
+constructs that command. Do not invent a Dorf wrapper, edit the protected generated `.env`, or
+start separate foreground Dorf processes.
 
 Cloudflare has no shell helper. Keep its existing guided browser, DNS, and named-Tunnel flow, pausing
-for the human authorization it requests. Prove the managed Compose project with the
-[service diagnostic](support.md), and use only the lifecycle commands and targets documented by the
-[deployment-service authority](control-api.md#deployment-services). Run the documented Profile,
-Provider Gateway, and `dorf doctor` checks with the exact selected names. Do not directly supervise
-managed project processes.
+for the human authorization it requests. Prove the project through the deployment-host procedure
+and [Support](support.md), then run the documented Profile, Provider Gateway, and `dorf doctor`
+checks with the exact selected names.
 
 Optional integrations remain host concerns. Pause while the human completes browser authorization,
 and return a short-lived code only to its waiting command. Let runtime composition supply integration
@@ -56,7 +58,7 @@ authority instead of putting credentials or integration settings in a Job reques
 
 Keep the operator-owned HTTPS ingress distinct from both the Compose-managed private control API and
 the Provider Gateway origin. Do not infer service readiness from a process or terminal merely
-remaining open; use the factual status result.
+remaining open; use Compose state and setup's factual readiness result.
 
 ## Remote-client protocol
 

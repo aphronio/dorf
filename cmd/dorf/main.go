@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -64,25 +63,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("update does not accept arguments")
 		}
-		binary, err := currentDorfBinary()
-		if err != nil {
-			return err
-		}
 		result, err := releaseapp.UpdateApplication(ctx, stdout, stderr)
 		if err != nil {
 			return err
 		}
-		command := exec.CommandContext(ctx, binary, "service", "reconcile", "--yes", "--existing")
-		command.Stdin, command.Stdout, command.Stderr = os.Stdin, stdout, stderr
-		if err := command.Run(); err != nil {
-			installed := result.From
-			if result.Updated {
-				installed = result.Latest
-			}
-			return fmt.Errorf("Dorf %s is installed, but Compose services were not reconciled: %w; run dorf service reconcile --yes", installed, err)
-		}
 		if result.Updated {
 			fmt.Fprintf(stdout, "Dorf update complete: %s -> %s\n", result.From, result.Latest)
+			fmt.Fprintln(stdout, "On a deployment host, run dorf setup and follow the deployment guide it links.")
 		} else if result.From == result.Latest {
 			fmt.Fprintf(stdout, "Dorf is already up to date: %s\n", result.From)
 		} else {
@@ -90,10 +77,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return nil
 	}
-	if handled, err := composeForegroundCommand(ctx, args, stdout, stderr); handled || err != nil {
-		return err
-	}
-	if handled, err := composeServiceRootCommand(ctx, args, stdout, stderr); handled || err != nil {
+	if handled, err := containerForegroundCommand(ctx, args, stdout, stderr); handled || err != nil {
 		return err
 	}
 	if handled, err := remoteCommand(ctx, args, stdout, stderr); handled || err != nil {
@@ -403,7 +387,7 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 		}
 	}
 	if err := makeProviderConnectionReady(ctx, *name, func(ctx context.Context) error {
-		return reconcileExistingComposeServices(ctx, currentComposeServiceManager(), stdout, stderr)
+		return refreshExistingDeploymentConfig(ctx, stdout)
 	}, g.FinalizeConnection, g.SetDefaultConnection); err != nil {
 		return err
 	}
@@ -414,15 +398,15 @@ func providerCommand(ctx context.Context, store postgres.Store, cfg config.Confi
 func makeProviderConnectionReady(
 	ctx context.Context,
 	name string,
-	reconcile func(context.Context) error,
+	prepare func(context.Context) error,
 	finalize func(context.Context, string) error,
 	setDefault func(string) error,
 ) error {
-	if err := reconcile(ctx); err != nil {
-		return fmt.Errorf("reconcile Compose deployment for AI connection %q: %w", name, err)
+	if err := prepare(ctx); err != nil {
+		return fmt.Errorf("prepare deployment configuration for AI connection %q: %w", name, err)
 	}
 	if err := finalize(ctx, name); err != nil {
-		return fmt.Errorf("verify AI connection %q through the Compose Gateway: %w", name, err)
+		return fmt.Errorf("verify AI connection %q through the deployment Gateway: %w", name, err)
 	}
 	if err := setDefault(name); err != nil {
 		return fmt.Errorf("select default AI connection %q: %w", name, err)
@@ -843,7 +827,7 @@ func (values *sandboxProviderFlags) Set(raw string) error {
 func parseSetupOptions(args []string, stderr io.Writer) (setupOptions, error) {
 	set := flag.NewFlagSet("setup", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	yes := set.Bool("yes", false, "approve the Compose deployment and guided setup choices")
+	yes := set.Bool("yes", false, "approve guided setup choices")
 	connection := set.String("ai-connection", "", "named AI connection (default: deployment default)")
 	profileName := set.String("profile", "", "named Sandbox profile (default: deployment default)")
 	localImage := set.String("local-image", "", "trust one already-loaded exact contributor/integration image reference")
@@ -924,16 +908,15 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if cfg.DatabaseExternal {
 		return fmt.Errorf("managed dorf setup does not accept DORF_DATABASE_URL; unset it or supervise the development deployment explicitly")
 	}
-	if err := requireOrdinaryComposeOperator(); err != nil {
+	if err := requireOrdinaryDeploymentOperator(); err != nil {
 		return err
 	}
 	presenter := newSetupPresenter(stdout)
 	presenter.Welcome()
-	manager := currentComposeServiceManager()
-	if err := manager.CheckDocker(ctx); err != nil {
+	if err := checkDockerEngine(ctx); err != nil {
 		return setupBootstrapHandoff(bootstrapDocker, err, stdout)
 	}
-	presenter.Ready("Host runtime", "Docker Engine · Compose")
+	presenter.Ready("Host runtime", "Docker Engine")
 
 	database, err := hostsetup.InitializeDatabase(cfg.DeploymentPath)
 	if err != nil {
@@ -943,7 +926,7 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	if err != nil {
 		return err
 	}
-	image, err := reconcileSetupBaseServices(ctx, manager, options, stdout, stderr)
+	_, err = prepareSetupDeployment(ctx, options.LocalImage, false, stdout)
 	if err != nil {
 		return err
 	}
@@ -1005,7 +988,8 @@ func setupCommand(ctx context.Context, cfg config.Config, args []string, stdout,
 	}
 	if prepared != nil {
 		if err := makeProviderConnectionReady(ctx, prepared.Connection, func(ctx context.Context) error {
-			return reconcileSetupFinalServices(ctx, manager, image, stdout, stderr)
+			_, err := prepareSetupDeployment(ctx, options.LocalImage, true, stdout)
+			return err
 		}, prepared.Gateway.FinalizeConnection, prepared.Gateway.SetDefaultConnection); err != nil {
 			return err
 		}
@@ -1242,33 +1226,22 @@ func worker(ctx context.Context, store postgres.Store, client *absurd.Client, cf
 		}
 		return err
 	}
+	readerService := controlReaderService(store, client, cfg)
+	reader, err := newWorkerControlReader(strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN")), readerService)
+	if err != nil {
+		return err
+	}
 	workerCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runCtx, cancel := context.WithCancel(workerCtx)
-	defer cancel()
-	recoveryDone := make(chan error, 1)
-	go func() {
-		err := coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
-		recoveryDone <- err
-		if err != nil && !errors.Is(err, context.Canceled) {
-			cancel()
-		}
-	}()
-	workerDone := make(chan error, 1)
-	go func() {
-		workerDone <- client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
-	}()
-	fmt.Fprintln(stdout, "Dorf durable worker started")
-	err := <-workerDone
-	cancel()
-	recoveryErr := <-recoveryDone
-	if recoveryErr != nil && !errors.Is(recoveryErr, context.Canceled) {
-		return recoveryErr
-	}
-	if errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
+	return runWorkerProcesses(workerCtx, reader,
+		func(runCtx context.Context) error {
+			return client.RunWorker(runCtx, absurd.WorkerOptions{WorkerID: workerID(), ClaimTimeout: claimTimeout, BatchSize: *concurrency, Concurrency: *concurrency})
+		},
+		func(runCtx context.Context) error {
+			return coreApplication(store, client).ReconcileCleanupRequests(runCtx, time.Second)
+		},
+		func() { fmt.Fprintln(stdout, "Dorf durable worker started") },
+	)
 }
 
 func inspect(ctx context.Context, store postgres.Store, client *absurd.Client, evidenceStore blob.Store, args []string, stdout, stderr io.Writer) error {
@@ -1833,6 +1806,6 @@ func jobAttentionNext(job core.Job, execution taskResultView) string {
 }
 
 func usage(output io.Writer) error {
-	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|service|serve|integration|migrate|doctor|provider|profile|run|job|workflow|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
+	fmt.Fprintln(output, "usage: dorf <version|update|setup|connect|auth|client|serve|integration|migrate|doctor|provider|profile|run|job|workflow|message|worker|inspect|retry|evidence|sandbox|abandon|cleanup> [options]")
 	return fmt.Errorf("unknown or missing command")
 }

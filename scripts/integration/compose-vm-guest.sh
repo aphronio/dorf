@@ -7,7 +7,11 @@ readonly PROFILE_NAME="compose-vm-proof"
 readonly CONNECTION_NAME="openai-api"
 readonly MAX_EVIDENCE_BYTES=262144
 
+readonly COMPOSE_DIR="$HOME/.local/share/dorf-compose"
+
 DORF_BIN=
+COMPOSE_MANIFEST=
+COMPOSE_INCUS_OVERLAY=
 SECRET_FILE=
 EVIDENCE_DIR=
 JOB_ID=
@@ -22,10 +26,12 @@ Usage:
   compose-vm-guest.sh cache-prep --user USER \
     --docker-helper PATH --docker-sha256 SHA256 \
     --incus-helper PATH --incus-sha256 SHA256 --guest-sha256 SHA256
-  compose-vm-guest.sh prove [proof options]
+  compose-vm-guest.sh prove --app-archive PATH --checksums PATH \
+    --image-ref REF --sandbox-archive PATH --sandbox-manifest PATH \
+    --openai-key-file PATH --work-root PATH --evidence-dir PATH
 
 cache-prep is an explicit administrator phase. prove refuses root and exercises
-only Dorf's public CLI plus read-only runtime observations.
+Dorf's public setup handoff, Docker Compose, and the public Job CLI.
 EOF
 }
 
@@ -110,6 +116,7 @@ cache_prep() {
 	for path in \
 		"$user_home/.config/dorf" \
 		"$user_home/.local/share/dorf" \
+		"$user_home/.local/share/dorf-compose" \
 		"$user_home/.local/state/dorf"; do
 		[[ ! -e "$path" && ! -L "$path" ]] || die "cache contains Dorf state at $path"
 	done
@@ -158,10 +165,12 @@ capture() {
 
 capture_failure_evidence() {
 	[[ -n "$EVIDENCE_DIR" && -d "$EVIDENCE_DIR" ]] || return 0
+	if [[ -n "$COMPOSE_MANIFEST" && -f "$COMPOSE_MANIFEST" && -f "$COMPOSE_INCUS_OVERLAY" && -f "$COMPOSE_DIR/.env" ]]; then
+		capture "$EVIDENCE_DIR/failure-compose-status.json" compose ps --all --format json || true
+		capture "$EVIDENCE_DIR/failure-api.log" compose logs --no-color --tail 200 control-api || true
+		capture "$EVIDENCE_DIR/failure-worker.log" compose logs --no-color --tail 200 worker || true
+	fi
 	if [[ -n "$DORF_BIN" && -x "$DORF_BIN" ]]; then
-		capture "$EVIDENCE_DIR/failure-service-status.json" "$DORF_BIN" service status --output json || true
-		capture "$EVIDENCE_DIR/failure-api.log" "$DORF_BIN" service logs api --lines 200 || true
-		capture "$EVIDENCE_DIR/failure-worker.log" "$DORF_BIN" service logs worker --lines 200 || true
 		if [[ -n "$JOB_ID" ]]; then
 			capture "$EVIDENCE_DIR/failure-inspect.json" "$DORF_BIN" inspect --json "$JOB_ID" || true
 		fi
@@ -205,10 +214,10 @@ arm_ephemeral_key_cleanup() {
 
 parse_proof_options() {
 	APP_ARCHIVE=
-	CONTAINER_IMAGE=
 	CHECKSUMS=
 	SANDBOX_ARCHIVE=
 	SANDBOX_MANIFEST=
+	IMAGE_REF=
 	SECRET_FILE=
 	WORK_ROOT=
 	EVIDENCE_DIR=
@@ -216,8 +225,8 @@ parse_proof_options() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--app-archive) [[ $# -ge 2 ]] || die "--app-archive needs a value"; APP_ARCHIVE=$2; shift 2 ;;
-		--container-image) [[ $# -ge 2 ]] || die "--container-image needs a value"; CONTAINER_IMAGE=$2; shift 2 ;;
 		--checksums) [[ $# -ge 2 ]] || die "--checksums needs a value"; CHECKSUMS=$2; shift 2 ;;
+		--image-ref) [[ $# -ge 2 ]] || die "--image-ref needs a value"; IMAGE_REF=$2; shift 2 ;;
 		--sandbox-archive) [[ $# -ge 2 ]] || die "--sandbox-archive needs a value"; SANDBOX_ARCHIVE=$2; shift 2 ;;
 		--sandbox-manifest) [[ $# -ge 2 ]] || die "--sandbox-manifest needs a value"; SANDBOX_MANIFEST=$2; shift 2 ;;
 		--openai-key-file)
@@ -232,6 +241,8 @@ parse_proof_options() {
 		*) die "prove received unknown argument '$1'" ;;
 		esac
 	done
+	[[ -n "$IMAGE_REF" ]] || die "prove requires --image-ref"
+	[[ "$IMAGE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "image reference is invalid"
 	local evidence_arg=$EVIDENCE_DIR
 	EVIDENCE_DIR=
 	SECRET_FILE=$(canonical_input_file "$SECRET_FILE" "--openai-key-file")
@@ -240,7 +251,6 @@ parse_proof_options() {
 	trap cleanup_proof EXIT
 	EPHEMERAL_KEY_PATH=$SECRET_FILE
 	APP_ARCHIVE=$(canonical_input_file "$APP_ARCHIVE" "--app-archive")
-	CONTAINER_IMAGE=$(canonical_input_file "$CONTAINER_IMAGE" "--container-image")
 	CHECKSUMS=$(canonical_input_file "$CHECKSUMS" "--checksums")
 	SANDBOX_ARCHIVE=$(canonical_input_file "$SANDBOX_ARCHIVE" "--sandbox-archive")
 	SANDBOX_MANIFEST=$(canonical_input_file "$SANDBOX_MANIFEST" "--sandbox-manifest")
@@ -260,12 +270,12 @@ assert_fresh_cache() {
 	images=$(docker image ls -q) || die "ordinary proof user cannot inventory Docker images"
 	volumes=$(docker volume ls -q) || die "ordinary proof user cannot inventory Docker volumes"
 	[[ -z "$containers" ]] || die "fresh proof VM already contains Docker containers"
-	[[ -z "$images" ]] || die "fresh proof VM already contains Docker images"
+	[[ -z "$images" ]] || die "fresh release-proof VM already contains Docker images"
 	[[ -z "$volumes" ]] || die "fresh proof VM already contains Docker volumes"
 	incus --force-local --project dorf query /1.0 >/dev/null
 	incus --force-local --project dorf list --format json | jq -e 'length == 0' >/dev/null || die "fresh proof VM contains an Incus instance"
 	incus --force-local --project dorf image list --format json | jq -e 'length == 0' >/dev/null || die "fresh proof VM contains a Dorf project image"
-	for path in "$HOME/.config/dorf" "$HOME/.local/share/dorf" "$HOME/.local/state/dorf"; do
+	for path in "$HOME/.config/dorf" "$HOME/.local/share/dorf" "$HOME/.local/share/dorf-compose" "$HOME/.local/state/dorf"; do
 		[[ ! -e "$path" && ! -L "$path" ]] || die "fresh proof VM contains Dorf state at $path"
 	done
 	if command -v dorf >/dev/null 2>&1; then
@@ -274,52 +284,77 @@ assert_fresh_cache() {
 }
 
 prepare_release() {
-	local app_base image_base checksums_base version
+	local app_base checksums_base version expected_checksum observed_checksum official_image_ref manifest
 	app_base=$(basename -- "$APP_ARCHIVE")
 	[[ "$app_base" =~ ^dorf_([0-9]+\.[0-9]+\.[0-9]+)_linux_x86_64\.tar\.gz$ ]] || die "application archive name is invalid"
 	version=${BASH_REMATCH[1]}
-	image_base=$(basename -- "$CONTAINER_IMAGE")
 	checksums_base=$(basename -- "$CHECKSUMS")
-	[[ "$image_base" == "dorf_${version}_linux_x86_64_container-image.docker.tar" ]] || die "container image release differs from application release"
 	[[ "$checksums_base" == "dorf_${version}_checksums.txt" ]] || die "checksum release differs from application release"
+	official_image_ref="ghcr.io/aphronio/dorf:$version"
+	[[ "$IMAGE_REF" == "$official_image_ref" ]] || die "--image-ref must equal $official_image_ref"
 	[[ "$(basename -- "$SANDBOX_ARCHIVE")" == dorf-incus-vm-v5-x86_64.tar.gz ]] || die "Sandbox archive name is invalid"
 	[[ "$(basename -- "$SANDBOX_MANIFEST")" == dorf-incus-vm-v5-x86_64.json ]] || die "Sandbox manifest name is invalid"
 	local staging="$WORK_ROOT/release-inputs"
 	install -d -m 0700 "$staging"
-	cp -- "$APP_ARCHIVE" "$CONTAINER_IMAGE" "$CHECKSUMS" "$staging/"
-	[[ "$(wc -l <"$staging/$checksums_base")" -eq 2 ]] || die "release checksum authority must contain exactly two entries"
-	[[ "$(awk -v file="$app_base" '$2 == file {n++} END {print n + 0}' "$staging/$checksums_base")" -eq 1 ]] ||
-		die "release checksums do not name the application archive exactly once"
-	[[ "$(awk -v file="$image_base" '$2 == file {n++} END {print n + 0}' "$staging/$checksums_base")" -eq 1 ]] ||
-		die "release checksums do not name the container image exactly once"
-	(
-		cd -- "$staging"
-		sha256sum --check --strict "$checksums_base" >/dev/null
-	)
+	cp -- "$APP_ARCHIVE" "$CHECKSUMS" "$staging/"
+	expected_checksum=$(awk -v file="$app_base" '$2 == file && $1 ~ /^[0-9a-f]{64}$/ {print $1}' "$staging/$checksums_base")
+	[[ "$expected_checksum" =~ ^[0-9a-f]{64}$ ]] || die "release checksums must name the application archive exactly once"
+	observed_checksum=$(sha256sum "$staging/$app_base" | awk '{print $1}')
+	[[ "$observed_checksum" == "$expected_checksum" ]] || die "application archive checksum differs"
 	install -d -m 0700 "$WORK_ROOT/release"
 	tar -xzf "$staging/$app_base" -C "$WORK_ROOT/release"
 	DORF_BIN="$WORK_ROOT/release/dorf"
 	[[ -f "$DORF_BIN" && ! -L "$DORF_BIN" && -x "$DORF_BIN" ]] || die "application archive contains no executable Dorf binary"
+	COMPOSE_MANIFEST="$WORK_ROOT/release/dorf-compose.yaml"
+	COMPOSE_INCUS_OVERLAY="$WORK_ROOT/release/dorf-compose-incus.yaml"
+	for manifest in "$COMPOSE_MANIFEST" "$COMPOSE_INCUS_OVERLAY"; do
+		[[ -f "$manifest" && ! -L "$manifest" ]] || die "application archive is missing $(basename -- "$manifest")"
+	done
 	[[ "$("$DORF_BIN" version)" == "dorf $version" ]] || die "extracted binary version differs from the release asset"
-	docker load --input "$staging/$image_base" >/dev/null
-	LOCAL_IMAGE="ghcr.io/aphronio/dorf:$version"
-	local image_id
-	image_id=$(docker image inspect --format '{{.Id}}' "$LOCAL_IMAGE")
-	[[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || die "loaded container image has no immutable Docker identity"
 }
 
-# This is the single guided-setup seam. It must consume only the injected,
-# checksummed application, container image, and official Incus image assets.
+compose() {
+	(
+		cd "$COMPOSE_DIR"
+		docker compose "$@"
+	)
+}
+
+assert_compose_project() {
+	[[ -f "$COMPOSE_DIR/.env" && ! -L "$COMPOSE_DIR/.env" ]] ||
+		die "setup did not render $COMPOSE_DIR/.env"
+}
+
 run_setup() {
-	capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup \
-		--yes \
-		--local-image "$LOCAL_IMAGE" \
-		--sandbox-provider incus \
-		--profile "$PROFILE_NAME" \
-		--connection-auth openai \
-		--openai-api-key-file "$SECRET_FILE" \
-		--incus-manifest "$SANDBOX_MANIFEST" \
+	local -a setup_args=(
+		--yes
+		--sandbox-provider incus
+		--profile "$PROFILE_NAME"
+		--connection-auth openai
+		--openai-api-key-file "$SECRET_FILE"
+		--incus-manifest "$SANDBOX_MANIFEST"
 		--incus-archive "$SANDBOX_ARCHIVE"
+	)
+	local base_status=0 optional_status=0
+	capture "$EVIDENCE_DIR/setup-base-handoff.log" "$DORF_BIN" setup "${setup_args[@]}" || base_status=$?
+	assert_compose_project
+	[[ "$base_status" -ne 0 ]] || die "initial setup did not stop at the base deployment handoff"
+	grep -Fq 'awaits operator deployment' "$EVIDENCE_DIR/setup-base-handoff.log" ||
+		die "initial setup failed without the expected deployment handoff"
+	capture "$EVIDENCE_DIR/compose-images.txt" compose config --images
+	grep -Fxq -- "$IMAGE_REF" "$EVIDENCE_DIR/compose-images.txt" || die "Compose did not select the proven Dorf image"
+	if grep '^ghcr.io/aphronio/dorf:' "$EVIDENCE_DIR/compose-images.txt" | grep -Fvx -- "$IMAGE_REF" >/dev/null; then
+		die "Compose selected a different Dorf image"
+	fi
+	capture "$EVIDENCE_DIR/compose-base-up.log" compose up --detach --wait --remove-orphans
+	capture "$EVIDENCE_DIR/setup-optional-handoff.log" "$DORF_BIN" setup "${setup_args[@]}" || optional_status=$?
+	[[ "$optional_status" -ne 0 ]] || die "setup did not stop after publishing optional deployment inputs"
+	grep -Fq 'awaits operator deployment' "$EVIDENCE_DIR/setup-optional-handoff.log" ||
+		die "optional setup failed without the expected deployment handoff"
+	capture "$EVIDENCE_DIR/compose-final-up.log" compose up --detach --wait --remove-orphans
+	if ! capture "$EVIDENCE_DIR/setup.log" "$DORF_BIN" setup "${setup_args[@]}"; then
+		die "setup did not resume after both deployment handoffs (statuses $base_status and $optional_status)"
+	fi
 	rm -f -- "$SECRET_FILE"
 	SECRET_FILE=
 	EPHEMERAL_KEY_PATH=
@@ -327,57 +362,47 @@ run_setup() {
 		--profile "$PROFILE_NAME" --ai-connection "$CONNECTION_NAME" --json
 }
 
-capture_ready_status() {
-	local destination=$1
-	capture "$destination" "$DORF_BIN" service status --output json
-	jq -e '.ready == true' "$destination" >/dev/null || die "Compose service status is not ready"
+capture_compose_status() {
+	local destination=$1 service
+	capture "$destination" compose ps --all --format json
+	for service in postgres worker control-api; do
+		one_service_container "$service" >/dev/null
+	done
 }
 
 one_service_container() {
 	local service=$1
 	local ids
-	ids=$(docker ps --filter "label=com.docker.compose.service=$service" --format '{{.ID}}')
+	ids=$(compose ps --quiet "$service")
 	[[ "$ids" != *$'\n'* && -n "$ids" ]] || die "expected exactly one running $service container"
 	printf '%s\n' "$ids"
 }
 
-assert_compose_topology() {
-	local worker reader api postgres
+assert_compose_runtime() {
+	local worker api migrate receipt="$EVIDENCE_DIR/compose-runtime.txt"
 	worker=$(one_service_container worker)
-	reader=$(one_service_container control-reader)
 	api=$(one_service_container control-api)
-	postgres=$(one_service_container postgres)
-	local ids id receipt="$EVIDENCE_DIR/compose-topology.txt"
-	ids=$(docker ps --filter label=com.docker.compose.service --format '{{.ID}}')
-	[[ -n "$ids" ]] || die "Compose exposed no managed service containers"
-	: >"$receipt"
-	while IFS= read -r id; do
-		[[ -n "$id" ]] || continue
-		[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "Docker exposed an unsafe container identity"
-		local inspection="$WORK_ROOT/docker-inspect-$id.json"
-		docker inspect "$id" >"$inspection"
-		jq -e '.[0].HostConfig.NetworkMode != "host"' "$inspection" >/dev/null || die "$id uses host networking"
-		jq -e '[.[0].Mounts[]? | select((.Source // "" | endswith("/docker.sock")) or (.Destination // "" | endswith("/docker.sock")))] | length == 0' "$inspection" >/dev/null ||
-			die "$id mounts the Docker socket"
-		printf '%s bridge-no-docker-socket\n' "$id" >>"$receipt"
-	done <<<"$ids"
-	for id in "$api" "$postgres"; do
-		local inspection="$WORK_ROOT/docker-inspect-$id.json"
-		jq -e '([.[0].NetworkSettings.Ports | to_entries[]?.value[]?.HostIp] as $ips | ($ips | length) > 0 and all($ips[]; . == "127.0.0.1"))' "$inspection" >/dev/null ||
-			die "$id does not publish only on loopback"
-	done
-	local reader_inspection="$WORK_ROOT/docker-inspect-$reader.json"
-	jq -e '.[0].State.Health.Status == "healthy"' "$reader_inspection" >/dev/null ||
-		die "control-reader did not prove its authenticated health operation"
-	jq -e '([.[0].NetworkSettings.Networks | keys[] | sub("^dorf_"; "")] | sort) == (["database", "provider", "reader", "reader-egress"] | sort)' "$reader_inspection" >/dev/null ||
-		die "control-reader network custody differs from the reviewed topology"
+	local worker_inspection="$WORK_ROOT/docker-inspect-$worker.json"
+	docker inspect "$worker" >"$worker_inspection"
+	jq -e '.[0].State.Health.Status == "healthy"' "$worker_inspection" >/dev/null ||
+		die "worker is not healthy"
 	local api_inspection="$WORK_ROOT/docker-inspect-$api.json"
-	jq -e '([.[0].NetworkSettings.Networks | keys[] | sub("^dorf_"; "")] | sort) == (["database", "reader"] | sort)' "$api_inspection" >/dev/null ||
-		die "control API network custody differs from the reviewed topology"
+	docker inspect "$api" >"$api_inspection"
+	jq -e '.[0].State.Health.Status == "healthy"' "$api_inspection" >/dev/null ||
+		die "control API is not healthy"
 	jq -e '[.[0].Config.Env[]? | select(startswith("E2B_API_KEY=") or startswith("DORF_INCUS_") or startswith("DORF_PROVIDER_GATEWAY_") or startswith("DORF_CONFIG_DIR=") or startswith("DORF_DATA_DIR="))] | length == 0' "$api_inspection" >/dev/null ||
 		die "control API received provider environment authority"
-	jq -e '([.[0].Mounts[]?.Destination] | sort) == (["/var/lib/dorf/.config", "/var/lib/dorf/.local/state/dorf"] | sort)' "$api_inspection" >/dev/null ||
-		die "control API mounts exceed sanitized configuration and read-only state"
+	jq -e '[.[0].Mounts[]? | select(.Destination == "/var/lib/dorf/.config/dorf" or .Destination == "/var/lib/dorf/.local/share/dorf")] | length == 0' "$api_inspection" >/dev/null ||
+		die "control API received provider configuration or data custody"
+	[[ -z "$(docker ps -aq --filter label=com.docker.compose.service=control-reader)" ]] ||
+		die "obsolete standalone control-reader container is running"
+	migrate=$(compose ps --all --quiet migrate)
+	[[ -n "$migrate" && "$migrate" != *$'\n'* ]] || die "expected exactly one completed migrate container"
+	local migrate_inspection="$WORK_ROOT/docker-inspect-$migrate.json"
+	docker inspect "$migrate" >"$migrate_inspection"
+	jq -e '.[0].State.Status == "exited" and .[0].State.ExitCode == 0' "$migrate_inspection" >/dev/null ||
+		die "one-shot migration did not complete successfully"
+	printf 'migrate=complete\nworker=healthy\napi=healthy-provider-authority-absent\nreader=worker-hosted\n' >"$receipt"
 	chmod 0600 "$receipt"
 }
 
@@ -395,7 +420,7 @@ wait_for_job_completion() {
 	local delay=${DORF_PROOF_POLL_SECONDS:-2}
 	local snapshot="$EVIDENCE_DIR/job-inspect.json"
 	local before_restart="$EVIDENCE_DIR/job-inspect-before-worker-restart.json"
-	local restarted=0 attempt current active_run_id worker_before worker_after
+	local restarted=0 attempt current active_run_id worker_container worker_started_before worker_started_after
 	for ((attempt = 1; attempt <= attempts; attempt++)); do
 		capture "$snapshot" "$DORF_BIN" inspect --json "$JOB_ID"
 		if [[ -z "$SANDBOX_ID" ]]; then
@@ -410,11 +435,14 @@ wait_for_job_completion() {
 				continue
 			fi
 			install -m 0600 "$snapshot" "$before_restart"
-			worker_before=$(one_service_container worker)
-			"$DORF_BIN" service restart worker >/dev/null
-			capture_ready_status "$EVIDENCE_DIR/service-status-after-worker-restart.json"
-			worker_after=$(one_service_container worker)
-			[[ "$worker_after" != "$worker_before" ]] || die "worker container identity did not change across restart"
+			worker_container=$(one_service_container worker)
+			worker_started_before=$(docker inspect --format '{{.State.StartedAt}}' "$worker_container")
+			compose restart worker >/dev/null
+			wait_for_service_health worker
+			capture_compose_status "$EVIDENCE_DIR/compose-status-after-worker-restart.json"
+			worker_container=$(one_service_container worker)
+			worker_started_after=$(docker inspect --format '{{.State.StartedAt}}' "$worker_container")
+			[[ "$worker_started_after" != "$worker_started_before" ]] || die "worker start time did not change across restart"
 			restarted=1
 			continue
 		fi
@@ -430,6 +458,19 @@ wait_for_job_completion() {
 		sleep "$delay"
 	done
 	die "Job did not reach Open and idle with a completed Turn"
+}
+
+wait_for_service_health() {
+	local service=$1 attempts=${DORF_PROOF_WAIT_ATTEMPTS:-90} delay=${DORF_PROOF_POLL_SECONDS:-2}
+	local attempt container
+	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		container=$(compose ps --quiet "$service")
+		if [[ -n "$container" ]] && [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container")" == healthy ]]; then
+			return 0
+		fi
+		sleep "$delay"
+	done
+	die "$service did not become healthy"
 }
 
 wait_for_cleanup() {
@@ -452,6 +493,7 @@ wait_for_cleanup() {
 prove() {
 	[[ "$(id -u)" -ne 0 ]] || die "prove must run as an ordinary user"
 	arm_ephemeral_key_cleanup "$@"
+	parse_proof_options "$@"
 	for command in docker incus jq od realpath sha256sum tar; do
 		require_command "$command"
 	done
@@ -460,12 +502,11 @@ prove() {
 	id -nG | tr ' ' '\n' | grep -Fx incus-admin >/dev/null || die "ordinary proof user lacks Incus authority"
 	id -nG | tr ' ' '\n' | grep -Fx kvm >/dev/null || die "ordinary proof user lacks KVM device access"
 	[[ -r "$KVM_DEVICE" && -w "$KVM_DEVICE" ]] || die "ordinary proof user cannot open the KVM device"
-	parse_proof_options "$@"
 	assert_fresh_cache
 	prepare_release
 	run_setup
-	capture_ready_status "$EVIDENCE_DIR/service-status.json"
-	assert_compose_topology
+	capture_compose_status "$EVIDENCE_DIR/compose-status.json"
+	assert_compose_runtime
 
 	local nonce goal_file admission expected observed
 	nonce=$(proof_nonce)
@@ -490,8 +531,9 @@ prove() {
 	wait_for_job_completion
 	[[ "$SANDBOX_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die "Job exposed an unsafe Sandbox identity"
 
-	"$DORF_BIN" service restart api >/dev/null
-	capture_ready_status "$EVIDENCE_DIR/service-status-after-api-restart.json"
+	compose restart control-api >/dev/null
+	wait_for_service_health control-api
+	capture_compose_status "$EVIDENCE_DIR/compose-status-after-api-restart.json"
 	"$DORF_BIN" sandbox file get "$SANDBOX_ID" PROOF.txt --output "$observed"
 	cmp "$expected" "$observed" || die "PROOF.txt bytes differ from the admitted nonce"
 	capture "$EVIDENCE_DIR/cleanup-request.json" "$DORF_BIN" cleanup "$JOB_ID"
@@ -502,7 +544,7 @@ prove() {
 		die "inner Incus still contains the cleaned Sandbox instance"
 
 	PROOF_COMPLETE=1
-	printf 'FILE -> exact nonce bytes -> API restart -> cleanup -> Sandbox absent\n'
+	printf 'FILE -> exact nonce bytes -> Compose API restart -> cleanup -> Sandbox absent\n'
 }
 
 main() {

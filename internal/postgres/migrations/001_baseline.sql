@@ -13,8 +13,13 @@ create table dorf.sandbox_profiles (
     provider text not null check (provider in ('incus','e2b')),
     harness text not null check (harness in ('codex','pi')),
     artifact text not null check (length(trim(artifact)) > 0),
+    definition_hash text not null check (definition_hash ~ '^[0-9a-f]{64}$'),
+    incus_endpoint_authority_hash text,
+    incus_project text,
+    incus_storage_pool text,
     incus_network text,
     incus_disk_size text,
+    incus_gateway_url text,
     e2b_gateway_url text,
     e2b_sandbox_timeout_seconds bigint,
     e2b_allow_internet boolean,
@@ -22,9 +27,14 @@ create table dorf.sandbox_profiles (
     created_at timestamptz not null default clock_timestamp(),
     check (
         (provider='incus' and incus_network is not null and incus_disk_size is not null and
+         incus_endpoint_authority_hash ~ '^[0-9a-f]{64}$' and
+         incus_project is not null and length(trim(incus_project)) > 0 and
+         incus_storage_pool is not null and length(trim(incus_storage_pool)) > 0 and
          length(trim(incus_network)) > 0 and length(trim(incus_disk_size)) > 0 and
+         incus_gateway_url is not null and length(trim(incus_gateway_url)) > 0 and
          e2b_gateway_url is null and e2b_sandbox_timeout_seconds is null and e2b_allow_internet is null) or
-        (provider='e2b' and incus_network is null and incus_disk_size is null and
+        (provider='e2b' and incus_endpoint_authority_hash is null and incus_project is null and
+         incus_storage_pool is null and incus_network is null and incus_disk_size is null and incus_gateway_url is null and
          e2b_gateway_url is not null and e2b_sandbox_timeout_seconds is not null and
          length(trim(e2b_gateway_url)) > 0 and e2b_sandbox_timeout_seconds > 0 and e2b_allow_internet is not null)
     )
@@ -34,6 +44,7 @@ create unique index sandbox_profiles_one_default on dorf.sandbox_profiles(is_def
 create table dorf.sandbox_profile_verifications (
     profile_name text primary key references dorf.sandbox_profiles(name) on delete cascade,
     contract_version text not null check (length(trim(contract_version)) > 0),
+    definition_hash text not null check (definition_hash ~ '^[0-9a-f]{64}$'),
     sandbox_id text not null unique check (length(trim(sandbox_id)) > 0),
     ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
     harness_version text,
@@ -48,15 +59,15 @@ create table dorf.sandbox_profile_verifications (
 create table dorf.jobs (
     id text primary key,
     admission_key text not null unique,
-    workflow_name text not null check (workflow_name in ('coding-to-proposal','codebase-investigation')),
-    workflow_revision text not null check (length(trim(workflow_revision)) > 0),
+    workflow_name text not null,
+    workflow_revision text not null,
     goal text not null check (length(trim(goal)) > 0),
     sandbox_profile text not null references dorf.sandbox_profiles(name),
     provider_connection text not null check (length(trim(provider_connection)) > 0),
     model text not null check (length(trim(model)) > 0),
     reasoning_effort text not null check (reasoning_effort in ('low','medium','high','xhigh')),
     admission_open boolean not null default true,
-    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','scheduled','complete')),
+    cleanup_state text not null default 'pending' check (cleanup_state in ('pending','requested','scheduled','complete')),
     workflow_attention text,
     workflow_attention_source text,
     workflow_attention_at timestamptz,
@@ -66,8 +77,15 @@ create table dorf.jobs (
     constraint jobs_workflow_attention_check check (
         num_nonnulls(workflow_attention,workflow_attention_source,workflow_attention_at) in (0,3)
     ),
+    constraint jobs_workflow_identity_check check (
+        (workflow_name='' and workflow_revision='') or
+        (workflow_name in ('coding-to-proposal','codebase-investigation') and length(trim(workflow_revision))>0)
+    ),
     unique(id,workflow_name)
 );
+create index jobs_by_admitted_at_id
+    on dorf.jobs(admitted_at desc,id desc)
+    include(workflow_name,workflow_revision);
 
 create table dorf.coding_to_proposal_inputs (
     job_id text primary key,
@@ -149,8 +167,10 @@ create unique index actions_one_scoped_job_effect
 create table dorf.sandboxes (
     id text primary key,
     job_id text not null references dorf.jobs(id),
+    name text not null check (name ~ '^[a-z][a-z0-9-]{0,126}$'),
     ownership_nonce text not null unique check (ownership_nonce ~ '^[0-9a-f]{64}$'),
-    unique(job_id,id)
+    unique(job_id,id),
+    unique(job_id,name)
 );
 create index sandboxes_by_job on dorf.sandboxes(job_id,id);
 
@@ -165,7 +185,7 @@ create table dorf.agent_runs (
     turn_id text,
     turn_outcome text check (turn_outcome is null or turn_outcome in ('completed','interrupted','failed')),
     attention text,
-    role text not null check (role in ('implement','investigate','general','browser-ui','auth-authority','performance','critical-boundary')),
+    role text not null check (role in ('implement','investigate','direct','general','browser-ui','auth-authority','performance','critical-boundary')),
     input_revision text check (input_revision is null or input_revision ~ '^[0-9a-f]{40}([0-9a-f]{24})?$'),
     capability text,
     sandbox_id text not null references dorf.sandboxes(id),
@@ -185,6 +205,7 @@ create table dorf.agent_runs (
     constraint agent_runs_role_binding_check check (
         (role='implement' and capability is null and submission_nonce is null) or
         (role='investigate' and input_revision is not null and capability='repository-read-report' and submission_nonce is null) or
+        (role='direct' and input_revision is null and capability is null and submission_nonce is null) or
         (role in ('general','browser-ui','auth-authority','performance','critical-boundary') and
          input_revision is not null and capability='immutable-read-only' and
          submission_nonce ~ '^[0-9a-f]{64}$')
@@ -237,32 +258,6 @@ create table dorf.evidence (
 create unique index evidence_one_agent_run on dorf.evidence(agent_run_id)
     where agent_run_id is not null;
 
-create table dorf.artifacts (
-    id text primary key,
-    job_id text not null references dorf.jobs(id),
-    name text not null check (length(trim(name))>0 and length(name)<=255),
-    digest text not null check (digest ~ '^[0-9a-f]{64}$'),
-    byte_size bigint not null check (byte_size>=0),
-    media_type text not null check (length(trim(media_type))>0),
-    producer text not null check (length(trim(producer))>0),
-    agent_run_id text not null,
-    created_at timestamptz not null,
-    unique(job_id,name),
-    unique(job_id,id),
-    unique(job_id,id,agent_run_id),
-    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id)
-);
-
-create table dorf.codebase_investigation_drafts (
-    job_id text not null references dorf.codebase_investigation_sources(job_id),
-    agent_run_id text not null,
-    artifact_id text not null,
-    primary key(job_id,agent_run_id),
-    unique(job_id,artifact_id),
-    foreign key(job_id,agent_run_id) references dorf.agent_runs(job_id,id),
-    foreign key(job_id,artifact_id,agent_run_id) references dorf.artifacts(job_id,id,agent_run_id)
-);
-
 alter table dorf.revisions
     add constraint revisions_evidence_fk foreign key(evidence_id) references dorf.evidence(id);
 
@@ -302,6 +297,7 @@ select
     coalesce(request.steer_target_turn_id,'') as request_target_turn_id,
     request.admitted_at as request_admitted_at,
     ar.sandbox_id as sandbox_id,
+    sandbox.name as sandbox_name,
     sandbox.ownership_nonce as ownership_nonce,
     coalesce(ar.submission_nonce,'') as submission_nonce
 from dorf.agent_runs ar
@@ -330,6 +326,37 @@ create table dorf.job_outcomes (
     )
 );
 
+create table dorf.control_clients (
+    id text primary key check (id ~ '^cli_[A-Za-z0-9_-]{22}$'),
+    name text not null check (name ~ '^[a-z0-9][a-z0-9._-]{0,62}$'),
+    credential_digest bytea not null unique check (octet_length(credential_digest)=32),
+    credential_expires_at timestamptz not null,
+    revoked_at timestamptz,
+    created_at timestamptz not null default clock_timestamp(),
+    check (credential_expires_at>created_at),
+    check (revoked_at is null or revoked_at>=created_at)
+);
+
+create table dorf.control_enrollments (
+    id text primary key check (id ~ '^enr_[A-Za-z0-9_-]{22}$'),
+    secret_digest bytea not null unique check (octet_length(secret_digest)=32),
+    expires_at timestamptz not null,
+    consumed_at timestamptz,
+    client_id text unique references dorf.control_clients(id),
+    created_at timestamptz not null default clock_timestamp(),
+    check (expires_at>created_at),
+    check (consumed_at is null or consumed_at>=created_at),
+    check (num_nonnulls(consumed_at,client_id) in (0,2))
+);
+
+create table dorf.job_retry_requests (
+    request_key text primary key check (length(request_key) between 1 and 255 and request_key=trim(request_key)),
+    job_id text not null references dorf.jobs(id),
+    task_id text not null check (task_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+    run_id text not null unique check (run_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
+    attempt integer not null check (attempt > 0)
+);
+
 comment on schema dorf is 'Dorf-owned product facts; Absurd execution state remains in schema absurd';
 comment on table dorf.job_messages is 'Immutable client input and Job-local admission order; follow is FIFO and steer is an explicit priority lane';
 comment on table dorf.agent_runs is 'Harness Thread and Turn bindings plus lifecycle outcome; the harness owns transcript and context';
@@ -339,7 +366,6 @@ comment on table dorf.sandbox_profiles is 'Named immutable-while-in-use provider
 comment on table dorf.sandbox_profile_verifications is 'Dorf-owned base-contract proof and confirmed cleanup for one exact Sandbox profile';
 comment on table dorf.github_proposals is 'One exact-Revision GitHub proposal projection per Job';
 comment on table dorf.job_outcomes is 'Immutable Job outcome; accepted and rejected outcomes retain an exact Proposal observation while pre-publication abandonment has none';
-comment on table dorf.codebase_investigation_drafts is 'Immutable investigator drafts; Markdown bytes live in the referenced Artifact';
 comment on table dorf.codebase_investigation_sources is 'Immutable remote or retained Git-bundle input for one codebase-investigation Job';
 
 insert into dorf.schema_migrations(name) values ('001_baseline.sql');

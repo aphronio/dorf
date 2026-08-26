@@ -1,0 +1,11 @@
+services:
+  worker:
+    group_add:
+      - "${DORF_INCUS_SOCKET_GID}"
+    volumes:
+      - type: bind
+        source: "${DORF_INCUS_SOCKET}"
+        target: "${DORF_INCUS_SOCKET}"
+        read_only: true
+        bind:
+          create_host_path: false

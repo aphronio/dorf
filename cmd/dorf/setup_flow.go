@@ -21,6 +21,7 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/postgres"
+	profileapp "github.com/aphronio/dorf/internal/profile"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	providerapi "github.com/aphronio/dorf/internal/sandbox"
 )
@@ -78,8 +79,7 @@ func prepareGuidedSetup(ctx context.Context, store postgres.Store, cfg *config.C
 	if err != nil {
 		return guidedSetupPrepared{}, err
 	}
-	profilePlans, err = bindGuidedLegacyProfileDefinitions(ctx, store, cfg, profilePlans, privateBridge, bind)
-	if err != nil {
+	if err := persistGuidedIncusAuthority(cfg, privateBridge); err != nil {
 		return guidedSetupPrepared{}, err
 	}
 
@@ -128,9 +128,6 @@ func guidedIncusReadinessScope(plans []guidedProfilePlan) (string, string, bool)
 			continue
 		}
 		if plan.Existing != nil {
-			if migration007LegacyIncusProfile(*plan.Existing) {
-				return incus.DefaultProject, incus.DefaultStoragePool, true
-			}
 			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool, true
 		}
 		return incus.DefaultProject, incus.DefaultStoragePool, true
@@ -166,9 +163,6 @@ func validateGuidedExistingIncusAuthorities(plans []guidedProfilePlan, authority
 		if plan.Provider != core.SandboxProviderIncus || plan.Existing == nil {
 			continue
 		}
-		if migration007LegacyIncusProfile(*plan.Existing) {
-			continue
-		}
 		if err := validateIncusProfileEndpointAuthority(authority, *plan.Existing); err != nil {
 			return err
 		}
@@ -178,93 +172,26 @@ func validateGuidedExistingIncusAuthorities(plans []guidedProfilePlan, authority
 
 func hasGuidedIncusProfileNeedingLocalDefinition(plans []guidedProfilePlan) bool {
 	for _, plan := range plans {
-		if plan.Provider == core.SandboxProviderIncus &&
-			(plan.Existing == nil || migration007LegacyIncusProfile(*plan.Existing)) {
+		if plan.Provider == core.SandboxProviderIncus && plan.Existing == nil {
 			return true
 		}
 	}
 	return false
 }
 
-func migration007LegacyIncusProfile(profile core.SandboxProfile) bool {
-	return profile.Provider == core.SandboxProviderIncus && profile.DefinitionHash == "" &&
-		profile.IncusEndpointAuthorityHash == "" && profile.IncusProject == "" &&
-		profile.IncusStoragePool == "" && profile.IncusGatewayURL == ""
-}
-
-// bindGuidedLegacyProfileDefinitions is the one compatibility bridge for
-// profiles created before migration 007. The Deployment endpoint is committed
-// before PostgreSQL can retain its public hash. Adoption itself is constrained
-// by postgres.Store to the exact former schema shape and remains replayable.
-func bindGuidedLegacyProfileDefinitions(
-	ctx context.Context,
-	store postgres.Store,
-	cfg *config.Config,
-	plans []guidedProfilePlan,
-	privateBridge, privateIPv4 string,
-) ([]guidedProfilePlan, error) {
-	legacyIncus := false
-	for _, plan := range plans {
-		if plan.Existing != nil && migration007LegacyIncusProfile(*plan.Existing) {
-			legacyIncus = true
-		}
+// persistGuidedIncusAuthority commits a newly selected local endpoint before
+// setup creates a Profile whose definition is bound to that endpoint hash.
+func persistGuidedIncusAuthority(cfg *config.Config, privateBridge string) error {
+	if privateBridge == "" {
+		return nil
 	}
-	if privateBridge != "" {
-		if cfg.Incus == nil {
-			return nil, incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
-		}
-		if !strings.HasPrefix(cfg.Incus.Endpoint, "unix://") {
-			return nil, guidedRemoteIncusSetupError()
-		}
-		if err := deployment.SaveIncus(cfg.DeploymentPath, *cfg.Incus); err != nil {
-			return nil, err
-		}
+	if cfg.Incus == nil {
+		return incusSetupReadinessError{cause: fmt.Errorf("Incus endpoint is not configured in the Dorf Deployment")}
 	}
-	if legacyIncus && privateBridge == "" {
-		return nil, fmt.Errorf("selected legacy Incus profile requires an explicit prepared local bridge before endpoint custody can be adopted")
+	if !strings.HasPrefix(cfg.Incus.Endpoint, "unix://") {
+		return guidedRemoteIncusSetupError()
 	}
-	updatedPlans := append([]guidedProfilePlan(nil), plans...)
-	for index := range updatedPlans {
-		plan := &updatedPlans[index]
-		if plan.Existing == nil || plan.Existing.DefinitionHash != "" {
-			continue
-		}
-		desired := *plan.Existing
-		switch desired.Provider {
-		case core.SandboxProviderIncus:
-			if !migration007LegacyIncusProfile(desired) {
-				return nil, fmt.Errorf("Sandbox profile %q has an incomplete definition that does not match migration 007", desired.Name)
-			}
-			if cfg.Incus == nil || !strings.HasPrefix(cfg.Incus.Endpoint, "unix://") {
-				return nil, guidedRemoteIncusSetupError()
-			}
-			if desired.IncusNetwork != privateBridge {
-				return nil, fmt.Errorf("Sandbox profile %q network %s does not match prepared local bridge %s", desired.Name, desired.IncusNetwork, privateBridge)
-			}
-			ip := net.ParseIP(strings.TrimSpace(privateIPv4))
-			if ip == nil || ip.To4() == nil || ip.IsLoopback() || !privateOrSharedIPv4(ip) {
-				return nil, fmt.Errorf("selected legacy Incus profile requires one prepared private local bridge address")
-			}
-			authorityHash, err := cfg.Incus.AuthorityHash()
-			if err != nil {
-				return nil, err
-			}
-			desired.IncusEndpointAuthorityHash = authorityHash
-			desired.IncusProject = incus.DefaultProject
-			desired.IncusStoragePool = incus.DefaultStoragePool
-			desired.IncusGatewayURL = "http://" + ip.To4().String() + ":8317/v1"
-		case core.SandboxProviderE2B:
-		default:
-			return nil, fmt.Errorf("unsupported Sandbox provider %q", desired.Provider)
-		}
-		adopted, _, err := store.AdoptLegacySandboxProfile(ctx, desired)
-		if err != nil {
-			return nil, err
-		}
-		copy := adopted
-		plan.Existing = &copy
-	}
-	return updatedPlans, nil
+	return deployment.SaveIncus(cfg.DeploymentPath, *cfg.Incus)
 }
 
 func guidedRemoteIncusSetupError() incusSetupReadinessError {
@@ -451,15 +378,6 @@ func selectGuidedGatewayBind(profiles []core.SandboxProfile, selected []guidedPr
 }
 
 func gatewayIncusScope(profiles []core.SandboxProfile, selected []guidedProfilePlan, network string) (string, string) {
-	normalize := func(project, storagePool string) (string, string) {
-		if strings.TrimSpace(project) == "" {
-			project = incus.DefaultProject
-		}
-		if strings.TrimSpace(storagePool) == "" {
-			storagePool = incus.DefaultStoragePool
-		}
-		return project, storagePool
-	}
 	for _, plan := range selected {
 		if plan.Provider != core.SandboxProviderIncus {
 			continue
@@ -468,12 +386,12 @@ func gatewayIncusScope(profiles []core.SandboxProfile, selected []guidedProfileP
 			return incus.DefaultProject, incus.DefaultStoragePool
 		}
 		if _, direct := guidedIncusProfilePublishAddress(*plan.Existing); direct && plan.Existing.IncusNetwork == network {
-			return normalize(plan.Existing.IncusProject, plan.Existing.IncusStoragePool)
+			return plan.Existing.IncusProject, plan.Existing.IncusStoragePool
 		}
 	}
 	for _, profile := range profiles {
 		if _, direct := guidedIncusProfilePublishAddress(profile); direct && profile.IncusNetwork == network {
-			return normalize(profile.IncusProject, profile.IncusStoragePool)
+			return profile.IncusProject, profile.IncusStoragePool
 		}
 	}
 	return incus.DefaultProject, incus.DefaultStoragePool
@@ -540,9 +458,7 @@ func gatewayIncusNetwork(profiles []core.SandboxProfile, selected []guidedProfil
 		}
 		network := guidedIncusNetwork
 		if profile.Existing != nil {
-			if migration007LegacyIncusProfile(*profile.Existing) {
-				network = profile.Existing.IncusNetwork
-			} else if _, direct := guidedIncusProfilePublishAddress(*profile.Existing); !direct {
+			if _, direct := guidedIncusProfilePublishAddress(*profile.Existing); !direct {
 				continue
 			} else {
 				network = profile.Existing.IncusNetwork
@@ -587,10 +503,6 @@ func guidedIncusBridgeAuthority(profiles []core.SandboxProfile, selected []guide
 			continue
 		}
 		if plan.Existing == nil {
-			bridgeRequired = true
-			continue
-		}
-		if migration007LegacyIncusProfile(*plan.Existing) {
 			bridgeRequired = true
 			continue
 		}
@@ -1148,7 +1060,7 @@ func setupProfiles(ctx context.Context, store postgres.Store, cfg config.Config,
 		}
 		err = presenter.Run(ctx, "Verifying "+profile.Name, func(ctx context.Context) error {
 			var verifyErr error
-			profile, verifyErr = verifyProfileBaseLive(ctx, store, func(profile core.SandboxProfile) (providerapi.Sandbox, error) {
+			profile, verifyErr = profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (providerapi.Sandbox, error) {
 				return sandboxForProfile(cfg, profile)
 			}, profile.Name)
 			return verifyErr

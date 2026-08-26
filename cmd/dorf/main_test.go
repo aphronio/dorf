@@ -26,7 +26,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/e2b"
 	"github.com/aphronio/dorf/internal/gateway"
-	"github.com/aphronio/dorf/internal/incus"
 	"github.com/aphronio/dorf/internal/investigation"
 	"github.com/aphronio/dorf/internal/postgres"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
@@ -302,7 +301,6 @@ func TestSetupRetainsVerifiedE2BCredentialForComposeServices(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "deployment.json")
 	durable := deployment.Config{Database: deployment.Database{
 		Host: "127.0.0.1", Port: 5432, Name: "dorf", User: "dorf", Password: "secret",
-		Image: "postgres:17", ImageID: "sha256:test",
 	}}
 	if err := deployment.Save(path, durable); err != nil {
 		t.Fatal(err)
@@ -933,30 +931,20 @@ func TestIncusReadinessIsScopedOnlyToASelectedIncusProfile(t *testing.T) {
 	}
 }
 
-func TestGuidedLegacyIncusProfilePlansAnExplicitLocalAuthorityUpgrade(t *testing.T) {
-	legacy := core.SandboxProfile{
-		Name: "local-codex", Provider: core.SandboxProviderIncus, Harness: "codex",
-		Artifact: strings.Repeat("a", 64), IncusNetwork: "incusbr0", IncusDiskSize: "40GiB",
+func TestGuidedNewLocalIncusPersistsEndpointAuthority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "deployment.json")
+	if err := deployment.Save(path, deployment.Config{Database: deployment.Database{
+		Host: "127.0.0.1", Port: 5432, Name: "dorf", User: "dorf", Password: "secret",
+	}}); err != nil {
+		t.Fatal(err)
 	}
-	plans := []guidedProfilePlan{{
-		Provider: core.SandboxProviderIncus, Name: legacy.Name, Harness: legacy.Harness, Existing: &legacy,
-	}}
-	authority := &deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
-	probed := false
-	err := setupGuidedIncusReadinessWith(context.Background(), plans, authority,
-		func(_ context.Context, got *deployment.Incus, project, storagePool string) error {
-			probed = true
-			if got != authority || project != incus.DefaultProject || storagePool != incus.DefaultStoragePool {
-				t.Fatalf("legacy readiness authority=%#v scope=%s/%s", got, project, storagePool)
-			}
-			return nil
-		})
-	if err != nil || !probed {
-		t.Fatalf("legacy local readiness probed=%t err=%v", probed, err)
+	authority := deployment.Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}
+	if err := persistGuidedIncusAuthority(&config.Config{DeploymentPath: path, Incus: &authority}, guidedIncusNetwork); err != nil {
+		t.Fatal(err)
 	}
-	address, bridge, resolve, err := selectGuidedGatewayBind(nil, plans, authority, "", false)
-	if err != nil || address != "" || bridge != legacy.IncusNetwork || !resolve {
-		t.Fatalf("legacy Gateway plan address=%q bridge=%q resolve=%t err=%v", address, bridge, resolve, err)
+	stored, found, err := deployment.Load(path)
+	if err != nil || !found || stored.Incus == nil || *stored.Incus != authority {
+		t.Fatalf("persisted authority found=%t Incus=%#v err=%v", found, stored.Incus, err)
 	}
 }
 

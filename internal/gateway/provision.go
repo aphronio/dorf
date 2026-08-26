@@ -355,7 +355,7 @@ func (g Gateway) attestPreparedBroker() error {
 	}
 	digest := sha256.Sum256(config)
 	if hex.EncodeToString(digest[:]) != launch.BrokerConfigSHA256 {
-		return fmt.Errorf("Provider Gateway broker.yaml checksum mismatch; rerun dorf service reconcile")
+		return fmt.Errorf("Provider Gateway broker.yaml checksum mismatch; rerun dorf setup")
 	}
 	return nil
 }
@@ -377,7 +377,7 @@ func (g Gateway) verifyBackendDigest(executable string) error {
 	}
 	digest := sha256.Sum256(raw)
 	if hex.EncodeToString(digest[:]) != g.expectedBackendSHA256() {
-		return fmt.Errorf("Provider Gateway executable checksum mismatch; rerun dorf service reconcile")
+		return fmt.Errorf("Provider Gateway executable checksum mismatch; rerun dorf setup")
 	}
 	return nil
 }

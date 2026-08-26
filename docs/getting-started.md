@@ -10,24 +10,23 @@ Beginning with the first release after `v0.3.0`, install the latest immutable Do
 curl -fsSL https://github.com/aphronio/dorf/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads the matching x86_64 Linux archive and checksum, verifies the archive before
-atomically installing `dorf` to `~/.local/bin`, and prints a `PATH` handoff when needed. It does not
-run setup. A standalone install prints the next-step `dorf setup` guidance; `dorf update` uses the
-same verified installer while omitting that fresh-install hint. On a deployment host with Dorf's
-Compose project already present, update also hands that project to the new binary for reconciliation
-and restart; a remote CLI-only installation remains project-free. Install an exact
-release by using its pinned installer asset:
+The installer downloads and verifies the complete matching x86_64 Linux archive, then installs
+`dorf`, `dorf-compose.yaml`, and `dorf-compose-incus.yaml` together in `~/.local/bin`, replacing each
+file atomically in that directory. It prints a
+`PATH` handoff when needed and does not run setup or Docker Compose. `dorf update` replaces the same
+three files without changing a running deployment. Install an exact release with its pinned
+installer asset:
 
 ```bash
-RELEASE_TAG=YOUR_RELEASE_TAG
+RELEASE_TAG=vX.Y.Z
 curl -fsSL "https://github.com/aphronio/dorf/releases/download/$RELEASE_TAG/install.sh" | sh
 ```
 
-Release `v0.3.0` predates the installer asset. For that release, or when independently verifying
-GitHub's signed release attestation is required, use the transparent manual path:
+To verify GitHub's signed release attestation and install manually, install the binary and both
+static manifests beside one another:
 
 ```bash
-RELEASE_TAG=v0.3.0
+RELEASE_TAG=vX.Y.Z
 release_dir="$(mktemp -d)"
 gh release verify "$RELEASE_TAG" --repo aphronio/dorf
 gh release download "$RELEASE_TAG" --repo aphronio/dorf --dir "$release_dir" \
@@ -37,6 +36,9 @@ gh release download "$RELEASE_TAG" --repo aphronio/dorf --dir "$release_dir" \
 tar -xzf "$release_dir/dorf_${RELEASE_TAG#v}_linux_x86_64.tar.gz" -C "$release_dir"
 mkdir -p "$HOME/.local/bin"
 install -m 0755 "$release_dir/dorf" "$HOME/.local/bin/dorf"
+install -m 0644 "$release_dir/dorf-compose.yaml" "$HOME/.local/bin/dorf-compose.yaml"
+install -m 0644 "$release_dir/dorf-compose-incus.yaml" \
+  "$HOME/.local/bin/dorf-compose-incus.yaml"
 dorf version
 ```
 
@@ -45,72 +47,92 @@ Contributors building from source should instead use the repository-managed tool
 
 On a remote CLI client, installation ends after `dorf version`; continue at
 [Connect one remote CLI Client](#3-connect-one-remote-cli-client). Only the deployment host runs the
-convergent setup entry point:
+resumable setup entry point:
 
 ```bash
 dorf setup
 ```
 
-Setup first checks for a usable Docker Engine and Compose plugin. When either is not ready, it
-materializes the exact version-matched `docker.sh` helper, prints the command an administrator may
-inspect and run, links the equivalent upstream [Docker Engine](https://docs.docker.com/engine/install/)
-and [Compose plugin](https://docs.docker.com/compose/install/linux/) installation authorities, and
-exits with a resumable handoff. Dorf never runs the helper or invokes `sudo`. After the operator
-prepares Docker, rerun the same command. Docker-daemon access is root-equivalent authority even
-though Dorf does not escalate itself. The shipped bootstrap helpers automate only their stated
-clean Ubuntu 24.04 noble amd64 host with systemd; on another supported x86_64 Linux host, follow the
-linked upstream or manual preparation authority and then rerun setup.
+Setup performs a read-only Docker Engine readiness probe; it does not invoke the Compose plugin.
+When the Engine is unavailable, setup materializes the version-matched `docker.sh` helper, which
+prepares both Engine and Compose on its stated clean Ubuntu 24.04 noble amd64 target. It prints the
+command an administrator may inspect and run and links the upstream
+[Docker Engine](https://docs.docker.com/engine/install/) and
+[Compose plugin](https://docs.docker.com/compose/install/linux/) authorities. Dorf never runs the
+helper or invokes `sudo`. After an operator prepares Docker, rerun `dorf setup`. Docker-daemon access
+is root-equivalent authority even though Dorf does not escalate itself. On another host, follow the
+linked upstream procedure. If the later direct lifecycle command reports a missing Compose plugin,
+use that plugin authority or the inspectable `bootstrap/docker.sh` shipped in the release archive.
 
-The managed deployment converges the one versioned Compose topology defined by the
-[Remote Control API](control-api.md#deployment-services). It does so even when the operator selects
-no Sandbox provider, leaving Job admission to wait for a verified Profile. Use `--yes` to approve
-the shown Dorf-owned project plan in automation. Public HTTPS control ingress remains an independent
+When configuration is complete enough to start, setup writes a protected `.env` under
+`${XDG_DATA_HOME:-$HOME/.local/share}/dorf-compose`. The installed static manifests remain beside
+the binary; `.env` points Docker Compose at the base manifest and, for a local Incus endpoint, its
+static overlay. Dorf Go code and setup never construct or execute Compose lifecycle commands, and
+they do not inspect or reconcile Docker resources. Setup only prepares `.env` and probes readiness.
+
+Apply the handoff as the same ordinary user who ran setup:
+
+```bash
+compose_dir="${XDG_DATA_HOME:-$HOME/.local/share}/dorf-compose"
+cd "$compose_dir"
+docker compose up -d --wait --remove-orphans
+dorf setup
+```
+
+The official release configuration selects the exact
+`ghcr.io/aphronio/dorf:MAJOR.MINOR.PATCH` image with `pull_policy: always`, so this one command is
+both the primary start and update operation. Its one-shot `migrate` service must complete
+successfully before the worker and private API start. Rerunning setup resumes the guided flow after
+the project is ready. Whenever setup later reports that protected `.env` changed, run the same
+`docker compose up` command and rerun setup. Public HTTPS control ingress remains an independent
 operator responsibility.
 
-Setup then offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already
-be usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
+Use Docker Compose itself for observation and process operations from that directory:
+
+```bash
+docker compose ps
+docker compose restart worker control-api
+docker compose logs --tail=200 worker control-api
+```
+
+There is no Dorf lifecycle wrapper. Do not edit the generated `.env`; rerun setup to change its
+source facts. After `dorf update`, rerun setup, apply the same Compose start/update command, and
+rerun setup once more for factual readiness.
+
+Setup offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already be
+usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
 materialize the version-matched `incus.sh` administrator helper, print its exact command and the
 upstream manual path, and exit. A custom Unix socket receives an exact repair-or-select handoff
-instead of a host recipe. An HTTPS endpoint is rejected while remote Incus remains unsupported.
-Dorf does not install Incus or QEMU, enable a
-service, change group membership, initialize the daemon, or mutate a host network. The manual
-authority is the upstream [Incus installation
+instead of a host recipe. Guided HTTPS Incus setup remains gated while remote proof is pending,
+although the adapter retains its explicit HTTPS and mTLS boundary. Dorf does not install Incus or
+QEMU, enable a service, change group membership, initialize the daemon, or mutate a host network.
+The manual authority is the upstream [Incus installation
 guide](https://linuxcontainers.org/incus/docs/main/installing/). The helper owns any administrator
-action and login handoff; rerun setup afterward. A Dorf Deployment configures at most one Incus
-endpoint, while each Incus Profile owns its restricted project, pool, network, exact image, disk
-contract, and guest-reachable Provider Gateway URL. Guided local setup may create that route from
-one unambiguous prepared bridge observation; the [Provider Gateway
-authority](project/provider-gateway.md) owns the exact persistence and no-runtime-inference rule.
-Remote Incus never uses that convenience and remains unsupported until the live gate in
-[Support](support.md) passes.
+action and login handoff; rerun setup afterward.
 
-When the selected Profile predates endpoint custody, guided setup adopts only its exact legacy
-shape after persisting the prepared local endpoint. Legacy Incus profiles move to the guided
-`dorf` project, `default` pool, and `incusbr0` network; Dorf does not copy an image from another
-Incus project. Adoption removes any settled verification and default selection, safely finishes an
-interrupted verification Sandbox when present, and requires a fresh live proof before admission.
-If the image is unavailable in the adopted project, install it there explicitly and rerun setup.
+A Dorf Deployment configures at most one Incus endpoint, while each Incus Profile owns its
+restricted project, pool, network, exact image, disk contract, and guest-reachable Provider Gateway
+URL. Guided local setup may create that route from one unambiguous prepared bridge observation; the
+[Provider Gateway authority](project/provider-gateway.md) owns the exact persistence and
+no-runtime-inference rule. Remote Incus never uses that convenience and remains unsupported until
+the live gate in [Support](support.md) passes. There is no migration or adoption path for an earlier
+Profile shape; create and verify a current Profile.
 
 Selecting a provider continues through Harness choice, ChatGPT-subscription or OpenAI-API
 authentication, provider inputs, profile creation, functional verification, and default selection.
 E2B uses Dorf's exact public Standard template build unless `--e2b-template` selects a custom exact
 build, and needs one stable HTTPS `/v1` Gateway route. The [Provider Gateway
-authority](project/provider-gateway.md) owns retained-candidate replay, reconciliation, live
-verification, and default-commit semantics. Automation can name a candidate with
+authority](project/provider-gateway.md) owns retained-candidate replay, protected Compose-input
+publication, live verification, and default-commit semantics. Automation can name a candidate with
 `--ai-connection` or explicitly select its authentication mode. Sandbox provider choices remain
-explicit. Running
-`dorf setup --yes` alone creates the common Compose deployment and does not silently select one.
+explicit; `dorf setup --yes` does not silently select one.
 
-Ordinary setup consumes the immutable release artifacts. `--local-image REF` instead selects one
-already-loaded Compose image, while the paired `--incus-manifest PATH --incus-archive PATH` options
-supply matching local Incus image assets and require `--sandbox-provider incus`. These are explicit
-contributor and disposable-integration-proof transports, not production channels or additional
-release authorities; omit them in an ordinary deployment.
-
-The Provider Gateway joins the same Compose project when an AI connection is configured. Setup can
-verify an existing Sandbox-reachable route or guide the named Cloudflare Tunnel owned by the
-[Provider Gateway authority](project/provider-gateway.md). This remains an unprivileged browser and
-DNS flow, not another shell helper.
+The Provider Gateway joins the static Compose project when an AI connection is configured. After
+setup publishes that profile into the protected `.env`, apply the standard Compose handoff above
+and rerun setup so it can verify and finalize the retained candidate. Setup can verify an existing
+Sandbox-reachable route or guide the named Cloudflare Tunnel owned by the [Provider Gateway
+authority](project/provider-gateway.md). This remains an unprivileged browser and DNS flow, not
+another shell helper.
 
 The separate `profile` and `provider` commands remain available for custom artifacts and advanced
 operations. Their exact-artifact, credential, and route boundaries are described by the
@@ -158,15 +180,11 @@ Deployment URL, and one short-lived Enrollment; it does not run `dorf setup`.
 The control API URL must be an operator-owned HTTPS origin backed by the Compose API's private
 listener. The operator must give it a different origin from the Provider Gateway: that separate
 `/v1` service provides model access to Sandboxes, not Dorf client operations. Compose supervises the
-private API and worker, but Dorf does not provision or infer public ingress. Verify the project
-before Enrollment:
-
-```bash
-dorf service status
-```
-
-See the [Remote Control API](control-api.md#deployment-services) for the exact service boundary and
-host lifecycle commands.
+private API and worker, but Dorf does not provision or infer public ingress. Before Enrollment,
+verify the project with `docker compose ps` and the readiness handoff in
+[the deployment-host procedure](#1-install-the-application-initialize-a-deployment-host). The
+[Remote Control API](control-api.md#deployment-services) owns the exact capability and service
+boundary.
 
 On the deployment host, create a one-use Enrollment:
 
@@ -344,8 +362,8 @@ dorf inspect --follow JOB_ID
 The follower shows current status and durable Job history until attention appears or cleanup
 completes. `Ctrl-C` stops only the local view, not the Job.
 
-The Compose-managed worker recovers after process loss; use the [service diagnostics](support.md) when an
-operator action is needed. Use `dorf message` for later input and `--intent steer` to target active
+The Compose-managed worker recovers after process loss; use [Support](support.md) when an operator
+action is needed. Use `dorf message` for later input and `--intent steer` to target active
 work. The coding workflow observes the exact pull request for acceptance or
 rejection and requests cleanup after its terminal policy is satisfied. To stop without a GitHub
 decision:

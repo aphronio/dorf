@@ -34,9 +34,10 @@ Native workflows compose Core in-process. The external-client boundary is intent
 enrolled CLI client can admit a direct Job or either fixed built-in workflow and operate their common
 interaction loop—Messages, observation, eligible recovery, exact Sandbox files, verified Evidence
 metadata, cleanup, and bounded Job listing—through one configured Dorf deployment over authenticated
-HTTPS. Each deployment publishes its OpenAPI and typed Problem catalog, while setup and update
-converge separately supervised API and worker services. Generic workflow registration, client SDKs,
-MCP, and a control-plane UI remain later work.
+HTTPS. Each deployment publishes its OpenAPI and typed Problem catalog. Static release manifests
+define separately supervised API and worker services; setup prepares their protected `.env`, and a
+human or deployment agent operates Docker Compose directly. Generic workflow registration, client
+SDKs, MCP, and a control-plane UI remain later work.
 
 The direct CLI path runs caller-owned prompts without workflow policy. Built-in workflows cover
 coding to a verified pull-request Proposal and repository-grounded codebase investigation. See

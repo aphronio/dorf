@@ -18,9 +18,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func TestSaveLoadDockerDatabase(t *testing.T) {
+func TestSaveLoadDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dorf", "deployment.json")
-	want := Config{Database: Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret", Image: "postgres:17.10-bookworm", ImageID: "sha256:exact"}}
+	want := Config{Database: Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret"}}
 	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestLoadRejectsIncompleteDatabase(t *testing.T) {
 
 func TestSaveE2BAPIKeyPreservesDatabaseAndSupportsRotation(t *testing.T) {
 	path := protectedDeploymentTestPath(t)
-	database := Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret", Image: "postgres:17.10-bookworm", ImageID: "sha256:exact"}
+	database := Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret"}
 	if err := Save(path, Config{Database: database}); err != nil {
 		t.Fatal(err)
 	}
@@ -426,27 +426,6 @@ func TestSaveE2BAPIKeyPreservesDatabaseAndSupportsRotation(t *testing.T) {
 	rotated, _, err := Load(path)
 	if err != nil || rotated.Database != database || rotated.E2B == nil || rotated.E2B.APIKey != "different" {
 		t.Fatalf("rotated=%#v err=%v", rotated, err)
-	}
-}
-
-func TestEnsureControlReaderKeyIsValidatedAndSetOnce(t *testing.T) {
-	path := protectedDeploymentTestPath(t)
-	if err := Save(path, Config{Database: testDatabase()}); err != nil {
-		t.Fatal(err)
-	}
-	if err := EnsureControlReaderKey(path, "not-a-key"); err == nil || !strings.Contains(err.Error(), "256-bit lowercase hex") {
-		t.Fatalf("invalid key error=%v", err)
-	}
-	first := strings.Repeat("a", 64)
-	if err := EnsureControlReaderKey(path, first); err != nil {
-		t.Fatal(err)
-	}
-	if err := EnsureControlReaderKey(path, strings.Repeat("b", 64)); err != nil {
-		t.Fatal(err)
-	}
-	got, found, err := Load(path)
-	if err != nil || !found || got.ControlReaderKey != first {
-		t.Fatalf("config=%#v found=%t error=%v", got, found, err)
 	}
 }
 
@@ -494,43 +473,6 @@ func TestDeploymentUpdatesSerializeWholeReadModifyWrite(t *testing.T) {
 	got, found, err := Load(path)
 	if err != nil || !found || got.E2B == nil || got.E2B.APIKey != "e2b-secret" || got.Incus == nil {
 		t.Fatalf("config=%#v found=%t error=%v", got, found, err)
-	}
-}
-
-func TestMarkDatabaseVolumeInitializedIsExactAndIdempotent(t *testing.T) {
-	path := protectedDeploymentTestPath(t)
-	database := Database{
-		Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret",
-		Image: "postgres:17.10-bookworm", ImageID: "sha256:exact", VolumeState: DatabaseVolumePending,
-	}
-	if err := Save(path, Config{Database: database, E2B: &E2B{APIKey: "retained"}, Incus: &Incus{Endpoint: "unix:///var/lib/incus/unix.socket"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := MarkDatabaseVolumeInitialized(path, database); err != nil {
-		t.Fatal(err)
-	}
-	if err := MarkDatabaseVolumeInitialized(path, database); err != nil {
-		t.Fatalf("idempotent mark: %v", err)
-	}
-	got, found, err := Load(path)
-	if err != nil || !found || got.Database.VolumeState != DatabaseVolumeInitialized || got.E2B == nil || got.E2B.APIKey != "retained" ||
-		got.Incus == nil || got.Incus.Endpoint != "unix:///var/lib/incus/unix.socket" {
-		t.Fatalf("config=%#v found=%t err=%v", got, found, err)
-	}
-	changed := database
-	changed.Password = "different"
-	if err := MarkDatabaseVolumeInitialized(path, changed); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("changed authority error=%v", err)
-	}
-}
-
-func TestDatabaseRejectsUnknownVolumeState(t *testing.T) {
-	database := Database{
-		Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret",
-		Image: "postgres:17.10-bookworm", ImageID: "sha256:exact", VolumeState: "invented",
-	}
-	if err := database.Validate(); err == nil || !strings.Contains(err.Error(), "volume state") {
-		t.Fatalf("Validate() error=%v", err)
 	}
 }
 
@@ -636,7 +578,7 @@ func TestSaveIncusPreservesExistingDeploymentAuthority(t *testing.T) {
 }
 
 func testDatabase() Database {
-	return Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret", Image: "postgres:17.10-bookworm", ImageID: "sha256:exact"}
+	return Database{Host: "127.0.0.1", Port: 54329, Name: "dorf", User: "dorf", Password: "secret"}
 }
 
 func protectedDeploymentTestPath(t *testing.T) string {

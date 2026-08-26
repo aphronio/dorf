@@ -64,19 +64,20 @@ jobs:
           version="$(.dorf/bin/mise exec -- go run ./cmd/dorf version | awk '{print $2}')"
           artifact_basename="dist/release/dorf_${version}_linux_x86_64"
           archive="${artifact_basename}.tar.gz"
-          image_archive="${artifact_basename}_container-image.docker.tar"
           checksums="dist/release/dorf_${version}_checksums.txt"
           test -f "$archive"
-          test -f "$image_archive"
           test -f "$checksums"
           test "$(awk -v file="$(basename "$archive")" '$2 == file { count += 1 } END { print count + 0 }' "$checksums")" -eq 1
-          test "$(awk -v file="$(basename "$image_archive")" '$2 == file { count += 1 } END { print count + 0 }' "$checksums")" -eq 1
-          test "$(wc -l < "$checksums")" -eq 2
+          test "$(wc -l < "$checksums")" -eq 1
           (cd dist/release && sha256sum --check --strict "$(basename "$checksums")")
           smoke_dir="$(mktemp -d)"
           trap 'rm -rf -- "$smoke_dir"' EXIT
           tar -xzf "$archive" -C "$smoke_dir"
           test "$("$smoke_dir/dorf" version)" = "dorf $version"
+          test "$(stat -c %a "$smoke_dir/dorf-compose.yaml")" = 644
+          test "$(stat -c %a "$smoke_dir/dorf-compose-incus.yaml")" = 644
+          cmp deploy/compose.yaml "$smoke_dir/dorf-compose.yaml"
+          cmp deploy/compose.incus.yaml "$smoke_dir/dorf-compose-incus.yaml"
           test -x "$smoke_dir/bootstrap/docker.sh"
           test -x "$smoke_dir/bootstrap/incus.sh"
           cmp scripts/bootstrap/docker.sh "$smoke_dir/bootstrap/docker.sh"

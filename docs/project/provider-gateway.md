@@ -11,11 +11,12 @@ masked API-key input. The standalone `provider connect` command accepts the same
 API keys only from a file or standard input. The protected host state retains authenticated
 connection candidates and the selected default; a deployment currently admits one unprefixed
 OpenAI authentication mode at a time.
-`provider connect` first prepares that state, then reconciles the existing Compose project with its
-already-acquired exact image and verifies the candidate through the live Gateway. Only that complete
-success selects it as the deployment default; reconciliation or verification failure preserves the
-previous healthy default. The command neither acquires an alternate image nor treats prepared state
-as runtime readiness.
+`provider connect` first prepares that retained candidate and publishes its protected environment
+and profile facts for the shipped static Compose project. When the running project does not yet
+reflect those facts, it stops at the ordinary operator/agent Compose handoff. Rerunning the command
+after that handoff verifies the candidate through the live Gateway; only complete success selects it
+as the deployment default. Publication or verification failure preserves the previous healthy
+default. The command neither runs Compose nor treats prepared state as runtime readiness.
 
 Executable code owns the exact broker version and artifact integrity. Each Sandbox receives only a
 scoped route and its selected Harness configuration.
@@ -56,9 +57,10 @@ exactly to Dorf's retained Tunnel hostname; otherwise setup keeps the existing-H
 and never replaces DNS it cannot prove is available. Browser authorization creates a broad
 Cloudflare account certificate only
 for Tunnel and DNS reconciliation; setup removes it after those account-level mutations settle.
-The Gateway and configured `cloudflared` process are foreground siblings in Dorf's Compose project;
-there is no host Cloudflare service. The Tunnel receives no upstream Provider credential and exposes
-only `/v1` plus one random nonsecret deployment probe. Setup and status require that probe to return
+The Gateway and configured `cloudflared` process are foreground siblings in Dorf's static Compose
+project; there is no host Cloudflare service. The Tunnel receives no upstream Provider credential
+and exposes only `/v1` plus one random nonsecret deployment probe. Setup and status require that
+probe to return
 HTTP 204 and separately require anonymous `/v1/models` access to return the Gateway's HTTP 401. This
 proves the configured hostname reaches this Dorf-owned Tunnel rather than merely some protected
 service. Operator-owned HTTPS ingress retains only the universal protected-API check because Dorf
@@ -76,10 +78,10 @@ passes `--ai-connection`; either way, the admitted Job durably pins the resolved
 `dorf provider status --profile NAME [--ai-connection CONNECTION]` is the observational deployment check. It
 verifies the selected AI connection and private broker locally, then requests the Profile's exact
 configured `/v1/models` path without a credential and requires the Gateway's HTTP 401 rejection. For
-the guided direct Incus route it first requires Compose's retained publish address to equal the
-Profile URL; for HTTPS it also attests Dorf-owned Tunnel identity when applicable. It never starts
-the broker, repairs ingress, resolves an Incus bridge, or creates a consumer route. Profile
-verification remains historical artifact proof; status reports current Gateway reachability
+the guided direct Incus route it first requires the publish address retained in protected `.env` to
+equal the Profile URL; for HTTPS it also attests Dorf-owned Tunnel identity when applicable. It
+never starts the broker, repairs ingress, resolves an Incus bridge, or creates a consumer route.
+Profile verification remains historical artifact proof; status reports current Gateway reachability
 separately and exits unsuccessfully when either authority is not ready. Use `--json` for the same
 machine-readable facts.
 

@@ -54,19 +54,19 @@ means the saved Client credential is invalid, expired, or revoked; a deployment-
 issue a new Enrollment. Use `dorf auth status --output json` for automation. `invalid_cursor` means a
 Job-list cursor was not passed back unchanged; begin a fresh traversal rather than altering it.
 
-On the deployment host, start service diagnosis with:
+On the deployment host, start service diagnosis with the direct Compose status and log operations in
+the [deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host).
+The Compose-owned PostgreSQL service must be healthy, the one-shot migration must have succeeded,
+and the worker and private API must be healthy. Worker readiness includes its narrow authenticated
+reader. A configured Gateway or Cloudflare Tunnel must also be running under its selected Compose
+profile. Rerun `dorf setup` to probe the private API and other prepared authorities; setup observes
+readiness but never starts or repairs a service.
 
-```bash
-dorf service status --output json
-```
-
-This fails unless the exact managed Compose project and its required services are converged and
-runtime-ready and the private API passes discovery and authentication probes. Configured Gateway
-and Cloudflare services are part of that same project status. The [deployment service
-authority](control-api.md#deployment-services) owns the exact reconcile, restart, and bounded-log
-commands and their configured-service targets. A deployment using `DORF_DATABASE_URL` or directly
-supervised processes is outside this managed topology and must own its own supervision and
-configuration custody. A remote client must not perform any of these host actions.
+The [deployment service authority](control-api.md#deployment-services) owns the capability and
+network boundary, while Getting started alone owns lifecycle commands. A deployment using
+`DORF_DATABASE_URL` or separately supervised processes is outside this managed topology and must
+own its own supervision and configuration custody. A remote client must not perform any of these
+host actions.
 
 If admission succeeds but a Job does not progress while the managed project is ready, continue with
 the Profile, Sandbox, Harness, Provider Gateway, and integration checks below rather than

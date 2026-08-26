@@ -109,65 +109,42 @@ operator-owned HTTPS ingress
             |
             v
 Docker Compose project
-  PostgreSQL -> migrate -> worker
-                        -> control-api -> authenticated typed control-reader
-                                             |          |
-                                             v          v
-                                     provider reads   PostgreSQL
+  PostgreSQL -> migrate -> worker + authenticated narrow reads
+                        -> control-api -----------^
                         -> provider-gateway  (when configured)
                              ^
                              |
                         cloudflared          (when guided Tunnel is configured)
 ```
 
-PostgreSQL, one successful migration phase, the private API, the internal control reader, and the
-durable worker are always part of the project, even when no Sandbox provider is selected yet. The
-Provider Gateway and guided named Cloudflare Tunnel are optional foreground services under the
-same Compose supervisor.
+PostgreSQL, the one-shot migration, the private API, and the durable worker are always in the base
+project, even when no Sandbox provider is selected. Migration must complete successfully before
+the worker or API starts. The worker hosts the independently authenticated, fixed read endpoint
+needed by the API; it is not another service or lifecycle. The Provider Gateway and guided named
+Cloudflare Tunnel are optional foreground services under the same Compose supervisor.
 
-The API receives only its generated database configuration, read-only API state, and one
-image-bound token derived from an independent deployment-owned reader key; the raw key never enters
-the API. It receives no Incus socket or identity, E2B key, GitHub credential, Gateway state, or
-provider configuration. The control reader alone answers
-the API's fixed authenticated read operations: default and named AI-connection observation, GitHub
-installation discovery, an
-exact Job-owned Sandbox file read, and one settled Message result. It has no generic proxy,
-provider selector, credential response, or mutation operation.
+The API receives its database URL, read-only API state, and an independently derived reader token
+through the protected Compose environment. It receives no Incus socket or identity, E2B key,
+GitHub credential, Gateway state, or provider configuration. The worker's narrow reader answers
+only default and named AI-connection observation, GitHub installation discovery, an exact
+Job-owned Sandbox file read, and one settled Message result. It has no generic proxy, provider
+selector, credential response, or mutation operation.
 
-Bridge networks separate database access, API-to-reader calls, reader-to-Gateway calls,
-worker-to-Gateway calls, worker egress, reader egress, and Gateway ingress. `cloudflared` can reach
-only the Gateway. PostgreSQL and the control API publish only on host loopback; the Gateway publishes
-only an explicitly selected Profile route. No Dorf workload or Sandbox receives the host Docker
-socket.
+Bridge networks separate database access, API-to-worker reads, worker-to-Gateway calls, worker
+egress, and Gateway ingress. `cloudflared` can reach only the Gateway. PostgreSQL and the control API
+publish only on host loopback; the Gateway publishes only an explicitly selected Profile route.
+The project uses no host networking and mounts no host Docker socket. The optional local-Incus
+overlay gives only the worker the exact configured Incus Unix socket; a remote Incus endpoint uses
+its explicit HTTPS and mTLS adapter instead.
 
-`dorf setup` follows the
-[deployment-host setup procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
-for host prerequisites, then persists the protected deployment configuration, shows the exact
-Compose plan, and waits for the project to become ready.
-
-Use the host-only lifecycle commands rather than supervising foreground Dorf processes or editing
-the Compose project in ordinary deployments:
-
-```text
-dorf service reconcile [--yes] [--existing] [--local-image REF]
-dorf service status [--output json]
-dorf service restart <api|worker|gateway|cloudflare|all>
-dorf service logs <api|worker|gateway|cloudflare> [--lines N]
-```
-
-Status distinguishes exact project and service convergence from runtime readiness and checks the
-private API's discovery and authentication boundary. Logs are bounded Compose service logs;
-the `gateway` and `cloudflare` targets exist only when their optional services are configured, and
-the restart target `all` includes the internal control reader and those configured services. The
-reader has no direct human restart or log target. Restart and reconcile operate only on the
-protected generated project.
-`--existing` makes an absent project a no-op rather than creating one. `dorf update` uses that gate
-when handing an existing project to the new binary for reconciliation and
-restart, so a remote CLI-only installation remains project-free.
-
-`--local-image` is only the explicit contributor and disposable-proof transport described in
-[Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host); an
-ordinary deployment omits it.
+The release installs static `dorf-compose.yaml` and `dorf-compose-incus.yaml` manifests beside the
+binary. `dorf setup` writes only the protected `.env` consumed by those manifests, then probes
+readiness. Dorf Go code neither constructs nor executes Compose lifecycle commands and does not
+reconcile Docker state. A human or deployment agent owns the ordinary Compose lifecycle directly
+from the generated project directory. The
+[deployment-host procedure](getting-started.md#1-install-the-application-initialize-a-deployment-host)
+is the sole authority for installation, start, update, status, restart, logs, and the resumable
+setup handoff.
 
 The managed project always uses its PostgreSQL service and the protected persisted deployment
 configuration as authority. `DORF_DATABASE_URL` remains only a development, test, or explicitly

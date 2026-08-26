@@ -16,7 +16,7 @@ on conflict(name) do nothing;
 
 -- name: GetSandboxProfile :one
 select p.name,p.provider,p.harness,p.artifact,
-       coalesce(p.definition_hash,'') as definition_hash,
+       p.definition_hash,
        coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(p.incus_project,'') as incus_project,
        coalesce(p.incus_storage_pool,'') as incus_storage_pool,
@@ -40,7 +40,7 @@ where p.name=sqlc.arg(name);
 
 -- name: ListSandboxProfiles :many
 select p.name,p.provider,p.harness,p.artifact,
-       coalesce(p.definition_hash,'') as definition_hash,
+       p.definition_hash,
        coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(p.incus_project,'') as incus_project,
        coalesce(p.incus_storage_pool,'') as incus_storage_pool,
@@ -70,13 +70,13 @@ select p.name
 from dorf.sandbox_profiles p
 join dorf.sandbox_profile_verifications v on v.profile_name=p.name
 where p.name=sqlc.arg(name) and v.contract_version=sqlc.arg(contract_version)
-  and p.definition_hash is not null and v.definition_hash=p.definition_hash
+  and v.definition_hash=p.definition_hash
   and v.probe_completed_at is not null and v.cleaned_at is not null and v.last_error is null
 for key share of p,v;
 
 -- name: LockSandboxProfile :one
 select name,provider,harness,artifact,
-       coalesce(definition_hash,'') as definition_hash,
+       definition_hash,
        coalesce(incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(incus_project,'') as incus_project,
        coalesce(incus_storage_pool,'') as incus_storage_pool,
@@ -113,12 +113,6 @@ where name=sqlc.arg(name);
 
 -- name: DeleteProfileVerification :exec
 delete from dorf.sandbox_profile_verifications where profile_name=sqlc.arg(profile_name);
-
--- name: BindLegacyProfileVerificationForAdoption :execrows
-update dorf.sandbox_profile_verifications
-set definition_hash=sqlc.arg(definition_hash),contract_version=sqlc.arg(contract_version)
-where profile_name=sqlc.arg(profile_name) and definition_hash is null and cleaned_at is null
-  and contract_version=sqlc.arg(previous_contract_version);
 
 -- name: ClearDefaultSandboxProfile :exec
 update dorf.sandbox_profiles set is_default=false where is_default;

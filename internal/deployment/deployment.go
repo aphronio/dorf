@@ -42,21 +42,14 @@ type Incus struct {
 }
 
 type Database struct {
-	Host        string `json:"host,omitempty"`
-	Port        int    `json:"port,omitempty"`
-	Name        string `json:"name,omitempty"`
-	User        string `json:"user,omitempty"`
-	Password    string `json:"password,omitempty"`
-	Image       string `json:"image,omitempty"`
-	ImageID     string `json:"image_id,omitempty"`
-	VolumeState string `json:"volume_state,omitempty"`
+	Host     string `json:"host,omitempty"`
+	Port     int    `json:"port,omitempty"`
+	Name     string `json:"name,omitempty"`
+	User     string `json:"user,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
-const (
-	DatabaseVolumePending     = "pending"
-	DatabaseVolumeInitialized = "initialized"
-	maxDeploymentConfigBytes  = 64 << 10
-)
+const maxDeploymentConfigBytes = 64 << 10
 
 var deploymentLoadOpenedForTest func()
 var deploymentSaveBeforeCommitForTest func()
@@ -601,22 +594,6 @@ func SaveIncus(path string, incus Incus) error {
 	})
 }
 
-// EnsureControlReaderKey records the independently generated managed-reader
-// key once while preserving every other Deployment authority. Concurrent
-// callers retain the first committed key.
-func EnsureControlReaderKey(path, key string) error {
-	if err := ValidateControlReaderKey(key); err != nil {
-		return err
-	}
-	return updateDeployment(path, func(cfg *Config) (bool, error) {
-		if cfg.ControlReaderKey != "" {
-			return false, ValidateControlReaderKey(cfg.ControlReaderKey)
-		}
-		cfg.ControlReaderKey = key
-		return true, nil
-	})
-}
-
 func ValidateControlReaderKey(key string) error {
 	if len(key) != 64 || strings.ToLower(key) != key {
 		return fmt.Errorf("control reader key must be one 256-bit lowercase hex value")
@@ -715,34 +692,10 @@ func parseSingleCertificate(label, value string) (*x509.Certificate, error) {
 }
 
 func (d Database) Validate() error {
-	if d.Host != "127.0.0.1" || d.Port < 1024 || d.Port > 65535 || strings.TrimSpace(d.Name) == "" || strings.TrimSpace(d.User) == "" || strings.TrimSpace(d.Password) == "" || strings.TrimSpace(d.Image) == "" || strings.TrimSpace(d.ImageID) == "" {
-		return fmt.Errorf("Docker PostgreSQL deployment configuration is incomplete")
-	}
-	if d.VolumeState != "" && d.VolumeState != DatabaseVolumePending && d.VolumeState != DatabaseVolumeInitialized {
-		return fmt.Errorf("Docker PostgreSQL volume state is invalid")
+	if d.Host != "127.0.0.1" || d.Port < 1024 || d.Port > 65535 || strings.TrimSpace(d.Name) == "" || strings.TrimSpace(d.User) == "" || strings.TrimSpace(d.Password) == "" {
+		return fmt.Errorf("PostgreSQL deployment configuration is incomplete")
 	}
 	return nil
-}
-
-// MarkDatabaseVolumeInitialized records the recovery boundary after the exact
-// owned volume has completed Dorf's migration. Empty state is accepted only as
-// a one-time upgrade from deployments created before the receipt existed.
-func MarkDatabaseVolumeInitialized(path string, expected Database) error {
-	return updateDeployment(path, func(cfg *Config) (bool, error) {
-		if !sameDatabaseAuthority(cfg.Database, expected) {
-			return false, fmt.Errorf("Dorf PostgreSQL deployment changed while its volume was initialized")
-		}
-		if cfg.Database.VolumeState == DatabaseVolumeInitialized {
-			return false, nil
-		}
-		cfg.Database.VolumeState = DatabaseVolumeInitialized
-		return true, nil
-	})
-}
-
-func sameDatabaseAuthority(first, second Database) bool {
-	return first.Host == second.Host && first.Port == second.Port && first.Name == second.Name && first.User == second.User &&
-		first.Password == second.Password && first.Image == second.Image && first.ImageID == second.ImageID
 }
 
 func (d Database) URL() (string, error) {

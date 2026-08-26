@@ -72,7 +72,7 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 		if len(args) != 2 {
 			return fmt.Errorf("profile verify requires NAME")
 		}
-		verified, err := verifyProfileBaseLive(ctx, store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
+		verified, err := profileapp.VerifyBase(ctx, store, func(profile core.SandboxProfile) (provider.Sandbox, error) {
 			return sandboxForProfile(cfg, profile)
 		}, args[1])
 		if err != nil {
@@ -113,29 +113,6 @@ func profileCommand(ctx context.Context, store postgres.Store, cfg config.Config
 	default:
 		return fmt.Errorf("unsupported profile command %q", args[0])
 	}
-}
-
-// verifyProfileBaseLive permits one bounded compatibility cleanup pass for an
-// interrupted pre-007 verification, then requires a fresh current-definition
-// proof before reporting success. Ordinary profiles settle in the first pass.
-func verifyProfileBaseLive(
-	ctx context.Context,
-	store postgres.Store,
-	runtimeForProfile func(core.SandboxProfile) (provider.Sandbox, error),
-	name string,
-) (core.SandboxProfile, error) {
-	var profile core.SandboxProfile
-	for range 2 {
-		var err error
-		profile, err = profileapp.VerifyBase(ctx, store, runtimeForProfile, name)
-		if err != nil {
-			return core.SandboxProfile{}, err
-		}
-		if profile.BaseVerified() {
-			return profile, nil
-		}
-	}
-	return core.SandboxProfile{}, fmt.Errorf("Sandbox profile %q did not produce a current-definition verification receipt", name)
 }
 
 func installOfficialIncusProfile(ctx context.Context, store postgres.Store, args []string, stdout, stderr io.Writer) error {
@@ -211,7 +188,7 @@ type sandboxProfileView struct {
 	Provider          core.SandboxProvider     `json:"provider"`
 	Harness           string                   `json:"harness"`
 	Artifact          string                   `json:"artifact"`
-	DefinitionHash    string                   `json:"definition_hash,omitempty"`
+	DefinitionHash    string                   `json:"definition_hash"`
 	IncusAuthority    string                   `json:"incus_endpoint_authority_hash,omitempty"`
 	IncusProject      string                   `json:"incus_project,omitempty"`
 	IncusStoragePool  string                   `json:"incus_storage_pool,omitempty"`
@@ -229,7 +206,7 @@ type sandboxProfileView struct {
 
 type profileVerificationView struct {
 	ContractVersion string    `json:"contract_version"`
-	DefinitionHash  string    `json:"definition_hash,omitempty"`
+	DefinitionHash  string    `json:"definition_hash"`
 	HarnessVersion  string    `json:"harness_version,omitempty"`
 	AttemptedAt     time.Time `json:"attempted_at"`
 	VerifiedAt      time.Time `json:"verified_at,omitempty"`

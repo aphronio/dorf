@@ -27,7 +27,7 @@ returning profile_name,contract_version,definition_hash,sandbox_id,ownership_non
 type BeginSandboxProfileVerificationParams struct {
 	ProfileName     string
 	ContractVersion string
-	DefinitionHash  sql.NullString
+	DefinitionHash  string
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -35,7 +35,7 @@ type BeginSandboxProfileVerificationParams struct {
 type BeginSandboxProfileVerificationRow struct {
 	ProfileName      string
 	ContractVersion  string
-	DefinitionHash   sql.NullString
+	DefinitionHash   string
 	SandboxID        string
 	OwnershipNonce   string
 	HarnessVersion   string
@@ -69,33 +69,6 @@ func (q *Queries) BeginSandboxProfileVerification(ctx context.Context, arg Begin
 	return i, err
 }
 
-const bindLegacyProfileVerificationForAdoption = `-- name: BindLegacyProfileVerificationForAdoption :execrows
-update dorf.sandbox_profile_verifications
-set definition_hash=$1,contract_version=$2
-where profile_name=$3 and definition_hash is null and cleaned_at is null
-  and contract_version=$4
-`
-
-type BindLegacyProfileVerificationForAdoptionParams struct {
-	DefinitionHash          sql.NullString
-	ContractVersion         string
-	ProfileName             string
-	PreviousContractVersion string
-}
-
-func (q *Queries) BindLegacyProfileVerificationForAdoption(ctx context.Context, arg BindLegacyProfileVerificationForAdoptionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bindLegacyProfileVerificationForAdoption,
-		arg.DefinitionHash,
-		arg.ContractVersion,
-		arg.ProfileName,
-		arg.PreviousContractVersion,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const clearDefaultSandboxProfile = `-- name: ClearDefaultSandboxProfile :exec
 update dorf.sandbox_profiles set is_default=false where is_default
 `
@@ -127,7 +100,7 @@ func (q *Queries) GetDefaultSandboxProfile(ctx context.Context) (string, error) 
 
 const getSandboxProfile = `-- name: GetSandboxProfile :one
 select p.name,p.provider,p.harness,p.artifact,
-       coalesce(p.definition_hash,'') as definition_hash,
+       p.definition_hash,
        coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(p.incus_project,'') as incus_project,
        coalesce(p.incus_storage_pool,'') as incus_storage_pool,
@@ -233,7 +206,7 @@ type InsertSandboxProfileParams struct {
 	Provider                   string
 	Harness                    string
 	Artifact                   string
-	DefinitionHash             sql.NullString
+	DefinitionHash             string
 	IncusEndpointAuthorityHash sql.NullString
 	IncusProject               sql.NullString
 	IncusStoragePool           sql.NullString
@@ -270,7 +243,7 @@ func (q *Queries) InsertSandboxProfile(ctx context.Context, arg InsertSandboxPro
 
 const listSandboxProfiles = `-- name: ListSandboxProfiles :many
 select p.name,p.provider,p.harness,p.artifact,
-       coalesce(p.definition_hash,'') as definition_hash,
+       p.definition_hash,
        coalesce(p.incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(p.incus_project,'') as incus_project,
        coalesce(p.incus_storage_pool,'') as incus_storage_pool,
@@ -372,7 +345,7 @@ func (q *Queries) ListSandboxProfiles(ctx context.Context) ([]ListSandboxProfile
 
 const lockSandboxProfile = `-- name: LockSandboxProfile :one
 select name,provider,harness,artifact,
-       coalesce(definition_hash,'') as definition_hash,
+       definition_hash,
        coalesce(incus_endpoint_authority_hash,'') as incus_endpoint_authority_hash,
        coalesce(incus_project,'') as incus_project,
        coalesce(incus_storage_pool,'') as incus_storage_pool,
@@ -434,7 +407,7 @@ select p.name
 from dorf.sandbox_profiles p
 join dorf.sandbox_profile_verifications v on v.profile_name=p.name
 where p.name=$1 and v.contract_version=$2
-  and p.definition_hash is not null and v.definition_hash=p.definition_hash
+  and v.definition_hash=p.definition_hash
   and v.probe_completed_at is not null and v.cleaned_at is not null and v.last_error is null
 for key share of p,v
 `
@@ -514,7 +487,7 @@ type RecordSandboxProfileProbeParams struct {
 	HarnessVersion  sql.NullString
 	ProfileName     string
 	ContractVersion string
-	DefinitionHash  sql.NullString
+	DefinitionHash  string
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -545,7 +518,7 @@ where profile_name=$1 and contract_version=$2
 type RecordSandboxProfileVerificationCleanupParams struct {
 	ProfileName     string
 	ContractVersion string
-	DefinitionHash  sql.NullString
+	DefinitionHash  string
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -576,7 +549,7 @@ type RecordSandboxProfileVerificationErrorParams struct {
 	LastError       sql.NullString
 	ProfileName     string
 	ContractVersion string
-	DefinitionHash  sql.NullString
+	DefinitionHash  string
 	SandboxID       string
 	OwnershipNonce  string
 }
@@ -624,7 +597,7 @@ type UpdateSandboxProfileParams struct {
 	Provider                   string
 	Harness                    string
 	Artifact                   string
-	DefinitionHash             sql.NullString
+	DefinitionHash             string
 	IncusEndpointAuthorityHash sql.NullString
 	IncusProject               sql.NullString
 	IncusStoragePool           sql.NullString

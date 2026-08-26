@@ -6,23 +6,36 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/postgres/dbsql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func TestPublishedBaselineIsImmutable(t *testing.T) {
+func TestCurrentBaselineIsImmutable(t *testing.T) {
 	baseline, err := migrationFiles.ReadFile("migrations/001_baseline.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(baseline)); got != "9640be723c7c91ca62d08b2a21421ca945c67cb7d4d89ba403f17659b1b9ccd7" {
-		t.Fatalf("published 001_baseline.sql checksum=%s", got)
+	if got := fmt.Sprintf("%x", sha256.Sum256(baseline)); got != "3db2b68dc915569b756fcde0493688425f4996ee1c35b361fa959e9afbc22c00" {
+		t.Fatalf("current 001_baseline.sql checksum=%s", got)
+	}
+	files, err := migrationFiles.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, file := range files {
+		if !file.IsDir() {
+			names = append(names, file.Name())
+		}
+	}
+	if !reflect.DeepEqual(names, dorfMigrations) {
+		t.Fatalf("embedded migrations=%v execution order=%v", names, dorfMigrations)
 	}
 }
 
-func TestPublishedBaselineMigratesRetainedSandboxCustody(t *testing.T) {
+func TestCurrentBaselineCreatesOnlyCurrentSchema(t *testing.T) {
 	dsn := os.Getenv("DORF_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DORF_TEST_DATABASE_URL is not configured")
@@ -52,94 +65,70 @@ func TestPublishedBaselineMigratesRetainedSandboxCustody(t *testing.T) {
 	if _, err := tx.ExecContext(ctx, string(baseline)); err != nil {
 		t.Fatal(err)
 	}
+	if err := migrateDorf(ctx, tx); err != nil {
+		t.Fatalf("baseline replay: %v", err)
+	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `savepoint reject_incomplete_profile`); err != nil {
+		t.Fatal(err)
+	}
+	_, legacyErr := tx.ExecContext(ctx, `
 insert into dorf.sandbox_profiles(name,provider,harness,artifact,incus_network,incus_disk_size)
-values('migration-profile','incus','codex','artifact','incusbr0','40GiB');
-insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
-values('job-migration','migration-admission','coding-to-proposal','3','migrate retained custody','migration-profile','primary','gpt-5.6-sol','high');
-insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
-values
-  ('message-main','job-migration','human','migration:main',1,'implement'),
-  ('message-review','job-migration','workflow','migration:review',2,'review');
-insert into dorf.sandboxes(id,job_id,ownership_nonce)
-values
-  ('sandbox-main','job-migration',repeat('1',64)),
-  ('sandbox-review','job-migration',repeat('2',64));
-insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id)
-values('agent-run-main','job-migration','message-main','implement','pending','sandbox-main');
-insert into dorf.agent_runs(id,job_id,message_id,role,state,input_revision,capability,sandbox_id,submission_nonce)
-values('agent-run-review','job-migration','message-review','general','pending','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','immutable-read-only','sandbox-review',repeat('3',64));
-`); err != nil {
+values('incomplete-profile','incus','codex',repeat('a',64),'incusbr0','40GiB')`)
+	if legacyErr == nil {
+		t.Fatal("current schema accepted a Profile without its definition and endpoint custody")
+	}
+	if _, err := tx.ExecContext(ctx, `rollback to savepoint reject_incomplete_profile`); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := migrateDorf(ctx, tx); err != nil {
-		t.Fatal(err)
-	}
-	// Development deployments could have the current table shape while their
-	// edited baseline still recorded only 001. Reapply 002 to that exact drift.
-	if _, err := tx.ExecContext(ctx, `delete from dorf.schema_migrations where name='002_sandbox_custody.sql'`); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateDorf(ctx, tx); err != nil {
-		t.Fatalf("migration from drifted baseline: %v", err)
-	}
-	if err := migrateDorf(ctx, tx); err != nil {
-		t.Fatalf("migration ledger replay: %v", err)
-	}
 	if _, err := tx.ExecContext(ctx, `
-insert into dorf.jobs(id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,provider_connection,model,reasoning_effort)
-values('job-client-migration','client-migration-admission','','','run direct caller intent','migration-profile','primary','gpt-5.6-sol','high');
+insert into dorf.sandbox_profiles(
+  name,provider,harness,artifact,definition_hash,incus_endpoint_authority_hash,
+  incus_project,incus_storage_pool,incus_network,incus_disk_size,incus_gateway_url
+) values(
+  'current-profile','incus','codex',repeat('a',64),repeat('b',64),repeat('c',64),
+  'dorf','default','incusbr0','40GiB','http://10.44.0.1:8317/v1'
+);
+insert into dorf.jobs(
+  id,admission_key,workflow_name,workflow_revision,goal,sandbox_profile,
+  provider_connection,model,reasoning_effort
+) values(
+  'job-current','current-admission','','','run direct caller intent','current-profile',
+  'primary','gpt-5.6-sol','high'
+);
 insert into dorf.job_messages(id,job_id,from_kind,from_id,sequence,input)
-values('message-client-migration','job-client-migration','human','dorf:initial',1,'run direct caller intent');
+values('message-current','job-current','human','dorf:initial',1,'run direct caller intent');
 insert into dorf.sandboxes(id,job_id,name,ownership_nonce)
-values('sandbox-client-migration','job-client-migration','default',repeat('4',64));
+values('sandbox-current','job-current','default',repeat('d',64));
 insert into dorf.agent_runs(id,job_id,message_id,role,state,sandbox_id)
-values('agent-run-client-migration','job-client-migration','message-client-migration','direct','pending','sandbox-client-migration');
+values('run-current','job-current','message-current','direct','pending','sandbox-current');
+update dorf.jobs set cleanup_state='requested' where id='job-current';
 `); err != nil {
-		t.Fatalf("client-directed Job after retained migration: %v", err)
+		t.Fatalf("current schema behavior: %v", err)
 	}
 
-	rows, err := tx.QueryContext(ctx, `select id,name from dorf.sandboxes where job_id='job-migration' order by id`)
-	if err != nil {
+	var sandboxName string
+	if err := tx.QueryRowContext(ctx, `select sandbox_name from dorf.review_run_projection where id='run-current'`).Scan(&sandboxName); err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	got := map[string]string{}
-	for rows.Next() {
-		var id, name string
-		if err := rows.Scan(&id, &name); err != nil {
-			t.Fatal(err)
-		}
-		got[id] = name
+	if sandboxName != "default" {
+		t.Fatalf("projected Sandbox name=%q", sandboxName)
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	if got["sandbox-main"] != "default" || got["sandbox-review"] != "agent-run-review" {
-		t.Fatalf("migrated Sandbox names=%v", got)
-	}
-
-	reviewRun, err := dbsql.New(tx).GetReviewRun(ctx, "agent-run-review")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewRun.SandboxName != "agent-run-review" || reviewRun.SandboxID != "sandbox-review" {
-		t.Fatalf("review projection=%#v", reviewRun)
-	}
-	if _, err := tx.ExecContext(ctx, `update dorf.jobs set cleanup_state='requested' where id='job-migration'`); err != nil {
-		t.Fatalf("requested cleanup state: %v", err)
-	}
-	var artifacts, drafts bool
+	var migrationCount int
+	var controlClients, retryRequests, artifacts, drafts bool
 	if err := tx.QueryRowContext(ctx, `
 select
+  (select count(*) from dorf.schema_migrations),
+  to_regclass('dorf.control_clients') is not null,
+  to_regclass('dorf.job_retry_requests') is not null,
   to_regclass('dorf.artifacts') is not null,
   to_regclass('dorf.codebase_investigation_drafts') is not null
-`).Scan(&artifacts, &drafts); err != nil {
+`).Scan(&migrationCount, &controlClients, &retryRequests, &artifacts, &drafts); err != nil {
 		t.Fatal(err)
 	}
-	if artifacts || drafts {
-		t.Fatalf("artifacts=%t drafts=%t", artifacts, drafts)
+	if migrationCount != 1 || !controlClients || !retryRequests || artifacts || drafts {
+		t.Fatalf("migration count=%d control clients=%t retries=%t artifacts=%t drafts=%t",
+			migrationCount, controlClients, retryRequests, artifacts, drafts)
 	}
 }

@@ -73,11 +73,13 @@ archive="dorf_${product_version}_linux_x86_64.tar.gz"
 checksums="dorf_${product_version}_checksums.txt"
 download_base="${DORF_RELEASES_URL%/}/download/$version"
 work_dir="$(mktemp -d)"
-install_temp=""
+binary_temp=""
+compose_temp=""
+incus_compose_temp=""
 cleanup() {
-  if [ -n "$install_temp" ]; then
-    rm -f -- "$install_temp"
-  fi
+  [ -z "$binary_temp" ] || rm -f -- "$binary_temp"
+  [ -z "$compose_temp" ] || rm -f -- "$compose_temp"
+  [ -z "$incus_compose_temp" ] || rm -f -- "$incus_compose_temp"
   rm -rf -- "$work_dir"
 }
 trap cleanup EXIT
@@ -99,25 +101,46 @@ expected_checksum="$(
 ) || fail "checksum verification failed for $archive"
 
 mkdir -p "$work_dir/extract"
-tar -xzf "$work_dir/$archive" -C "$work_dir/extract" dorf
+tar -xzf "$work_dir/$archive" -C "$work_dir/extract" \
+  dorf dorf-compose.yaml dorf-compose-incus.yaml ||
+  fail "release archive does not contain the complete Dorf installation"
 [ -f "$work_dir/extract/dorf" ] || fail "release archive does not contain dorf"
+[ -f "$work_dir/extract/dorf-compose.yaml" ] ||
+  fail "release archive does not contain dorf-compose.yaml"
+[ -f "$work_dir/extract/dorf-compose-incus.yaml" ] ||
+  fail "release archive does not contain dorf-compose-incus.yaml"
 chmod 0755 "$work_dir/extract/dorf"
+chmod 0644 "$work_dir/extract/dorf-compose.yaml" "$work_dir/extract/dorf-compose-incus.yaml"
 observed_version="$("$work_dir/extract/dorf" version)" || fail "downloaded dorf could not report its version"
 [ "$observed_version" = "dorf $product_version" ] ||
   fail "downloaded binary reported '$observed_version', expected 'dorf $product_version'"
 
 mkdir -p "$install_dir" || fail "cannot create $install_dir; pass --install-dir ABSOLUTE_DIR"
 target="$install_dir/dorf"
+compose_target="$install_dir/dorf-compose.yaml"
+incus_compose_target="$install_dir/dorf-compose-incus.yaml"
 [ ! -d "$target" ] || fail "$target is a directory"
+[ ! -d "$compose_target" ] || fail "$compose_target is a directory"
+[ ! -d "$incus_compose_target" ] || fail "$incus_compose_target is a directory"
 existing_install=false
 if [ -e "$target" ]; then
   existing_install=true
 fi
-install_temp="$(mktemp "$install_dir/.dorf.install.XXXXXX")" ||
+binary_temp="$(mktemp "$install_dir/.dorf.install.XXXXXX")" ||
   fail "cannot write to $install_dir; pass --install-dir ABSOLUTE_DIR"
-install -m 0755 "$work_dir/extract/dorf" "$install_temp"
-mv -f -- "$install_temp" "$target"
-install_temp=""
+compose_temp="$(mktemp "$install_dir/.dorf-compose.install.XXXXXX")" ||
+  fail "cannot write to $install_dir; pass --install-dir ABSOLUTE_DIR"
+incus_compose_temp="$(mktemp "$install_dir/.dorf-compose-incus.install.XXXXXX")" ||
+  fail "cannot write to $install_dir; pass --install-dir ABSOLUTE_DIR"
+install -m 0755 "$work_dir/extract/dorf" "$binary_temp"
+install -m 0644 "$work_dir/extract/dorf-compose.yaml" "$compose_temp"
+install -m 0644 "$work_dir/extract/dorf-compose-incus.yaml" "$incus_compose_temp"
+mv -f -- "$compose_temp" "$compose_target"
+compose_temp=""
+mv -f -- "$incus_compose_temp" "$incus_compose_target"
+incus_compose_temp=""
+mv -f -- "$binary_temp" "$target"
+binary_temp=""
 
 installed_version="$("$target" version)" || fail "installed dorf could not report its version"
 [ "$installed_version" = "dorf $product_version" ] ||

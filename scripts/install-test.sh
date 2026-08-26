@@ -6,6 +6,8 @@ SOURCE_INSTALLER="$PROJECT_ROOT/scripts/install.sh"
 WORK_DIR="$(mktemp -d)"
 INSTALLER="$WORK_DIR/install.sh"
 RELEASES_DIR="$WORK_DIR/releases"
+NO_COMPOSE_SHIM="$WORK_DIR/no-compose-bin"
+COMPOSE_EVENTS="$WORK_DIR/compose-events"
 SERVER_PID=""
 GENERATED_INSTALLER="${1:-}"
 GENERATED_ASSETS="${2:-}"
@@ -36,13 +38,38 @@ assert_binary_output() {
     fail "$binary printed '$actual', expected '$expected'"
 }
 
+expected_compose_manifest() {
+  local version="$1"
+  printf 'services:\n  api:\n    image: dorf-test:%s\n' "$version"
+}
+
+expected_incus_compose_manifest() {
+  local version="$1"
+  printf 'services:\n  worker:\n    environment:\n      INCUS_RELEASE: "%s"\n' "$version"
+}
+
+assert_installed_manifests() {
+  local install_dir="$1"
+  local version="$2"
+
+  cmp <(expected_compose_manifest "$version") "$install_dir/dorf-compose.yaml" ||
+    fail "installed Compose manifest differs from the release archive"
+  cmp <(expected_incus_compose_manifest "$version") \
+    "$install_dir/dorf-compose-incus.yaml" ||
+    fail "installed Incus Compose override differs from the release archive"
+  [[ "$(stat -c %a "$install_dir/dorf-compose.yaml")" == 644 ]] ||
+    fail "installed Compose manifest mode is not 0644"
+  [[ "$(stat -c %a "$install_dir/dorf-compose-incus.yaml")" == 644 ]] ||
+    fail "installed Incus Compose override mode is not 0644"
+}
+
 create_release() {
   local version="$1"
   local output="$2"
   local checksum="$3"
+  local layout="${4:-complete}"
   local artifact_basename="dorf_${version}_linux_x86_64"
   local archive="${artifact_basename}.tar.gz"
-  local container_archive="${artifact_basename}_container-image.docker.tar"
   local release_dir="$RELEASES_DIR/download/v$version"
   local stage="$WORK_DIR/stage-$version"
 
@@ -50,23 +77,22 @@ create_release() {
   printf '#!/bin/sh\n[ "${1:-}" = version ] || exit 2\nprintf "%%s\\n" "%s"\n' \
     "$output" >"$stage/dorf"
   chmod 0755 "$stage/dorf"
-  tar -C "$stage" -czf "$release_dir/$archive" dorf
-  printf '%s\n' "unrelated container archive for checksum selection" \
-    >"$release_dir/$container_archive"
+  expected_compose_manifest "$version" >"$stage/dorf-compose.yaml"
+  if [[ "$layout" == complete ]]; then
+    expected_incus_compose_manifest "$version" >"$stage/dorf-compose-incus.yaml"
+    tar -C "$stage" -czf "$release_dir/$archive" \
+      dorf dorf-compose.yaml dorf-compose-incus.yaml
+  else
+    tar -C "$stage" -czf "$release_dir/$archive" dorf dorf-compose.yaml
+  fi
 
   if [[ "$checksum" == valid ]]; then
     (
       cd "$release_dir"
-      # Keep the unrelated asset first so a successful install proves the installer
-      # selects the one exact application-archive line rather than the first line.
-      sha256sum "$container_archive" "$archive" >"dorf_${version}_checksums.txt"
+      sha256sum "$archive" >"dorf_${version}_checksums.txt"
     )
   else
-    (
-      cd "$release_dir"
-      sha256sum "$container_archive" >"dorf_${version}_checksums.txt"
-      printf '%064d  %s\n' 0 "$archive" >>"dorf_${version}_checksums.txt"
-    )
+    printf '%064d  %s\n' 0 "$archive" >"$release_dir/dorf_${version}_checksums.txt"
   fi
 }
 
@@ -133,7 +159,9 @@ PY
 }
 
 install_with_release_server() {
-  DORF_RELEASES_URL="$RELEASES_URL" \
+  DORF_INSTALL_TEST_COMPOSE_EVENTS="$COMPOSE_EVENTS" \
+    DORF_RELEASES_URL="$RELEASES_URL" \
+    PATH="$NO_COMPOSE_SHIM:$PATH" \
     sh "$INSTALLER" "$@"
 }
 
@@ -142,12 +170,15 @@ test_pinned_default_and_explicit_replacement() {
 
   DORF_DEFAULT_VERSION=v2.4.6 DORF_INSTALL_DIR="$install_dir" install_with_release_server
   assert_binary_output "$install_dir/dorf" "dorf 1.2.3"
+  assert_installed_manifests "$install_dir" 1.2.3
 
   install_with_release_server --version v2.4.6 --install-dir "$install_dir"
   assert_binary_output "$install_dir/dorf" "dorf 2.4.6"
+  assert_installed_manifests "$install_dir" 2.4.6
 
   install_with_release_server --version v2.4.6 --install-dir "$install_dir"
   assert_binary_output "$install_dir/dorf" "dorf 2.4.6"
+  assert_installed_manifests "$install_dir" 2.4.6
 }
 
 test_fresh_install_and_update_guidance() {
@@ -174,6 +205,7 @@ test_fresh_install_and_update_guidance() {
   [[ "$update_output" != *"dorf setup"* ]] ||
     fail "update installer printed fresh-install setup guidance"
   assert_binary_output "$install_dir/dorf" "dorf 2.4.6"
+  assert_installed_manifests "$install_dir" 2.4.6
 }
 
 test_install_dir_must_be_absolute() {
@@ -192,14 +224,43 @@ test_checksum_failure_is_atomic() {
     '[ "${1:-}" = version ] || exit 2' \
     'printf "%s\n" "existing-dorf"' >"$install_dir/dorf"
   chmod 0755 "$install_dir/dorf"
+  printf 'existing compose\n' >"$install_dir/dorf-compose.yaml"
+  printf 'existing incus compose\n' >"$install_dir/dorf-compose-incus.yaml"
 
   if install_with_release_server --version v9.9.9 --install-dir "$install_dir"; then
     fail "installer accepted an archive with a bad checksum"
   fi
 
   assert_binary_output "$install_dir/dorf" existing-dorf
-  unexpected="$(find "$install_dir" -mindepth 1 -maxdepth 1 ! -name dorf -print -quit)"
+  [[ "$(<"$install_dir/dorf-compose.yaml")" == "existing compose" ]] ||
+    fail "checksum failure replaced the Compose manifest"
+  [[ "$(<"$install_dir/dorf-compose-incus.yaml")" == "existing incus compose" ]] ||
+    fail "checksum failure replaced the Incus Compose override"
+  unexpected="$(find "$install_dir" -mindepth 1 -maxdepth 1 \
+    ! -name dorf ! -name dorf-compose.yaml ! -name dorf-compose-incus.yaml -print -quit)"
   [[ -z "$unexpected" ]] || fail "installer left a partial file: $unexpected"
+}
+
+test_incomplete_archive_is_atomic() {
+  local install_dir="$WORK_DIR/incomplete-bin"
+
+  mkdir -p "$install_dir"
+  printf '%s\n' \
+    '#!/bin/sh' \
+    '[ "${1:-}" = version ] || exit 2' \
+    'printf "%s\n" "existing-dorf"' >"$install_dir/dorf"
+  chmod 0755 "$install_dir/dorf"
+  printf 'existing compose\n' >"$install_dir/dorf-compose.yaml"
+  printf 'existing incus compose\n' >"$install_dir/dorf-compose-incus.yaml"
+
+  if install_with_release_server --version v8.8.8 --install-dir "$install_dir"; then
+    fail "installer accepted an archive missing the Incus Compose override"
+  fi
+  assert_binary_output "$install_dir/dorf" existing-dorf
+  [[ "$(<"$install_dir/dorf-compose.yaml")" == "existing compose" ]] ||
+    fail "incomplete archive replaced the Compose manifest"
+  [[ "$(<"$install_dir/dorf-compose-incus.yaml")" == "existing incus compose" ]] ||
+    fail "incomplete archive replaced the Incus Compose override"
 }
 
 test_unsupported_platforms() {
@@ -238,6 +299,7 @@ test_default_target_path_handoff() {
     HOME="$test_home" install_with_release_server
   )"
   assert_binary_output "$default_bin/dorf" "dorf 1.2.3"
+  assert_installed_manifests "$default_bin" 1.2.3
   [[ "$installer_output" == *"export PATH='$default_bin':\"\$PATH\""* ]] ||
     fail "installer did not print the default-directory PATH handoff"
   actual="$(PATH="$default_bin:$PATH" dorf version)"
@@ -263,17 +325,38 @@ test_generated_installer_embeds_release_version() {
   if [[ -z "$GENERATED_INSTALLER" ]]; then
     return 0
   fi
-  DORF_RELEASES_URL="$RELEASES_URL" DORF_INSTALL_DIR="$install_dir" sh "$GENERATED_INSTALLER"
+  DORF_INSTALL_TEST_COMPOSE_EVENTS="$COMPOSE_EVENTS" \
+    DORF_RELEASES_URL="$RELEASES_URL" \
+    DORF_INSTALL_DIR="$install_dir" \
+    PATH="$NO_COMPOSE_SHIM:$PATH" \
+    sh "$GENERATED_INSTALLER"
   assert_binary_output "$install_dir/dorf" "dorf $GENERATED_VERSION"
+  cmp "$PROJECT_ROOT/deploy/compose.yaml" "$install_dir/dorf-compose.yaml" ||
+    fail "generated installer changed the shipped Compose manifest"
+  cmp "$PROJECT_ROOT/deploy/compose.incus.yaml" "$install_dir/dorf-compose-incus.yaml" ||
+    fail "generated installer changed the shipped Incus Compose override"
+  [[ "$(stat -c %a "$install_dir/dorf-compose.yaml")" == 644 ]] ||
+    fail "generated installer used the wrong Compose manifest mode"
+  [[ "$(stat -c %a "$install_dir/dorf-compose-incus.yaml")" == 644 ]] ||
+    fail "generated installer used the wrong Incus Compose override mode"
 }
 
 [[ -f "$SOURCE_INSTALLER" ]] || fail "missing installer at $SOURCE_INSTALLER"
+mkdir -p "$NO_COMPOSE_SHIM"
+for command in docker docker-compose compose; do
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'printf "%s\n" "$0 $*" >>"$DORF_INSTALL_TEST_COMPOSE_EVENTS"' \
+    'exit 97' >"$NO_COMPOSE_SHIM/$command"
+  chmod 0755 "$NO_COMPOSE_SHIM/$command"
+done
 sed 's/@DORF_VERSION@/v1.2.3/g' "$SOURCE_INSTALLER" >"$INSTALLER"
 chmod 0755 "$INSTALLER"
 sh -n "$INSTALLER"
 create_release 1.2.3 "dorf 1.2.3" valid
 create_release 2.4.6 "dorf 2.4.6" valid
 create_release 9.9.9 corrupt-dorf invalid
+create_release 8.8.8 "dorf 8.8.8" valid incomplete
 prepare_generated_release
 start_release_server
 
@@ -281,9 +364,11 @@ test_pinned_default_and_explicit_replacement
 test_fresh_install_and_update_guidance
 test_install_dir_must_be_absolute
 test_checksum_failure_is_atomic
+test_incomplete_archive_is_atomic
 test_unsupported_platforms
 test_default_target_path_handoff
 test_path_handoff_shell_quotes_install_dir
 test_generated_installer_embeds_release_version
+[[ ! -e "$COMPOSE_EVENTS" ]] || fail "installer executed Docker or Compose"
 
 printf 'installer tests passed\n'

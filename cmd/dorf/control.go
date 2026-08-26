@@ -22,7 +22,6 @@ import (
 	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/coding"
-	"github.com/aphronio/dorf/internal/composeservice"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -37,7 +36,7 @@ import (
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
 
-const defaultControlAddress = composeservice.ControlAddress
+const defaultControlAddress = "127.0.0.1:8745"
 
 const maxControlModelBytes = 1024
 
@@ -1372,7 +1371,6 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	set.SetOutput(stderr)
 	address := set.String("listen", defaultControlAddress, "private loopback HTTP listen address")
 	allowContainerListen := set.Bool("allow-container-listen", false, "allow 0.0.0.0 for container port publishing")
-	readerMode := set.Bool("control-reader", false, "serve the Compose-internal read-only external-observation capability")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
@@ -1393,48 +1391,22 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	defer listener.Close()
 	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
-	var (
-		server      *http.Server
-		serviceName = "Dorf control API"
-	)
-	if *readerMode {
-		token := strings.TrimSpace(os.Getenv("DORF_CONTROL_READER_TOKEN"))
-		handler, err := controlreader.NewHandler(token, controlreader.Service{
-			Store: store, Runtimes: runtimes,
-			Provider: configuredProviderGateway(cfg),
-			Installations: githubapi.Client{
-				APIURL: cfg.GitHubAPIURL, Credentials: cfg.GitHubCredentials,
-			},
-		})
-		if err != nil {
-			return err
-		}
-		server = &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       10 * time.Second,
-			WriteTimeout:      25 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		serviceName = "Dorf control reader"
-	} else {
-		reader, err := configuredControlReader(cfg, store, runtimes)
-		if err != nil {
-			return err
-		}
-		auth := controlauth.Service{Store: store}
-		jobs := controlAPIJobs{
-			store: store, tasks: tasks,
-			directAdmissions:        direct.NewAdmissionService(store, coreApplication(store, tasks), reader),
-			codingAdmissions:        coding.NewAdmissionService(store, coreApplication(store, tasks), reader, reader),
-			investigationAdmissions: investigation.NewAdmissionService(store, coreApplication(store, tasks), reader),
-			reader:                  reader, evidence: blob.Store{Root: cfg.BlobRoot},
-		}
-		server = controlapi.NewServer(controlapi.Discovery{
-			Product: "dorf", Version: version.Version,
-			Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
-		}, auth, jobs)
+	reader, err := configuredControlReader(cfg, store, runtimes)
+	if err != nil {
+		return err
 	}
+	auth := controlauth.Service{Store: store}
+	jobs := controlAPIJobs{
+		store: store, tasks: tasks,
+		directAdmissions:        direct.NewAdmissionService(store, coreApplication(store, tasks), reader),
+		codingAdmissions:        coding.NewAdmissionService(store, coreApplication(store, tasks), reader, reader),
+		investigationAdmissions: investigation.NewAdmissionService(store, coreApplication(store, tasks), reader),
+		reader:                  reader, evidence: blob.Store{Root: cfg.BlobRoot},
+	}
+	server := controlapi.NewServer(controlapi.Discovery{
+		Product: "dorf", Version: version.Version,
+		Capabilities: []string{"direct_jobs", "coding_jobs", "codebase_investigation_jobs", "job_list", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
+	}, auth, jobs)
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan struct{})
@@ -1446,9 +1418,9 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 		close(done)
 	}()
 	if *allowContainerListen && listenAddress.Addr().Is4() && listenAddress.Addr().IsUnspecified() {
-		fmt.Fprintf(stdout, "%s listening inside its container on http://%s\n", serviceName, listener.Addr())
+		fmt.Fprintf(stdout, "Dorf control API listening inside its container on http://%s\n", listener.Addr())
 	} else {
-		fmt.Fprintf(stdout, "%s listening privately on http://%s\n", serviceName, listener.Addr())
+		fmt.Fprintf(stdout, "Dorf control API listening privately on http://%s\n", listener.Addr())
 	}
 	err = server.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {

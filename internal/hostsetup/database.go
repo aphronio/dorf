@@ -11,13 +11,7 @@ import (
 )
 
 const (
-	// DatabaseImage is the reviewed recovery reference for Dorf's supported
-	// Linux/amd64 PostgreSQL image. DatabaseImageID is the exact local image
-	// identity that reference resolved to when this deployment contract was
-	// accepted; Compose refuses a moved tag instead of upgrading implicitly.
-	DatabaseImage   = "postgres:17.10-bookworm"
-	DatabaseImageID = "sha256:8164afa59e26be9f78959e538d6c9da8553d67e601d8ebd0d5e9cbf558c3986e"
-	DatabasePort    = 54329
+	DatabasePort = 54329
 )
 
 // InitializeDatabase persists the complete PostgreSQL identity before the
@@ -33,15 +27,7 @@ func initializeDatabase(path string, random io.Reader) (deployment.Database, err
 		return deployment.Database{}, err
 	}
 	if found {
-		if stored.ControlReaderKey == "" {
-			key, err := generateControlReaderKey(random)
-			if err != nil {
-				return deployment.Database{}, err
-			}
-			if err := deployment.EnsureControlReaderKey(path, key); err != nil {
-				return deployment.Database{}, err
-			}
-		} else if err := deployment.ValidateControlReaderKey(stored.ControlReaderKey); err != nil {
+		if err := deployment.ValidateControlReaderKey(stored.ControlReaderKey); err != nil {
 			return deployment.Database{}, err
 		}
 		return stored.Database, nil
@@ -52,14 +38,11 @@ func initializeDatabase(path string, random io.Reader) (deployment.Database, err
 		return deployment.Database{}, fmt.Errorf("generate PostgreSQL credential: %w", err)
 	}
 	database := deployment.Database{
-		Host:        "127.0.0.1",
-		Port:        DatabasePort,
-		Name:        "dorf",
-		User:        "dorf",
-		Password:    base64.RawURLEncoding.EncodeToString(passwordBytes),
-		Image:       DatabaseImage,
-		ImageID:     DatabaseImageID,
-		VolumeState: deployment.DatabaseVolumePending,
+		Host:     "127.0.0.1",
+		Port:     DatabasePort,
+		Name:     "dorf",
+		User:     "dorf",
+		Password: base64.RawURLEncoding.EncodeToString(passwordBytes),
 	}
 	controlReaderKey, err := generateControlReaderKey(random)
 	if err != nil {

@@ -11,7 +11,7 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 )
 
-func TestInitializeDatabasePersistsPendingIdentityWithoutDocker(t *testing.T) {
+func TestInitializeDatabasePersistsCredentialsWithoutDocker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "deployment.json")
 	database, err := initializeDatabase(path, bytes.NewReader(bytes.Repeat([]byte{0x5a}, 64)))
 	if err != nil {
@@ -19,9 +19,6 @@ func TestInitializeDatabasePersistsPendingIdentityWithoutDocker(t *testing.T) {
 	}
 	if database.Host != "127.0.0.1" || database.Port != DatabasePort || database.Name != "dorf" || database.User != "dorf" {
 		t.Fatalf("unexpected PostgreSQL identity: %#v", database)
-	}
-	if database.Image != DatabaseImage || database.ImageID != DatabaseImageID || database.VolumeState != deployment.DatabaseVolumePending {
-		t.Fatalf("unexpected PostgreSQL image/volume authority: %#v", database)
 	}
 	if database.Password == "" {
 		t.Fatal("PostgreSQL credential was not generated")
@@ -43,7 +40,6 @@ func TestInitializeDatabaseReplayKeepsExactPersistedAuthority(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "deployment.json")
 	existing := deployment.Config{Database: deployment.Database{
 		Host: "127.0.0.1", Port: 55432, Name: "dorf", User: "dorf", Password: "retained",
-		Image: DatabaseImage, ImageID: DatabaseImageID, VolumeState: deployment.DatabaseVolumeInitialized,
 	}, ControlReaderKey: strings.Repeat("a", 64), E2B: &deployment.E2B{APIKey: "retained-e2b"}}
 	if err := deployment.Save(path, existing); err != nil {
 		t.Fatal(err)
@@ -61,25 +57,21 @@ func TestInitializeDatabaseReplayKeepsExactPersistedAuthority(t *testing.T) {
 	}
 }
 
-func TestInitializeDatabaseBackfillsReaderKeyWithoutChangingExistingAuthority(t *testing.T) {
+func TestInitializeDatabaseRejectsPersistedConfigWithoutReaderKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "deployment.json")
 	existing := deployment.Config{Database: deployment.Database{
 		Host: "127.0.0.1", Port: 55432, Name: "dorf", User: "dorf", Password: "retained",
-		Image: DatabaseImage, ImageID: DatabaseImageID, VolumeState: deployment.DatabaseVolumeInitialized,
 	}, E2B: &deployment.E2B{APIKey: "retained-e2b"}}
 	if err := deployment.Save(path, existing); err != nil {
 		t.Fatal(err)
 	}
-	database, err := initializeDatabase(path, bytes.NewReader(bytes.Repeat([]byte{0xbc}, 32)))
-	if err != nil || database != existing.Database {
-		t.Fatalf("database=%#v error=%v", database, err)
+	if _, err := initializeDatabase(path, failingReader{}); err == nil || !strings.Contains(err.Error(), "control reader key") {
+		t.Fatalf("error=%v", err)
 	}
 	stored, found, err := deployment.Load(path)
-	if err != nil || !found || stored.Database != existing.Database || stored.E2B == nil || stored.E2B.APIKey != "retained-e2b" || stored.ControlReaderKey != strings.Repeat("bc", 32) {
+	if err != nil || !found || stored.Database != existing.Database || stored.ControlReaderKey != "" ||
+		stored.E2B == nil || stored.E2B.APIKey != "retained-e2b" {
 		t.Fatalf("stored=%#v found=%t error=%v", stored, found, err)
-	}
-	if _, err := initializeDatabase(path, failingReader{}); err != nil {
-		t.Fatalf("replay regenerated reader key: %v", err)
 	}
 }
 

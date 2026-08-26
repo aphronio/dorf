@@ -31,16 +31,19 @@ compose one small application boundary in-process. A separate API service projec
 narrow closed set over authenticated HTTPS: direct Jobs and typed admission for the compiled coding
 and codebase-investigation workflows, followed by their common Job interaction surface. This is not
 a network exposure of Core itself, a workflow registry, a client SDK, or an embeddable-runtime
-contract. Setup and update converge the accepted managed topology under one versioned Docker
-Compose project; the [Remote Control API](../control-api.md#deployment-services) owns its exact
-service inventory, capability custody, and network segmentation. Operator-owned public control
-ingress remains outside its lifecycle.
+contract. One versioned static Docker Compose project supervises the accepted deployment; the
+[Remote Control API](../control-api.md#deployment-services) owns its exact service inventory,
+capability custody, and network segmentation. Operator-owned public control ingress remains outside
+its lifecycle.
 
 Compose is the only supervisor in the managed shape. The project uses its own PostgreSQL service,
-segmented bridge networks, protected generated configuration, and a narrow internal reader so the
-public API never receives provider credentials or provider mutation authority; it never mounts the
-host Docker socket into a Dorf workload or Sandbox. `DORF_DATABASE_URL` is only a development, test, or explicitly manually
-supervised process override. Host prerequisites and bootstrap privilege follow the single
+segmented bridge networks, setup's protected generated `.env`, and a narrow authenticated reader
+hosted by the worker so the public API never receives provider credentials or provider mutation
+authority. Static manifests ship beside the binary. Setup writes that protected `.env` and probes
+readiness; it neither constructs nor executes Compose lifecycle commands. A human or deployment
+agent runs Compose directly, and no Dorf workload or Sandbox mounts the host Docker socket.
+`DORF_DATABASE_URL` is only a development, test, or explicitly manually supervised process
+override. Host prerequisites and bootstrap privilege follow the single
 [deployment-host setup procedure](../getting-started.md#1-install-the-application-initialize-a-deployment-host);
 version-matched helpers are explicit administrator handoffs, not another reconciler.
 
@@ -215,9 +218,10 @@ and each Client can be revoked independently. The CLI retains one Deployment ori
 credential rather than implementing multi-deployment context selection. The API listens on a
 host-private HTTP address behind operator-owned HTTPS ingress. It admits and projects Jobs but does
 not register execution handlers; a separate durable worker claims and reconciles the attached
-Absurd tasks. Setup converges both responsibilities as separate services in the one Dorf Compose
-project; status distinguishes project and service convergence from runtime readiness and probes the
-API boundary.
+Absurd tasks and hosts the fixed authenticated reads the API cannot perform without provider
+authority. The static Compose project supervises both long-running responsibilities after its
+one-shot migration completes. Setup prepares protected `.env` and observes readiness; the operator
+or deployment agent owns lifecycle through ordinary Compose.
 Ingress, multi-user identity, roles, organizations, billing, and quotas remain separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through

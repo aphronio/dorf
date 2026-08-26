@@ -16,11 +16,12 @@ readonly GUEST_SCRIPT="$SCRIPT_DIR/compose-vm-guest.sh"
 readonly MAX_EVIDENCE_FILE_BYTES=262144
 readonly MAX_EVIDENCE_TOTAL_BYTES=4194304
 readonly -a REMOTE_EVIDENCE_FILES=(
-	setup.log provider-status.json
-	service-status.json service-status-after-worker-restart.json service-status-after-api-restart.json
-	compose-topology.txt job-admission.json job-inspect-before-worker-restart.json job-inspect.json
+	setup-base-handoff.log setup-optional-handoff.log setup.log compose-images.txt
+	compose-base-up.log compose-final-up.log provider-status.json
+	compose-status.json compose-status-after-worker-restart.json compose-status-after-api-restart.json
+	compose-runtime.txt job-admission.json job-inspect-before-worker-restart.json job-inspect.json
 	cleanup-request.json cleanup-inspect.json incus-after-cleanup.json
-	failure-service-status.json failure-api.log failure-worker.log failure-inspect.json failure-incus.json
+	failure-compose-status.json failure-api.log failure-worker.log failure-inspect.json failure-incus.json
 )
 
 ACTIVE_INSTANCE=
@@ -38,8 +39,8 @@ usage() {
 Usage:
   scripts/integration/compose-vm.sh refresh-cache
   scripts/integration/compose-vm.sh prove --openai-key-file PATH \
-    --app-archive PATH --container-image PATH --checksums PATH \
-    --sandbox-archive PATH --sandbox-manifest PATH [--evidence-root PATH]
+	--app-archive PATH --checksums PATH --image-ref REF \
+	--sandbox-archive PATH --sandbox-manifest PATH [--evidence-root PATH]
 
 refresh-cache is the explicit administrator phase. It freezes Docker, Compose,
 and an empty restricted local Incus project into a keyed Ubuntu 24.04 VM image.
@@ -143,19 +144,6 @@ prepare_cache_identity() {
 	set_cache_identity \
 		"$(sha256sum "$DOCKER_HELPER" | awk '{print $1}')" \
 		"$(sha256sum "$INCUS_HELPER" | awk '{print $1}')"
-}
-
-prepare_cache_identity_from_release() {
-	local member count docker_sha incus_sha
-	for member in bootstrap/docker.sh bootstrap/incus.sh; do
-		count=$(tar -tzf "$APP_ARCHIVE" | awk -v member="$member" '$0 == member {count++} END {print count + 0}')
-		[[ "$count" -eq 1 ]] || die "supplied application release must contain $member exactly once"
-	done
-	docker_sha=$(tar -xOf "$APP_ARCHIVE" bootstrap/docker.sh | sha256sum | awk '{print $1}')
-	incus_sha=$(tar -xOf "$APP_ARCHIVE" bootstrap/incus.sh | sha256sum | awk '{print $1}')
-	[[ "$docker_sha" =~ ^[0-9a-f]{64}$ && "$incus_sha" =~ ^[0-9a-f]{64}$ ]] ||
-		die "supplied release helper digest is invalid"
-	set_cache_identity "$docker_sha" "$incus_sha"
 }
 
 image_exists() {
@@ -396,18 +384,18 @@ stage_ephemeral_key() {
 
 parse_prove_options() {
 	APP_ARCHIVE=
-	CONTAINER_IMAGE=
 	CHECKSUMS=
 	SANDBOX_ARCHIVE=
 	SANDBOX_MANIFEST=
+	IMAGE_REF=
 	OPENAI_KEY_FILE=
 	EVIDENCE_ROOT="$PROJECT_ROOT/.dorf/evidence/compose-vm"
 	local openai_key_count=0
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--app-archive) [[ $# -ge 2 ]] || die "--app-archive needs a value"; APP_ARCHIVE=$2; shift 2 ;;
-		--container-image) [[ $# -ge 2 ]] || die "--container-image needs a value"; CONTAINER_IMAGE=$2; shift 2 ;;
 		--checksums) [[ $# -ge 2 ]] || die "--checksums needs a value"; CHECKSUMS=$2; shift 2 ;;
+		--image-ref) [[ $# -ge 2 ]] || die "--image-ref needs a value"; IMAGE_REF=$2; shift 2 ;;
 		--sandbox-archive) [[ $# -ge 2 ]] || die "--sandbox-archive needs a value"; SANDBOX_ARCHIVE=$2; shift 2 ;;
 		--sandbox-manifest) [[ $# -ge 2 ]] || die "--sandbox-manifest needs a value"; SANDBOX_MANIFEST=$2; shift 2 ;;
 		--openai-key-file)
@@ -421,8 +409,9 @@ parse_prove_options() {
 		*) die "prove received unknown argument '$1'" ;;
 		esac
 	done
+	[[ -n "$IMAGE_REF" ]] || die "prove requires --image-ref"
+	[[ "$IMAGE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]] || die "image reference is invalid"
 	APP_ARCHIVE=$(canonical_input_file "$APP_ARCHIVE" "--app-archive")
-	CONTAINER_IMAGE=$(canonical_input_file "$CONTAINER_IMAGE" "--container-image")
 	CHECKSUMS=$(canonical_input_file "$CHECKSUMS" "--checksums")
 	SANDBOX_ARCHIVE=$(canonical_input_file "$SANDBOX_ARCHIVE" "--sandbox-archive")
 	SANDBOX_MANIFEST=$(canonical_input_file "$SANDBOX_MANIFEST" "--sandbox-manifest")
@@ -439,10 +428,9 @@ prove() {
 	require_command "$INCUS_BIN"
 	require_command sha256sum
 	require_command realpath
-	require_command tar
 	assert_proof_project
 	trap cleanup_active_instance EXIT
-	prepare_cache_identity_from_release
+	prepare_cache_identity
 	image_exists "$CACHE_ALIAS" || die "frozen cache $CACHE_ALIAS is absent; run refresh-cache explicitly"
 	assert_cache_image "$CACHE_ALIAS"
 	stage_ephemeral_key
@@ -484,7 +472,7 @@ prove() {
 	outer_incus file push --uid "$uid" --gid "$gid" --mode 0700 \
 		"$GUEST_SCRIPT" "$instance$guest_root/compose-vm-guest.sh"
 	local source
-	for source in "$APP_ARCHIVE" "$CONTAINER_IMAGE" "$CHECKSUMS" "$SANDBOX_ARCHIVE" "$SANDBOX_MANIFEST"; do
+	for source in "$APP_ARCHIVE" "$CHECKSUMS" "$SANDBOX_ARCHIVE" "$SANDBOX_MANIFEST"; do
 		outer_incus file push --uid "$uid" --gid "$gid" --mode 0600 \
 			"$source" "$instance$guest_inbox/$(basename -- "$source")"
 	done
@@ -498,8 +486,8 @@ prove() {
 		DORF_PROOF_KVM_DEVICE=/dev/kvm \
 		"$guest_root/compose-vm-guest.sh" prove \
 		--app-archive "$guest_inbox/$(basename -- "$APP_ARCHIVE")" \
-		--container-image "$guest_inbox/$(basename -- "$CONTAINER_IMAGE")" \
 		--checksums "$guest_inbox/$(basename -- "$CHECKSUMS")" \
+		--image-ref "$IMAGE_REF" \
 		--sandbox-archive "$guest_inbox/$(basename -- "$SANDBOX_ARCHIVE")" \
 		--sandbox-manifest "$guest_inbox/$(basename -- "$SANDBOX_MANIFEST")" \
 		--openai-key-file "$guest_root/openai-key" \
@@ -524,7 +512,7 @@ prove() {
 	cleanup_temp_root
 	trap - EXIT
 	EPHEMERAL_SECRET=
-	printf 'PUBLIC CLI -> restart custody -> file bytes -> cleanup: proven\n'
+	printf 'SETUP HANDOFF -> Docker Compose -> Job recovery -> file bytes -> cleanup: proven\n'
 	printf 'Evidence: %s\n' "$evidence_dir"
 }
 

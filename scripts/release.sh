@@ -51,9 +51,9 @@ readonly RELEASE_TAG="v$PRODUCT_VERSION"
 readonly OFFICIAL_IMAGE_RELEASE="$(jq -er .release_tag "$IMAGE_DESCRIPTOR")"
 readonly ARTIFACT_BASENAME="dorf_${PRODUCT_VERSION}_linux_x86_64"
 readonly APP_ARCHIVE="$OUTPUT_DIR/${ARTIFACT_BASENAME}.tar.gz"
-readonly CONTAINER_ARCHIVE="$OUTPUT_DIR/${ARTIFACT_BASENAME}_container-image.docker.tar"
 readonly CHECKSUMS="$OUTPUT_DIR/dorf_${PRODUCT_VERSION}_checksums.txt"
 readonly INSTALLER="$OUTPUT_DIR/install.sh"
+readonly CONTAINER_IMAGE="ghcr.io/aphronio/dorf:$PRODUCT_VERSION"
 readonly IMAGE_ARCHIVE="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.tar.gz"
 readonly IMAGE_MANIFEST="$OUTPUT_DIR/dorf-incus-vm-v5-x86_64.json"
 
@@ -94,13 +94,16 @@ mkdir -p "$OUTPUT_DIR"
 rm -f \
   "$INSTALLER" \
   "$APP_ARCHIVE" \
-  "$CONTAINER_ARCHIVE" \
   "$CHECKSUMS" \
   "$IMAGE_ARCHIVE" \
   "$IMAGE_MANIFEST"
-"$PROJECT_ROOT/scripts/build-release.sh" "$OUTPUT_DIR"
+build_options=()
+if [[ "$PUBLISH" == true ]]; then
+  build_options+=(--push)
+fi
+"$PROJECT_ROOT/scripts/build-release.sh" "${build_options[@]}" "$OUTPUT_DIR"
 
-assets=("$INSTALLER" "$APP_ARCHIVE" "$CONTAINER_ARCHIVE" "$CHECKSUMS")
+assets=("$INSTALLER" "$APP_ARCHIVE" "$CHECKSUMS")
 image_promoted=false
 if [[ "$OFFICIAL_IMAGE_RELEASE" == "$RELEASE_TAG" ]]; then
   if [[ -z "${AI_CONNECTION:-}" ]]; then
@@ -122,7 +125,7 @@ fi
 printf '%s\n' \
   "Application candidate ready: $RELEASE_TAG" \
   "Archive: $APP_ARCHIVE" \
-  "Container image archive: $CONTAINER_ARCHIVE" \
+  "Container image: $CONTAINER_IMAGE" \
   "Installer: $INSTALLER" \
   "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
 
@@ -150,8 +153,7 @@ notes_path="$(mktemp)"
     "Dorf $PRODUCT_VERSION" \
     "" \
     "Go x86_64 Linux application with an immutable release installer." \
-    "Docker-loadable Linux/amd64 container image archive: $(basename "$CONTAINER_ARCHIVE")" \
-    "Embedded container image: ghcr.io/aphronio/dorf:$PRODUCT_VERSION" \
+    "Linux/amd64 container image: $CONTAINER_IMAGE" \
     "Official Incus image release: $OFFICIAL_IMAGE_RELEASE"
   if [[ "$image_promoted" == true ]]; then
     printf '%s\n' \

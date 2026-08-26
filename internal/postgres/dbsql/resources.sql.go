@@ -21,16 +21,9 @@ type GetJobSandboxByNameForUpdateParams struct {
 	Name  string
 }
 
-type GetJobSandboxByNameForUpdateRow struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
-}
-
-func (q *Queries) GetJobSandboxByNameForUpdate(ctx context.Context, arg GetJobSandboxByNameForUpdateParams) (GetJobSandboxByNameForUpdateRow, error) {
+func (q *Queries) GetJobSandboxByNameForUpdate(ctx context.Context, arg GetJobSandboxByNameForUpdateParams) (DorfSandbox, error) {
 	row := q.db.QueryRowContext(ctx, getJobSandboxByNameForUpdate, arg.JobID, arg.Name)
-	var i GetJobSandboxByNameForUpdateRow
+	var i DorfSandbox
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
@@ -46,16 +39,9 @@ from dorf.sandboxes
 where id=$1
 `
 
-type GetSandboxRow struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
-}
-
-func (q *Queries) GetSandbox(ctx context.Context, id string) (GetSandboxRow, error) {
+func (q *Queries) GetSandbox(ctx context.Context, id string) (DorfSandbox, error) {
 	row := q.db.QueryRowContext(ctx, getSandbox, id)
-	var i GetSandboxRow
+	var i DorfSandbox
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
@@ -72,16 +58,9 @@ where id=$1
 for update
 `
 
-type GetSandboxForUpdateRow struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
-}
-
-func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (GetSandboxForUpdateRow, error) {
+func (q *Queries) GetSandboxForUpdate(ctx context.Context, id string) (DorfSandbox, error) {
 	row := q.db.QueryRowContext(ctx, getSandboxForUpdate, id)
-	var i GetSandboxForUpdateRow
+	var i DorfSandbox
 	err := row.Scan(
 		&i.ID,
 		&i.JobID,
@@ -98,22 +77,15 @@ where s.job_id=$1
 order by s.id
 `
 
-type ListJobSandboxesRow struct {
-	ID             string
-	JobID          string
-	Name           string
-	OwnershipNonce string
-}
-
-func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]ListJobSandboxesRow, error) {
+func (q *Queries) ListJobSandboxes(ctx context.Context, jobID string) ([]DorfSandbox, error) {
 	rows, err := q.db.QueryContext(ctx, listJobSandboxes, jobID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListJobSandboxesRow
+	var items []DorfSandbox
 	for rows.Next() {
-		var i ListJobSandboxesRow
+		var i DorfSandbox
 		if err := rows.Scan(
 			&i.ID,
 			&i.JobID,
