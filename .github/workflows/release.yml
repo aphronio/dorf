@@ -47,8 +47,6 @@ jobs:
           echo "Verified CI run $ci_run_id."
       - name: Install the release toolchain
         uses: ./.github/actions/setup-mise
-        with:
-          install_args: go
       - name: Require an already proven Incus image pin
         shell: bash
         run: |

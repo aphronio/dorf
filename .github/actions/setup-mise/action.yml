@@ -1,11 +1,5 @@
 name: Set up the Dorf toolchain
-description: Install the repository's pinned Mise and selected locked tools
-
-inputs:
-  install_args:
-    description: Optional arguments passed to mise install
-    required: false
-    default: ""
+description: Install the repository's pinned Mise and locked tools
 
 runs:
   using: composite
@@ -16,4 +10,3 @@ runs:
         version: 2026.8.5
         sha256: ee362b6d96c648e27325a8bc7ee866bde4fffc20c88c777c5eb5c3b5c6f3e226
         # mise-action automatically enables locked mode when mise.lock is present.
-        install_args: ${{ inputs.install_args }}
