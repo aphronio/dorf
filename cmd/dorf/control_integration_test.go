@@ -445,6 +445,9 @@ func controlTestStore(t *testing.T) (postgres.Store, *absurd.Client, string) {
 	if err == nil {
 		err = store.RecordSandboxProfileVerificationCleanup(context.Background(), verification)
 	}
+	if err == nil {
+		_, err = store.SetDefaultSandboxProfile(context.Background(), profile.Name)
+	}
 	if err != nil {
 		db.Close()
 		t.Fatal(err)
