@@ -67,15 +67,6 @@ no Sandbox provider, leaving Job admission to wait for a verified Profile. Use `
 the shown Dorf-owned project plan in automation. Public HTTPS control ingress remains an independent
 operator responsibility.
 
-Before any real Compose apply, Dorf checks only the three service names shipped by the superseded
-systemd deployment. If an intact root-owned unit for the same numeric operator remains active or
-enabled, Dorf materializes the version-matched `retire-systemd.sh` helper and exits with an exact
-administrator command. That helper reattests the fixed units, stops and disables only those units,
-and deletes no files; it is safe to rerun after a partial attempt. A same-named foreign, modified,
-or differently owned unit is refused for manual review. Dorf itself never invokes `sudo` or a
-mutating `systemctl` command. After the helper succeeds, rerun the interrupted setup, reconcile, or
-update command.
-
 Setup then offers local Incus, cloud E2B, both, or neither. A selected Incus endpoint must already
 be usable. For the default local `unix:///var/lib/incus/unix.socket` authority only, setup can
 materialize the version-matched `incus.sh` administrator helper, print its exact command and the

@@ -34,7 +34,6 @@ printf 'license\n' >"$FIXTURE_ROOT/LICENSE"
 printf '@DORF_VERSION@\n' >"$FIXTURE_ROOT/scripts/install.sh"
 printf '#!/bin/sh\nprintf "docker helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/docker.sh"
 printf '#!/bin/sh\nprintf "incus helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/incus.sh"
-printf '#!/bin/sh\nprintf "retire systemd helper\\n"\n' >"$FIXTURE_ROOT/scripts/bootstrap/retire-systemd.sh"
 printf 'FROM scratch\n' >"$FIXTURE_ROOT/internal/release/container/Dockerfile"
 printf '*\n!dorf\n' >"$FIXTURE_ROOT/internal/release/container/.dockerignore"
 chmod 0755 "$FIXTURE_ROOT/scripts/build-release.sh" "$FIXTURE_ROOT/scripts/release.sh"
@@ -239,7 +238,6 @@ EOF
 chmod 0755 \
   "$FIXTURE_ROOT/scripts/bootstrap/docker.sh" \
   "$FIXTURE_ROOT/scripts/bootstrap/incus.sh" \
-  "$FIXTURE_ROOT/scripts/bootstrap/retire-systemd.sh" \
   "$FIXTURE_ROOT/.dorf/bin/mise" \
   "$FIXTURE_ROOT/scripts/incus/check-image-inputs.sh" \
   "$FIXTURE_ROOT/scripts/incus/release-dorf-image.sh" \
@@ -340,14 +338,12 @@ test_publish_verifies_before_latest_promotion() {
   grep -F $'docker\timage\trm\t'"$IMAGE_REF" "$EVENTS" >/dev/null ||
     fail "loaded exact image reference was not cleaned"
   archive="$FIXTURE_ROOT/dist/release/dorf_${VERSION}_linux_x86_64.tar.gz"
-  [[ "$(tar -tzf "$archive" | LC_ALL=C sort)" == $'LICENSE\nbootstrap/docker.sh\nbootstrap/incus.sh\nbootstrap/retire-systemd.sh\ndorf' ]] ||
+  [[ "$(tar -tzf "$archive" | LC_ALL=C sort)" == $'LICENSE\nbootstrap/docker.sh\nbootstrap/incus.sh\ndorf' ]] ||
     fail "application archive does not contain the exact binary, license, and administrator helpers"
   [[ "$(tar -xOf "$archive" bootstrap/docker.sh)" == $'#!/bin/sh\nprintf "docker helper\\n"' ]] ||
     fail "application archive changed the canonical Docker helper"
   [[ "$(tar -xOf "$archive" bootstrap/incus.sh)" == $'#!/bin/sh\nprintf "incus helper\\n"' ]] ||
     fail "application archive changed the canonical Incus helper"
-  [[ "$(tar -xOf "$archive" bootstrap/retire-systemd.sh)" == $'#!/bin/sh\nprintf "retire systemd helper\\n"' ]] ||
-    fail "application archive changed the canonical systemd retirement helper"
 }
 
 test_failed_asset_verification_never_changes_latest() {

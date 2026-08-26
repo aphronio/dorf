@@ -166,17 +166,6 @@ func TestServiceReconcileStopsWhenApprovedImageResolutionFails(t *testing.T) {
 	}
 }
 
-func TestComposeApplyStopsAtLegacySystemdHandoff(t *testing.T) {
-	manager := &composeServiceTestOperations{legacyErr: errors.New("administrator handoff required")}
-	err := applyComposeServiceSpec(context.Background(), manager, composeServiceTestSpec(t.TempDir()), io.Discard, io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "administrator handoff required") {
-		t.Fatalf("legacy gate error = %v", err)
-	}
-	if manager.legacyChecks != 1 || manager.applyCalls != 0 || manager.statusCalls != 0 {
-		t.Fatalf("legacy checks=%d apply=%d status=%d", manager.legacyChecks, manager.applyCalls, manager.statusCalls)
-	}
-}
-
 func TestServiceReconcileLocalImageIsExplicitAndNamed(t *testing.T) {
 	options, err := parseComposeServiceReconcileOptions([]string{"--yes", "--local-image", "dorf-proof:1.2.3"}, io.Discard)
 	if err != nil {
@@ -491,13 +480,6 @@ type composeServiceTestOperations struct {
 	operationSpecs []composeservice.Spec
 	applyCalls     int
 	statusCalls    int
-	legacyChecks   int
-	legacyErr      error
-}
-
-func (operations *composeServiceTestOperations) CheckLegacySystemd(context.Context, composeservice.Spec, io.Writer) error {
-	operations.legacyChecks++
-	return operations.legacyErr
 }
 
 func (operations *composeServiceTestOperations) Apply(_ context.Context, spec composeservice.Spec, _, _ io.Writer) error {

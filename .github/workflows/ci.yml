@@ -57,7 +57,6 @@ jobs:
           bash -n scripts/integration/compose-vm-test.sh
           sh -n scripts/bootstrap/docker.sh
           sh -n scripts/bootstrap/incus.sh
-          sh -n scripts/bootstrap/retire-systemd.sh
           bash -n scripts/incus/release-dorf-image.sh
           bash -n scripts/incus/check-image-inputs.sh
       - name: Smoke installed artifact
@@ -80,8 +79,6 @@ jobs:
           test "$("$smoke_dir/dorf" version)" = "dorf $version"
           test -x "$smoke_dir/bootstrap/docker.sh"
           test -x "$smoke_dir/bootstrap/incus.sh"
-          test -x "$smoke_dir/bootstrap/retire-systemd.sh"
           cmp scripts/bootstrap/docker.sh "$smoke_dir/bootstrap/docker.sh"
           cmp scripts/bootstrap/incus.sh "$smoke_dir/bootstrap/incus.sh"
-          cmp scripts/bootstrap/retire-systemd.sh "$smoke_dir/bootstrap/retire-systemd.sh"
           .dorf/bin/mise exec -- go version -m "$smoke_dir/dorf"

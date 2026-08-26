@@ -16,9 +16,8 @@ build and verifies the release binary's Go VCS metadata against that exact clean
 builds the application archive and a Linux/amd64 Docker image archive from the same exact release
 binary and the canonical release container recipe. The application archive also carries the exact
 reviewed `bootstrap/docker.sh` and `bootstrap/incus.sh` administrator helpers embedded in that
-binary, plus the reviewed `bootstrap/retire-systemd.sh` one-time deployment-migration helper, so
-humans can inspect or run the same bytes Dorf materializes during an administrator handoff. The
-image archive is named
+binary, so humans can inspect or run the same bytes Dorf materializes during an administrator
+handoff. The image archive is named
 `dorf_<version>_linux_x86_64_container-image.docker.tar`, embeds
 `ghcr.io/aphronio/dorf:<version>`, and is directly loadable with `docker image load`. The one release
 checksum file identifies the application archive and container image archive exactly once each. The

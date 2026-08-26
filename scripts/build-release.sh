@@ -8,7 +8,6 @@ readonly DOCKERFILE="$PROJECT_ROOT/internal/release/container/Dockerfile"
 readonly DOCKERIGNORE="$PROJECT_ROOT/internal/release/container/.dockerignore"
 readonly DOCKER_HELPER="$PROJECT_ROOT/scripts/bootstrap/docker.sh"
 readonly INCUS_HELPER="$PROJECT_ROOT/scripts/bootstrap/incus.sh"
-readonly RETIRE_SYSTEMD_HELPER="$PROJECT_ROOT/scripts/bootstrap/retire-systemd.sh"
 readonly CONTAINER_REPOSITORY="ghcr.io/aphronio/dorf"
 readonly -a CONTAINER_PROOF_ARGS=(
   --rm
@@ -176,7 +175,7 @@ if [[ ! -f "$DOCKERIGNORE" ]]; then
   echo "Canonical release container context filter is unavailable: $DOCKERIGNORE" >&2
   exit 1
 fi
-for helper in "$DOCKER_HELPER" "$INCUS_HELPER" "$RETIRE_SYSTEMD_HELPER"; do
+for helper in "$DOCKER_HELPER" "$INCUS_HELPER"; do
   if [[ ! -f "$helper" ]]; then
     echo "Canonical administrator helper is unavailable: $helper" >&2
     exit 1
@@ -201,11 +200,10 @@ install -m 0644 "$PROJECT_ROOT/LICENSE" "$STAGE/context/LICENSE"
 install -m 0644 "$DOCKERIGNORE" "$STAGE/context/.dockerignore"
 install -m 0755 "$DOCKER_HELPER" "$STAGE/context/bootstrap/docker.sh"
 install -m 0755 "$INCUS_HELPER" "$STAGE/context/bootstrap/incus.sh"
-install -m 0755 "$RETIRE_SYSTEMD_HELPER" "$STAGE/context/bootstrap/retire-systemd.sh"
 binary_sha256="$(sha256sum "$STAGE/context/dorf" | awk '{print $1}')"
 
 tar -C "$STAGE/context" -czf "$STAGE/artifacts/$ARCHIVE" \
-  dorf LICENSE bootstrap/docker.sh bootstrap/incus.sh bootstrap/retire-systemd.sh
+  dorf LICENSE bootstrap/docker.sh bootstrap/incus.sh
 docker buildx build \
   --platform linux/amd64 \
   --pull \

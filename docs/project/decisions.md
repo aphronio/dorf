@@ -2694,12 +2694,8 @@ Git history; only the rationale needed to avoid accidental reversal is retained 
   [Getting started](../getting-started.md#1-install-the-application-initialize-a-deployment-host)
   and its equivalent manual authorities. The release ships the same small, inspectable helpers from
   `scripts/bootstrap/`; they remain explicit, idempotent recipes for their stated proven host, not a
-  universal package manager or a second runtime reconciler. Before a real Compose apply, a read-only
-  transition gate detects only the three active or enabled units shipped by the superseded
-  deployment. It offers a version-matched administrator helper only after the root-owned unit and
-  its exact operator identity are attested; the helper reattests, stops, and disables those fixed
-  units without deleting them. Cloudflare remains in the existing guided browser/DNS/Tunnel flow;
-  a shell wrapper would only duplicate that authority.
+  universal package manager or a second runtime reconciler. Cloudflare remains in the existing
+  guided browser/DNS/Tunnel flow; a shell wrapper would only duplicate that authority.
 - **Sandbox boundary:** Incus remains a provider behind the existing Sandbox adapter rather than a
   universal deployment dependency. One Dorf Deployment configures at most one Incus endpoint and
   client identity; its profiles name their restricted project, storage pool, network, and exact

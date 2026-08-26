@@ -38,8 +38,7 @@ prepare the approved Sandbox and Harness path. Setup's host-prerequisite checks 
 offers an administrator helper, follow the exact handoff in
 [Getting started](getting-started.md#1-install-the-application-initialize-a-deployment-host), pause
 for explicit human authorization, then rerun setup. Honor its Docker-authority warning even when no
-escalation prompt appears. The same pause-and-rerun rule applies when Compose reconciliation offers
-the fixed legacy-systemd retirement helper; do not stop, disable, edit, or remove units directly.
+escalation prompt appears.
 
 Use setup's local image transport options only when the human explicitly requests the contributor
 or disposable-proof path documented in Getting started.

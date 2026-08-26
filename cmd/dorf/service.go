@@ -23,7 +23,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/incus"
-	"github.com/aphronio/dorf/internal/legacysystemd"
 	releaseapp "github.com/aphronio/dorf/internal/release"
 	"github.com/aphronio/dorf/internal/version"
 	bootstraphelper "github.com/aphronio/dorf/scripts/bootstrap"
@@ -170,18 +169,8 @@ func containsServiceHelpFlag(args []string) bool {
 	return false
 }
 
-type composeServiceManager struct {
-	composeservice.Manager
-	legacySystemd legacysystemd.Gate
-}
-
-func currentComposeServiceManager() composeServiceManager {
-	return composeServiceManager{Manager: composeservice.Manager{}}
-}
-
-func (manager composeServiceManager) CheckLegacySystemd(ctx context.Context, spec composeservice.Spec, output io.Writer) error {
-	runtime := spec.Project.Runtime
-	return manager.legacySystemd.Check(ctx, runtime.DataDir, version.Version, runtime.UID, runtime.GID, output)
+func currentComposeServiceManager() composeservice.Manager {
+	return composeservice.Manager{}
 }
 
 type composeDeploymentSource struct {
@@ -476,7 +465,6 @@ func existingComposeDeployment(projectDir string) (bool, error) {
 
 type composeServiceReconciler interface {
 	composeServiceStatuser
-	CheckLegacySystemd(context.Context, composeservice.Spec, io.Writer) error
 	Apply(context.Context, composeservice.Spec, io.Writer, io.Writer) error
 }
 
@@ -521,9 +509,6 @@ func reconcileComposeServicesWith(ctx context.Context, manager composeServiceRec
 }
 
 func applyComposeServiceSpec(ctx context.Context, manager composeServiceReconciler, spec composeservice.Spec, stdout, stderr io.Writer) error {
-	if err := manager.CheckLegacySystemd(ctx, spec, stdout); err != nil {
-		return err
-	}
 	if err := manager.Apply(ctx, spec, stdout, stderr); err != nil {
 		return err
 	}

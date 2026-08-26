@@ -9,9 +9,8 @@ import (
 
 func TestBootstrapHelpersAreValidPOSIXShell(t *testing.T) {
 	for name, script := range map[string][]byte{
-		"docker.sh":         dockerScript,
-		"incus.sh":          incusScript,
-		"retire-systemd.sh": retireSystemdScript,
+		"docker.sh": dockerScript,
+		"incus.sh":  incusScript,
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command("sh", "-n")
@@ -21,49 +20,6 @@ func TestBootstrapHelpersAreValidPOSIXShell(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRetireSystemdHelperStopsAndDisablesOnlyAttestedLegacyUnits(t *testing.T) {
-	script := string(retireSystemdScript)
-	assertContainsAll(t, script,
-		"--acknowledge-retire-legacy-dorf-services",
-		"--operator-uid",
-		"--operator-gid",
-		"dorf-control-api.service",
-		"dorf-worker.service",
-		"dorf-cloudflared.service",
-		"# Managed by Dorf. Local edits are refused.",
-		"# dorf-sha256=",
-		"CLOUDFLARED_NORMALIZED",
-		"CLOUDFLARED_EXPECTED",
-		"Description=Dorf Cloudflare Tunnel",
-		"After=network-online.target",
-		"Wants=network-online.target",
-		"Restart=on-failure",
-		"RestartSec=5s",
-		"WantedBy=multi-user.target",
-		`ExecStart="[^"]+" --no-autoupdate --config "[^"]+" tunnel run`,
-		`"$SYSTEMCTL" stop -- "$UNIT"`,
-		`"$SYSTEMCTL" disable -- "$UNIT"`,
-		`grep -Fxc "User=$OPERATOR_UID"`,
-		`grep -Fxc "Group=$OPERATOR_GID"`,
-		"inactive | failed | unknown | not-found",
-		"disabled | static | indirect | generated | transient | masked | masked-runtime | not-found",
-		"No unit files were deleted",
-	)
-	for _, forbidden := range []string{
-		"systemctl enable",
-		"systemctl restart",
-		"daemon-reload",
-		"rm ",
-		"/etc/systemd/system/dorf-*",
-		"*.service",
-	} {
-		if strings.Contains(script, forbidden) {
-			t.Errorf("retirement helper contains forbidden operation %q", forbidden)
-		}
-	}
-	assertForbiddenShellPatterns(t, script)
 }
 
 func TestDockerHelperMakesAuthorityAndRefusalBoundaryExplicit(t *testing.T) {
