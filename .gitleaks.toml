@@ -8,3 +8,11 @@ targetRules = ["private-key"]
 regexTarget = "match"
 paths = ['''(?:^|/)tests/test_github_app\.py$''']
 regexes = ['''-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----''']
+
+[[allowlists]]
+description = "Deterministic API-key-shaped Go test fixtures"
+condition = "AND"
+targetRules = ["generic-api-key"]
+regexTarget = "match"
+paths = ['''(?:^|/)(?:cmd/dorf/main_test\.go|internal/composeconfig/config_test\.go|internal/composeproject/project_test\.go)$''']
+regexes = ['''(?:rotated-verified-(?:key)|0123456789abcdef(?:0123456789abcdef){3})''']
