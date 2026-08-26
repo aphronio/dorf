@@ -13,10 +13,11 @@ ingress boundaries. It must pause for every password, secret, browser authorizat
 or consequential infrastructure choice.
 
 The **remote-client agent** installs and uses only the Dorf CLI. It may connect, check its own
-authentication, admit a direct Job, inspect that Job, and request its cleanup. It must not run
-`dorf setup`, `dorf serve`, `dorf worker`, database or migration commands, `dorf provider`,
-`dorf profile`, or GitHub integration setup. It must not use SSH or local-only commands to work
-around a missing remote capability. The deployment host owns all of those operations.
+authentication, admit, inspect, and watch a direct Job, send or inspect Messages, request eligible
+retry, read an exact Sandbox file, inspect Evidence, and request cleanup. It must not run `dorf
+setup`, `dorf serve`, `dorf worker`, database or migration commands, `dorf provider`, `dorf profile`,
+or GitHub integration setup. It must not use SSH or local-only commands to work around a missing
+remote capability. The deployment host owns all of those operations.
 
 ## Common installation protocol
 
@@ -49,19 +50,20 @@ Receive the exact HTTPS Deployment origin and Enrollment through the human-appro
 then follow the remote-client procedure in Getting started. One successful `dorf connect` saves one
 Deployment; there are no contexts to choose or switch. Prove the binding with `dorf auth status`.
 
-Put the complete goal in a file and use `dorf run`. Admission retry identity is automatic; do not
-invent or ask the human to manage a key in the ordinary flow. Observe only with `dorf job inspect`
-and request cleanup only with `dorf job cleanup`. An open Job may be idle after a successful Turn;
-do not create a replacement merely because it has no active execution. Remote Job listing, watch,
-Messages, explicit Job retry, file retrieval, Evidence, and workflow admission are not delivered
-yet.
+Put the complete goal or Message in a file and use the exact remote commands in Getting started.
+Mutation retry identity is automatic; do not invent or ask the human to manage a key in the ordinary
+flow. Follow may queue, while steer requires the exact active Turn and must not be resent as Follow
+after `steer_unavailable`. Retrieve needed Sandbox files before cleanup. An open Job may be idle after
+a successful Turn; do not create a replacement merely because it has no active execution. Remote Job
+listing and workflow admission are not delivered yet.
 
 ## Safety and handback
 
 Never expose Enrollment codes, Client credentials or configuration, environment dumps, Gateway
-state, provider credentials, or Harness transcripts. Never delete provider resources or PostgreSQL
-rows directly. Stop and report the exact failed check when repair needs authority the human has not
-granted.
+state, provider credentials, or unrequested Harness transcripts. A caller-requested Message result
+may be returned narrowly; do not dump complete inspection, watch, or Message output. Never delete
+provider resources or PostgreSQL rows directly. Stop and report the exact failed check when repair
+needs authority the human has not granted.
 
 Report only the installed version, the role operated, readiness actually observed, Job identity and
 current state, caller-requested output, and cleanup state. A deployment-host handback may also name

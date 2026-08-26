@@ -9,11 +9,10 @@ delete this working design.
 
 ## Delivery status
 
-Slice 1 is implemented and dogfood-proven: one CLI Client can enroll, connect to one Deployment,
-authenticate, admit and inspect a direct Job, and request cleanup over HTTPS. The delivered HTTP and
-CLI surfaces are listed separately below. Job listing and watch, Messages, explicit Job retry,
-Sandbox file and Evidence reads, workflow admission, OpenAPI publication, and managed service
-packaging remain planned work; nothing in those sections describes current behavior.
+Slices 1 and 2 are implemented and dogfood-proven: one CLI Client can enroll, connect to one
+Deployment, authenticate, and operate the complete direct Job interaction loop over HTTPS. The
+delivered HTTP and CLI surfaces are listed separately below. Job listing, workflow admission,
+OpenAPI publication, and managed service packaging remain planned work.
 
 ## Outcome
 
@@ -44,9 +43,9 @@ publication. MCP, A2A, and a matrix of hand-written SDKs are deliberately deferr
 | Client targeting | One configured Deployment; no named contexts in version one. |
 | Long-running work | Job is the resource; do not expose a generic Task, Run, or Operation. |
 | Job creation retries | The caller creates request identity before sending; the CLI hides it from humans. |
-| Observation | Canonical snapshots now; conditional GET and snapshot SSE in Slice 2; no copied event store. |
-| Messages | Slice 2 exposes existing follow and steer invariants; adapters do not redefine them. |
-| Files | Slice 2 adds exact Sandbox-level reads only; no Job nesting, uploads, listing, or arbitrary writes. |
+| Observation | Canonical snapshots, conditional GET, and snapshot SSE; no copied event store. |
+| Messages | Existing follow and steer invariants; adapters do not redefine them. |
+| Files | Exact Sandbox-level reads only; no Job nesting, uploads, listing, or arbitrary writes. |
 | Authentication | Short-lived Enrollment creates one Client with an independently revocable opaque credential. |
 | Agent access | Structured CLI and HTTP first; OpenAPI in Slice 4; no required agent-specific transport. |
 | Deployment | Private API listener behind HTTPS ingress and a separate worker; managed packaging in Slice 4. |
@@ -95,7 +94,7 @@ before considering persistent contexts.
 
 ## Resource model
 
-The delivered Slice 1 API is resource-oriented HTTPS with purpose-built JSON representations:
+The delivered API is resource-oriented HTTPS with purpose-built JSON representations:
 
 ```text
 GET   /v1                                  deployment/version/capability discovery
@@ -104,22 +103,19 @@ GET   /v1/me                               effective Principal and Client
 
 POST  /v1/jobs                             admit or replay a direct Job
 GET   /v1/jobs/{job}                       inspect one canonical Job snapshot
+GET   /v1/jobs/{job}/watch                 observe newer canonical snapshots
+POST  /v1/jobs/{job}/messages              follow or steer
+GET   /v1/jobs/{job}/messages/{message}    inspect one Message delivery
+POST  /v1/jobs/{job}/retries               retry eligible failed work
+GET   /v1/sandboxes/{sandbox}/files?path=REPORT.md
+GET   /v1/jobs/{job}/evidence              inspect verified Evidence metadata
 PUT   /v1/jobs/{job}/cleanup               request cleanup idempotently
 ```
 
-Later slices plan the rest of the accepted surface:
+Later slices plan:
 
 ```text
-GET   /v1/jobs                    list Jobs
-GET   /v1/jobs/{job}/watch        observe newer canonical snapshots
-
-POST  /v1/jobs/{job}/messages     follow or steer
-GET   /v1/jobs/{job}/messages/{message}
-POST  /v1/jobs/{job}/retries      request retry of eligible failed work
-
-GET   /v1/sandboxes/{sandbox}/files?path=REPORT.md
-GET   /v1/jobs/{job}/evidence
-
+GET   /v1/jobs
 POST  /v1/workflows/coding/jobs
 POST  /v1/workflows/codebase-investigation/jobs
 ```
@@ -144,10 +140,10 @@ or internal Go structs. It keeps independent facts independent:
   "profile": "default",
   "model": "...",
   "reasoning": "high",
+  "initial_message_id": "message-...",
   "admission": { "open": true },
   "execution": { "state": "idle" },
   "attention": null,
-  "outcome": null,
   "cleanup": { "state": "not_requested" },
   "sandboxes": [
     { "id": "dorf-...", "name": "default" }
@@ -162,9 +158,9 @@ itself mean cleanup completed.
 When Job listing is added, its responses will be paginated from the start. JSON field names, enum
 values, error codes, and exit behavior are compatibility surface; human CLI prose is not.
 
-## Planned Messages
+## Messages
 
-Slice 2 remote Message admission will expose the invariant Dorf semantics already owned by Core:
+Remote Message admission exposes the invariant Dorf semantics already owned by Core:
 
 - follow is durable FIFO input, may queue early, retains the authoritative Thread, and creates a new
   Turn;
@@ -172,24 +168,29 @@ Slice 2 remote Message admission will expose the invariant Dorf semantics alread
   new Turn;
 - cleanup timing remains caller or workflow policy.
 
-The API exposes the Message identity and accepted delivery state, not Harness Thread or Turn IDs.
+The API exposes Message identity, delivery state, and an available settled result, not AgentRun,
+Harness Thread, or Turn IDs. After cleanup begins, retained delivery state remains readable while
+Harness output is no longer fetched.
 
-## Planned exact Sandbox files
+## Exact Sandbox files
 
-Slice 2 file retrieval is a Sandbox-level read because the Sandbox owns the bytes:
+File retrieval is a Sandbox-level read because the Sandbox owns the bytes:
 
 ```text
 GET /v1/sandboxes/{sandbox}/files?path=REPORT.md
 ```
 
 The Job snapshot tells the caller which Sandboxes the Job owns. The server then enforces exact
-Sandbox custody and the existing safe relative-path and cleanup fence. The response is the file
-bytes with ordinary HTTP metadata such as content length, content type when known, digest, and
-content disposition where useful.
+Sandbox custody and the existing safe relative-path and cleanup fence. The response is exact
+`application/octet-stream` bytes with `Content-Length` and a SHA-256 `Content-Digest` that the CLI
+verifies before writing.
 
 Version one does not add file upload, arbitrary writes, listing, globbing, directory download,
 archives, or server-side destination paths. A future write operation must be earned separately; it
 must not be smuggled into the read endpoint.
+
+Evidence retrieval returns only verified immutable metadata. It does not expose internal Action or
+AgentRun identities or retained blob bytes, and a direct Job may truthfully return an empty list.
 
 ## Automatic retry identity
 
@@ -206,18 +207,18 @@ client sends request K
 client retries K  ----------> same Job, never a duplicate Job
 ```
 
-Humans do not manage this key in the ordinary successful flow. The Dorf CLI creates it before
-sending, retains it for the retry, and returns it with the receipt; future generated clients must do
-the same. A raw HTTP caller supplies `Idempotency-Key`. Reusing the key with the same request returns
-the same resource; reusing it with materially different input returns a stable typed conflict. The
-server cannot safely generate the only copy after admission: that copy is precisely what may be
-lost with the response.
+Humans do not manage this key in the ordinary successful flow. The Dorf CLI creates it before Job
+admission, Message admission, and explicit retry; it retries the same mutation once after an
+ambiguous transport or server failure and reveals the key only if ambiguity remains. A raw HTTP
+caller supplies `Idempotency-Key`. Reusing the key with the same request returns the same resource;
+reusing it with materially different input returns a stable typed conflict. The server cannot safely
+generate the only copy after admission: that copy is precisely what may be lost with the response.
 
 ## Observation, not a second event system
 
-`GET /v1/jobs/{job}` is already the canonical current snapshot. Slice 2 plans conditional GET and a
-`watch` server-sent event stream that delivers a newer complete snapshot when the observable
-representation changes, plus normal keepalive and reconnect behavior.
+`GET /v1/jobs/{job}` is the canonical current snapshot and supports representation ETags. The
+`watch` server-sent event stream delivers a newer complete snapshot when that representation
+changes, plus keepalive, bounded reauthentication, and reconnect behavior.
 
 The stream is a delivery optimization over authoritative facts, not a new durable event log. It may
 coalesce intermediate projections. Reconnecting clients resume by re-reading the canonical Job.
@@ -226,8 +227,8 @@ those different guarantees.
 
 The observation CLI mirrors that separation incrementally:
 
-- delivered `job inspect --output json` emits one stable JSON document;
-- planned `job watch --output jsonl` emits one snapshot per line;
+- `job inspect --output json` emits one stable JSON document;
+- `job watch --output jsonl` emits one snapshot per line;
 - human output remains concise and situation-first;
 - successful data goes to stdout, progress and diagnostics to stderr.
 
@@ -235,8 +236,9 @@ The observation CLI mirrors that separation incrementally:
 
 Dorf-origin API failures use Problem Details with a stable Dorf code, retryability, and structured
 details. Clients never need to parse its prose. An ingress or other non-Dorf failure may not be a
-Problem response, so admission retry also recognizes transport and HTTP server failure directly.
-Typed recovery actions may follow only when a later slice can name them honestly.
+Problem response, so mutation retry also recognizes transport and HTTP server failure directly.
+Message, steer, retry, file, Evidence, and idempotency failures have stable typed codes; Slice 4 will
+publish the full catalog.
 
 ```json
 {
@@ -301,6 +303,14 @@ dorf auth status
 
 dorf run --goal-file goal.md --model MODEL
 dorf job inspect JOB
+dorf job watch JOB
+dorf job watch --output jsonl JOB
+dorf job message --input-file follow-up.md JOB
+dorf job message --intent steer --input-file correction.md JOB
+dorf job message inspect JOB MESSAGE
+dorf job retry JOB
+dorf job evidence JOB
+dorf sandbox file get SANDBOX PATH --output DESTINATION
 dorf job cleanup JOB
 ```
 
@@ -309,14 +319,13 @@ The deployment host creates and revokes remote Clients with `dorf client enroll`
 one saved Deployment and no named multi-Deployment switching. `dorf connect` accepts an Enrollment
 interactively or through `--enrollment-file PATH|-` for non-interactive use.
 
-The CLI creates admission identity internally, retries the exact request once after a retryable
+The CLI creates mutation identity internally, retries the exact request once after a retryable
 transport or HTTP server failure, and reveals the recovery key in human output only if ambiguity
-remains. Structured admission receipts always include the request identity. Mutations return the
-effective Deployment, canonical resource identity, and accepted state. Cleanup names one exact Job.
+remains. Structured mutation receipts include the request identity. Mutations return the effective
+Deployment, canonical resource identity, and accepted state. Cleanup names one exact Job.
 
-Later slices add `job list`, `job watch`, `job message`, `job retry`, exact file and Evidence reads,
-and typed workflow admissions. `watch` is used instead of overloading `inspect --follow`, because
-Follow already has a precise Message meaning.
+Later slices add `job list` and typed workflow admissions. `watch` is used instead of overloading
+`inspect --follow`, because Follow already has a precise Message meaning.
 
 Agents initially use the same CLI with structured output or call the described HTTP API directly
 from code mode. OpenAPI publication remains Slice 4 work. MCP and A2A are not part of the first
@@ -342,7 +351,8 @@ The API composes existing direct application handles; later typed workflow adapt
 boundary. It does not shell out to the Dorf CLI, expose PostgreSQL, hand out task claims, or expose
 provider/Harness operations.
 
-Slice 1 proved independent API and worker restart with transient, separately supervised processes.
+Slices 1 and 2 proved independent API and worker restart, plus watch reconnection after API loss,
+with transient, separately supervised processes.
 A supported managed lifecycle, diagnostics, and upgrade path remain Slice 4 work; current operator
 limits are documented once in [Getting started](../getting-started.md#3-connect-one-remote-cli-client).
 The Provider Gateway's HTTPS `/v1` route is a different authority on a different hostname from this

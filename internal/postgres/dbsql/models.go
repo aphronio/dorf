@@ -30,6 +30,14 @@ type DorfGithubProposal struct {
 	BodyDigest       string
 }
 
+type DorfJobRetryRequest struct {
+	RequestKey string
+	JobID      string
+	TaskID     string
+	RunID      string
+	Attempt    int32
+}
+
 type DorfJobTask struct {
 	JobID      string
 	Sequence   int64

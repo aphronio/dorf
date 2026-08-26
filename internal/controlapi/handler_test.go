@@ -1,15 +1,20 @@
 package controlapi_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -44,6 +49,20 @@ func TestHandlerBoundary(t *testing.T) {
 
 	unauthenticated := do(http.MethodGet, "/v1/me", "", "", nil)
 	requireProblem(t, unauthenticated, http.StatusUnauthorized, "unauthenticated")
+	for _, route := range []struct {
+		method string
+		path   string
+		body   io.Reader
+	}{
+		{http.MethodGet, "/v1/jobs/job-1/watch", nil},
+		{http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{}`)},
+		{http.MethodGet, "/v1/jobs/job-1/messages/message-1", nil},
+		{http.MethodPost, "/v1/jobs/job-1/retries", nil},
+		{http.MethodGet, "/v1/jobs/job-1/evidence", nil},
+		{http.MethodGet, "/v1/sandboxes/sandbox-1/files?path=REPORT.md", nil},
+	} {
+		requireProblem(t, do(route.method, route.path, "", "", route.body), http.StatusUnauthorized, "unauthenticated")
+	}
 	revoked := do(http.MethodGet, "/v1/me", "revoked-secret", "", nil)
 	requireProblem(t, revoked, http.StatusUnauthorized, "unauthenticated")
 	assertSecretsAbsent(t, revoked.Body.String(), credential, enrollment, "revoked-secret")
@@ -105,6 +124,303 @@ func TestHandlerBoundary(t *testing.T) {
 	}
 }
 
+func TestJobConditionalGetAndDirectInteractionRoutes(t *testing.T) {
+	credential := "dcr_control-client"
+	message := controlapi.Message{
+		ID: "message-2", JobID: "job-1", Sequence: 2, Intent: "follow",
+		Delivery: controlapi.State{State: "completed"}, Result: &controlapi.MessageResult{Outcome: "completed", Output: "done"},
+		AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+	}
+	jobs := &fakeJobs{
+		job:     controlapi.Job{ID: "job-1", Kind: "direct", Goal: "ship", InitialMessageID: "message-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
+		message: message, messageCreated: true,
+		retry: controlapi.Retry{JobID: "job-1", State: "scheduled"}, retryCreated: true,
+	}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+
+	request := func(method, target string, body io.Reader) *http.Request {
+		req := httptest.NewRequest(method, target, body)
+		req.Header.Set("Authorization", "Bearer "+credential)
+		return req
+	}
+	do := func(req *http.Request) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+
+	first := do(request(http.MethodGet, "/v1/jobs/job-1", nil))
+	requireStatusType(t, first, http.StatusOK, "application/json")
+	etag := first.Header().Get("ETag")
+	if len(etag) != 66 || etag[0] != '"' || etag[len(etag)-1] != '"' {
+		t.Fatalf("ETag=%q, want quoted SHA-256 representation hash", etag)
+	}
+	conditionalRequest := request(http.MethodGet, "/v1/jobs/job-1", nil)
+	conditionalRequest.Header.Set("If-None-Match", etag)
+	conditional := do(conditionalRequest)
+	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 || conditional.Header().Get("ETag") != etag {
+		t.Fatalf("conditional response status/body/etag=%d/%q/%q", conditional.Code, conditional.Body.String(), conditional.Header().Get("ETag"))
+	}
+
+	messageRequest := request(http.MethodPost, "/v1/jobs/job-1/messages", strings.NewReader(`{"text":"continue","intent":"follow"}`))
+	messageRequest.Header.Set("Content-Type", "application/json")
+	messageRequest.Header.Set("Idempotency-Key", "send-2")
+	sent := do(messageRequest)
+	requireStatusType(t, sent, http.StatusCreated, "application/json")
+	var accepted controlapi.Message
+	decode(t, sent, &accepted)
+	if accepted.ID != message.ID || accepted.Result == nil || *accepted.Result != *message.Result || jobs.messageKey != "send-2" || jobs.messageInput != (controlapi.SendMessageRequest{Text: "continue", Intent: "follow"}) {
+		t.Fatalf("Message=%#v key/input=%q/%#v, want %#v/send-2", accepted, jobs.messageKey, jobs.messageInput, message)
+	}
+	retryRequest := request(http.MethodPost, "/v1/jobs/job-1/retries", nil)
+	retryRequest.Header.Set("Idempotency-Key", "retry-3")
+	retried := do(retryRequest)
+	requireStatusType(t, retried, http.StatusCreated, "application/json")
+	var retry controlapi.Retry
+	decode(t, retried, &retry)
+	if retry != jobs.retry || jobs.retryKey != "retry-3" {
+		t.Fatalf("Retry=%#v key=%q, want %#v/retry-3", retry, jobs.retryKey, jobs.retry)
+	}
+
+	query := do(request(http.MethodGet, "/v1/jobs/job-1?extra=true", nil))
+	requireProblem(t, query, http.StatusBadRequest, "invalid_query")
+	missingMessage := do(request(http.MethodGet, "/v1/jobs/job-1/messages/other", nil))
+	requireProblem(t, missingMessage, http.StatusNotFound, "message_not_found")
+	wrongWatchType := do(request(http.MethodGet, "/v1/jobs/job-1/watch", nil))
+	requireProblem(t, wrongWatchType, http.StatusNotAcceptable, "not_acceptable")
+	invalidResumeRequest := request(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	invalidResumeRequest.Header.Set("Accept", "text/event-stream")
+	invalidResumeRequest.Header.Set("Last-Event-ID", "not-a-representation-hash")
+	requireProblem(t, do(invalidResumeRequest), http.StatusBadRequest, "invalid_last_event_id")
+	conditionalCleanup := request(http.MethodPut, "/v1/jobs/job-1/cleanup", nil)
+	conditionalCleanup.Header.Set("If-None-Match", "*")
+	requireProblem(t, do(conditionalCleanup), http.StatusBadRequest, "unsupported_precondition")
+	if jobs.cleanupCalls != 0 {
+		t.Fatal("unsupported cleanup precondition reached the mutation")
+	}
+}
+
+func TestSandboxFileIsExactAndSelfVerifying(t *testing.T) {
+	credential := "dcr_control-client"
+	contents := []byte{0x00, 0xff, '\n', 'D', 'o', 'r', 'f'}
+	jobs := &fakeJobs{
+		job:  controlapi.Job{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
+		file: contents,
+	}
+	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
+	do := func(target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+
+	file := do("/v1/sandboxes/sandbox-1/files?path=nested%2FREPORT%2B.bin")
+	requireStatusType(t, file, http.StatusOK, "application/octet-stream")
+	digest := sha256.Sum256(contents)
+	wantDigest := "sha-256=:" + base64.StdEncoding.EncodeToString(digest[:]) + ":"
+	if !bytes.Equal(file.Body.Bytes(), contents) || file.Header().Get("Content-Length") != fmt.Sprint(len(contents)) || file.Header().Get("Content-Digest") != wantDigest || jobs.filePath != "nested/REPORT+.bin" {
+		t.Fatalf("file bytes/length/digest=%x/%q/%q", file.Body.Bytes(), file.Header().Get("Content-Length"), file.Header().Get("Content-Digest"))
+	}
+	missingPath := do("/v1/sandboxes/sandbox-1/files")
+	requireProblem(t, missingPath, http.StatusBadRequest, "file_path_required")
+}
+
+func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
+	credential := "dcr_control-client"
+	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Goal: "first", Sandboxes: []controlapi.Sandbox{}}}
+	api := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs)
+
+	open := func(lastID string) (*streamResponse, context.CancelFunc, <-chan struct{}) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil).WithContext(ctx)
+		request.Header.Set("Authorization", "Bearer "+credential)
+		request.Header.Set("Accept", "text/event-stream")
+		if lastID != "" {
+			request.Header.Set("Last-Event-ID", lastID)
+		}
+		response := newStreamResponse()
+		done := make(chan struct{})
+		go func() {
+			api.Handler.ServeHTTP(response, request)
+			close(done)
+		}()
+		return response, cancel, done
+	}
+
+	firstResponse, cancelFirst, firstDone := open("")
+	firstResponse.awaitFlush(t)
+	firstID, firstJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(firstResponse.bytes())))
+	if firstJob.Goal != "first" || len(firstID) != 64 {
+		t.Fatalf("first snapshot id/job=%q/%#v", firstID, firstJob)
+	}
+	if status, header, bounded := firstResponse.metadata(); status != http.StatusOK || header.Get("Content-Type") != "text/event-stream" || header.Get("Cache-Control") != "no-store, no-transform" || !bounded {
+		t.Fatalf("watch status/type/cache/bounded-write=%d/%q/%q/%t", status, header.Get("Content-Type"), header.Get("Cache-Control"), bounded)
+	}
+	cancelFirst()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled watch did not stop")
+	}
+
+	resumedResponse, cancelResumed, resumedDone := open(firstID)
+	defer cancelResumed()
+	resumedResponse.awaitFlush(t)
+	if got := resumedResponse.bytes(); len(got) != 0 {
+		t.Fatalf("matching Last-Event-ID replayed unchanged snapshot: %q", got)
+	}
+	jobs.mu.Lock()
+	jobs.job.Goal = "changed"
+	jobs.mu.Unlock()
+	resumedResponse.awaitFlush(t)
+	changedID, changedJob := readSnapshotEvent(t, bufio.NewReader(bytes.NewReader(resumedResponse.bytes())))
+	if changedJob.Goal != "changed" || changedID == firstID {
+		t.Fatalf("changed snapshot id/job=%q/%#v after %q", changedID, changedJob, firstID)
+	}
+
+	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := api.Shutdown(shutdown); err != nil {
+		t.Fatalf("shutdown API with active watch: %v", err)
+	}
+	select {
+	case <-resumedDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("watch did not stop after server shutdown")
+	}
+}
+
+func TestJobWatchReauthenticatesNoLaterThanCredentialExpiry(t *testing.T) {
+	credential := "dcr_expiring-client"
+	auth := &fakeAuth{credential: credential, client: controlauth.Client{CredentialExpiresAt: time.Now().Add(100 * time.Millisecond)}}
+	jobs := &fakeJobs{job: controlapi.Job{ID: "job-1", Kind: "direct", Sandboxes: []controlapi.Sandbox{}}}
+	api := controlapi.NewServer(controlapi.Discovery{}, auth, jobs)
+	request := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	request.Header.Set("Authorization", "Bearer "+credential)
+	request.Header.Set("Accept", "text/event-stream")
+	response := newStreamResponse()
+	done := make(chan struct{})
+	go func() {
+		api.Handler.ServeHTTP(response, request)
+		close(done)
+	}()
+	response.awaitFlush(t)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watch outlived its Client credential")
+	}
+
+	auth.credential = "revoked"
+	reconnect := httptest.NewRequest(http.MethodGet, "/v1/jobs/job-1/watch", nil)
+	reconnect.Header.Set("Authorization", "Bearer "+credential)
+	reconnect.Header.Set("Accept", "text/event-stream")
+	rejected := httptest.NewRecorder()
+	api.Handler.ServeHTTP(rejected, reconnect)
+	requireProblem(t, rejected, http.StatusUnauthorized, "unauthenticated")
+}
+
+type streamResponse struct {
+	mu              sync.Mutex
+	header          http.Header
+	status          int
+	body            bytes.Buffer
+	flushes         chan struct{}
+	boundedDeadline bool
+}
+
+func newStreamResponse() *streamResponse {
+	return &streamResponse{header: make(http.Header), flushes: make(chan struct{}, 4)}
+}
+
+func (w *streamResponse) Header() http.Header { return w.header }
+
+func (w *streamResponse) WriteHeader(status int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *streamResponse) Write(contents []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(contents)
+}
+
+func (w *streamResponse) Flush() {
+	select {
+	case w.flushes <- struct{}{}:
+	default:
+	}
+}
+
+func (w *streamResponse) SetWriteDeadline(deadline time.Time) error {
+	if !deadline.IsZero() {
+		w.mu.Lock()
+		w.boundedDeadline = true
+		w.mu.Unlock()
+	}
+	return nil
+}
+
+func (w *streamResponse) awaitFlush(t *testing.T) {
+	t.Helper()
+	select {
+	case <-w.flushes:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for stream flush")
+	}
+}
+
+func (w *streamResponse) bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.body.Bytes()...)
+}
+
+func (w *streamResponse) metadata() (int, http.Header, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.status, w.header.Clone(), w.boundedDeadline
+}
+
+func readSnapshotEvent(t *testing.T, reader *bufio.Reader) (string, controlapi.Job) {
+	t.Helper()
+	var event, id, data string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read snapshot event: %v", err)
+		}
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case line == "":
+			if event != "snapshot" || id == "" || data == "" {
+				t.Fatalf("SSE event/type/id/data=%q/%q/%q", event, id, data)
+			}
+			var job controlapi.Job
+			if err := json.Unmarshal([]byte(data), &job); err != nil {
+				t.Fatalf("decode snapshot %q: %v", data, err)
+			}
+			return id, job
+		case strings.HasPrefix(line, "event: "):
+			event = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "id: "):
+			id = strings.TrimPrefix(line, "id: ")
+		case strings.HasPrefix(line, "data: "):
+			data = strings.TrimPrefix(line, "data: ")
+		}
+	}
+}
+
 type fakeAuth struct {
 	credential         string
 	client             controlauth.Client
@@ -130,23 +446,90 @@ func (a *fakeAuth) Redeem(_ context.Context, code, name, credential string) (con
 }
 
 type fakeJobs struct {
-	job      controlapi.Job
-	gotInput controlapi.AdmitJobRequest
+	mu             sync.Mutex
+	job            controlapi.Job
+	gotInput       controlapi.AdmitJobRequest
+	message        controlapi.Message
+	retry          controlapi.Retry
+	file           []byte
+	filePath       string
+	messageKey     string
+	retryKey       string
+	messageInput   controlapi.SendMessageRequest
+	messageCreated bool
+	retryCreated   bool
+	cleanupCalls   int
 }
 
 func (j *fakeJobs) AdmitDirect(_ context.Context, _ string, input controlapi.AdmitJobRequest) (controlapi.Job, bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	j.gotInput = input
 	return j.job, true, nil
 }
 
 func (j *fakeJobs) Get(_ context.Context, id string) (controlapi.Job, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	if id != j.job.ID {
 		return controlapi.Job{}, controlapi.ErrJobNotFound
 	}
 	return j.job, nil
 }
 
+func (j *fakeJobs) SendMessage(_ context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if jobID != j.job.ID {
+		return controlapi.Message{}, false, controlapi.ErrJobNotFound
+	}
+	j.messageKey = key
+	j.messageInput = input
+	return j.message, j.messageCreated, nil
+}
+
+func (j *fakeJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if jobID != j.job.ID || messageID != j.message.ID {
+		return controlapi.Message{}, controlapi.ErrMessageNotFound
+	}
+	return j.message, nil
+}
+
+func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry, bool, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if jobID != j.job.ID {
+		return controlapi.Retry{}, false, controlapi.ErrJobNotFound
+	}
+	j.retryKey = key
+	return j.retry, j.retryCreated, nil
+}
+
+func (j *fakeJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if len(j.job.Sandboxes) == 0 || sandboxID != j.job.Sandboxes[0].ID {
+		return nil, controlapi.ErrSandboxNotFound
+	}
+	j.filePath = path
+	return append([]byte(nil), j.file...), nil
+}
+
+func (j *fakeJobs) Evidence(_ context.Context, jobID string) ([]controlapi.Evidence, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if jobID != j.job.ID {
+		return nil, controlapi.ErrJobNotFound
+	}
+	return nil, nil
+}
+
 func (j *fakeJobs) RequestCleanup(_ context.Context, id string) (controlapi.Job, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.cleanupCalls++
 	if id != j.job.ID {
 		return controlapi.Job{}, controlapi.ErrJobNotFound
 	}

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
 	"github.com/aphronio/dorf/internal/controlauth"
@@ -38,7 +39,9 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := controlTestHandler(store, firstTasks, provider, auth)
+	fileBytes := []byte{0, 1, '\n', 255}
+	runtimes := controlTestRuntimes{profile: profileName, contents: fileBytes}
+	first := controlTestHandler(store, firstTasks, provider, auth, runtimes, blob.Store{Root: t.TempDir()})
 	redeem := controlTestRequest(t, first, http.MethodPost, "/v1/auth/enrollments/redeem", "", "", controlapi.RedeemRequest{
 		EnrollmentCode: enrollment.Token, ClientName: profileName, Credential: credential,
 	})
@@ -60,19 +63,69 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	}
 
 	restartedTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
-	restarted := controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store})
+	restarted := controlTestHandler(store, restartedTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
 	replay := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, input)
 	var replayed controlapi.Job
 	controlTestJSON(t, replay, http.StatusOK, &replayed)
 	afterReplay, err := store.Job(ctx, committed.ID)
-	if err != nil || replayed.ID != committed.ID || afterReplay.CurrentTaskID != committed.CurrentTaskID {
+	if err != nil || replayed.ID != committed.ID || replayed.InitialMessageID == "" || afterReplay.CurrentTaskID != committed.CurrentTaskID {
 		t.Fatalf("replay Job=%#v durable=%#v err=%v", replayed, afterReplay, err)
+	}
+	var problem controlapi.Problem
+
+	messageKey := fmt.Sprintf("control-message-%d", time.Now().UnixNano())
+	messageInput := controlapi.SendMessageRequest{Text: "continue before the initial Turn settles", Intent: "follow"}
+	early := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
+	var accepted controlapi.Message
+	controlTestJSON(t, early, http.StatusCreated, &accepted)
+	if accepted.JobID != committed.ID || accepted.Sequence != 2 || accepted.Delivery.State != "accepted" {
+		t.Fatalf("early Message=%#v", accepted)
+	}
+	replayedMessage := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, messageInput)
+	var sameMessage controlapi.Message
+	controlTestJSON(t, replayedMessage, http.StatusOK, &sameMessage)
+	if sameMessage.ID != accepted.ID {
+		t.Fatalf("replayed Message=%#v want ID %s", sameMessage, accepted.ID)
+	}
+	changedMessage := messageInput
+	changedMessage.Text = "different input"
+	messageConflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/messages", credential, messageKey, changedMessage)
+	controlTestJSON(t, messageConflict, http.StatusConflict, &problem)
+	if problem.Code != "idempotency_conflict" {
+		t.Fatalf("Message conflict=%#v", problem)
+	}
+
+	file := controlTestRequest(t, restarted, http.MethodGet, "/v1/sandboxes/"+replayed.Sandboxes[0].ID+"/files?path=result.bin", credential, "", nil)
+	if file.Code != http.StatusOK || !bytes.Equal(file.Body.Bytes(), fileBytes) {
+		t.Fatalf("Sandbox file status=%d bytes=%v", file.Code, file.Body.Bytes())
+	}
+	invalidFile := controlTestRequest(t, restarted, http.MethodGet, "/v1/sandboxes/"+replayed.Sandboxes[0].ID+"/files?path=../secret", credential, "", nil)
+	controlTestJSON(t, invalidFile, http.StatusUnprocessableEntity, &problem)
+	if problem.Code != "invalid_file_path" {
+		t.Fatalf("invalid file problem=%#v", problem)
+	}
+	missingFile := controlTestRequest(t, restarted, http.MethodGet, "/v1/sandboxes/missing-sandbox/files?path=result.bin", credential, "", nil)
+	controlTestJSON(t, missingFile, http.StatusNotFound, &problem)
+	if problem.Code != "sandbox_not_found" {
+		t.Fatalf("missing Sandbox problem=%#v", problem)
+	}
+	evidence := controlTestRequest(t, restarted, http.MethodGet, "/v1/jobs/"+committed.ID+"/evidence", credential, "", nil)
+	var retained controlapi.EvidenceList
+	controlTestJSON(t, evidence, http.StatusOK, &retained)
+	if retained.Evidence == nil || len(retained.Evidence) != 0 {
+		t.Fatalf("direct Job Evidence=%#v, want an explicit empty collection", retained)
+	}
+
+	retryKey := fmt.Sprintf("control-retry-%d", time.Now().UnixNano())
+	notEligible := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs/"+committed.ID+"/retries", credential, retryKey, nil)
+	controlTestJSON(t, notEligible, http.StatusConflict, &problem)
+	if problem.Code != "retry_unavailable" {
+		t.Fatalf("retry problem=%#v", problem)
 	}
 
 	changed := input
 	changed.Goal = "different input must conflict"
 	conflict := controlTestRequest(t, restarted, http.MethodPost, "/v1/jobs", credential, key, changed)
-	var problem controlapi.Problem
 	controlTestJSON(t, conflict, http.StatusConflict, &problem)
 	if problem.Code != "idempotency_conflict" {
 		t.Fatalf("conflict=%#v", problem)
@@ -85,11 +138,16 @@ func TestControlAPIPostgresReplayRestartAndCleanup(t *testing.T) {
 	if err != nil || cleaning.Admission.Open || cleaning.Cleanup.State != "running" || cleaningFact.CurrentTaskID == committed.CurrentTaskID {
 		t.Fatalf("cleanup view=%#v durable=%#v err=%v", cleaning, cleaningFact, err)
 	}
+	fencedFile := controlTestRequest(t, restarted, http.MethodGet, "/v1/sandboxes/"+replayed.Sandboxes[0].ID+"/files?path=result.bin", credential, "", nil)
+	controlTestJSON(t, fencedFile, http.StatusConflict, &problem)
+	if problem.Code != "file_unavailable" {
+		t.Fatalf("cleanup-fenced file problem=%#v", problem)
+	}
 
 	// Recreate the API and Absurd client again: cleanup remains one durable
 	// request and one attached task rather than being rescheduled.
 	finalTasks := controlTestTasks(t, store.DB, firstTasks.QueueName(), false)
-	finalHandler := controlTestHandler(store, finalTasks, provider, controlauth.Service{Store: store})
+	finalHandler := controlTestHandler(store, finalTasks, provider, controlauth.Service{Store: store}, runtimes, blob.Store{Root: t.TempDir()})
 	repeated := controlTestRequest(t, finalHandler, http.MethodPut, "/v1/jobs/"+committed.ID+"/cleanup", credential, "", nil)
 	controlTestJSON(t, repeated, http.StatusOK, &cleaning)
 	finalFact, err := store.Job(ctx, committed.ID)
@@ -189,9 +247,25 @@ func controlTestGateway(t *testing.T) gateway.Gateway {
 	return gateway.Gateway{StatePath: state, Client: server.Client()}
 }
 
-func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service) http.Handler {
+func controlTestHandler(store postgres.Store, tasks *absurd.Client, provider gateway.Gateway, auth controlauth.Service, runtimes core.SandboxRuntimeResolver, evidence blob.Store) http.Handler {
 	return controlapi.NewServer(controlapi.Discovery{Product: "dorf"}, auth,
-		controlAPIJobs{store: store, tasks: tasks, gateway: provider}).Handler
+		controlAPIJobs{store: store, tasks: tasks, gateway: provider, runtimes: runtimes, evidence: evidence}).Handler
+}
+
+type controlTestRuntimes struct {
+	profile  string
+	contents []byte
+}
+
+func (r controlTestRuntimes) ResolveSandbox(_ context.Context, profile string) (core.SandboxRuntime, error) {
+	if profile != r.profile {
+		return core.SandboxRuntime{}, fmt.Errorf("unexpected Sandbox profile %q", profile)
+	}
+	return core.SandboxRuntime{SandboxProfile: r.profile, Files: r}, nil
+}
+
+func (r controlTestRuntimes) ReadSandboxFile(context.Context, core.Job, core.Sandbox, string) ([]byte, error) {
+	return append([]byte(nil), r.contents...), nil
 }
 
 func controlTestRequest(t *testing.T, handler http.Handler, method, path, credential, key string, input any) *httptest.ResponseRecorder {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,7 +28,7 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}}
 	jobs := &remoteCLIJobs{job: controlapi.Job{
 		ID: "job-1", Kind: "direct", Goal: "prove remote control", Profile: "default",
-		Model: "model-1", Reasoning: "high", Admission: controlapi.Admission{Open: true},
+		Model: "model-1", Reasoning: "high", InitialMessageID: "message-1", Admission: controlapi.Admission{Open: true},
 		Execution: controlapi.State{State: "idle"}, Cleanup: controlapi.State{State: "not_requested"},
 		Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "main"}},
 	}}
@@ -36,15 +37,24 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	}, auth, jobs)
 	originalTransport := http.DefaultTransport
 	var admissionAttempts []string
+	var messageAttempts, retryAttempts []string
 	http.DefaultTransport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		lostAdmissionResponse := false
+		lostResponse := false
 		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs" {
 			admissionAttempts = append(admissionAttempts, request.Header.Get("Idempotency-Key"))
-			lostAdmissionResponse = len(admissionAttempts) == 1
+			lostResponse = len(admissionAttempts) == 1
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs/job-1/messages" {
+			messageAttempts = append(messageAttempts, request.Header.Get("Idempotency-Key"))
+			lostResponse = len(messageAttempts) == 1
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/v1/jobs/job-1/retries" {
+			retryAttempts = append(retryAttempts, request.Header.Get("Idempotency-Key"))
+			lostResponse = len(retryAttempts) == 1
 		}
 		response := httptest.NewRecorder()
 		api.Handler.ServeHTTP(response, request)
-		if lostAdmissionResponse {
+		if lostResponse {
 			return nil, errors.New("simulated lost response after commit")
 		}
 		return response.Result(), nil
@@ -59,10 +69,15 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	t.Setenv("DORF_GITHUB_API_URL", "deliberately-invalid-host-configuration")
 	enrollmentFile := filepath.Join(root, "enrollment")
 	goalFile := filepath.Join(root, "goal")
+	messageFile := filepath.Join(root, "message")
+	download := filepath.Join(root, "REPORT.md")
 	if err := os.WriteFile(enrollmentFile, []byte("one-time-code\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(goalFile, []byte(jobs.job.Goal), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(messageFile, []byte("continue with exact evidence"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,6 +86,11 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 		{"auth", "status"},
 		{"run", "--goal-file", goalFile, "--model", jobs.job.Model},
 		{"job", "inspect", jobs.job.ID},
+		{"job", "message", "--input-file", messageFile, jobs.job.ID},
+		{"job", "message", "inspect", jobs.job.ID, "message-2"},
+		{"job", "retry", jobs.job.ID},
+		{"job", "evidence", jobs.job.ID},
+		{"sandbox", "file", "get", "sandbox-1", "REPORT.md", "--output", download},
 		{"job", "cleanup", jobs.job.ID},
 	}
 	var output strings.Builder
@@ -99,10 +119,18 @@ func TestRemoteCLIJourneyRunsBeforeHostDeploymentComposition(t *testing.T) {
 	if requestKey == "" || len(admissionAttempts) != 2 || admissionAttempts[0] != requestKey || admissionAttempts[1] != requestKey {
 		t.Fatalf("automatic admission attempts=%q, want the same generated identity twice", admissionAttempts)
 	}
-	if !strings.Contains(output.String(), "Job job-1 accepted") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
+	if len(messageAttempts) != 2 || messageAttempts[0] == "" || messageAttempts[0] != messageAttempts[1] ||
+		len(retryAttempts) != 2 || retryAttempts[0] == "" || retryAttempts[0] != retryAttempts[1] {
+		t.Fatalf("mutation replay keys message=%q retry=%q", messageAttempts, retryAttempts)
+	}
+	if contents, err := os.ReadFile(download); err != nil || string(contents) != "exact report\x00\n" {
+		t.Fatalf("downloaded exact Sandbox file=%q err=%v", contents, err)
+	}
+	if !strings.Contains(output.String(), "Job job-1 accepted") || !strings.Contains(output.String(), "Message message-2 accepted") ||
+		!strings.Contains(output.String(), "Retry scheduled") || !strings.Contains(output.String(), "Cleanup requested for Job job-1") {
 		t.Fatalf("remote CLI journey output omitted its Job result:\n%s", output.String())
 	}
-	for _, secret := range []string{code, credential, requestKey} {
+	for _, secret := range []string{code, credential, requestKey, messageAttempts[0], retryAttempts[0]} {
 		if secret != "" && strings.Contains(output.String(), secret) {
 			t.Fatalf("remote CLI output leaked %q:\n%s", secret, output.String())
 		}
@@ -181,12 +209,62 @@ func TestPublicJobStatesKeepCleanupTruthSeparateFromExecution(t *testing.T) {
 	}
 }
 
+func TestPublicMessageDeliveryStatesDoNotExposeAgentRunLifecycle(t *testing.T) {
+	tests := map[core.AgentRunState]string{
+		core.AgentRunPending: "accepted", core.AgentRunSubmitting: "accepted",
+		core.AgentRunActive: "running", core.AgentRunUncertain: "running",
+		core.AgentRunCompleted: "completed", core.AgentRunFailed: "failed", core.AgentRunInterrupted: "failed",
+	}
+	for internal, want := range tests {
+		got, err := publicMessageDeliveryState(internal)
+		if err != nil || got != want {
+			t.Fatalf("internal state %q projected as %q, want %q: %v", internal, got, want, err)
+		}
+	}
+	if _, err := publicMessageDeliveryState("future-state"); err == nil {
+		t.Fatal("unknown internal delivery state crossed the public API")
+	}
+}
+
 func TestAdmissionRetryUsesHTTPFailureClass(t *testing.T) {
 	background := context.Background()
 	ingress5xx := &controlclient.ProblemError{Problem: controlapi.Problem{Status: http.StatusBadGateway}}
 	definitive4xx := &controlclient.ProblemError{Problem: controlapi.Problem{Status: http.StatusBadRequest, Retryable: true}}
-	if !retryableAdmissionError(background, ingress5xx) || retryableAdmissionError(background, definitive4xx) || retryableAdmissionError(background, context.Canceled) {
+	if !retryableMutationError(background, ingress5xx) || retryableMutationError(background, definitive4xx) || retryableMutationError(background, context.Canceled) {
 		t.Fatal("admission retry must accept every 5xx and reject 4xx or cancellation")
+	}
+}
+
+func TestRemoteJobWatchWritesOneSnapshotPerJSONLLine(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &cancelAtEOF{reader: strings.NewReader("event: snapshot\nid: snapshot-1\ndata: {\"id\":\"job-watch\"}\n\n"), cancel: cancel}
+	client, err := controlclient.New("https://dorf.example.test", "credential", roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/v1/jobs/job-watch/watch" || request.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("watch request path=%q accept=%q", request.URL.Path, request.Header.Get("Accept"))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: body}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	if err := remoteJobWatch(ctx, client, []string{"--output", "jsonl", "job-watch"}, &stdout, &stderr); err != nil {
+		t.Fatalf("watch: %v stderr=%s", err, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], `"id":"job-watch"`) {
+		t.Fatalf("JSONL output=%q", stdout.String())
+	}
+}
+
+func TestRemoteMessageHumanOutputQuotesHarnessControlBytes(t *testing.T) {
+	var output strings.Builder
+	renderRemoteMessage(&output, controlapi.Message{
+		Delivery: controlapi.State{State: "completed"},
+		Result:   &controlapi.MessageResult{Outcome: "completed", Output: "safe\x1b]52;bad\rrewritten"},
+	})
+	if strings.ContainsRune(output.String(), '\x1b') || !strings.Contains(output.String(), `\x1b`) || !strings.Contains(output.String(), `\r`) {
+		t.Fatalf("human Message output did not quote control bytes: %q", output.String())
 	}
 }
 
@@ -207,6 +285,21 @@ type remoteCLIAuth struct {
 	code, name, credential string
 	revoked, rejectRedeem  bool
 }
+
+type cancelAtEOF struct {
+	reader io.Reader
+	cancel context.CancelFunc
+}
+
+func (r *cancelAtEOF) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.cancel()
+	}
+	return n, err
+}
+
+func (r *cancelAtEOF) Close() error { return nil }
 
 func (a *remoteCLIAuth) Redeem(_ context.Context, code, name, credential string) (controlauth.Client, bool, error) {
 	a.mu.Lock()
@@ -265,4 +358,42 @@ func (j *remoteCLIJobs) RequestCleanup(_ context.Context, id string) (controlapi
 	}
 	j.job.Cleanup.State = "requested"
 	return j.job, nil
+}
+
+func (j *remoteCLIJobs) SendMessage(_ context.Context, jobID, _ string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+	if jobID != j.job.ID {
+		return controlapi.Message{}, false, controlapi.ErrJobNotFound
+	}
+	return controlapi.Message{
+		ID: "message-2", JobID: jobID, Sequence: 2, Intent: input.Intent,
+		Delivery: controlapi.State{State: "pending"}, AdmittedAt: time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
+	}, true, nil
+}
+
+func (j *remoteCLIJobs) GetMessage(_ context.Context, jobID, messageID string) (controlapi.Message, error) {
+	if jobID != j.job.ID || messageID != "message-2" {
+		return controlapi.Message{}, controlapi.ErrMessageNotFound
+	}
+	return controlapi.Message{ID: messageID, JobID: jobID, Sequence: 2, Intent: "follow", Delivery: controlapi.State{State: "completed"}}, nil
+}
+
+func (j *remoteCLIJobs) Retry(_ context.Context, jobID, _ string) (controlapi.Retry, bool, error) {
+	if jobID != j.job.ID {
+		return controlapi.Retry{}, false, controlapi.ErrJobNotFound
+	}
+	return controlapi.Retry{JobID: jobID, State: "scheduled"}, true, nil
+}
+
+func (j *remoteCLIJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
+	if sandboxID != "sandbox-1" || path != "REPORT.md" {
+		return nil, controlapi.ErrFileNotFound
+	}
+	return []byte("exact report\x00\n"), nil
+}
+
+func (j *remoteCLIJobs) Evidence(_ context.Context, jobID string) ([]controlapi.Evidence, error) {
+	if jobID != j.job.ID {
+		return nil, controlapi.ErrJobNotFound
+	}
+	return []controlapi.Evidence{}, nil
 }

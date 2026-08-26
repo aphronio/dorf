@@ -230,8 +230,8 @@ activation. Humans must be able to inspect, edit, fork, pin, and roll back what 
 
 Native workflows compose the intended Core contract in-process. External-client surfaces project
 only the operations their real use has earned; the first such projection covers direct Job
-admission, inspection, and requested cleanup through one configured deployment. Public workflow
-compatibility, thin SDKs, MCP, a control-plane UI, and named multi-deployment contexts remain
+admission, interaction, inspection, and requested cleanup through one configured deployment. Public
+workflow compatibility, thin SDKs, MCP, a control-plane UI, and named multi-deployment contexts remain
 uncommitted. Dynamic agent-authored recipes are a later UX layer, not the requirements driver for
 Core. Dorf does not become a generic automation canvas, graph framework, agent builder, or
 model/tool Harness.

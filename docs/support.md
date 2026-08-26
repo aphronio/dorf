@@ -47,6 +47,12 @@ issue a new Enrollment. If admission succeeds but a Job does not progress, inspe
 supervised worker on the deployment host. The remote client must not repair host services, Profiles,
 integrations, or storage.
 
+A watch reconnecting after API interruption is expected; its next value is a canonical snapshot,
+not replay from an event log. `steer_unavailable` means the exact active Turn no longer exists and
+must not be resent as Follow. `retry_unavailable` means there is no eligible failed execution.
+`file_unavailable` after cleanup begins is expected. `evidence_unverified` or a file digest mismatch
+is a Dorf control-path integrity failure.
+
 Ownership guide:
 
 - a minimal Incus command failing outside Dorf is an Incus or host-distribution problem;
@@ -62,6 +68,7 @@ Ownership guide:
 - another OS or architecture is unsupported, not silently equivalent.
 
 Never attach Enrollment codes, Client configuration, Provider Gateway state, credentials,
-environment dumps, Harness transcript contents, or complete inspection output to a report. Both
-local and remote Job inspection include the caller's full goal. Report only the needed Job ID and
-reviewed state, attention, and cleanup facts; redact caller input first.
+environment dumps, Harness transcript contents, complete inspection output, watch snapshots, or
+Message output to a report. Those surfaces may contain the caller's full goal or agent output.
+Report only the needed Job ID and reviewed state, attention, and cleanup facts; redact caller input
+first.

@@ -12,7 +12,7 @@ and proof, not release availability.
 | Slice | Status |
 | --- | --- |
 | 1 — One authenticated remote direct Job | Delivered and dogfood-proven on 2026-08-26 |
-| 2 — Complete the direct Job interaction loop | Planned |
+| 2 — Complete the direct Job interaction loop | Delivered and dogfood-proven on 2026-08-26 |
 | 3 — Typed workflow admission | Planned |
 | 4 — Automation-quality contract and operations | Planned |
 
@@ -116,6 +116,8 @@ UI in this slice.
 
 ## Slice 2 — Complete the direct Job interaction loop
 
+**Status:** Delivered and dogfood-proven on 2026-08-26.
+
 **Client result:** A remote person or agent can watch a Job, send follow and steer Messages, retry
 eligible failed work, retrieve an exact Sandbox file, inspect Evidence, and request cleanup using
 stable machine output.
@@ -124,9 +126,27 @@ This slice proves snapshot observation and reconnect, invariant Message semantic
 file bytes, typed recovery guidance, and idempotent lifecycle mutations. The stream remains a view of
 canonical Job snapshots rather than a second durable event system.
 
-The proof must include an early follow, exact-active-Turn steer with no fallback, reconnect after a
-stream interruption, binary file fidelity, read refusal after cleanup begins, and a recovery path
-whose machine response does not require parsing prose.
+The real HTTPS proof admitted an early follow that later completed on the retained Thread, steered
+one exact active Turn, and received typed `steer_unavailable` after that Turn became terminal rather
+than creating a fallback Turn. A JSONL watch reconnected after the API process restarted and
+continued from canonical snapshots. The remote client downloaded a real five-byte Sandbox file and
+independently matched its SHA-256 digest; cleanup immediately returned typed `file_unavailable`, then
+durably revoked the model route, deleted the Sandbox, and completed. Explicit retry returned typed
+`retry_unavailable` when no failed execution was eligible, while the live PostgreSQL fault proof
+covered successful caller-keyed retry and exact replay. The direct Job truthfully returned no
+Evidence; nonempty verified Evidence remains part of Slice 3's coding proof. The proof Client was
+revoked, its next request was denied, and all temporary credentials, services, tunnel, and Sandbox
+resources were removed.
+
+The final simplification pass removed the old non-atomic retry path, the former Job-scoped file
+grammar, a duplicate Message-observation seam, direct-only policy from Sandbox reads, leaked
+Task-adjacent response fields, and redundant transport tests. From the Slice 1 checkpoint, the final
+delta is: handwritten production Go `+1,411/-133`, authored SQL `+23/-0`, generated Go
+`+70/-0`, tests `+736/-46`, and documentation `+175/-97`. The remaining code
+earns its keep by owning the canonical snapshot stream, typed public representations, exact-byte
+verification, invariant Message translation, and atomic caller-keyed retry. Snapshot polling and
+whole-file buffering are accepted current pressure; file writes/listing, an event log, OpenAPI, and
+the complete error catalog remain outside this slice.
 
 Do not add file writes, listing, archives, webhooks, or an externally replayable event log.
 

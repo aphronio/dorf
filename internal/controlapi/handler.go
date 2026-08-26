@@ -1,11 +1,16 @@
 package controlapi
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -16,8 +21,12 @@ import (
 )
 
 const (
-	maxBodyBytes   = 8 << 20
-	maxHeaderBytes = 32 << 10
+	maxBodyBytes           = 8 << 20
+	maxHeaderBytes         = 32 << 10
+	watchPollInterval      = time.Second
+	watchKeepaliveInterval = 15 * time.Second
+	watchWriteTimeout      = 10 * time.Second
+	watchAuthenticationTTL = time.Minute
 )
 
 type handler struct {
@@ -26,16 +35,23 @@ type handler struct {
 	jobs      Jobs
 	mux       *http.ServeMux
 	redeem    redemptionLimiter
+	shutdown  context.Context
 }
 
-func newHandler(discovery Discovery, auth Auth, jobs Jobs) http.Handler {
-	h := &handler{discovery: discovery, auth: auth, jobs: jobs, mux: http.NewServeMux()}
+func newHandlerContext(discovery Discovery, auth Auth, jobs Jobs, shutdown context.Context) http.Handler {
+	h := &handler{discovery: discovery, auth: auth, jobs: jobs, mux: http.NewServeMux(), shutdown: shutdown}
 	h.mux.HandleFunc("/v1", h.discoveryRoute)
 	h.mux.HandleFunc("/v1/auth/enrollments/redeem", h.redeemRoute)
 	h.mux.HandleFunc("/v1/me", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs", h.protectedRoute)
+	h.mux.HandleFunc("/v1/jobs/{job}/watch", h.protectedRoute)
+	h.mux.HandleFunc("/v1/jobs/{job}/messages", h.protectedRoute)
+	h.mux.HandleFunc("/v1/jobs/{job}/messages/{message}", h.protectedRoute)
+	h.mux.HandleFunc("/v1/jobs/{job}/retries", h.protectedRoute)
+	h.mux.HandleFunc("/v1/jobs/{job}/evidence", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs/{job}/cleanup", h.protectedRoute)
 	h.mux.HandleFunc("/v1/jobs/{job}", h.protectedRoute)
+	h.mux.HandleFunc("/v1/sandboxes/{sandbox}/files", h.protectedRoute)
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		h.fail(w, problem(http.StatusNotFound, "not_found", "Resource not found"))
 	})
@@ -43,15 +59,18 @@ func newHandler(discovery Discovery, auth Auth, jobs Jobs) http.Handler {
 }
 
 func NewServer(discovery Discovery, auth Auth, jobs Jobs) *http.Server {
-	return &http.Server{Handler: newHandler(discovery, auth, jobs), ReadHeaderTimeout: 10 * time.Second,
+	shutdown, cancel := context.WithCancel(context.Background())
+	server := &http.Server{Handler: newHandlerContext(discovery, auth, jobs, shutdown), ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: maxHeaderBytes}
+	server.RegisterOnShutdown(cancel)
+	return server
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "no-store, no-transform")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	clean := path.Clean(r.URL.Path)
-	if r.URL.RawQuery != "" || r.URL.Path == "" || clean != r.URL.Path || strings.Contains(strings.ToLower(r.URL.EscapedPath()), "%2f") {
+	if r.URL.Path == "" || clean != r.URL.Path || strings.Contains(strings.ToLower(r.URL.EscapedPath()), "%2f") {
 		h.fail(w, problem(http.StatusNotFound, "not_found", "Resource not found"))
 		return
 	}
@@ -163,26 +182,82 @@ func (h *handler) protectedRoute(w http.ResponseWriter, r *http.Request) {
 		if !h.exact(w, r, http.MethodPost, true) {
 			return
 		}
-		keys := r.Header.Values("Idempotency-Key")
-		if len(keys) != 1 || keys[0] != strings.TrimSpace(keys[0]) || keys[0] == "" || len(keys[0]) > 255 {
-			h.fail(w, problem(http.StatusBadRequest, "idempotency_key_required", "Exactly one valid Idempotency-Key is required"))
+		key, ok := h.idempotencyKey(w, r)
+		if !ok {
 			return
 		}
 		var input AdmitJobRequest
 		if !h.decode(w, r, &input) {
 			return
 		}
-		job, created, err := h.jobs.AdmitDirect(r.Context(), keys[0], input)
+		job, created, err := h.jobs.AdmitDirect(r.Context(), key, input)
 		if err != nil {
 			h.serviceError(w, r, err)
 			return
 		}
 		h.reply(w, createdStatus(created), job)
+	case "/v1/jobs/{job}/watch":
+		h.watchRoute(w, r, client.CredentialExpiresAt)
+	case "/v1/jobs/{job}/messages":
+		if !h.exact(w, r, http.MethodPost, true) {
+			return
+		}
+		key, ok := h.idempotencyKey(w, r)
+		if !ok {
+			return
+		}
+		var input SendMessageRequest
+		if !h.decode(w, r, &input) {
+			return
+		}
+		message, created, err := h.jobs.SendMessage(r.Context(), r.PathValue("job"), key, input)
+		if err != nil {
+			h.serviceError(w, r, err)
+			return
+		}
+		h.reply(w, createdStatus(created), message)
+	case "/v1/jobs/{job}/messages/{message}":
+		if h.exact(w, r, http.MethodGet, false) {
+			message, err := h.jobs.GetMessage(r.Context(), r.PathValue("job"), r.PathValue("message"))
+			if err != nil {
+				h.serviceError(w, r, err)
+				return
+			}
+			h.reply(w, http.StatusOK, message)
+		}
+	case "/v1/jobs/{job}/retries":
+		if !h.exact(w, r, http.MethodPost, false) {
+			return
+		}
+		key, ok := h.idempotencyKey(w, r)
+		if !ok {
+			return
+		}
+		retry, created, err := h.jobs.Retry(r.Context(), r.PathValue("job"), key)
+		if err != nil {
+			h.serviceError(w, r, err)
+			return
+		}
+		h.reply(w, createdStatus(created), retry)
+	case "/v1/jobs/{job}/evidence":
+		if h.exact(w, r, http.MethodGet, false) {
+			evidence, err := h.jobs.Evidence(r.Context(), r.PathValue("job"))
+			if err != nil {
+				h.serviceError(w, r, err)
+				return
+			}
+			if evidence == nil {
+				evidence = []Evidence{}
+			}
+			h.reply(w, http.StatusOK, EvidenceList{Evidence: evidence})
+		}
 	case "/v1/jobs/{job}/cleanup":
 		if h.exact(w, r, http.MethodPut, false) {
 			job, err := h.jobs.RequestCleanup(r.Context(), r.PathValue("job"))
 			h.jobResponse(w, r, job, err)
 		}
+	case "/v1/sandboxes/{sandbox}/files":
+		h.fileRoute(w, r)
 	default:
 		if h.exact(w, r, http.MethodGet, false) {
 			job, err := h.jobs.Get(r.Context(), r.PathValue("job"))
@@ -196,13 +271,32 @@ func (h *handler) jobResponse(w http.ResponseWriter, r *http.Request, job Job, e
 		h.serviceError(w, r, err)
 		return
 	}
-	h.reply(w, http.StatusOK, job)
+	body, id, err := jobRepresentation(job)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	etag := `"` + id + `"`
+	w.Header().Set("ETag", etag)
+	if r.Method == http.MethodGet && ifNoneMatch(r.Header.Values("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	h.replyJSON(w, http.StatusOK, body)
 }
 
 func (h *handler) exact(w http.ResponseWriter, r *http.Request, method string, hasJSON bool) bool {
 	if r.Method != method {
 		w.Header().Set("Allow", method)
 		h.fail(w, problem(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		return false
+	}
+	if r.URL.RawQuery != "" {
+		h.fail(w, problem(http.StatusBadRequest, "invalid_query", "This operation does not accept query parameters"))
+		return false
+	}
+	if method != http.MethodGet && hasConditionalHeader(r) {
+		h.fail(w, problem(http.StatusBadRequest, "unsupported_precondition", "Conditional headers are not supported for this mutation"))
 		return false
 	}
 	contentTypes := r.Header.Values("Content-Type")
@@ -215,6 +309,214 @@ func (h *handler) exact(w http.ResponseWriter, r *http.Request, method string, h
 		return false
 	}
 	return true
+}
+
+func (h *handler) idempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	keys := r.Header.Values("Idempotency-Key")
+	if len(keys) != 1 || keys[0] != strings.TrimSpace(keys[0]) || keys[0] == "" || len(keys[0]) > 255 {
+		h.fail(w, problem(http.StatusBadRequest, "idempotency_key_required", "Exactly one valid Idempotency-Key is required"))
+		return "", false
+	}
+	return keys[0], true
+}
+
+func (h *handler) watchRoute(w http.ResponseWriter, r *http.Request, credentialExpiresAt time.Time) {
+	if !h.exact(w, r, http.MethodGet, false) {
+		return
+	}
+	accept := r.Header.Values("Accept")
+	if len(accept) != 1 || accept[0] != "text/event-stream" {
+		h.fail(w, problem(http.StatusNotAcceptable, "not_acceptable", "Accept must be text/event-stream"))
+		return
+	}
+	lastIDs := r.Header.Values("Last-Event-ID")
+	if len(lastIDs) > 1 || len(lastIDs) == 1 && lastIDs[0] != strings.TrimSpace(lastIDs[0]) {
+		h.fail(w, problem(http.StatusBadRequest, "invalid_last_event_id", "Last-Event-ID must be one exact representation identifier"))
+		return
+	}
+	lastID := ""
+	if len(lastIDs) == 1 {
+		lastID = lastIDs[0]
+		decoded, err := hex.DecodeString(lastID)
+		if err != nil || len(decoded) != sha256.Size {
+			h.fail(w, problem(http.StatusBadRequest, "invalid_last_event_id", "Last-Event-ID must be one exact representation identifier"))
+			return
+		}
+	}
+	authenticationDeadline := time.Now().Add(watchAuthenticationTTL)
+	if !credentialExpiresAt.IsZero() && credentialExpiresAt.Before(authenticationDeadline) {
+		authenticationDeadline = credentialExpiresAt
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), authenticationDeadline)
+	stopShutdown := context.AfterFunc(h.shutdown, cancel)
+	defer stopShutdown()
+	defer cancel()
+
+	controller := http.NewResponseController(w)
+	job, err := h.jobs.Get(ctx, r.PathValue("job"))
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		h.serviceError(w, r, err)
+		return
+	}
+	body, currentID, err := jobRepresentation(job)
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	if err := controller.SetWriteDeadline(time.Now().Add(watchWriteTimeout)); err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if lastID != currentID {
+		if err := writeSnapshot(w, controller, currentID, body); err != nil {
+			return
+		}
+		lastID = currentID
+	} else if err := streamWrite(controller, controller.Flush); err != nil {
+		return
+	}
+
+	poll := time.NewTicker(watchPollInterval)
+	keepalive := time.NewTicker(watchKeepaliveInterval)
+	defer poll.Stop()
+	defer keepalive.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			if err := streamWrite(controller, func() error {
+				if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+					return err
+				}
+				return controller.Flush()
+			}); err != nil {
+				return
+			}
+		case <-poll.C:
+			job, err := h.jobs.Get(ctx, r.PathValue("job"))
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("Dorf control API watch stopped: path=%q error_type=%T", r.URL.Path, err)
+				return
+			}
+			body, currentID, err := jobRepresentation(job)
+			if err != nil {
+				log.Printf("Dorf control API watch stopped: path=%q error_type=%T", r.URL.Path, err)
+				return
+			}
+			if currentID == lastID {
+				continue
+			}
+			if err := writeSnapshot(w, controller, currentID, body); err != nil {
+				return
+			}
+			lastID = currentID
+		}
+	}
+}
+
+func writeSnapshot(w io.Writer, controller *http.ResponseController, id string, body []byte) error {
+	return streamWrite(controller, func() error {
+		if _, err := io.WriteString(w, "event: snapshot\nid: "+id+"\ndata: "); err != nil {
+			return err
+		}
+		if _, err := w.Write(body); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, "\n\n"); err != nil {
+			return err
+		}
+		return controller.Flush()
+	})
+}
+
+func streamWrite(controller *http.ResponseController, write func() error) error {
+	if err := controller.SetWriteDeadline(time.Now().Add(watchWriteTimeout)); err != nil {
+		return err
+	}
+	writeErr := write()
+	clearErr := controller.SetWriteDeadline(time.Time{})
+	if writeErr != nil {
+		return writeErr
+	}
+	return clearErr
+}
+
+func (h *handler) fileRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		h.fail(w, problem(http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed"))
+		return
+	}
+	if contentTypes := r.Header.Values("Content-Type"); len(contentTypes) != 0 || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+		h.fail(w, problem(http.StatusUnsupportedMediaType, "body_not_allowed", "This operation does not accept a body or Content-Type"))
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		h.fail(w, problem(http.StatusBadRequest, "invalid_query", "Sandbox file query is invalid"))
+		return
+	}
+	paths, found := query["path"]
+	if !found || len(paths) == 0 || paths[0] == "" {
+		h.fail(w, problem(http.StatusBadRequest, "file_path_required", "Exactly one path query parameter is required"))
+		return
+	}
+	if len(query) != 1 || len(paths) != 1 {
+		h.fail(w, problem(http.StatusBadRequest, "invalid_query", "Sandbox file accepts only one path query parameter"))
+		return
+	}
+	contents, err := h.jobs.ReadSandboxFile(r.Context(), r.PathValue("sandbox"), paths[0])
+	if err != nil {
+		h.serviceError(w, r, err)
+		return
+	}
+	digest := sha256.Sum256(contents)
+	w.Header().Set("Content-Digest", "sha-256=:"+base64.StdEncoding.EncodeToString(digest[:])+":")
+	w.Header().Set("Content-Length", strconv.Itoa(len(contents)))
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(contents)
+}
+
+func jobRepresentation(job Job) ([]byte, string, error) {
+	body, err := json.Marshal(job)
+	if err != nil {
+		return nil, "", err
+	}
+	digest := sha256.Sum256(body)
+	return body, hex.EncodeToString(digest[:]), nil
+}
+
+func ifNoneMatch(values []string, etag string) bool {
+	target := strings.TrimPrefix(etag, "W/")
+	for _, value := range values {
+		for candidate := range strings.SplitSeq(value, ",") {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "*" || strings.TrimPrefix(candidate, "W/") == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasConditionalHeader(r *http.Request) bool {
+	for _, name := range []string{"If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range"} {
+		if len(r.Header.Values(name)) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) decode(w http.ResponseWriter, r *http.Request, output any) bool {
@@ -254,8 +556,27 @@ func (h *handler) serviceError(w http.ResponseWriter, r *http.Request, err error
 		value = problem(http.StatusUnprocessableEntity, "invalid_input", "Input could not be accepted")
 	case errors.Is(err, ErrJobNotFound):
 		value = problem(http.StatusNotFound, "job_not_found", "Job not found")
+	case errors.Is(err, ErrMessageNotFound):
+		value = problem(http.StatusNotFound, "message_not_found", "Message not found")
+	case errors.Is(err, ErrSandboxNotFound):
+		value = problem(http.StatusNotFound, "sandbox_not_found", "Sandbox not found")
+	case errors.Is(err, ErrInvalidFilePath):
+		value = problem(http.StatusUnprocessableEntity, "invalid_file_path", "Sandbox file path must be clean and workspace-relative")
+	case errors.Is(err, ErrFileNotFound):
+		value = problem(http.StatusNotFound, "file_not_found", "Sandbox file not found")
+	case errors.Is(err, ErrFileUnavailable):
+		value = problem(http.StatusConflict, "file_unavailable", "Sandbox file is unavailable")
+	case errors.Is(err, ErrSteerUnavailable):
+		value = problem(http.StatusConflict, "steer_unavailable", "No exact active delivery can accept a steer")
+	case errors.Is(err, ErrMessageUnavailable):
+		value = problem(http.StatusConflict, "message_unavailable", "The Job cannot accept this Message")
+	case errors.Is(err, ErrRetryUnavailable):
+		value = problem(http.StatusConflict, "retry_unavailable", "The Job has no eligible failed execution to retry")
+	case errors.Is(err, ErrEvidenceUnverified):
+		log.Printf("Dorf control API Evidence verification failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
+		value = problem(http.StatusInternalServerError, "evidence_unverified", "Retained Evidence could not be verified")
 	case errors.Is(err, ErrIdempotencyConflict):
-		value = problem(http.StatusConflict, "idempotency_conflict", "Idempotency-Key is bound to different Job input")
+		value = problem(http.StatusConflict, "idempotency_conflict", "Idempotency-Key is bound to different input")
 	default:
 		log.Printf("Dorf control API internal failure: method=%s path=%q error_type=%T", r.Method, r.URL.Path, err)
 		value = problem(http.StatusInternalServerError, "internal_error", "The request could not be completed")
@@ -273,6 +594,12 @@ func (h *handler) reply(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func (h *handler) replyJSON(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 func (h *handler) fail(w http.ResponseWriter, value Problem) {

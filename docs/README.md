@@ -12,7 +12,7 @@
 | Understand accepted choices | [Decision log](project/decisions.md) |
 | Operate the Provider Gateway | [Provider Gateway](project/provider-gateway.md) |
 | Operate the persistent Buzz deployment | [Buzz deployment](implementation/buzz.md) |
-| Review delivered Slice 1 and planned remote-client scope | [Remote Control API design](implementation/control-api-design.md) |
+| Review delivered Slices 1–2 and planned remote-client scope | [Remote Control API design](implementation/control-api-design.md) |
 | Implement that boundary in vertical slices | [Remote Control API slices](implementation/control-api-slices.md) |
 
 Material under `docs/research/` is archival, non-normative exploration. Material under

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -52,18 +51,27 @@ func TestRetryFailedJobSchedulesOneMoreAttemptOnSameTask(t *testing.T) {
 	if err != nil || failed == nil || failed.State != absurd.TaskFailed {
 		t.Fatalf("failed task=%#v err=%v", failed, err)
 	}
-	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID)
+	requestKey := "retry-request-" + job.ID
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.JobID != job.ID || receipt.TaskID != job.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 {
+	if receipt.RequestKey != requestKey || receipt.JobID != job.ID || receipt.TaskID != job.CurrentTaskID || receipt.Retry != "scheduled" || receipt.RunID == "" || receipt.Attempt != 2 || !receipt.Created {
 		t.Fatalf("retry receipt=%#v", receipt)
+	}
+	replayed, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey)
+	if err != nil || replayed.RequestKey != receipt.RequestKey || replayed.JobID != receipt.JobID || replayed.TaskID != receipt.TaskID || replayed.RunID != receipt.RunID || replayed.Attempt != receipt.Attempt || replayed.Created {
+		t.Fatalf("retry replay=%#v original=%#v err=%v", replayed, receipt, err)
+	}
+	other := admitFaultJob(t, store, fmt.Sprintf("retry-conflict-%d", time.Now().UnixNano()))
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, other.ID, requestKey); !errors.Is(err, core.ErrRetryReplayConflict) {
+		t.Fatalf("changed Job replay error=%v", err)
 	}
 	pending, err := client.FetchTaskResult(ctx, queueName, job.CurrentTaskID)
 	if err != nil || pending == nil || pending.State != absurd.TaskPending {
 		t.Fatalf("scheduled task=%#v err=%v", pending, err)
 	}
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err == nil || !strings.Contains(err.Error(), "not currently failed") {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, requestKey+"-new"); !errors.Is(err, core.ErrRetryNotEligible) {
 		t.Fatalf("non-failed retry error=%v", err)
 	}
 	after, err := store.Job(ctx, job.ID)
@@ -125,7 +133,7 @@ func TestRetryFailedJobTargetsAttachedCleanupTask(t *testing.T) {
 		t.Fatalf("ordered task attachments=%#v", attachments)
 	}
 
-	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID)
+	receipt, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "cleanup-retry-"+job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

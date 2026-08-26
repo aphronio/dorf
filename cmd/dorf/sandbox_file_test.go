@@ -77,7 +77,7 @@ func TestSandboxFileGetWritesExactBytesToExplicitOutput(t *testing.T) {
 	if err := os.Symlink(outside, output); err != nil {
 		t.Fatal(err)
 	}
-	if err := sandboxFileGet(context.Background(), application, []string{job.ID, "nested/result.bin", "--sandbox", namedID, "--output", output}, &bytes.Buffer{}); err != nil {
+	if err := sandboxFileGet(context.Background(), application, []string{namedID, "nested/result.bin", "--output", output}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(output)
@@ -89,11 +89,11 @@ func TestSandboxFileGetWritesExactBytesToExplicitOutput(t *testing.T) {
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 || outsideErr != nil || string(outsideBytes) != "preserve outside" {
 		t.Fatalf("atomic output info=%v err=%v outside=%q outsideErr=%v", info, err, outsideBytes, outsideErr)
 	}
-	if err := sandboxFileGet(context.Background(), application, []string{job.ID, "result.bin", "--sandbox=", "--output=-"}, &bytes.Buffer{}); err == nil {
-		t.Fatal("explicit empty Sandbox selected the default")
+	if err := sandboxFileGet(context.Background(), application, []string{"", "result.bin", "--output=-"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("empty Sandbox identity was accepted")
 	}
 	var stdout bytes.Buffer
-	if err := sandboxFileGet(context.Background(), application, []string{"--output=-", job.ID, "--", "-result.bin"}, &stdout); err != nil || !bytes.Equal(stdout.Bytes(), want) {
+	if err := sandboxFileGet(context.Background(), application, []string{"--output=-", defaultID, "--", "-result.bin"}, &stdout); err != nil || !bytes.Equal(stdout.Bytes(), want) {
 		t.Fatalf("stdout=%v want=%v err=%v", stdout.Bytes(), want, err)
 	}
 }

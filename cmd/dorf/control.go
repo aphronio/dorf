@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aphronio/dorf/internal/blob"
 	"github.com/aphronio/dorf/internal/clientconfig"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/controlapi"
@@ -28,6 +30,7 @@ import (
 	"github.com/aphronio/dorf/internal/gateway"
 	"github.com/aphronio/dorf/internal/postgres"
 	profileapp "github.com/aphronio/dorf/internal/profile"
+	provider "github.com/aphronio/dorf/internal/sandbox"
 	"github.com/aphronio/dorf/internal/version"
 	"github.com/earendil-works/absurd/sdks/go/absurd"
 )
@@ -50,6 +53,16 @@ func remoteCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return true, authCommand(ctx, args[1:], stdout)
 	case "job":
 		return true, remoteJobCommand(ctx, args[1:], stdout, stderr)
+	case "sandbox":
+		cfg, _, found, err := loadClientConfig()
+		if err != nil || !found {
+			return false, err
+		}
+		client, err := controlclient.New(cfg.DeploymentURL, cfg.Credential, nil)
+		if err != nil {
+			return true, err
+		}
+		return true, remoteSandboxCommand(ctx, client, args[1:], stdout)
 	case "run":
 		cfg, _, found, err := loadClientConfig()
 		if err != nil || !found {
@@ -199,7 +212,7 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 		Goal: goal, Profile: strings.TrimSpace(*profileName), Model: strings.TrimSpace(*model), Reasoning: strings.TrimSpace(*effort),
 	}
 	job, err := client.AdmitJob(ctx, requestKey, request)
-	retried := retryableAdmissionError(ctx, err)
+	retried := retryableMutationError(ctx, err)
 	if retried {
 		job, err = client.AdmitJob(ctx, requestKey, request)
 	}
@@ -219,13 +232,33 @@ func remoteRun(ctx context.Context, client *controlclient.Client, deploymentURL 
 }
 
 func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
-	if len(args) == 0 || (args[0] != "inspect" && args[0] != "cleanup") {
-		return fmt.Errorf("job requires: inspect JOB_ID or cleanup JOB_ID")
-	}
 	cfg, _, client, err := loadConnectedClient()
 	if err != nil {
 		return err
 	}
+	if len(args) == 0 {
+		return fmt.Errorf("job requires: inspect, watch, message, retry, evidence, or cleanup")
+	}
+	switch args[0] {
+	case "inspect", "cleanup":
+		return remoteJobSnapshot(ctx, cfg, client, args, stdout, stderr)
+	case "watch":
+		return remoteJobWatch(ctx, client, args[1:], stdout, stderr)
+	case "message":
+		if len(args) > 1 && args[1] == "inspect" {
+			return remoteMessageInspect(ctx, client, args[2:], stdout, stderr)
+		}
+		return remoteMessageSend(ctx, cfg, client, args[1:], stdout, stderr)
+	case "retry":
+		return remoteJobRetry(ctx, cfg, client, args[1:], stdout, stderr)
+	case "evidence":
+		return remoteJobEvidence(ctx, client, args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("job requires: inspect, watch, message, retry, evidence, or cleanup")
+	}
+}
+
+func remoteJobSnapshot(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("job "+args[0], flag.ContinueOnError)
 	set.SetOutput(stderr)
 	output := set.String("output", "human", "output format: human or json")
@@ -239,6 +272,7 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return err
 	}
 	var job controlapi.Job
+	var err error
 	if args[0] == "inspect" {
 		job, err = client.Job(ctx, set.Arg(0))
 	} else {
@@ -260,6 +294,216 @@ func remoteJobCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	return nil
 }
 
+func remoteJobWatch(ctx context.Context, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job watch", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or jsonl")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("job watch requires one Job ID")
+	}
+	if *output != "human" && *output != "jsonl" {
+		return fmt.Errorf("output must be human or jsonl")
+	}
+	watchCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	encoder := json.NewEncoder(stdout)
+	err := client.WatchJob(watchCtx, set.Arg(0), func(job controlapi.Job) error {
+		if *output == "jsonl" {
+			return encoder.Encode(job)
+		}
+		fmt.Fprintf(stdout, "Job %s\n", job.ID)
+		renderRemoteJob(stdout, job)
+		return nil
+	})
+	if errors.Is(err, context.Canceled) && watchCtx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
+func remoteMessageSend(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job message", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable request identity for explicit replay")
+	inputFile := set.String("input-file", "", "path containing the complete Message")
+	intent := set.String("intent", "follow", "delivery intent: follow or steer")
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("job message requires one Job ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	if *intent != "follow" && *intent != "steer" {
+		return fmt.Errorf("message intent must be follow or steer")
+	}
+	input, err := readInput(*inputFile, "job message", "Message")
+	if err != nil {
+		return err
+	}
+	requestKey, generated, err := operationKey("message", *key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	request := controlapi.SendMessageRequest{Text: input, Intent: *intent}
+	message, err := client.SendMessage(ctx, set.Arg(0), requestKey, request)
+	retried := retryableMutationError(ctx, err)
+	if retried {
+		message, err = client.SendMessage(ctx, set.Arg(0), requestKey, request)
+	}
+	if err != nil {
+		if generated && retried {
+			fmt.Fprintf(stderr, "Message may have been accepted. Retry the same request with --key %s.\n", requestKey)
+		}
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteMessageReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Message: message})
+	}
+	fmt.Fprintf(stdout, "Message %s accepted for Job %s\n", message.ID, message.JobID)
+	renderRemoteMessage(stdout, message)
+	fmt.Fprintf(stdout, "Next: dorf job message inspect %s %s\n", message.JobID, message.ID)
+	return nil
+}
+
+func remoteMessageInspect(ctx context.Context, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job message inspect", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 2 {
+		return fmt.Errorf("job message inspect requires one Job ID and Message ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	message, err := client.Message(ctx, set.Arg(0), set.Arg(1))
+	if err != nil {
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, message)
+	}
+	fmt.Fprintf(stdout, "Message %s for Job %s\n", message.ID, message.JobID)
+	renderRemoteMessage(stdout, message)
+	return nil
+}
+
+func remoteJobRetry(ctx context.Context, cfg clientconfig.Config, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job retry", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	key := set.String("key", "", "stable request identity for explicit replay")
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("job retry requires one Job ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	requestKey, generated, err := operationKey("retry", *key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	retry, err := client.Retry(ctx, set.Arg(0), requestKey)
+	retried := retryableMutationError(ctx, err)
+	if retried {
+		retry, err = client.Retry(ctx, set.Arg(0), requestKey)
+	}
+	if err != nil {
+		if generated && retried {
+			fmt.Fprintf(stderr, "Retry may have been accepted. Retry the same request with --key %s.\n", requestKey)
+		}
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, remoteRetryReceipt{Deployment: cfg.DeploymentURL, RequestID: requestKey, Retry: retry})
+	}
+	fmt.Fprintf(stdout, "Retry %s for Job %s\n", retry.State, retry.JobID)
+	return nil
+}
+
+func remoteJobEvidence(ctx context.Context, client *controlclient.Client, args []string, stdout, stderr io.Writer) error {
+	set := flag.NewFlagSet("job evidence", flag.ContinueOnError)
+	set.SetOutput(stderr)
+	output := set.String("output", "human", "output format: human or json")
+	if err := set.Parse(args); err != nil {
+		return err
+	}
+	if set.NArg() != 1 {
+		return fmt.Errorf("job evidence requires one Job ID")
+	}
+	if err := validateOutput(*output); err != nil {
+		return err
+	}
+	list, err := client.Evidence(ctx, set.Arg(0))
+	if err != nil {
+		return err
+	}
+	if *output == "json" {
+		return writeJSON(stdout, list)
+	}
+	records := list.Evidence
+	if len(records) == 0 {
+		fmt.Fprintf(stdout, "Job %s has no retained Evidence\n", set.Arg(0))
+		return nil
+	}
+	fmt.Fprintf(stdout, "Evidence for Job %s\n", set.Arg(0))
+	for _, record := range records {
+		fmt.Fprintf(stdout, "  %s: %s sha256=%s bytes=%d producer=%s\n", record.ID, record.Kind, record.SHA256, record.ByteSize, record.Producer)
+	}
+	return nil
+}
+
+func remoteSandboxCommand(ctx context.Context, client *controlclient.Client, args []string, stdout io.Writer) error {
+	if len(args) < 2 || args[0] != "file" || args[1] != "get" {
+		return fmt.Errorf("sandbox requires: file get SANDBOX_ID RELATIVE_PATH --output DESTINATION")
+	}
+	sandboxID, relativePath, output, err := parseSandboxFileGet(args[2:])
+	if err != nil {
+		return err
+	}
+	return downloadSandboxFile(ctx, sandboxID, relativePath, output, stdout, func(ctx context.Context, path string) ([]byte, error) {
+		return client.SandboxFile(ctx, sandboxID, path)
+	})
+}
+
+func renderRemoteMessage(output io.Writer, message controlapi.Message) {
+	fmt.Fprintf(output, "  sequence: %d\n  intent: %s\n  delivery: %s\n  admitted: %s\n",
+		message.Sequence, message.Intent, message.Delivery.State, message.AdmittedAt.Format(time.RFC3339))
+	if message.Result != nil {
+		fmt.Fprintf(output, "  outcome: %s\n", message.Result.Outcome)
+		if message.Result.Output != "" {
+			fmt.Fprintf(output, "  output: %q\n", message.Result.Output)
+		}
+	}
+	if message.Attention != nil {
+		fmt.Fprintf(output, "  attention: %s\n", message.Attention.Detail)
+	}
+}
+
+type remoteMessageReceipt struct {
+	Deployment string             `json:"deployment"`
+	RequestID  string             `json:"request_id"`
+	Message    controlapi.Message `json:"message"`
+}
+
+type remoteRetryReceipt struct {
+	Deployment string           `json:"deployment"`
+	RequestID  string           `json:"request_id"`
+	Retry      controlapi.Retry `json:"retry"`
+}
+
 type remoteJobReceipt struct {
 	Deployment string         `json:"deployment"`
 	RequestID  string         `json:"request_id,omitempty"`
@@ -267,8 +511,8 @@ type remoteJobReceipt struct {
 }
 
 func renderRemoteJob(output io.Writer, job controlapi.Job) {
-	fmt.Fprintf(output, "  goal: %q\n  profile: %s\n  model: %q (%s)\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
-		job.Goal, job.Profile, job.Model, job.Reasoning, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
+	fmt.Fprintf(output, "  goal: %q\n  profile: %s\n  model: %q (%s)\n  initial Message: %s\n  admission: %s\n  execution: %s\n  cleanup: %s\n",
+		job.Goal, job.Profile, job.Model, job.Reasoning, job.InitialMessageID, openClosed(job.Admission.Open), job.Execution.State, job.Cleanup.State)
 	if job.Attention != nil {
 		fmt.Fprintf(output, "  attention: %s\n", job.Attention.Detail)
 	}
@@ -364,7 +608,7 @@ func definitiveClientError(err error) bool {
 	return errors.As(err, &problem) && problem.Problem.Status >= 400 && problem.Problem.Status < 500
 }
 
-func retryableAdmissionError(ctx context.Context, err error) bool {
+func retryableMutationError(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
@@ -376,9 +620,17 @@ func retryableAdmissionError(ctx context.Context, err error) bool {
 }
 
 type controlAPIJobs struct {
-	store   postgres.Store
-	tasks   *absurd.Client
-	gateway gateway.Gateway
+	store    postgres.Store
+	tasks    *absurd.Client
+	gateway  gateway.Gateway
+	runtimes core.SandboxRuntimeResolver
+	evidence blob.Store
+}
+
+func (a controlAPIJobs) application() core.Application {
+	application := coreApplication(a.store, a.tasks)
+	application.SandboxRuntimes = a.runtimes
+	return application
 }
 
 func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input controlapi.AdmitJobRequest) (controlapi.Job, bool, error) {
@@ -427,7 +679,7 @@ func (a controlAPIJobs) AdmitDirect(ctx context.Context, key string, input contr
 		return controlapi.Job{}, false, err
 	}
 
-	job, created, err := direct.Admit(ctx, a.store, coreApplication(a.store, a.tasks), a.gateway,
+	job, created, err := direct.Admit(ctx, a.store, a.application(), a.gateway,
 		profileapp.Runtime{SandboxProfile: admission.SandboxProfile}, admission)
 	if errors.Is(err, postgres.ErrAdmissionConflict) {
 		return controlapi.Job{}, false, controlapi.ErrIdempotencyConflict
@@ -447,12 +699,210 @@ func (a controlAPIJobs) Get(ctx context.Context, jobID string) (controlapi.Job, 
 	return a.project(ctx, job)
 }
 
+func (a controlAPIJobs) SendMessage(ctx context.Context, jobID, key string, input controlapi.SendMessageRequest) (controlapi.Message, bool, error) {
+	job, err := a.directJob(ctx, jobID)
+	if err != nil {
+		return controlapi.Message{}, false, err
+	}
+	if strings.TrimSpace(input.Text) == "" || len(input.Text) > 1<<20 || strings.ContainsRune(input.Text, 0) {
+		return controlapi.Message{}, false, controlapi.ErrInvalidInput
+	}
+	var options []core.MessageOption
+	switch input.Intent {
+	case string(core.MessageFollow):
+	case string(core.MessageSteer):
+		options = append(options, core.Steer())
+	default:
+		return controlapi.Message{}, false, controlapi.ErrInvalidInput
+	}
+	handle, err := a.application().OpenJob(ctx, job.ID)
+	if err != nil {
+		return controlapi.Message{}, false, err
+	}
+	sandbox, err := handle.DefaultSandbox(ctx)
+	if err != nil {
+		return controlapi.Message{}, false, err
+	}
+	receipt, err := sandbox.Agent().Message(ctx, key, input.Text, options...)
+	if err != nil {
+		return controlapi.Message{}, receipt.Created, controlMessageError(err)
+	}
+	message, err := a.GetMessage(ctx, job.ID, receipt.MessageID)
+	return message, receipt.Created, err
+}
+
+func (a controlAPIJobs) GetMessage(ctx context.Context, jobID, messageID string) (controlapi.Message, error) {
+	job, err := a.directJob(ctx, jobID)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	snapshot, err := direct.LoadSnapshot(ctx, a.store, job)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	var delivery *core.Delivery
+	for i := range snapshot.Deliveries {
+		if snapshot.Deliveries[i].Message.ID == messageID {
+			delivery = &snapshot.Deliveries[i]
+			break
+		}
+	}
+	if delivery == nil {
+		return controlapi.Message{}, controlapi.ErrMessageNotFound
+	}
+	message, run := delivery.Message, delivery.AgentRun
+	deliveryState, err := publicMessageDeliveryState(run.State)
+	if err != nil {
+		return controlapi.Message{}, err
+	}
+	result := (*controlapi.MessageResult)(nil)
+	if job.CleanupState == core.CleanupPending {
+		switch run.State {
+		case core.AgentRunCompleted:
+			if a.runtimes == nil {
+				return controlapi.Message{}, fmt.Errorf("direct Agent observation runtime is not configured")
+			}
+			runtime, resolveErr := a.runtimes.ResolveSandbox(ctx, job.SandboxProfile)
+			if resolveErr != nil {
+				return controlapi.Message{}, resolveErr
+			}
+			if runtime.SandboxProfile != job.SandboxProfile || runtime.Execution == nil {
+				return controlapi.Message{}, fmt.Errorf("direct Agent observation runtime does not match Job profile %q", job.SandboxProfile)
+			}
+			observed, observeErr := runtime.Execution.ObserveSettledAgentMessage(ctx, job.ID, message.ID)
+			if observeErr != nil {
+				return controlapi.Message{}, observeErr
+			}
+			result = &controlapi.MessageResult{Outcome: observed.Outcome, Output: observed.Output}
+		case core.AgentRunFailed, core.AgentRunInterrupted:
+			outcome := run.TurnOutcome
+			if outcome == "" {
+				outcome = string(run.State)
+			}
+			result = &controlapi.MessageResult{Outcome: outcome}
+		}
+	}
+	attention := (*controlapi.Attention)(nil)
+	if run.Attention != "" || run.State == core.AgentRunUncertain {
+		attention = &controlapi.Attention{Code: "agent_delivery_attention", Detail: "Message delivery needs operator attention; inspect the deployment service logs."}
+	}
+	return controlapi.Message{
+		ID: message.ID, JobID: job.ID, Sequence: message.Sequence, Intent: string(message.Intent),
+		Delivery: controlapi.State{State: deliveryState}, Result: result, Attention: attention, AdmittedAt: message.AdmittedAt,
+	}, nil
+}
+
+func publicMessageDeliveryState(state core.AgentRunState) (string, error) {
+	switch state {
+	case core.AgentRunPending, core.AgentRunSubmitting:
+		return "accepted", nil
+	case core.AgentRunActive, core.AgentRunUncertain:
+		return "running", nil
+	case core.AgentRunCompleted:
+		return "completed", nil
+	case core.AgentRunFailed, core.AgentRunInterrupted:
+		return "failed", nil
+	default:
+		return "", fmt.Errorf("unknown Agent delivery state %q", state)
+	}
+}
+
+func (a controlAPIJobs) Retry(ctx context.Context, jobID, key string) (controlapi.Retry, bool, error) {
+	job, err := a.directJob(ctx, jobID)
+	if err != nil {
+		return controlapi.Retry{}, false, err
+	}
+	receipt, err := a.application().RetryFailedJob(ctx, job.ID, key)
+	if err != nil {
+		return controlapi.Retry{}, false, controlRetryError(err)
+	}
+	return controlapi.Retry{JobID: receipt.JobID, State: receipt.Retry}, receipt.Created, nil
+}
+
+func (a controlAPIJobs) ReadSandboxFile(ctx context.Context, sandboxID, relativePath string) ([]byte, error) {
+	owned, err := a.store.Sandbox(ctx, sandboxID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return nil, controlapi.ErrSandboxNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	handle, err := a.application().OpenJob(ctx, owned.JobID)
+	if err != nil {
+		return nil, err
+	}
+	sandbox, err := handle.Sandbox(ctx, owned.ID)
+	if err != nil {
+		return nil, err
+	}
+	contents, err := sandbox.ReadFile(ctx, relativePath)
+	switch {
+	case errors.Is(err, core.ErrSandboxFileCleanupFenced):
+		return nil, controlapi.ErrFileUnavailable
+	case errors.Is(err, provider.ErrInvalidFilePath):
+		return nil, controlapi.ErrInvalidFilePath
+	case errors.Is(err, provider.ErrFileUnavailable):
+		return nil, controlapi.ErrFileNotFound
+	case err != nil:
+		return nil, err
+	default:
+		return contents, nil
+	}
+}
+
+func (a controlAPIJobs) Evidence(ctx context.Context, jobID string) ([]controlapi.Evidence, error) {
+	job, err := a.directJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	records, err := a.store.Evidence(ctx, job.ID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]controlapi.Evidence, 0, len(records))
+	for _, record := range records {
+		if err := a.evidence.Verify(record.Digest, record.ByteSize); err != nil {
+			return nil, controlapi.ErrEvidenceUnverified
+		}
+		result = append(result, controlapi.Evidence{
+			ID: record.ID, SHA256: record.Digest, ByteSize: record.ByteSize, MediaType: record.MediaType,
+			Producer: record.Producer, Kind: record.Kind, Revision: record.Revision,
+			StartedAt: record.StartedAt, FinishedAt: record.FinishedAt,
+		})
+	}
+	return result, nil
+}
+
+func controlMessageError(err error) error {
+	switch {
+	case errors.Is(err, core.ErrMessageAdmissionClosed):
+		return controlapi.ErrMessageUnavailable
+	case errors.Is(err, core.ErrMessageSteerUnavailable):
+		return controlapi.ErrSteerUnavailable
+	case errors.Is(err, core.ErrMessageReplayConflict):
+		return controlapi.ErrIdempotencyConflict
+	default:
+		return err
+	}
+}
+
+func controlRetryError(err error) error {
+	switch {
+	case errors.Is(err, core.ErrRetryReplayConflict):
+		return controlapi.ErrIdempotencyConflict
+	case errors.Is(err, core.ErrRetryNotEligible):
+		return controlapi.ErrRetryUnavailable
+	default:
+		return err
+	}
+}
+
 func (a controlAPIJobs) RequestCleanup(ctx context.Context, jobID string) (controlapi.Job, error) {
 	job, err := a.directJob(ctx, jobID)
 	if err != nil {
 		return controlapi.Job{}, err
 	}
-	handle, err := coreApplication(a.store, a.tasks).OpenJob(ctx, job.ID)
+	handle, err := a.application().OpenJob(ctx, job.ID)
 	if err != nil {
 		return controlapi.Job{}, err
 	}
@@ -491,9 +941,14 @@ func (a controlAPIJobs) project(ctx context.Context, job core.Job) (controlapi.J
 	for _, sandbox := range snapshot.Sandboxes {
 		sandboxes = append(sandboxes, controlapi.Sandbox{ID: sandbox.ID, Name: sandbox.Name})
 	}
+	if len(snapshot.Deliveries) == 0 || snapshot.Deliveries[0].Message.ID == "" || snapshot.Deliveries[0].Message.Sequence != 1 {
+		return controlapi.Job{}, fmt.Errorf("direct Job %s has no initial Message", job.ID)
+	}
+	initialMessageID := snapshot.Deliveries[0].Message.ID
 	return controlapi.Job{
 		ID: job.ID, Kind: "direct", Goal: job.Goal, Profile: job.SandboxProfile, Model: job.Model, Reasoning: job.ReasoningEffort,
-		Admission: controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
+		InitialMessageID: initialMessageID,
+		Admission:        controlapi.Admission{Open: job.AdmissionOpen}, Execution: controlapi.State{State: executionState},
 		Attention: attention, Cleanup: controlapi.State{State: cleanupState}, Sandboxes: sandboxes,
 	}, nil
 }
@@ -593,9 +1048,14 @@ func serveCommand(ctx context.Context, store postgres.Store, tasks *absurd.Clien
 	}
 	defer listener.Close()
 	auth := controlauth.Service{Store: store}
-	jobs := controlAPIJobs{store: store, tasks: tasks, gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath}}
+	runtimes := profileRuntimeResolver{cfg: cfg, store: store, client: tasks}
+	jobs := controlAPIJobs{
+		store: store, tasks: tasks, gateway: gateway.Gateway{StatePath: cfg.GatewayStatePath},
+		runtimes: runtimes, evidence: blob.Store{Root: cfg.BlobRoot},
+	}
 	server := controlapi.NewServer(controlapi.Discovery{
-		Product: "dorf", Version: version.Version, Capabilities: []string{"direct_jobs"},
+		Product: "dorf", Version: version.Version,
+		Capabilities: []string{"direct_jobs", "job_watch", "messages", "job_retry", "sandbox_files", "evidence"},
 	}, auth, jobs)
 	serverCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

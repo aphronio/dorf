@@ -147,13 +147,28 @@ HTTPS:
 ```bash
 dorf run --goal-file goal.txt --model MODEL --reasoning high
 dorf job inspect JOB_ID
+dorf job watch JOB_ID
+dorf job watch --output jsonl JOB_ID
+dorf job message --input-file follow-up.txt JOB_ID
+dorf job message --intent steer --input-file correction.txt JOB_ID
+dorf job message inspect JOB_ID MESSAGE_ID
+dorf job retry JOB_ID
+dorf job evidence JOB_ID
+dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf job cleanup JOB_ID
 ```
 
-Add `--output json` before `JOB_ID` to inspect or request cleanup with stable machine output. The
-ordinary `run` flow creates retry identity internally and retries the exact admission once after a
-retryable transport or HTTP server failure; a human does not need to configure a key. The Job
-remains open and idle after a successful Turn until the caller requests cleanup.
+`job inspect` reports the initial Message ID and exact Sandbox IDs. Follow may queue before current
+work settles; steer targets only the exact active Turn and never becomes a Follow. `job watch`
+reconnects from the canonical snapshot, and Ctrl-C stops only the view. Retry is accepted only for
+eligible failed execution. Evidence is verified metadata; Sandbox file retrieval returns exact
+bytes and must happen before cleanup, which closes Message admission and file reads.
+
+Use `--output json` on Job, Message, retry, and Evidence operations and `--output jsonl` on watch for
+stable machine output. The ordinary mutation flow creates retry identity internally and retries the
+exact request once after a retryable transport or HTTP server failure; a human does not need to
+configure a key. The Job remains open and idle after a successful Turn until the caller requests
+cleanup.
 
 The deployment operator can revoke exactly one Client at any time using the Client ID reported by
 `dorf connect` or `dorf auth status`:
@@ -191,7 +206,7 @@ Harness Thread, retrieve an exact workspace file, or request cleanup:
 
 ```bash
 dorf message --job JOB_ID --id follow-1 --input-file follow-up.txt
-dorf sandbox file get JOB_ID PATH --output DESTINATION
+dorf sandbox file get SANDBOX_ID PATH --output DESTINATION
 dorf cleanup JOB_ID
 ```
 

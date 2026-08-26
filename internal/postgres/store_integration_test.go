@@ -613,14 +613,14 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if err != nil || repeated.Created || repeated.Message != first.Message {
 		t.Fatalf("idempotent message=%#v err=%v", repeated, err)
 	}
-	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "different complete Sandbox delivery request") {
+	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.NamedSandboxID(job.ID, "other"), FromKind: "human", FromID: "client-retry", Input: "same text"}); !errors.Is(err, core.ErrMessageReplayConflict) || admitted.Created {
 		t.Fatalf("same send key replayed through another Sandbox: admitted=%#v err=%v", admitted, err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); err == nil {
-		t.Fatal("changed input under the same source identity did not conflict")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "changed"}); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("changed input replay error=%v", err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text "}); err == nil {
-		t.Fatal("byte-distinct complete input under the same source identity did not conflict")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text "}); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("byte-distinct input replay error=%v", err)
 	}
 	distinct, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-distinct", Input: "same text"})
 	if err != nil || !distinct.Created || distinct.Message.ID == first.Message.ID || distinct.Message.Sequence != 3 {
@@ -633,7 +633,7 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 
 	const concurrent = 12
 	sequences := make(chan int64, concurrent)
-	errors := make(chan error, concurrent)
+	errResults := make(chan error, concurrent)
 	var wg sync.WaitGroup
 	for i := range concurrent {
 		wg.Add(1)
@@ -643,13 +643,13 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 			if err == nil {
 				sequences <- admitted.Message.Sequence
 			}
-			errors <- err
+			errResults <- err
 		}(i)
 	}
 	wg.Wait()
 	close(sequences)
-	close(errors)
-	for err := range errors {
+	close(errResults)
+	for err := range errResults {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -750,8 +750,8 @@ func TestPostgresMessageIdempotencyConcurrentFIFOAndLowestUnsettled(t *testing.T
 	if retry, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "client-retry", Input: "same text"}); err != nil || retry.Created || retry.Message != first.Message {
 		t.Fatalf("closed admission did not preserve idempotent retry: %#v %v", retry, err)
 	}
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); err == nil {
-		t.Fatal("cleanup allowed a new message")
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: "human", FromID: "after-cleanup", Input: "late"}); !errors.Is(err, core.ErrMessageAdmissionClosed) {
+		t.Fatalf("cleanup admission error=%v", err)
 	}
 }
 
@@ -1177,8 +1177,8 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 	}
 	changed := steerInput
 	changed.Intent = core.MessageFollow
-	if _, err := store.AdmitCodingMessage(ctx, changed); err == nil {
-		t.Fatal("same caller identity accepted a changed delivery intent")
+	if _, err := store.AdmitCodingMessage(ctx, changed); !errors.Is(err, core.ErrMessageReplayConflict) {
+		t.Fatalf("changed delivery replay error=%v", err)
 	}
 	delivery, err := codingDelivery(ctx, store, job.ID)
 	if err != nil || delivery == nil || delivery.Message.ID != steer.Message.ID || delivery.AgentRun.ThreadID != threadID {
@@ -1209,7 +1209,7 @@ func TestExplicitSteerTargetsAndAcknowledgesExactActiveTurn(t *testing.T) {
 		t.Fatalf("delivery after steer=%#v err=%v, want active Turn observation", next, err)
 	}
 	other, _ := prepareTransportIntegrationJob(t, store, "steer-without-active-turn")
-	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); err == nil || !strings.Contains(err.Error(), "one exact active Harness Turn") {
+	if _, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: other.ID, SandboxID: core.MainSandboxName(other.ID), FromKind: "human", FromID: "invalid-steer", Input: "cannot target", Intent: core.MessageSteer}); !errors.Is(err, core.ErrMessageSteerUnavailable) {
 		t.Fatalf("steer without active turn error=%v", err)
 	}
 }
@@ -2430,7 +2430,7 @@ func TestSandboxActionAttentionPersistsAcrossRetryAndClearsOnSuccess(t *testing.
 		t.Fatalf("unsettled route Action=%#v err=%v", unsettled, err)
 	}
 
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "action-attention-retry-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "action-attention-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {
@@ -2586,7 +2586,7 @@ func TestSandboxCleanupRequiresRouteRevoke(t *testing.T) {
 	if err != nil || unsettled.State != core.ActionUnsettled || len(externals.effectKinds()) != 1 {
 		t.Fatalf("lost provider receipt action=%#v effects=%v err=%v", unsettled, externals.effectKinds(), err)
 	}
-	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID); err != nil {
+	if _, err := (core.Application{Store: store, Tasks: client}).RetryFailedJob(ctx, job.ID, "lost-provider-receipt-retry-"+job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.WorkBatch(ctx, absurd.WorkBatchOptions{WorkerID: "lost-provider-receipt-retry", BatchSize: 1, ClaimTimeout: time.Minute}); err != nil {

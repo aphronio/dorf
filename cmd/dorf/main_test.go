@@ -626,7 +626,7 @@ func TestInvestigationReportAccessIsExplicitlyWorkspaceOwnedAndCleanupBound(t *t
 	var output strings.Builder
 	renderInvestigationReportAccess(&output, job)
 	want := "  report: " + investigation.ReportPath + " (agent-owned workspace file; existence not checked; not durably retained)\n" +
-		"  retrieve before cleanup: dorf sandbox file get job-report " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
+		"  retrieve before cleanup: dorf sandbox file get " + core.MainSandboxName(job.ID) + " " + investigation.ReportPath + " --output " + investigation.ReportPath + "\n" +
 		"  revise: dorf message --job job-report --id REQUEST_ID --input-file FOLLOW_UP.md\n" +
 		"  release resources: dorf cleanup job-report\n"
 	if output.String() != want {

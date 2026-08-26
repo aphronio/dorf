@@ -80,7 +80,7 @@ func (h SandboxHandle) ReadFile(ctx context.Context, relativePath string) ([]byt
 			return err
 		}
 		if job.CleanupState != CleanupPending {
-			return fmt.Errorf("Job %s workspace files are unavailable after cleanup begins", job.ID)
+			return fmt.Errorf("%w for Job %s", ErrSandboxFileCleanupFenced, job.ID)
 		}
 		owned, err := h.application.Store.Sandbox(ctx, h.id)
 		if err != nil {

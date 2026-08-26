@@ -184,11 +184,12 @@ workflow. Native workflows and host-local adapters compose the in-process Core c
 its durable facts.
 
 The first external projection serves one configured Dorf Deployment over authenticated HTTPS. Its
-surface is intentionally limited to direct Job admission, situation-first inspection, and requested
-cleanup. It does not expose workflow admission, follow, steer, Sandbox files, PostgreSQL, Absurd,
-provider adapters, or Core as a network or embeddable runtime. Named deployment contexts, MCP, a
-control-plane UI, language SDKs, and a public workflow API remain deferred. The accepted working
-transport design and slice boundaries live in the
+surface covers the direct Job interaction loop: admission, canonical inspect/watch, invariant
+Messages, eligible retry, exact Sandbox reads, verified Evidence metadata, and requested cleanup.
+It does not expose workflow admission, PostgreSQL, Absurd, provider or Harness operations,
+transcript resources, or Core as a generic network or embeddable runtime. Named deployment contexts,
+MCP, a control-plane UI, language SDKs, and a public workflow API remain deferred. The accepted
+working transport design and slice boundaries live in the
 [Remote Control API design](../implementation/control-api-design.md) and
 [implementation slices](../implementation/control-api-slices.md).
 
@@ -203,9 +204,9 @@ billing, and quotas remain separate work.
 
 A direct Job has no workflow identity. Its first Message carries the caller's exact prompt through
 the `direct` Agent role, and successful work remains open and idle until a caller requests cleanup.
-Follow, steer, and exact Sandbox file reads remain reusable Core mechanisms but are not part of the
-current HTTPS projection. The client—not Core—decides what the work means and when retained
-resources may be released.
+The HTTPS projection reuses Core's Follow, Steer, retry, and exact Sandbox file mechanisms without
+changing their invariants or transferring result meaning and cleanup timing into Core. The
+client—not Core—decides what the work means and when retained resources may be released.
 
 ## Native workflow composition
 

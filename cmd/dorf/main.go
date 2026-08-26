@@ -212,17 +212,21 @@ func runDirect(ctx context.Context, store postgres.Store, client *absurd.Client,
 }
 
 func directAdmissionKey(value string, source io.Reader) (string, bool, error) {
+	return operationKey("direct", value, source)
+}
+
+func operationKey(kind, value string, source io.Reader) (string, bool, error) {
 	if value = strings.TrimSpace(value); value != "" {
 		return value, false, nil
 	}
 	if source == nil {
-		return "", false, fmt.Errorf("generate direct admission key: randomness is not configured")
+		return "", false, fmt.Errorf("generate %s request key: randomness is not configured", kind)
 	}
 	random := make([]byte, 16)
 	if _, err := io.ReadFull(source, random); err != nil {
-		return "", false, fmt.Errorf("generate direct admission key: %w", err)
+		return "", false, fmt.Errorf("generate %s request key: %w", kind, err)
 	}
-	return "direct-" + hex.EncodeToString(random), true, nil
+	return kind + "-" + hex.EncodeToString(random), true, nil
 }
 
 func registerWorkerTasks(store postgres.Store, client *absurd.Client, cfg config.Config) error {
@@ -1389,7 +1393,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 			"readable_before_cleanup": job.CleanupState == core.CleanupPending,
 		}
 		if job.CleanupState == core.CleanupPending {
-			report["retrieval_command"] = fmt.Sprintf("dorf sandbox file get %s %s --output %s", job.ID, investigation.ReportPath, investigation.ReportPath)
+			report["retrieval_command"] = fmt.Sprintf("dorf sandbox file get %s %s --output %s", core.MainSandboxName(job.ID), investigation.ReportPath, investigation.ReportPath)
 		}
 		return writeJSON(stdout, map[string]any{
 			"job": job, "source": snapshot.Source, "sandbox_profile": profileView(profile), "current_work": work, "report": report,
@@ -1423,7 +1427,7 @@ func inspectCodebaseInvestigation(ctx context.Context, store postgres.Store, cli
 func renderInvestigationReportAccess(stdout io.Writer, job core.Job) {
 	fmt.Fprintf(stdout, "  report: %s (agent-owned workspace file; existence not checked; not durably retained)\n", investigation.ReportPath)
 	if job.AdmissionOpen && job.CleanupState == core.CleanupPending {
-		fmt.Fprintf(stdout, "  retrieve before cleanup: dorf sandbox file get %s %s --output %s\n", job.ID, investigation.ReportPath, investigation.ReportPath)
+		fmt.Fprintf(stdout, "  retrieve before cleanup: dorf sandbox file get %s %s --output %s\n", core.MainSandboxName(job.ID), investigation.ReportPath, investigation.ReportPath)
 		fmt.Fprintf(stdout, "  revise: dorf message --job %s --id REQUEST_ID --input-file FOLLOW_UP.md\n", job.ID)
 		fmt.Fprintf(stdout, "  release resources: dorf cleanup %s\n", job.ID)
 	} else if job.CleanupState != core.CleanupPending {
@@ -1452,13 +1456,18 @@ func joinProviderCapabilities(capabilities []profileapp.Capability) string {
 func retry(ctx context.Context, store postgres.Store, client *absurd.Client, args []string, stdout, stderr io.Writer) error {
 	set := flag.NewFlagSet("retry", flag.ContinueOnError)
 	set.SetOutput(stderr)
+	key := set.String("key", "", "stable request identity for explicit replay")
 	if err := set.Parse(args); err != nil {
 		return err
 	}
 	if set.NArg() != 1 {
 		return fmt.Errorf("retry requires one Job ID")
 	}
-	receipt, err := coreApplication(store, client).RetryFailedJob(ctx, set.Arg(0))
+	requestKey, _, err := operationKey("retry", *key, rand.Reader)
+	if err != nil {
+		return err
+	}
+	receipt, err := coreApplication(store, client).RetryFailedJob(ctx, set.Arg(0), requestKey)
 	if err != nil {
 		return err
 	}
