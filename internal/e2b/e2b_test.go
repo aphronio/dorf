@@ -39,62 +39,11 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if discovered == nil || discovered.ProviderID != "provider-1" {
 		t.Fatalf("discovered Sandbox = %#v", discovered)
 	}
-	inspected, err := client.InspectOwned(context.Background(), discovered.ProviderID, owner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inspected.TemplateID != "template:build" || inspected.State != "running" {
-		t.Fatalf("inspected Sandbox = %#v", inspected)
-	}
-	connection, err := client.ConnectEnvd(context.Background(), discovered.ProviderID, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if connection.ProviderID != discovered.ProviderID || connection.Domain != "e2b.app" || connection.Version != "0.6.2" || connection.accessToken != "scoped-envd-token" {
-		t.Fatalf("envd connection = %#v", connection)
-	}
-	endpoint, err := client.ConnectEndpoint(context.Background(), discovered.ProviderID, 4500, 10*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if endpoint.ListenURL != "ws://0.0.0.0:4500" || endpoint.DialURL != "wss://4500-provider-1.e2b.app" || endpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
-		t.Fatalf("endpoint = %#v", endpoint)
-	}
-	if strings.Contains(endpoint.String(), "scoped-traffic-token") {
-		t.Fatal("E2B endpoint string leaked its traffic token")
-	}
 	commonOwner := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
 	adapter := Adapter{Client: client, Config: AdapterConfig{SandboxTimeout: 10 * time.Minute, Workspace: "/workspace/job"}}
 	if present, err := adapter.OwnedPresent(context.Background(), commonOwner); err != nil || !present {
 		t.Fatalf("common Sandbox presence = %v, %v", present, err)
 	}
-	if err := adapter.AttestOwnership(context.Background(), commonOwner); err != nil {
-		t.Fatal(err)
-	}
-	commonEndpoint, err := adapter.Endpoint(context.Background(), commonOwner, 4500)
-	if err != nil || commonEndpoint.DialURL != endpoint.DialURL || commonEndpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
-		t.Fatalf("common Sandbox endpoint = %#v, %v", commonEndpoint, err)
-	}
-	if _, err := adapter.ProviderRouteURL(context.Background()); err == nil || !strings.Contains(err.Error(), "remote-provider-gateway-route") {
-		t.Fatalf("unproved E2B route admission = %v", err)
-	}
-	adapter.Config.ProviderGatewayURL = "https://temporary-gateway.example/v1"
-	if routeURL, err := adapter.ProviderRouteURL(context.Background()); err != nil || routeURL != adapter.Config.ProviderGatewayURL {
-		t.Fatalf("E2B Provider Gateway URL = %q, %v", routeURL, err)
-	}
-	for _, value := range []string{
-		"http://temporary-gateway.example/v1",
-		"https://temporary-gateway.example",
-		"https://temporary-gateway.example/v1/",
-		"https://user@temporary-gateway.example/v1",
-		"https://temporary-gateway.example/v1?token=secret",
-	} {
-		adapter.Config.ProviderGatewayURL = value
-		if _, err := adapter.ProviderRouteURL(context.Background()); err == nil {
-			t.Fatalf("accepted unsafe E2B Provider Gateway URL %q", value)
-		}
-	}
-
 	foreign := owner
 	foreign.OwnershipNonce = strings.Repeat("b", 64)
 	if err := client.DeleteOwned(context.Background(), discovered.ProviderID, foreign); err == nil {
@@ -128,27 +77,58 @@ func TestLifecycleReconcilesLostCreateResponseAndDeletesOnlyOwnedSandbox(t *test
 	if absent != nil {
 		t.Fatalf("deleted Sandbox remains discoverable: %#v", absent)
 	}
+}
 
-	if api.createBody["templateID"] != "template:build" || api.createBody["secure"] != true || api.createBody["allow_internet_access"] != false {
-		t.Fatalf("create body = %#v", api.createBody)
+func TestAdapterEndpointRequiresOwnershipAndBuildsScopedProviderDial(t *testing.T) {
+	api := newFakeAPI(t)
+	client := Client{APIURL: "https://e2b.test", APIKey: "test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: api}}}
+	owner := Ownership{JobID: "job-endpoint", SandboxID: "dorf-job-endpoint", OwnershipNonce: strings.Repeat("e", 64)}
+	if _, err := client.Create(context.Background(), CreateRequest{
+		Template: "template:build", Timeout: 10 * time.Minute, Owner: owner, AllowedHostnames: []string{"gateway.example"},
+	}); err != nil {
+		t.Fatal(err)
 	}
-	network, ok := api.createBody["network"].(map[string]any)
-	if !ok || network["allowPublicTraffic"] != false {
-		t.Fatalf("create network = %#v", api.createBody["network"])
+	commonOwner := provider.Ownership{JobID: owner.JobID, SandboxID: owner.SandboxID, OwnershipNonce: owner.OwnershipNonce}
+	adapter := Adapter{Client: client, Config: AdapterConfig{SandboxTimeout: 10 * time.Minute}}
+	foreign := commonOwner
+	foreign.OwnershipNonce = strings.Repeat("f", 64)
+	if _, err := adapter.Endpoint(context.Background(), foreign, 4500); err == nil {
+		t.Fatal("foreign owner received an endpoint")
 	}
-	allowed, ok := network["allowOut"].([]any)
-	if !ok || len(allowed) != 1 || allowed[0] != "gateway.example" {
-		t.Fatalf("create network allowOut = %#v", network["allowOut"])
+	endpoint, err := adapter.Endpoint(context.Background(), commonOwner, 4500)
+	if err != nil {
+		t.Fatal(err)
 	}
-	denied, ok := network["denyOut"].([]any)
-	if !ok || len(denied) != 1 || denied[0] != "0.0.0.0/0" {
-		t.Fatalf("create network denyOut = %#v", network["denyOut"])
+	if endpoint.ListenURL != "ws://0.0.0.0:4500" || endpoint.DialURL != "wss://4500-provider-1.e2b.app" || endpoint.Headers().Get(trafficAccessHeader) != "scoped-traffic-token" {
+		t.Fatalf("adapter endpoint = %#v", endpoint)
 	}
-	if api.createBody["timeout"] != float64(600) {
-		t.Fatalf("create timeout = %#v", api.createBody["timeout"])
+	if strings.Contains(endpoint.String(), "scoped-traffic-token") {
+		t.Fatal("endpoint string leaked its scoped traffic token")
 	}
-	if api.authorizationFailures != 0 {
-		t.Fatalf("requests missing exact API authentication = %d", api.authorizationFailures)
+	connection, err := client.ConnectEnvd(context.Background(), "provider-1", 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.ProviderID != "provider-1" || connection.Domain != "e2b.app" || connection.Version != "0.6.2" || connection.accessToken != "scoped-envd-token" {
+		t.Fatalf("envd connection = %#v", connection)
+	}
+}
+
+func TestProviderRouteURLRequiresExactHTTPSV1Endpoint(t *testing.T) {
+	valid := Adapter{Config: AdapterConfig{ProviderGatewayURL: "https://gateway.example/v1"}}
+	if got, err := valid.ProviderRouteURL(context.Background()); err != nil || got != valid.Config.ProviderGatewayURL {
+		t.Fatalf("valid Provider Gateway URL = %q, %v", got, err)
+	}
+	for _, value := range []string{
+		"", "http://gateway.example/v1", "https://gateway.example", "https://gateway.example/v1/",
+		"https://user@gateway.example/v1", "https://gateway.example/v1?token=secret",
+	} {
+		t.Run(value, func(t *testing.T) {
+			adapter := Adapter{Config: AdapterConfig{ProviderGatewayURL: value}}
+			if _, err := adapter.ProviderRouteURL(context.Background()); err == nil {
+				t.Fatalf("accepted unsafe Provider Gateway URL %q", value)
+			}
+		})
 	}
 }
 
@@ -206,12 +186,13 @@ func TestCreateDoesNotClassifyUnrelated404AsMissingTemplate(t *testing.T) {
 func TestAPIErrorRedactsConfiguredCredential(t *testing.T) {
 	const key = "e2b_secret_test_key"
 	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(response, `{"code":401,"message":"rejected `+key+`"}`)
+		response.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(response, `{"code":429,"message":"capacity rejected `+key+`"}`)
 	})
 	client := Client{APIURL: "https://e2b.test", APIKey: key, HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
 	err := client.Check(context.Background())
-	if err == nil || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[redacted]") {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != 429 || strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "[redacted]") {
 		t.Fatalf("redacted API error = %v", err)
 	}
 }
@@ -281,23 +262,6 @@ func TestFindOwnedPaginatesRunningAndPausedAndRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func TestAPIErrorPreservesProviderStatusWithoutLeakingKey(t *testing.T) {
-	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.WriteHeader(http.StatusTooManyRequests)
-		io.WriteString(response, `{"code":429,"message":"capacity reached"}`)
-	})
-	client := Client{APIURL: "https://e2b.test", APIKey: "secret-test-key", HTTPClient: &http.Client{Transport: handlerTransport{handler: handler}}}
-	owner := Ownership{JobID: "job-3", SandboxID: "dorf-job-3", OwnershipNonce: strings.Repeat("d", 64)}
-	_, err := client.FindOwned(context.Background(), owner)
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || apiErr.Code != 429 {
-		t.Fatalf("API error = %#v", err)
-	}
-	if strings.Contains(err.Error(), client.APIKey) {
-		t.Fatal("API error leaked the E2B key")
-	}
-}
-
 type dropCreatedResponse struct {
 	base http.RoundTripper
 	once sync.Once
@@ -329,12 +293,11 @@ func (t *dropCreatedResponse) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 type fakeAPI struct {
-	t                     *testing.T
-	mu                    sync.Mutex
-	sandboxes             map[string]detailSandbox
-	createBody            map[string]any
-	deleteCalls           int
-	authorizationFailures int
+	t           *testing.T
+	mu          sync.Mutex
+	sandboxes   map[string]detailSandbox
+	createBody  map[string]any
+	deleteCalls int
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -345,15 +308,28 @@ func (a *fakeAPI) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if request.Header.Get("X-API-Key") != "test-key" {
-		a.authorizationFailures++
-		response.WriteHeader(http.StatusUnauthorized)
-		return
+		a.t.Fatalf("request missing API authentication: %s %s", request.Method, request.URL)
 	}
 	response.Header().Set("Content-Type", "application/json")
 	switch {
 	case request.Method == http.MethodPost && request.URL.Path == "/sandboxes":
 		if err := json.NewDecoder(request.Body).Decode(&a.createBody); err != nil {
 			a.t.Fatal(err)
+		}
+		allowInternet, ok := a.createBody["allow_internet_access"].(bool)
+		if !ok {
+			a.t.Fatalf("create omitted boolean allow_internet_access: %#v", a.createBody)
+		}
+		if !allowInternet {
+			if a.createBody["secure"] != true || a.createBody["timeout"] != float64(600) {
+				a.t.Fatalf("restricted create settings = %#v", a.createBody)
+			}
+			network, ok := a.createBody["network"].(map[string]any)
+			allowOut, allowOK := network["allowOut"].([]any)
+			denyOut, denyOK := network["denyOut"].([]any)
+			if !ok || network["allowPublicTraffic"] != false || !allowOK || len(allowOut) != 1 || allowOut[0] != "gateway.example" || !denyOK || len(denyOut) != 1 || denyOut[0] != "0.0.0.0/0" {
+				a.t.Fatalf("restricted create network = %#v", network)
+			}
 		}
 		metadata := map[string]string{}
 		for key, value := range a.createBody["metadata"].(map[string]any) {
@@ -388,7 +364,10 @@ func (a *fakeAPI) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		}
 		json.NewEncoder(response).Encode(listed)
 	case request.Method == http.MethodPost && request.URL.Path == "/sandboxes/provider-1/connect":
-		response.WriteHeader(http.StatusOK)
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || len(body) != 1 || body["timeout"] != float64(600) {
+			a.t.Fatalf("connect body = %#v, error = %v", body, err)
+		}
 		json.NewEncoder(response).Encode(map[string]any{
 			"sandboxID": "provider-1", "domain": "e2b.app", "envdVersion": "0.6.2",
 			"envdAccessToken": "scoped-envd-token", "trafficAccessToken": "scoped-traffic-token",

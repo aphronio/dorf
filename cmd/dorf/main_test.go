@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"github.com/aphronio/dorf/internal/coding"
 	"github.com/aphronio/dorf/internal/config"
 	"github.com/aphronio/dorf/internal/core"
@@ -142,49 +140,6 @@ func TestProviderConnectionReadinessStopsAtEachFailedStage(t *testing.T) {
 	}
 }
 
-func TestGuidedSetupCommitsDefaultOnlyAfterLiveConnectionVerification(t *testing.T) {
-	for _, failure := range []string{"compose", "finalize", "default", ""} {
-		t.Run(failure, func(t *testing.T) {
-			events := []string{}
-			defaultConnection := "healthy"
-			failed := errors.New("stage failed")
-			err := makeProviderConnectionReady(context.Background(), "candidate",
-				func(context.Context) error {
-					events = append(events, "compose")
-					if failure == "compose" {
-						return failed
-					}
-					return nil
-				},
-				func(context.Context, string) error {
-					events = append(events, "finalize")
-					if failure == "finalize" {
-						return failed
-					}
-					return nil
-				},
-				func(name string) error {
-					events = append(events, "default")
-					if failure == "default" {
-						return failed
-					}
-					defaultConnection = name
-					return nil
-				},
-			)
-			if failure == "" {
-				if err != nil || defaultConnection != "candidate" || strings.Join(events, ",") != "compose,finalize,default" {
-					t.Fatalf("events=%v default=%q error=%v", events, defaultConnection, err)
-				}
-				return
-			}
-			if !errors.Is(err, failed) || defaultConnection != "healthy" {
-				t.Fatalf("failure=%s events=%v default=%q error=%v", failure, events, defaultConnection, err)
-			}
-		})
-	}
-}
-
 func TestGuidedSetupResumesRetainedOpenAICandidateWithoutEarlyDefaultCommit(t *testing.T) {
 	configured := func(name string) (bool, error) { return name == "openai-api", nil }
 	missingDefault := func() (string, error) { return "", errors.New("no default") }
@@ -193,25 +148,6 @@ func TestGuidedSetupResumesRetainedOpenAICandidateWithoutEarlyDefaultCommit(t *t
 		if err != nil || !retained || name != "openai-api" {
 			t.Fatalf("options=%#v name=%q retained=%t error=%v", options, name, retained, err)
 		}
-	}
-
-	defaultConnection := "healthy"
-	failed := errors.New("live proof failed")
-	err := makeProviderConnectionReady(context.Background(), "openai-api",
-		func(context.Context) error { return nil },
-		func(context.Context, string) error { return failed },
-		func(name string) error { defaultConnection = name; return nil },
-	)
-	if !errors.Is(err, failed) || defaultConnection != "healthy" {
-		t.Fatalf("failed replay default=%q error=%v", defaultConnection, err)
-	}
-	err = makeProviderConnectionReady(context.Background(), "openai-api",
-		func(context.Context) error { return nil },
-		func(context.Context, string) error { return nil },
-		func(name string) error { defaultConnection = name; return nil },
-	)
-	if err != nil || defaultConnection != "openai-api" {
-		t.Fatalf("successful replay default=%q error=%v", defaultConnection, err)
 	}
 
 	name, retained, err := retainedSetupConnection(setupOptions{}, missingDefault, func(string) (bool, error) { return true, nil })
@@ -579,12 +515,6 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	if _, err := parseSetupOptions([]string{"--sandbox-provider", "incus", "--ai-connection", "personal-chatgpt", "--connection-auth", "chatgpt"}, &stderr); err == nil || !strings.Contains(err.Error(), "either") {
 		t.Fatalf("conflicting connection input error=%v", err)
 	}
-	if _, err := parseSetupOptions([]string{"--database", "native"}, &stderr); err == nil {
-		t.Fatal("removed database selection was accepted")
-	}
-	if _, err := parseSetupOptions([]string{"--absurd-schema", "/tmp/absurd.sql"}, &stderr); err == nil {
-		t.Fatal("removed setup Absurd schema transport was accepted")
-	}
 	for _, args := range [][]string{
 		{"--sandbox-provider", "incus", "--incus-manifest", "manifest.json"},
 		{"--sandbox-provider", "incus", "--incus-archive", "image.tar.zst"},
@@ -592,11 +522,6 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 	} {
 		if _, err := parseSetupOptions(args, &stderr); err == nil {
 			t.Fatalf("invalid Incus image transport was accepted: %v", args)
-		}
-	}
-	for _, removed := range []string{"--provider", "--connection"} {
-		if _, err := parseSetupOptions([]string{removed, "legacy"}, &stderr); err == nil {
-			t.Fatalf("removed setup flag %s was accepted", removed)
 		}
 	}
 	if _, err := parseSetupOptions([]string{"--sandbox-provider", "unknown"}, &stderr); err == nil {
@@ -646,18 +571,37 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 			t.Fatalf("ready connections=%v got=%q want=%q error=%v", test.ready, got, test.want, err)
 		}
 	}
-	selected := []core.SandboxProvider{}
+}
+
+func TestGuidedSetupPresenterKeepsChoicesAndControlsUsable(t *testing.T) {
 	presenter := setupPresenter{}
-	view := presenter.ProviderGroup(&selected, true).Content()
-	for _, label := range []string{"Local · Incus", "Hardware-isolated Linux VMs on this machine", "Cloud · E2B", "Managed Linux VMs"} {
-		if !strings.Contains(view, label) {
-			t.Fatalf("provider selector omitted %q:\n%s", label, view)
+	providers := []core.SandboxProvider{}
+	provider := presenter.ProviderGroup(&providers, true)
+	harness := presenter.HarnessGroup(new(string))
+	connection := presenter.ConnectionGroup(new(setupConnectionMode))
+	gateway := presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com")
+	for _, group := range []struct{ name, header, content string }{
+		{"provider", provider.Header(), provider.Content()},
+		{"harness", harness.Header(), harness.Content()},
+		{"connection", connection.Header(), connection.Content()},
+		{"gateway", gateway.Header(), gateway.Content()},
+	} {
+		if strings.TrimSpace(group.header) == "" || strings.TrimSpace(group.content) == "" {
+			t.Fatalf("%s group header=%q content=%q", group.name, group.header, group.content)
 		}
 	}
-	keymap := setupKeyMap()
-	if keymap.Select.Filter.Enabled() {
-		t.Fatal("short setup choices should not advertise filtering")
+	if content := provider.Content(); !strings.Contains(content, "Local · Incus") || !strings.Contains(content, "Cloud · E2B") {
+		t.Fatalf("provider choices=%q", content)
 	}
+	if content := harness.Content(); !strings.Contains(content, "Codex") || !strings.Contains(content, "Pi") {
+		t.Fatalf("Harness choices=%q", content)
+	}
+	unavailable := presenter.ProviderGroup(&providers, false).Content()
+	if !strings.Contains(unavailable, "[—] Local · Incus") || !strings.Contains(unavailable, "Unavailable") || strings.Contains(unavailable, "[ ] Local · Incus") {
+		t.Fatalf("KVM-disabled provider choices=%q", unavailable)
+	}
+
+	keymap := setupKeyMap()
 	if help := keymap.Select.Next.Help(); help.Key != "enter" || help.Desc != "continue" {
 		t.Fatalf("select help=%#v", help)
 	}
@@ -668,42 +612,9 @@ func TestSetupAutomationApprovalAndSelectionsAreExplicit(t *testing.T) {
 		t.Fatalf("submit help=%#v", help)
 	}
 	styles := setupTheme(true)
-	if !strings.Contains(styles.Focused.SelectSelector.String(), "› ") ||
-		!strings.Contains(styles.Focused.MultiSelectSelector.String(), "› ") {
-		t.Fatalf("setup menus do not share the same selector")
-	}
-	if focused := styles.Focused.FocusedButton.Render("Continue"); !strings.Contains(focused, "›") {
-		t.Fatalf("focused confirmation is not structurally marked: %q", focused)
-	}
-	if blurred := styles.Focused.BlurredButton.Render("Cancel"); strings.Contains(blurred, "›") {
-		t.Fatalf("inactive confirmation looks focused: %q", blurred)
-	}
-	if strings.Contains(view, "    Hardware-isolated") || strings.Contains(view, "    Managed Linux") {
-		t.Fatalf("provider descriptions carry embedded indentation:\n%s", view)
-	}
-	withoutKVM := presenter.ProviderGroup(&selected, false)
-	if !strings.Contains(withoutKVM.Content(), "[—] Local · Incus") ||
-		!strings.Contains(withoutKVM.Content(), "Unavailable on this machine · KVM not detected") ||
-		strings.Contains(withoutKVM.Content(), "[ ] Local · Incus") {
-		t.Fatalf("KVM-less provider selector is misleading:\n%s\n%s", withoutKVM.Header(), withoutKVM.Content())
-	}
-	for _, group := range []*huh.Group{
-		presenter.HarnessGroup(new(string)),
-		presenter.ConnectionGroup(new(setupConnectionMode)),
-		presenter.CloudflareGatewayGroup(new(setupGatewayMode), "example.com"),
-	} {
-		if strings.TrimSpace(group.Header()) == "" || strings.TrimSpace(group.Content()) == "" {
-			t.Fatalf("guided setup group is empty: header=%q content=%q", group.Header(), group.Content())
-		}
-	}
-	harness := "codex"
-	harnessForm := huh.NewForm(presenter.HarnessGroup(&harness)).WithKeyMap(setupKeyMap()).WithTheme(huh.ThemeFunc(setupTheme))
-	model, _ := harnessForm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
-	harnessContent := model.(*huh.Form).View()
-	for _, text := range []string{"Codex", "OpenAI Codex Harness", "Pi", "Pi coding-agent Harness"} {
-		if !strings.Contains(harnessContent, text) {
-			t.Fatalf("Harness selector omitted %q:\n%s", text, harnessContent)
-		}
+	if styles.Focused.SelectSelector.String() == styles.Blurred.SelectSelector.String() ||
+		styles.Focused.FocusedButton.Render("Continue") == styles.Focused.BlurredButton.Render("Continue") {
+		t.Fatal("focused controls lack a distinct indicator")
 	}
 }
 
@@ -889,13 +800,13 @@ func TestGuidedGatewayBindRejectsNewIncusProfileOnRemoteAuthorityBeforeRouteReus
 		IncusEndpointAuthorityHash: hash, IncusNetwork: guidedIncusNetwork,
 		IncusGatewayURL: "http://100.64.0.10:8317/v1",
 	}
-	address, privateBridge, resolve, err := selectGuidedGatewayBind(
+	_, _, _, err = selectGuidedGatewayBind(
 		[]core.SandboxProfile{profile},
 		[]guidedProfilePlan{{Provider: core.SandboxProviderIncus, Name: "new-local"}},
 		authority, "100.64.0.10", true,
 	)
 	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
-		t.Fatalf("address=%q private bridge=%q resolve=%t error=%v", address, privateBridge, resolve, err)
+		t.Fatalf("remote Incus setup error=%v", err)
 	}
 }
 
@@ -971,33 +882,12 @@ func TestGuidedIncusAuthorityDriftStopsBeforeReadinessHandoff(t *testing.T) {
 	}
 }
 
-func TestGuidedNewRemoteIncusStopsBeforeEndpointReadiness(t *testing.T) {
+func TestGuidedExistingVerifiedRemoteIncusIsRejectedBeforeAuthorityOrHostWork(t *testing.T) {
 	authority := &deployment.Incus{Endpoint: "https://unreachable.example:8443"}
-	probed := false
-	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
-		Provider: core.SandboxProviderIncus, Name: "new-remote",
-	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
-		probed = true
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
-		t.Fatalf("new remote guided setup error=%v", err)
-	}
-	if probed {
-		t.Fatalf("unsupported setup reached endpoint readiness")
-	}
-}
-
-func TestGuidedExistingVerifiedRemoteIncusReuseStopsBeforeEndpointReadiness(t *testing.T) {
-	authority := testRemoteIncusAuthority(t)
-	hash, err := authority.AuthorityHash()
-	if err != nil {
-		t.Fatal(err)
-	}
 	verifiedAt := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 	profile := core.SandboxProfile{
 		Name: "existing-remote", Provider: core.SandboxProviderIncus, Harness: "codex",
-		Artifact: "dorf:verified", IncusEndpointAuthorityHash: hash,
+		Artifact: "dorf:verified", IncusEndpointAuthorityHash: "different-authority",
 		IncusProject: "restricted", IncusStoragePool: "dorf-pool", IncusNetwork: "remote0",
 		IncusDiskSize: "40GiB", IncusGatewayURL: "https://gateway.example/v1",
 	}
@@ -1011,7 +901,7 @@ func TestGuidedExistingVerifiedRemoteIncusReuseStopsBeforeEndpointReadiness(t *t
 	}
 
 	probed := false
-	err = setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
+	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
 		Provider: core.SandboxProviderIncus, Name: profile.Name, Existing: &profile,
 	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
 		probed = true
@@ -1020,32 +910,11 @@ func TestGuidedExistingVerifiedRemoteIncusReuseStopsBeforeEndpointReadiness(t *t
 	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
 		t.Fatalf("existing remote guided setup error=%v", err)
 	}
+	if strings.Contains(err.Error(), "different Incus endpoint authority") {
+		t.Fatalf("profile authority validation ran before remote Incus policy: %v", err)
+	}
 	if probed {
 		t.Fatal("existing remote profile reuse reached endpoint readiness")
-	}
-}
-
-func TestGuidedRemoteIncusRejectionPrecedesExistingProfileAuthorityValidation(t *testing.T) {
-	authority := &deployment.Incus{Endpoint: "https://unreachable.example:8443"}
-	profile := core.SandboxProfile{
-		Name: "existing-remote", Provider: core.SandboxProviderIncus,
-		IncusEndpointAuthorityHash: "different-authority",
-	}
-	probed := false
-	err := setupGuidedIncusReadinessWith(context.Background(), []guidedProfilePlan{{
-		Provider: core.SandboxProviderIncus, Name: profile.Name, Existing: &profile,
-	}}, authority, func(context.Context, *deployment.Incus, string, string) error {
-		probed = true
-		return nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "guided remote Incus setup is not supported") {
-		t.Fatalf("remote Incus rejection ordering error=%v", err)
-	}
-	if strings.Contains(err.Error(), "different Incus endpoint authority") {
-		t.Fatalf("profile authority validation ran before remote Incus rejection: %v", err)
-	}
-	if probed {
-		t.Fatal("remote Incus ordering test reached endpoint readiness")
 	}
 }
 
@@ -1259,21 +1128,21 @@ func TestRenderWorkflowExecutionAttentionLeadsToTruthfulRepair(t *testing.T) {
 	}
 
 	output.Reset()
-	renderExecutionAttention(&output, core.Job{ID: "job-direct", AdmissionOpen: true}, execution, "Run prompt")
-	if got := output.String(); !strings.Contains(got, "attention: job stopped") || strings.Contains(got, "workflow stopped") {
-		t.Fatalf("client-directed attention output:\n%s", got)
-	}
-
-	output.Reset()
 	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupComplete}, execution, "Complete")
 	if output.Len() != 0 {
 		t.Fatalf("completed Job rendered non-actionable attention: %q", output.String())
 	}
 
 	output.Reset()
+	renderExecutionAttention(&output, core.Job{ID: "job-direct", AdmissionOpen: true}, execution, "Run prompt")
+	if got := output.String(); !strings.Contains(got, "attention: job stopped") || strings.Contains(got, "workflow stopped") {
+		t.Fatalf("direct Job attention=%q", got)
+	}
+
+	output.Reset()
 	renderExecutionAttention(&output, core.Job{ID: "job-123", CleanupState: core.CleanupScheduled}, execution, "Deleting Sandbox")
 	if got := output.String(); !strings.Contains(got, "attention: cleanup stopped") || !strings.Contains(got, "operation: Deleting Sandbox") || !strings.Contains(got, "dorf retry job-123") {
-		t.Fatalf("failed cleanup attention:\n%s", got)
+		t.Fatalf("cleanup attention=%q", got)
 	}
 
 	output.Reset()

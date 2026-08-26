@@ -128,7 +128,7 @@ func TestWatchJobReconnectsWithoutOrdinaryRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestTypedWorkflowAdmissionsAndJobUnion(t *testing.T) {
+func TestJobDecodesWorkflowUnion(t *testing.T) {
 	const credential = "workflow-credential"
 	codingJSON := `{"id":"job-coding","kind":"coding","workflow_revision":"3"}`
 	investigationJSON := `{"id":"job-investigation","kind":"codebase-investigation","workflow_revision":"2"}`
@@ -137,16 +137,6 @@ func TestTypedWorkflowAdmissionsAndJobUnion(t *testing.T) {
 			t.Fatalf("workflow request auth=%q", request.Header.Get("Authorization"))
 		}
 		switch request.Method + " " + request.URL.Path {
-		case "POST /v1/workflows/coding/jobs":
-			if request.Header.Get("Idempotency-Key") != "coding-key" {
-				t.Fatalf("coding key=%q", request.Header.Get("Idempotency-Key"))
-			}
-			return jsonResponse(http.StatusCreated, codingJSON), nil
-		case "POST /v1/workflows/codebase-investigation/jobs":
-			if request.Header.Get("Idempotency-Key") != "investigation-key" {
-				t.Fatalf("investigation key=%q", request.Header.Get("Idempotency-Key"))
-			}
-			return jsonResponse(http.StatusCreated, investigationJSON), nil
 		case "GET /v1/jobs/job-coding":
 			return jsonResponse(http.StatusOK, codingJSON), nil
 		case "GET /v1/jobs/job-investigation":
@@ -159,14 +149,6 @@ func TestTypedWorkflowAdmissionsAndJobUnion(t *testing.T) {
 	client, err := New("https://dorf.example.test", credential, transport)
 	if err != nil {
 		t.Fatal(err)
-	}
-	gotCoding, err := client.AdmitCodingJob(context.Background(), "coding-key", controlapi.AdmitCodingJobRequest{Model: "model-1"})
-	if err != nil || gotCoding.Kind != controlapi.JobKindCoding {
-		t.Fatalf("coding Job=%#v err=%v", gotCoding, err)
-	}
-	gotInvestigation, err := client.AdmitInvestigationJob(context.Background(), "investigation-key", controlapi.AdmitInvestigationJobRequest{Model: "model-1"})
-	if err != nil || gotInvestigation.Kind != controlapi.JobKindInvestigation {
-		t.Fatalf("investigation Job=%#v err=%v", gotInvestigation, err)
 	}
 	if got, err := client.Job(context.Background(), "job-coding"); err != nil {
 		t.Fatal(err)

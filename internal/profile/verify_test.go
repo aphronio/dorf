@@ -150,6 +150,10 @@ func (*verificationSandbox) Endpoint(context.Context, provider.Ownership, int) (
 }
 func (*verificationSandbox) ProviderRouteURL(context.Context) (string, error) { return "", nil }
 
+func verifyBase(store *verificationStore, runtime *verificationSandbox) (core.SandboxProfile, error) {
+	return VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+}
+
 func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	store := newVerificationStore()
 	store.profile.Artifact = "exact-artifact"
@@ -167,20 +171,6 @@ func TestVerifyBaseRecordsProbeAndExactCleanup(t *testing.T) {
 	}
 }
 
-func TestVerifyBaseRejectsFailedOrInexactFileReadProbe(t *testing.T) {
-	for _, runtime := range []*verificationSandbox{
-		{readErr: errors.New("read failed")},
-		{readResult: []byte("changed")},
-	} {
-		store := newVerificationStore()
-		store.profile.Artifact = "exact-artifact"
-		runtime.execResult = provider.Result{Stdout: "codex 1.2.3\n"}
-		if _, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil || runtime.deleteCall != 1 || runtime.present {
-			t.Fatalf("runtime=%#v err=%v", runtime, err)
-		}
-	}
-}
-
 func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
 	store := newVerificationStore()
 	previous := time.Now().Add(-time.Hour)
@@ -188,7 +178,7 @@ func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
 	store.verification.CleanedAt = previous.Add(time.Second)
 	store.verification.HarnessVersion = "codex old"
 	runtime := &verificationSandbox{execResult: provider.Result{Stdout: "codex fresh\n"}}
-	profile, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	profile, err := verifyBase(store, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,21 +190,12 @@ func TestVerifyBaseFreshlyProbesAnAlreadyVerifiedProfile(t *testing.T) {
 	}
 }
 
-func TestVerifyBaseRejectsFailedAtomicFileProbe(t *testing.T) {
-	store := newVerificationStore()
-	runtime := &verificationSandbox{putErr: errors.New("upload unavailable")}
-	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
-	if err == nil || !strings.Contains(err.Error(), "atomic file probe") || runtime.deleteCall != 1 || store.profile.BaseVerified() {
-		t.Fatalf("profile=%#v runtime=%#v error=%v", store.profile, runtime, err)
-	}
-}
-
 func TestVerifyBaseResumesCleanupWithoutRepeatingProbe(t *testing.T) {
 	store := newVerificationStore()
 	store.verification.ProbeCompletedAt = time.Now()
 	store.verification.HarnessVersion = "codex 1.2.3"
 	runtime := &verificationSandbox{present: true, execErr: errors.New("probe must not repeat")}
-	profile, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+	profile, err := verifyBase(store, runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,23 +204,25 @@ func TestVerifyBaseResumesCleanupWithoutRepeatingProbe(t *testing.T) {
 	}
 }
 
-func TestVerifyBaseCleansFailedProbeAndKeepsProfileUnverified(t *testing.T) {
-	store := newVerificationStore()
-	runtime := &verificationSandbox{execErr: errors.New("transport failed")}
-	if _, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name); err == nil {
-		t.Fatal("failed probe was accepted")
-	}
-	if runtime.deleteCall != 1 || runtime.present || store.verification.CleanedAt.IsZero() || store.errorDetail == "" || store.profile.BaseVerified() {
-		t.Fatalf("store=%#v runtime=%#v", store, runtime)
-	}
-}
-
-func TestVerifyBaseReportsFailedPredicateDetail(t *testing.T) {
-	store := newVerificationStore()
-	runtime := &verificationSandbox{execResult: provider.Result{ExitCode: 1, Stderr: "required command is missing: rg\n"}}
-	_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
-	if err == nil || !strings.Contains(err.Error(), "required command is missing: rg") {
-		t.Fatalf("error=%v", err)
+func TestVerifyBaseCleansFailedProbesAndKeepsProfileUnverified(t *testing.T) {
+	for name, test := range map[string]struct {
+		runtime *verificationSandbox
+		want    string
+	}{
+		"read failure":     {&verificationSandbox{readErr: errors.New("read failed")}, "read failed"},
+		"inexact read":     {&verificationSandbox{readResult: []byte("changed")}, "exact"},
+		"atomic upload":    {&verificationSandbox{putErr: errors.New("upload unavailable")}, "atomic file probe"},
+		"transport":        {&verificationSandbox{execErr: errors.New("transport failed")}, "transport failed"},
+		"predicate detail": {&verificationSandbox{execResult: provider.Result{ExitCode: 1, Stderr: "required command is missing: rg\n"}}, "required command is missing: rg"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newVerificationStore()
+			test.runtime.execResult.Stdout = "codex 1.2.3\n"
+			_, err := verifyBase(store, test.runtime)
+			if err == nil || !strings.Contains(err.Error(), test.want) || test.runtime.deleteCall != 1 || test.runtime.present || store.verification.CleanedAt.IsZero() || store.errorDetail == "" || store.profile.BaseVerified() {
+				t.Fatalf("store=%#v runtime=%#v error=%v, want %q", store, test.runtime, err, test.want)
+			}
+		})
 	}
 }
 
@@ -269,7 +252,7 @@ func TestVerifyBaseRequiresConfirmedCleanup(t *testing.T) {
 			store.verification.HarnessVersion = "codex 1.2.3"
 			runtime := &verificationSandbox{present: true}
 			test.configure(store, runtime)
-			_, err := VerifyBase(context.Background(), store, func(core.SandboxProfile) (provider.Sandbox, error) { return runtime, nil }, store.profile.Name)
+			_, err := verifyBase(store, runtime)
 			if err == nil || !strings.Contains(err.Error(), test.wantDetail) {
 				t.Fatalf("error=%v, want %q", err, test.wantDetail)
 			}

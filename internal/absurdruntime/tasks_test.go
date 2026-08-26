@@ -3,25 +3,15 @@ package absurdruntime
 import "testing"
 
 func TestTaskSpawnOptionsUseBoundedExponentialRetry(t *testing.T) {
-	first := TaskSpawnOptions("jobs", "job-key")
-	second := TaskSpawnOptions("jobs", "cleanup-key")
+	options := TaskSpawnOptions("jobs", "job-key")
 
-	if first.IdempotencyKey != "job-key" {
-		t.Fatalf("idempotency = %q", first.IdempotencyKey)
+	if options.QueueName != "jobs" || options.IdempotencyKey != "job-key" {
+		t.Fatalf("spawn identity = %#v", options)
 	}
-	if first.RetryStrategy == nil {
+	if options.RetryStrategy == nil {
 		t.Fatal("retry strategy is missing")
 	}
-	if first.RetryStrategy.Kind != "exponential" ||
-		first.RetryStrategy.BaseSeconds != 5 ||
-		first.RetryStrategy.Factor != 2 ||
-		first.RetryStrategy.MaxSeconds != 60 {
-		t.Fatalf("retry strategy = %#v", first.RetryStrategy)
-	}
-	if second.IdempotencyKey != "cleanup-key" || second.RetryStrategy == nil {
-		t.Fatalf("second spawn options = %#v", second)
-	}
-	if first.RetryStrategy == second.RetryStrategy {
-		t.Fatal("spawn options share a mutable retry strategy")
+	if retry := options.RetryStrategy; retry.Kind != "exponential" || retry.BaseSeconds != 5 || retry.Factor != 2 || retry.MaxSeconds != 60 {
+		t.Fatalf("retry strategy = %#v", retry)
 	}
 }

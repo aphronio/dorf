@@ -51,62 +51,7 @@ func TestSelectDeploymentImagePreservesSameVersionChoice(t *testing.T) {
 	}
 }
 
-func TestMaterializeDeploymentConfigurationAppliesChangedProjectAndContinuesWhenReady(t *testing.T) {
-	source := testDeploymentConfigurationSource(t)
-	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
-	requests := 0
-	readyClient := &http.Client{Transport: deploymentRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		requests++
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"product":"dorf","version":"1.2.3"}`)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-	applied := 0
-	apply := func(_ context.Context, projectDir string) error {
-		applied++
-		if projectDir != source.Paths.ComposeDir {
-			t.Fatalf("applied project = %q, want %q", projectDir, source.Paths.ComposeDir)
-		}
-		return nil
-	}
-
-	got, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply)
-	if err != nil || got != image || applied != 1 || requests != 1 {
-		t.Fatalf("materialization image=%+v error=%v applies=%d requests=%d", got, err, applied, requests)
-	}
-}
-
-func TestMaterializeDeploymentConfigurationReappliesReadyUnchangedProject(t *testing.T) {
-	source := testDeploymentConfigurationSource(t)
-	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
-	readyClient := &http.Client{Transport: deploymentRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"product":"dorf","version":"1.2.3"}`)),
-			Header:     make(http.Header),
-		}, nil
-	})}
-	applied := 0
-	apply := func(context.Context, string) error {
-		applied++
-		return nil
-	}
-	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply); err != nil {
-		t.Fatal(err)
-	}
-	applied = 0
-
-	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, readyClient, apply); err != nil {
-		t.Fatal(err)
-	}
-	if applied != 1 {
-		t.Fatalf("ready unchanged project applied %d times, want 1", applied)
-	}
-}
-
-func TestMaterializeDeploymentConfigurationRestartsStoppedUnchangedProject(t *testing.T) {
+func TestMaterializeDeploymentConfigurationAppliesAndReplaysReadyProject(t *testing.T) {
 	source := testDeploymentConfigurationSource(t)
 	image := composeconfig.Image{Version: "1.2.3", Reference: "ghcr.io/aphronio/dorf:1.2.3", Pull: true}
 	running := false
@@ -121,21 +66,21 @@ func TestMaterializeDeploymentConfigurationRestartsStoppedUnchangedProject(t *te
 		}, nil
 	})}
 	applied := 0
-	apply := func(context.Context, string) error {
+	apply := func(_ context.Context, projectDir string) error {
 		applied++
+		if projectDir != source.Paths.ComposeDir {
+			t.Fatalf("applied project = %q, want %q", projectDir, source.Paths.ComposeDir)
+		}
 		running = true
 		return nil
 	}
 
-	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil {
-		t.Fatal(err)
+	if got, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil || got != image || applied != 1 {
+		t.Fatalf("initial materialization image=%+v error=%v applies=%d", got, err, applied)
 	}
 	running = false
-	if _, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil {
-		t.Fatal(err)
-	}
-	if applied != 2 {
-		t.Fatalf("stopped unchanged project applied %d times, want 2 total", applied)
+	if got, err := materializeDeploymentConfiguration(context.Background(), source, image, client, apply); err != nil || got != image || applied != 2 {
+		t.Fatalf("replayed materialization image=%+v error=%v applies=%d", got, err, applied)
 	}
 }
 

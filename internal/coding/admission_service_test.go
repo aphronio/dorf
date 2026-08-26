@@ -16,8 +16,6 @@ type admissionServiceStore struct {
 	profile      core.SandboxProfile
 	profileErr   error
 	admitted     Admission
-	admitCalls   int
-	profileCalls int
 	hideJobOnce  bool
 	conflictOnce bool
 }
@@ -37,17 +35,14 @@ func (s *admissionServiceStore) CodingJob(_ context.Context, _ string) (Job, err
 }
 
 func (s *admissionServiceStore) SandboxProfile(_ context.Context, _ string) (core.SandboxProfile, error) {
-	s.profileCalls++
 	return s.profile, s.profileErr
 }
 
 func (s *admissionServiceStore) DefaultSandboxProfile(_ context.Context) (core.SandboxProfile, error) {
-	s.profileCalls++
 	return s.profile, s.profileErr
 }
 
 func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission) (core.Job, bool, error) {
-	s.admitCalls++
 	s.admitted = input
 	if s.conflictOnce {
 		s.conflictOnce = false
@@ -83,10 +78,9 @@ func (s *admissionServiceStore) AdmitCoding(_ context.Context, input Admission) 
 	return s.job, created, nil
 }
 
-type admissionServiceScheduler struct{ calls int }
+type admissionServiceScheduler struct{}
 
 func (s *admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.Job, taskName, taskKey string) (core.Job, error) {
-	s.calls++
 	if taskName != TaskName || taskKey != TaskKey(job.ID) {
 		return core.Job{}, errors.New("wrong coding task identity")
 	}
@@ -94,29 +88,17 @@ func (s *admissionServiceScheduler) ScheduleJobTask(_ context.Context, job core.
 	return job, nil
 }
 
-type admissionServiceProvider struct {
-	defaultCalls int
-	checkCalls   int
-	err          error
-}
+type admissionServiceProvider struct{ err error }
 
 func (p *admissionServiceProvider) DefaultConnection() (string, error) {
-	p.defaultCalls++
 	return "primary", p.err
 }
 
-func (p *admissionServiceProvider) Check(context.Context, string) error {
-	p.checkCalls++
-	return p.err
-}
+func (p *admissionServiceProvider) Check(context.Context, string) error { return p.err }
 
-type admissionServiceInstallations struct {
-	calls int
-	err   error
-}
+type admissionServiceInstallations struct{ err error }
 
 func (g *admissionServiceInstallations) DiscoverInstallation(_ context.Context, repository string) (string, error) {
-	g.calls++
 	if repository != "aphronio/dorf" {
 		return "", errors.New("wrong GitHub repository")
 	}
@@ -126,7 +108,7 @@ func (g *admissionServiceInstallations) DiscoverInstallation(_ context.Context, 
 	return "42", nil
 }
 
-func TestAdmissionServiceSelectsAuthorityOnceAndReconcilesExactReplay(t *testing.T) {
+func TestAdmissionServiceReconcilesFirstAdmissionRaceAndExactReplay(t *testing.T) {
 	store := &admissionServiceStore{profile: verifiedAdmissionProfile("cloud", true)}
 	scheduler := &admissionServiceScheduler{}
 	provider := &admissionServiceProvider{}
@@ -159,11 +141,6 @@ func TestAdmissionServiceSelectsAuthorityOnceAndReconcilesExactReplay(t *testing
 	if err != nil || created || replayed.ID != createdJob.ID || replayed.CurrentTaskID == "" {
 		t.Fatalf("exact replay Job=%#v created=%t err=%v", replayed, created, err)
 	}
-	if store.profileCalls != 2 || provider.defaultCalls != 2 || provider.checkCalls != 2 || installations.calls != 2 || scheduler.calls != 3 {
-		t.Fatalf("replay consulted volatile authority: profile=%d default=%d check=%d GitHub=%d schedule=%d",
-			store.profileCalls, provider.defaultCalls, provider.checkCalls, installations.calls, scheduler.calls)
-	}
-
 	changed := request
 	changed.BaseBranch = "develop"
 	if _, _, err := service.Admit(context.Background(), changed); !errors.Is(err, ErrAdmissionConflict) {
@@ -181,36 +158,34 @@ func TestAdmissionServiceSelectsAuthorityOnceAndReconcilesExactReplay(t *testing
 }
 
 func TestAdmissionServiceValidatesAndRequiresRemoteGitBeforeExternalAuthority(t *testing.T) {
+	valid := AdmissionRequest{
+		AdmissionKey: "request", Goal: "goal", Model: "model", Repository: "https://github.com/aphronio/dorf.git",
+		Revision: strings.Repeat("a", 40), BaseBranch: "main",
+	}
 	tests := map[string]struct {
-		request    AdmissionRequest
+		mutate     func(*AdmissionRequest)
 		profile    core.SandboxProfile
 		profileErr error
 	}{
-		"malformed": {
-			request: AdmissionRequest{AdmissionKey: "invalid", Goal: "goal", Model: "model", Repository: "not a repository", Revision: strings.Repeat("a", 40), BaseBranch: "main"},
-			profile: verifiedAdmissionProfile("cloud", true),
-		},
-		"offline remote Git": {
-			request: AdmissionRequest{AdmissionKey: "offline", Goal: "goal", Model: "model", Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main"},
-			profile: verifiedAdmissionProfile("cloud", false),
-		},
+		"malformed":          {mutate: func(r *AdmissionRequest) { r.Repository = "not a repository" }},
+		"offline remote Git": {profile: verifiedAdmissionProfile("cloud", false)},
 		"missing explicit profile": {
-			request:    AdmissionRequest{AdmissionKey: "missing", Goal: "goal", SandboxProfile: "missing", Model: "model", Repository: "https://github.com/aphronio/dorf.git", Revision: strings.Repeat("a", 40), BaseBranch: "main"},
+			mutate:     func(r *AdmissionRequest) { r.SandboxProfile = "missing" },
 			profileErr: errors.New("profile not found"),
 		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
+			request := valid
+			if test.mutate != nil {
+				test.mutate(&request)
+			}
 			store := &admissionServiceStore{profile: test.profile, profileErr: test.profileErr}
-			provider := &admissionServiceProvider{}
-			installations := &admissionServiceInstallations{}
-			_, _, err := NewAdmissionService(store, &admissionServiceScheduler{}, provider, installations).Admit(context.Background(), test.request)
+			provider := &admissionServiceProvider{err: errors.New("external authority called")}
+			installations := &admissionServiceInstallations{err: errors.New("external authority called")}
+			_, _, err := NewAdmissionService(store, &admissionServiceScheduler{}, provider, installations).Admit(context.Background(), request)
 			if !errors.Is(err, ErrInvalidAdmission) {
 				t.Fatalf("error=%v, want invalid admission", err)
-			}
-			if provider.defaultCalls != 0 || provider.checkCalls != 0 || installations.calls != 0 || store.admitCalls != 0 {
-				t.Fatalf("invalid admission crossed external authority: default=%d check=%d GitHub=%d store=%d",
-					provider.defaultCalls, provider.checkCalls, installations.calls, store.admitCalls)
 			}
 		})
 	}

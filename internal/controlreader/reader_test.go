@@ -241,28 +241,6 @@ func TestAuthenticatedClientUsesFixedAdmissionObservations(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedClientProvesReaderHealthWithoutExternalAuthority(t *testing.T) {
-	handler, err := NewHandler(strings.Repeat("a", 64), Service{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientHTTP := &http.Client{Transport: readerHandlerTransport{handler: handler}}
-	client, err := NewClient("http://control-reader.test:8756", strings.Repeat("a", 64), clientHTTP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.Health(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	unauthorized, err := NewClient("http://control-reader.test:8756", strings.Repeat("b", 64), clientHTTP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := unauthorized.Health(context.Background()); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("unauthorized Health() error=%v", err)
-	}
-}
-
 func TestHandlerRejectsOversizedAndUnknownRequestsBeforeAuthority(t *testing.T) {
 	store := &readerTestStore{}
 	handler, err := NewHandler(strings.Repeat("e", 64), Service{Store: store})

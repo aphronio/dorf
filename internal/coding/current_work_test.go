@@ -45,6 +45,15 @@ func factMessage(message core.Message, run core.AgentRun) MessageRecord {
 	}
 }
 
+func projectedWork(t *testing.T, facts Snapshot) Work {
+	t.Helper()
+	projection, err := facts.Project(blob.Store{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return projection.CurrentWork
+}
+
 func TestCodingAgentPromptKeepsReviewFeedbackOpaque(t *testing.T) {
 	job := Job{Branch: "dorf/feedback", Revision: strings.Repeat("a", 40)}
 	message := core.Message{FromKind: core.MessageFromAgent, FromID: "review-run-1", Input: "Reviewer prose that the implementation agent must interpret."}
@@ -71,19 +80,19 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 			{WorkAction, core.ActionRouteCreate},
 		}
 		for _, step := range steps {
-			got := decideCurrentWork(facts)
+			got := projectedWork(t, facts)
 			wantID := core.ScopedActionID(facts.Job.ID, step.action, reviewer.Sandbox.ID)
 			if got.Kind != step.work || got.ActionKind != step.action || got.FactID != wantID || got.Scope != reviewer.Sandbox.ID {
 				t.Fatalf("CurrentWork = %#v, want %s Action %s", got, step.action, wantID)
 			}
 			facts.Actions = append(facts.Actions, core.Action{ID: wantID, JobID: facts.Job.ID, Kind: step.action, State: core.ActionSucceeded, Scope: reviewer.Sandbox.ID})
 		}
-		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != reviewer.MessageID {
+		if got := projectedWork(t, facts); got.Kind != WorkWaitAgent || got.FactID != reviewer.MessageID {
 			t.Fatalf("CurrentWork = %#v, want selected reviewer after its exact Actions", got)
 		}
 		reviewer.Outcome = "completed"
 		facts.ReviewRuns = []ReviewRunView{reviewer}
-		if got := decideCurrentWork(facts); got.Kind != WorkRecordReview || got.FactID != reviewer.MessageID {
+		if got := projectedWork(t, facts); got.Kind != WorkRecordReview || got.FactID != reviewer.MessageID {
 			t.Fatalf("CurrentWork = %#v, want typed review feedback recording", got)
 		}
 	})
@@ -102,7 +111,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		}
 		facts.Job.WorkflowAttentionSource = messageID
 		facts.Job.WorkflowAttention = "review Role general returned no feedback text"
-		if got := decideCurrentWork(facts); got.Kind != WorkAttention || got.FactID != messageID || got.Detail != facts.Job.WorkflowAttention {
+		if got := projectedWork(t, facts); got.Kind != WorkAttention || got.FactID != messageID || got.Detail != facts.Job.WorkflowAttention {
 			t.Fatalf("CurrentWork=%#v, want durable review attention", got)
 		}
 	})
@@ -117,7 +126,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		facts.ReviewRuns = []ReviewRunView{reviewer}
 		facts.Messages = []MessageRecord{factMessage(feedback, core.AgentRun{ID: core.AgentRunID(feedback.ID), MessageID: feedback.ID, Role: "implement", SandboxID: facts.MainSandbox.ID})}
 		facts.Sandboxes = append(facts.Sandboxes, core.Sandbox{ID: reviewer.SandboxID, JobID: facts.Job.ID})
-		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != feedback.ID {
+		if got := projectedWork(t, facts); got.Kind != WorkWaitAgent || got.FactID != feedback.ID {
 			t.Fatalf("CurrentWork = %#v, want ordinary feedback Message wait", got)
 		}
 	})
@@ -127,7 +136,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		facts.ReviewPlans = nil
 		message := core.Message{ID: "message-implement-2", JobID: facts.Job.ID, Sequence: 2, Intent: core.MessageFollow}
 		facts.Messages = []MessageRecord{factMessage(message, core.AgentRun{ID: core.AgentRunID(message.ID), MessageID: message.ID, Role: "implement", SandboxID: facts.MainSandbox.ID})}
-		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != "message-implement-2" {
+		if got := projectedWork(t, facts); got.Kind != WorkWaitAgent || got.FactID != "message-implement-2" {
 			t.Fatalf("CurrentWork = %#v, want active Message wait", got)
 		}
 	})
@@ -138,7 +147,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 		message := core.Message{ID: "message-2", JobID: facts.Job.ID, Sequence: 2, Intent: core.MessageFollow}
 		run := core.AgentRun{ID: core.AgentRunID(message.ID), JobID: facts.Job.ID, MessageID: message.ID, Role: "implement", State: core.AgentRunSubmitting}
 		facts.Messages = []MessageRecord{factMessage(message, run)}
-		if got := decideCurrentWork(facts); got.Kind != WorkWaitAgent || got.FactID != message.ID {
+		if got := projectedWork(t, facts); got.Kind != WorkWaitAgent || got.FactID != message.ID {
 			t.Fatalf("CurrentWork = %#v, want submitting Follow wait", got)
 		}
 	})
@@ -159,7 +168,7 @@ func TestCurrentWorkDependencyOrder(t *testing.T) {
 	t.Run("ready exact Revision observes its Proposal", func(t *testing.T) {
 		facts := readyFacts()
 		facts.Proposal = &Proposal{JobID: facts.Job.ID, Number: 12, URL: "https://example.test/12", ProposedRevision: facts.Job.Revision}
-		if got := decideCurrentWork(facts); got.Kind != WorkObserveProposal {
+		if got := projectedWork(t, facts); got.Kind != WorkObserveProposal {
 			t.Fatalf("CurrentWork = %#v, want Proposal observation", got)
 		}
 	})
@@ -171,7 +180,7 @@ func TestCurrentWorkSurfacesSandboxActionAttention(t *testing.T) {
 	source := core.ScopedActionID(facts.Job.ID, core.ActionSandboxCreate, facts.MainSandbox.ID)
 	facts.Job.WorkflowAttentionSource = source
 	facts.Job.WorkflowAttention = "the exact Sandbox profile artifact is unavailable"
-	work := decideCurrentWork(facts)
+	work := projectedWork(t, facts)
 	if work.Kind != WorkAttention || work.FactID != source || work.Detail != facts.Job.WorkflowAttention {
 		t.Fatalf("CurrentWork = %#v", work)
 	}
@@ -271,7 +280,7 @@ func TestLatestImplementationMessageCannotFallThrough(t *testing.T) {
 				facts.Evidence = []core.Evidence{{Kind: "git-revision", AgentRunID: "run-1", Revision: facts.Job.Revision}}
 				wantFactID = facts.Job.Revision
 			}
-			got := decideCurrentWork(facts)
+			got := projectedWork(t, facts)
 			if got.Kind != test.want || got.FactID != wantFactID {
 				t.Fatalf("CurrentWork = %#v, want kind %s owned by latest safe fact", got, test.want)
 			}
@@ -292,11 +301,7 @@ func TestRejectedPublicationReadinessBecomesAttention(t *testing.T) {
 	if tentative.Kind != WorkPublishProposal {
 		t.Fatalf("tentative CurrentWork = %#v, want publication", tentative)
 	}
-	projection, err := facts.Project(blob.Store{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := projection.CurrentWork
+	got := projectedWork(t, facts)
 	if got.Kind != WorkAttention || !strings.HasPrefix(got.Detail, "publication lost exact-Revision readiness: ") {
 		t.Fatalf("CurrentWork = %#v, want publication readiness attention", got)
 	}

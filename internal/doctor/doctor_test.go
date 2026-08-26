@@ -69,41 +69,24 @@ func TestIncusChecksUseExplicitSDKConnectionWithoutCLI(t *testing.T) {
 	assertCheckStatus(t, checks, "incus-image", "ready", "")
 }
 
-func TestIncusChecksDoNotInferGatewayRouteFromPrivateHTTPAddress(t *testing.T) {
+func TestIncusChecksDoNotInferOperatorGatewayRoutes(t *testing.T) {
 	authority := &deployment.Incus{Endpoint: "unix:///run/incus/dorf.socket"}
-	profile := localIncusProfile(t, authority)
-	profile.IncusGatewayURL = "http://10.173.0.99:8317/v1"
-	checks := collectIncusChecks(context.Background(), authority, profile, incusCheckDependencies{
-		openClient: func(context.Context, incus.ConnectionConfig) (incusReadClient, error) {
-			return &fakeIncusReadClient{network: "10.173.0.1/24"}, nil
-		},
-		resolveImageFingerprint: func(_ context.Context, _ incus.ConnectionConfig, reference string) (string, error) {
-			return reference, nil
-		},
-	})
+	for _, gatewayURL := range []string{"http://10.173.0.99:8317/v1", "https://gateway.example/v1"} {
+		profile := localIncusProfile(t, authority)
+		profile.IncusGatewayURL = gatewayURL
+		checks := collectIncusChecks(context.Background(), authority, profile, incusCheckDependencies{
+			openClient: func(context.Context, incus.ConnectionConfig) (incusReadClient, error) {
+				return &fakeIncusReadClient{network: "10.173.0.1/24"}, nil
+			},
+			resolveImageFingerprint: func(_ context.Context, _ incus.ConnectionConfig, reference string) (string, error) {
+				return reference, nil
+			},
+		})
 
-	assertCheckStatus(t, checks, "incus-network", "ready", "")
-	if route, found := checks["incus-gateway-route"]; found {
-		t.Fatalf("operator-routed private address was inferred from Incus network authority: %#v", route)
-	}
-}
-
-func TestIncusGatewayRouteDoesNotInferOperatorHTTPSRouting(t *testing.T) {
-	authority := &deployment.Incus{Endpoint: "unix:///run/incus/dorf.socket"}
-	profile := localIncusProfile(t, authority)
-	profile.IncusGatewayURL = "https://gateway.example/v1"
-	checks := collectIncusChecks(context.Background(), authority, profile, incusCheckDependencies{
-		openClient: func(context.Context, incus.ConnectionConfig) (incusReadClient, error) {
-			return &fakeIncusReadClient{network: "10.173.0.1/24"}, nil
-		},
-		resolveImageFingerprint: func(_ context.Context, _ incus.ConnectionConfig, reference string) (string, error) {
-			return reference, nil
-		},
-	})
-
-	assertCheckStatus(t, checks, "incus-network", "ready", "")
-	if route, found := checks["incus-gateway-route"]; found {
-		t.Fatalf("operator-owned HTTPS route was inferred from Incus network authority: %#v", route)
+		assertCheckStatus(t, checks, "incus-network", "ready", "")
+		if route, found := checks["incus-gateway-route"]; found {
+			t.Fatalf("operator gateway %q was inferred from Incus network authority: %#v", gatewayURL, route)
+		}
 	}
 }
 

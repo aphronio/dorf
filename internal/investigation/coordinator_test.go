@@ -31,13 +31,11 @@ func TestCodebaseInvestigationProjectsItsOwnDependencyChain(t *testing.T) {
 	if work := snapshot.Project(); work.Kind != WorkWaitAgent || work.FactID != message.MessageID {
 		t.Fatalf("Agent Message work=%#v", work)
 	}
-	snapshot.Message.Outcome = "completed"
-	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
-		t.Fatalf("open Job with completed investigator projected workflow work=%#v", work)
-	}
-	snapshot.Message = MessageRecord{}
-	if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
-		t.Fatalf("open Job with no unsettled Message projected workflow work=%#v", work)
+	for _, message := range []MessageRecord{{Outcome: "completed"}, {}} {
+		snapshot.Message = message
+		if work := snapshot.Project(); work.Kind != "" || work.Description() != "No current workflow operation" {
+			t.Fatalf("open Job with settled Message %#v projected workflow work=%#v", message, work)
+		}
 	}
 	snapshot.Job.AdmissionOpen = false
 	if work := snapshot.Project(); work.Kind != WorkComplete {
@@ -109,11 +107,11 @@ func TestProviderCapabilityAdmissionUsesOnlyOptionalProviderPrimitives(t *testin
 	if err == nil || !strings.Contains(err.Error(), string(browser)) {
 		t.Fatalf("missing provider capability error=%v", err)
 	}
-	if definition := WorkflowDefinition(); len(definition.RequiredProviderCapabilities) != 0 {
-		t.Fatalf("investigation unexpectedly requires provider capabilities: %v", definition.RequiredProviderCapabilities)
+	workflow := WorkflowDefinition()
+	if len(workflow.RequiredProviderCapabilities) != 0 {
+		t.Fatalf("investigation unexpectedly requires provider capabilities: %v", workflow.RequiredProviderCapabilities)
 	}
-	investigationDefinition := WorkflowDefinition()
-	if err := (profile.Runtime{SandboxProfile: "e2b"}).Require(investigationDefinition.Name, investigationDefinition.Revision, investigationDefinition.RequiredProviderCapabilities); err != nil {
+	if err := (profile.Runtime{SandboxProfile: "e2b"}).Require(workflow.Name, workflow.Revision, workflow.RequiredProviderCapabilities); err != nil {
 		t.Fatal(err)
 	}
 }

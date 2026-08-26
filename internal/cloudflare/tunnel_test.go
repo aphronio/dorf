@@ -82,18 +82,22 @@ func (f *fakeRunner) Output(_ context.Context, _ []string, name string, args ...
 	return "", nil
 }
 
-func TestGuidedTunnelRefusesHostnameOccupiedImmediatelyBeforeDNSMutation(t *testing.T) {
+func preparedTunnel(t *testing.T, origin string) (Tunnel, *fakeRunner, State) {
+	t.Helper()
 	statePath := filepath.Join(t.TempDir(), "state")
 	binary, digest := installFakeCloudflared(t, statePath)
-	resolver := &fakeDNSResolver{}
 	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
-		Runner: runner, Resolver: resolver, binarySHA256: digest,
-	}
-	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
+	tunnel := Tunnel{StatePath: statePath, Binary: binary, Origin: origin, Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest}
+	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
+	if err != nil {
 		t.Fatal(err)
 	}
+	return tunnel, runner, state
+}
+
+func TestGuidedTunnelRefusesHostnameOccupiedImmediatelyBeforeDNSMutation(t *testing.T) {
+	tunnel, runner, _ := preparedTunnel(t, ComposeGatewayOrigin)
+	resolver := tunnel.Resolver.(*fakeDNSResolver)
 	runner.calls = nil
 	resolver.lookups = 0
 	runner.afterIngressValidation = func() {
@@ -118,19 +122,8 @@ func TestGuidedTunnelRefusesHostnameOccupiedImmediatelyBeforeDNSMutation(t *test
 }
 
 func TestGuidedTunnelReplaysAmbiguousDNSCommitForExactRetainedTunnel(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	resolver := &fakeDNSResolver{}
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
-		Runner: runner, Resolver: resolver, binarySHA256: digest,
-	}
-
-	initial, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, initial := preparedTunnel(t, ComposeGatewayOrigin)
+	resolver := tunnel.Resolver.(*fakeDNSResolver)
 	// Simulate process loss after the exact route mutation succeeded but before
 	// its local completion flag was retained.
 	initial.DNSConfigured = false
@@ -157,23 +150,7 @@ func TestGuidedTunnelReplaysAmbiguousDNSCommitForExactRetainedTunnel(t *testing.
 }
 
 func TestGuidedTunnelPreparationRetainsRunAuthorityWithoutInstallingAService(t *testing.T) {
-	root := t.TempDir()
-	statePath := filepath.Join(root, "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath:    statePath,
-		Binary:       binary,
-		Origin:       "http://127.0.0.1:8317",
-		Runner:       runner,
-		Resolver:     &fakeDNSResolver{},
-		binarySHA256: digest,
-	}
-
-	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, state := preparedTunnel(t, "http://127.0.0.1:8317")
 	if !state.DNSConfigured {
 		t.Fatalf("prepared state=%#v", state)
 	}
@@ -193,46 +170,22 @@ func TestGuidedTunnelPreparationRetainsRunAuthorityWithoutInstallingAService(t *
 }
 
 func TestPreparedTunnelRunsForegroundWithPinnedBinaryAndRetainedConfig(t *testing.T) {
-	root := t.TempDir()
-	statePath := filepath.Join(root, "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath:    statePath,
-		Binary:       binary,
-		Origin:       "http://127.0.0.1:8317",
-		Runner:       runner,
-		Resolver:     &fakeDNSResolver{},
-		binarySHA256: digest,
-	}
-	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, state := preparedTunnel(t, "http://127.0.0.1:8317")
 	runner.calls = nil
 
 	if err := tunnel.RunForeground(context.Background(), io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	want := strings.Join([]string{binary, "--no-autoupdate", "--config", state.ConfigPath, "tunnel", "run"}, " ")
+	want := strings.Join([]string{tunnel.Binary, "--no-autoupdate", "--config", state.ConfigPath, "tunnel", "run"}, " ")
 	if len(runner.calls) != 1 || runner.calls[0] != want {
 		t.Fatalf("foreground calls=%v, want %q", runner.calls, want)
 	}
 }
 
 func TestPreparedTunnelRefusesBinaryChangedAfterPreparation(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
-		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
-	}
-	if _, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard); err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, _ := preparedTunnel(t, ComposeGatewayOrigin)
 	runner.calls = nil
-	if err := os.WriteFile(binary, []byte("tampered"), 0o700); err != nil {
+	if err := os.WriteFile(tunnel.Binary, []byte("tampered"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -246,23 +199,13 @@ func TestPreparedTunnelRefusesBinaryChangedAfterPreparation(t *testing.T) {
 }
 
 func TestPreparedTunnelRefusesConfigChangedAfterPreparation(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
-		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
-	}
-	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, state := preparedTunnel(t, ComposeGatewayOrigin)
 	runner.calls = nil
 	if err := os.WriteFile(state.ConfigPath, []byte("tunnel: malicious\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	err = tunnel.RunForeground(context.Background(), io.Discard, io.Discard)
+	err := tunnel.RunForeground(context.Background(), io.Discard, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "config checksum mismatch") {
 		t.Fatalf("tampered Tunnel config error=%v", err)
 	}
@@ -318,17 +261,7 @@ func TestPrepareRuntimeBinaryUpdatesOnlyRetainedExecutableAuthority(t *testing.T
 }
 
 func TestPrepareRuntimeBinaryRepairsConfigAfterStateCommitProcessLoss(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "state")
-	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: "http://127.0.0.1:8317",
-		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
-	}
-	state, err := tunnel.Prepare(context.Background(), "dorf.example.com", io.Discard, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tunnel, runner, state := preparedTunnel(t, "http://127.0.0.1:8317")
 
 	// Simulate process loss after Prepare retained the new state authority but
 	// before it atomically replaced the config derived from that state.
@@ -338,7 +271,7 @@ func TestPrepareRuntimeBinaryRepairsConfigAfterStateCommitProcessLoss(t *testing
 	}
 	runner.calls = nil
 
-	reconcile := Tunnel{StatePath: statePath, Binary: binary, Runner: runner, binarySHA256: digest}
+	reconcile := Tunnel{StatePath: tunnel.StatePath, Binary: tunnel.Binary, Runner: runner, binarySHA256: tunnel.binarySHA256}
 	found, err := reconcile.PrepareRuntimeBinary(context.Background())
 	if err != nil || !found {
 		t.Fatalf("repair retained config found=%t error=%v", found, err)
@@ -361,14 +294,9 @@ func TestPrepareRuntimeBinaryRepairsConfigAfterStateCommitProcessLoss(t *testing
 }
 
 func TestPreparedTunnelExposesStableComposeState(t *testing.T) {
-	root := t.TempDir()
-	statePath := filepath.Join(root, "state")
+	statePath := filepath.Join(t.TempDir(), "state")
 	binary, digest := installFakeCloudflared(t, statePath)
-	runner := &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}
-	tunnel := Tunnel{
-		StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin,
-		Runner: runner, Resolver: &fakeDNSResolver{}, binarySHA256: digest,
-	}
+	tunnel := Tunnel{StatePath: statePath, Binary: binary, Origin: ComposeGatewayOrigin, Runner: &fakeRunner{id: "11111111-2222-3333-4444-555555555555"}, Resolver: &fakeDNSResolver{}, binarySHA256: digest}
 	if _, desired, err := tunnel.ComposeState(); err != nil || desired {
 		t.Fatalf("absent Compose state desired=%t err=%v", desired, err)
 	}

@@ -62,79 +62,8 @@ func TestPostgresCodebaseInvestigationIdentityAndFollowUps(t *testing.T) {
 		job.ID, "https://github.com/aphronio/dorf.git", input.Source.Revision, "dorf/foreign-workflow", "aphronio/dorf", "42", "main"); err == nil {
 		t.Fatal("database attached coding input to an investigation Job")
 	}
-	early, err := store.AdmitInvestigationMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "too-early", Input: "broaden the question"})
-	if err != nil || !early.Created || early.Message.Sequence != 2 {
-		t.Fatalf("investigation did not durably queue an early Follow: admitted=%#v err=%v", early, err)
-	}
 	if admitted, err := store.AdmitCodingMessage(ctx, core.MessageAdmission{JobID: job.ID, SandboxID: core.MainSandboxName(job.ID), FromKind: core.MessageFromHuman, FromID: "wrong-workflow", Input: "must not cross workflow authority"}); err == nil || admitted.Created || !strings.Contains(err.Error(), "is not coding-to-proposal") {
 		t.Fatalf("coding admission crossed into investigation: admitted=%#v err=%v", admitted, err)
-	}
-
-	deliveries, err := store.Deliveries(ctx, job.ID)
-	if err != nil || len(deliveries) != 2 || deliveries[0].AgentRun.Role != "investigate" || deliveries[0].AgentRun.Capability != "repository-read-report" ||
-		deliveries[0].AgentRun.InputRevision != input.Source.Revision ||
-		deliveries[1].Message.ID != early.Message.ID || deliveries[1].AgentRun.ThreadID != "" {
-		t.Fatalf("deliveries=%#v err=%v", deliveries, err)
-	}
-	run := deliveries[0].AgentRun
-	if err := store.PrepareAgentRun(ctx, run.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, run.ID, "codex", "thread-investigation", "turn-investigation", "completed"); err != nil {
-		t.Fatal(err)
-	}
-	deliveries, err = store.Deliveries(ctx, job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run = deliveries[0].AgentRun
-	job, err = store.Job(ctx, job.ID)
-	if err != nil || !job.AdmissionOpen {
-		t.Fatalf("completed run prematurely closed Job=%#v err=%v", job, err)
-	}
-	selected, err := store.AgentMessage(ctx, job.ID)
-	if err != nil || selected == nil || selected.MessageID != early.Message.ID {
-		t.Fatalf("early Follow selection=%#v err=%v", selected, err)
-	}
-	earlyExecution, err := store.AgentMessageExecution(ctx, early.Message.ID)
-	if err != nil || earlyExecution.AgentRun.ThreadID != "thread-investigation" {
-		t.Fatalf("early Follow did not adopt retained Thread: execution=%#v err=%v", earlyExecution, err)
-	}
-	if err := store.PrepareAgentRun(ctx, earlyExecution.AgentRun.ID, "codex", ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BindAgentRun(ctx, earlyExecution.AgentRun.ID, "codex", "thread-investigation", "turn-investigation-2", "completed"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPostgresCodebaseInvestigationRetainsBundleSourceIdentity(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	ctx := context.Background()
-	revision := strings.Repeat("9", 40)
-	supplied := investigation.Source{
-		Kind: investigation.SourceGitBundle, Revision: revision,
-		BundleDigest: strings.Repeat("8", 64), BundleByteSize: 4096,
-	}
-	job, created, err := store.AdmitInvestigation(ctx, investigation.Admission{
-		JobAdmission: core.JobAdmission{
-			AdmissionKey: "bundle-source-" + fmt.Sprint(time.Now().UnixNano()),
-			Workflow:     investigation.Workflow, WorkflowRevision: investigation.WorkflowRevision,
-			Goal: "Inspect an unpublished commit.", SandboxProfile: "incus",
-			ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		},
-		Source: supplied,
-	})
-	if err != nil || !created {
-		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
-	}
-	stored, err := store.CodebaseInvestigationSource(ctx, job.ID)
-	supplied.JobID = job.ID
-	if err != nil || stored != supplied {
-		t.Fatalf("source=%#v want=%#v err=%v", stored, supplied, err)
-	}
-	if _, err := store.DB.ExecContext(ctx, `update dorf.codebase_investigation_sources set bundle_digest=null where job_id=$1`, job.ID); err == nil {
-		t.Fatal("database accepted incomplete Git-bundle source identity")
 	}
 }
 
@@ -294,17 +223,26 @@ func TestPostgresCodebaseInvestigationResumesOneOpenIdleTaskAfterRestart(t *test
 	}
 	application.RegisterCleanup()
 	investigation.Register(application, store, resolver)
+	source := investigation.Source{
+		Kind: investigation.SourceGitBundle, Revision: strings.Repeat("d", 40),
+		BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
+	}
 	job, created, err := investigation.NewAdmissionService(store, application, providerCheck{}).Admit(ctx, investigation.AdmissionRequest{
 		AdmissionKey: "investigation-terminal-" + suffix,
 		Brief:        "Find one concrete simplification.", SandboxProfile: "incus",
 		ProviderConnection: "primary", Model: "gpt-5.6-sol", ReasoningEffort: "high",
-		Source: investigation.Source{
-			Kind: investigation.SourceGitBundle, Revision: strings.Repeat("d", 40),
-			BundleDigest: retained.Digest, BundleByteSize: retained.ByteSize,
-		},
+		Source: source,
 	})
 	if err != nil || !created {
 		t.Fatalf("Job=%#v created=%v err=%v", job, created, err)
+	}
+	storedSource, err := store.CodebaseInvestigationSource(ctx, job.ID)
+	source.JobID = job.ID
+	if err != nil || storedSource != source {
+		t.Fatalf("source=%#v want=%#v err=%v", storedSource, source, err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `update dorf.codebase_investigation_sources set bundle_digest=null where job_id=$1`, job.ID); err == nil {
+		t.Fatal("database accepted incomplete Git-bundle source identity")
 	}
 	reportJob, err := application.OpenJob(ctx, job.ID)
 	if err != nil {

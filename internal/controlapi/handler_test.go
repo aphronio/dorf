@@ -300,15 +300,12 @@ func TestConcreteWorkflowJobRepresentationDrivesETag(t *testing.T) {
 	requireProblem(t, get(""), http.StatusInternalServerError, "internal_error")
 }
 
-func TestSandboxFileIsExactAndSelfVerifying(t *testing.T) {
+func TestSandboxFileResponseContract(t *testing.T) {
 	credential := "dcr_control-client"
-	contents := []byte{0x00, 0xff, '\n', 'D', 'o', 'r', 'f'}
-	jobs := &fakeJobs{
-		job:  controlapi.Job{ID: "job-1", Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1", Name: "default"}}},
-		file: contents,
-	}
+	contents := []byte{0x00, 0xff, '\n'}
+	jobs := &fakeJobs{job: controlapi.Job{Sandboxes: []controlapi.Sandbox{{ID: "sandbox-1"}}}, file: contents}
 	handler := controlapi.NewServer(controlapi.Discovery{}, &fakeAuth{credential: credential}, jobs).Handler
-	do := func(target string) *httptest.ResponseRecorder {
+	get := func(target string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer "+credential)
 		response := httptest.NewRecorder()
@@ -316,15 +313,15 @@ func TestSandboxFileIsExactAndSelfVerifying(t *testing.T) {
 		return response
 	}
 
-	file := do("/v1/sandboxes/sandbox-1/files?path=nested%2FREPORT%2B.bin")
-	requireStatusType(t, file, http.StatusOK, "application/octet-stream")
+	response := get("/v1/sandboxes/sandbox-1/files?path=nested%2FREPORT%2B.bin")
 	digest := sha256.Sum256(contents)
-	wantDigest := "sha-256=:" + base64.StdEncoding.EncodeToString(digest[:]) + ":"
-	if !bytes.Equal(file.Body.Bytes(), contents) || file.Header().Get("Content-Length") != fmt.Sprint(len(contents)) || file.Header().Get("Content-Digest") != wantDigest || jobs.filePath != "nested/REPORT+.bin" {
-		t.Fatalf("file bytes/length/digest=%x/%q/%q", file.Body.Bytes(), file.Header().Get("Content-Length"), file.Header().Get("Content-Digest"))
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/octet-stream" ||
+		response.Header().Get("Content-Length") != fmt.Sprint(len(contents)) ||
+		response.Header().Get("Content-Digest") != "sha-256=:"+base64.StdEncoding.EncodeToString(digest[:])+":" ||
+		!bytes.Equal(response.Body.Bytes(), contents) || jobs.filePath != "nested/REPORT+.bin" {
+		t.Fatalf("file response status/type/length/digest/path=%d/%q/%q/%q/%q", response.Code, response.Header().Get("Content-Type"), response.Header().Get("Content-Length"), response.Header().Get("Content-Digest"), jobs.filePath)
 	}
-	missingPath := do("/v1/sandboxes/sandbox-1/files")
-	requireProblem(t, missingPath, http.StatusBadRequest, "file_path_required")
+	requireProblem(t, get("/v1/sandboxes/sandbox-1/files"), http.StatusBadRequest, "file_path_required")
 }
 
 func TestJobWatchEmitsChangedSnapshotsAndStopsOnServerShutdown(t *testing.T) {
@@ -660,8 +657,6 @@ func (j *fakeJobs) Retry(_ context.Context, jobID, key string) (controlapi.Retry
 }
 
 func (j *fakeJobs) ReadSandboxFile(_ context.Context, sandboxID, path string) ([]byte, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
 	if len(j.job.Sandboxes) == 0 || sandboxID != j.job.Sandboxes[0].ID {
 		return nil, controlapi.ErrSandboxNotFound
 	}

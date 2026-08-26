@@ -62,7 +62,7 @@ func (s *fakeImageServer) CreateImage(post api.ImagesPost, args *incusclient.Ima
 		return nil, err
 	}
 	s.importBytes = contents
-	return &fakeImageOperation{onWait: func() {
+	return &fakeOperation{onWait: func() {
 		s.images[s.importFingerprint] = api.Image{Fingerprint: s.importFingerprint, Type: virtualMachineImageType}
 	}}, nil
 }
@@ -86,22 +86,6 @@ func (s *fakeImageServer) UpdateImageAlias(name string, put api.ImageAliasesEntr
 	}
 	return nil
 }
-
-type fakeImageOperation struct {
-	incusclient.Operation
-	waited context.Context
-	onWait func()
-}
-
-func (o *fakeImageOperation) WaitContext(ctx context.Context) error {
-	o.waited = ctx
-	if o.onWait != nil {
-		o.onWait()
-	}
-	return nil
-}
-
-func (*fakeImageOperation) Get() api.Operation { return api.Operation{} }
 
 func newFakeImageServer() *fakeImageServer {
 	return &fakeImageServer{

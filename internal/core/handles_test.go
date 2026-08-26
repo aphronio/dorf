@@ -149,27 +149,28 @@ func TestAgentMessageRequiresExplicitSteerOption(t *testing.T) {
 }
 
 func TestAgentMessageRejectsForeignReceiptBeforeWake(t *testing.T) {
-	admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
-		return MessageAdmissionResult{Message: Message{ID: "message-foreign", JobID: input.JobID, FromKind: input.FromKind, FromID: input.FromID, Sequence: 2, Input: "changed", Intent: input.Intent}, SandboxID: input.SandboxID, Created: true}, nil
-	}}
-	application := Application{Store: handleTestStore{}, AgentMessages: admissions}
-	receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
-	if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
-		t.Fatalf("receipt=%#v err=%v", receipt, err)
-	}
-}
-
-func TestAgentMessageRejectsForeignSandboxReceiptBeforeWake(t *testing.T) {
-	admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
-		return MessageAdmissionResult{Message: Message{
-			ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind,
-			FromID: input.FromID, Sequence: 2, Input: input.Input, Intent: input.Intent,
-		}, SandboxID: "sandbox-foreign", Created: true}, nil
-	}}
-	application := Application{Store: handleTestStore{}, AgentMessages: admissions}
-	receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
-	if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
-		t.Fatalf("receipt=%#v err=%v", receipt, err)
+	for _, test := range []struct {
+		name    string
+		corrupt func(*MessageAdmissionResult)
+	}{
+		{name: "Message", corrupt: func(result *MessageAdmissionResult) { result.Message.Input = "changed" }},
+		{name: "Sandbox", corrupt: func(result *MessageAdmissionResult) { result.SandboxID = "sandbox-foreign" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admissions := handleTestAdmissions{admit: func(_ context.Context, input MessageAdmission) (MessageAdmissionResult, error) {
+				result := MessageAdmissionResult{Message: Message{
+					ID: MessageID(input.JobID, input.FromKind, input.FromID), JobID: input.JobID, FromKind: input.FromKind,
+					FromID: input.FromID, Sequence: 2, Input: input.Input, Intent: input.Intent,
+				}, SandboxID: input.SandboxID, Created: true}
+				test.corrupt(&result)
+				return result, nil
+			}}
+			application := Application{Store: handleTestStore{}, AgentMessages: admissions}
+			receipt, err := application.jobHandle("job-1").sandboxHandle("sandbox-named").Agent().Message(context.Background(), "send-1", "exact")
+			if err == nil || receipt.MessageID != "" || !strings.Contains(err.Error(), "foreign receipt") {
+				t.Fatalf("receipt=%#v err=%v", receipt, err)
+			}
+		})
 	}
 }
 

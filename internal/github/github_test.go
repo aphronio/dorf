@@ -2,11 +2,7 @@ package github
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,14 +39,9 @@ func TestAuthorityRequiresCanonicalRepositoryInstallationBaseAndDistinctHead(t *
 
 func TestInstallationTokenIsShortLivedRepositoryScopedAndPermissionBound(t *testing.T) {
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
 	directory := t.TempDir()
 	credentialsPath := filepath.Join(directory, "credentials.json")
-	encoded := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(encoded), Slug: "dorf-test"})
+	bundle, _ := json.Marshal(credentialBundle{AppID: "7", PrivateKey: string(testKey(t)), Slug: "dorf-test"})
 	if err := os.WriteFile(credentialsPath, bundle, 0o600); err != nil {
 		t.Fatal(err)
 	}

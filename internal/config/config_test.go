@@ -12,19 +12,6 @@ import (
 	"github.com/aphronio/dorf/internal/deployment"
 )
 
-func TestLoadUsesOneSetupOwnedGitHubCredentialBundle(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(configHome, "dorf", "integrations", "github", "credentials.json"); cfg.GitHubCredentials != want {
-		t.Fatalf("GitHub credentials=%q want=%q", cfg.GitHubCredentials, want)
-	}
-}
-
 func TestLoadRejectsRelativeGitHubCredentialsAndInexactAPIURL(t *testing.T) {
 	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
 	t.Setenv("DORF_GITHUB_CREDENTIALS", "relative-github/credentials.json")
@@ -50,19 +37,6 @@ func TestLoadDoesNotLetAmbientStateOverrideXDGProviderGatewayAuthority(t *testin
 	want := filepath.Join(dataHome, "dorf", "provider-gateway")
 	if cfg.GatewayStatePath != want {
 		t.Fatalf("gateway locator=%q want=%q", cfg.GatewayStatePath, want)
-	}
-}
-
-func TestLoadUsesXDGDataHomeForProviderGateway(t *testing.T) {
-	dataHome := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", dataHome)
-	t.Setenv("DORF_PROVIDER_GATEWAY_STATE", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(dataHome, "dorf", "provider-gateway"); cfg.GatewayStatePath != want {
-		t.Fatalf("gateway state=%q want=%q", cfg.GatewayStatePath, want)
 	}
 }
 
@@ -112,27 +86,8 @@ func TestLoadUsesPersistedE2BCredentialForManagedDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DatabaseExternal || cfg.E2BAPIKey != "persisted-managed-key" {
+	if cfg.DatabaseExternal || !strings.Contains(cfg.DatabaseURL, "127.0.0.1:54329/dorf") || cfg.E2BAPIKey != "persisted-managed-key" {
 		t.Fatalf("managed config=%#v", cfg)
-	}
-}
-
-func TestLoadUsesNeutralBlobStoreForEvidenceAndRetainedInputs(t *testing.T) {
-	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", "")
-	t.Setenv("DORF_DATABASE_URL", "postgres://dorf-test")
-	t.Setenv("DORF_BLOB_ROOT", "")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := filepath.Join(account.HomeDir, ".local", "state", "dorf", "blobs"); cfg.BlobRoot != want {
-		t.Fatalf("blob root=%q want=%q", cfg.BlobRoot, want)
 	}
 }
 
@@ -163,19 +118,21 @@ func TestResolvePathsIsTheOneXDGHostLayout(t *testing.T) {
 	}
 	if cfg.DeploymentPath != filepath.Join(paths.ConfigDir, "deployment.json") ||
 		cfg.GatewayStatePath != filepath.Join(paths.DataDir, "provider-gateway") ||
-		cfg.BlobRoot != filepath.Join(paths.StateDir, "blobs") {
+		cfg.BlobRoot != filepath.Join(paths.StateDir, "blobs") ||
+		cfg.GitHubCredentials != filepath.Join(paths.ConfigDir, "integrations", "github", "credentials.json") {
 		t.Fatalf("configuration did not use resolved paths: %#v", cfg)
 	}
 }
 
-func TestCurrentOperatorPathsIgnoreAmbientHomeWithoutXDG(t *testing.T) {
+func TestCurrentOperatorPathsIgnoreAmbientHomeWithoutCompleteXDG(t *testing.T) {
 	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	home := filepath.Clean(account.HomeDir)
+	configRoot := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
 	t.Setenv("XDG_DATA_HOME", "")
 	t.Setenv("XDG_STATE_HOME", "")
 
@@ -184,7 +141,7 @@ func TestCurrentOperatorPathsIgnoreAmbientHomeWithoutXDG(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Paths{
-		ConfigDir:  filepath.Join(home, ".config", "dorf"),
+		ConfigDir:  filepath.Join(configRoot, "dorf"),
 		DataDir:    filepath.Join(home, ".local", "share", "dorf"),
 		StateDir:   filepath.Join(home, ".local", "state", "dorf"),
 		ComposeDir: filepath.Join(home, ".local", "share", "dorf-compose"),
@@ -192,42 +149,12 @@ func TestCurrentOperatorPathsIgnoreAmbientHomeWithoutXDG(t *testing.T) {
 	if paths != want {
 		t.Fatalf("managed paths=%#v want=%#v", paths, want)
 	}
-	for label, root := range map[string]struct{ got, want string }{
-		"deployment": {filepath.Join(paths.ConfigDir, "deployment.json"), filepath.Join(home, ".config", "dorf", "deployment.json")},
-		"Gateway":    {filepath.Join(paths.DataDir, "provider-gateway"), filepath.Join(home, ".local", "share", "dorf", "provider-gateway")},
-		"bootstrap":  {filepath.Join(paths.DataDir, "bootstrap"), filepath.Join(home, ".local", "share", "dorf", "bootstrap")},
-	} {
-		if root.got != root.want {
-			t.Errorf("%s root=%q want=%q", label, root.got, root.want)
-		}
-	}
 }
 
 func TestResolvePathsRejectsRelativeXDGRoots(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative-config")
 	if _, err := ResolvePaths(t.TempDir()); err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("relative XDG configuration error=%v", err)
-	}
-}
-
-func TestLoadUsesPersistedDockerDatabase(t *testing.T) {
-	configHome := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Setenv("DORF_DATABASE_URL", "")
-	path := filepath.Join(configHome, "dorf", "deployment.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	contents := `{"database":{"host":"127.0.0.1","port":54329,"name":"dorf","user":"dorf","password":"secret","image":"postgres:17.10-bookworm","image_id":"sha256:exact"},"e2b":{"api_key":"persisted-e2b-key"}}`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.DatabaseExternal || !strings.Contains(cfg.DatabaseURL, "127.0.0.1:54329/dorf") || cfg.E2BAPIKey != "persisted-e2b-key" {
-		t.Fatalf("cfg=%#v", cfg)
 	}
 }
 

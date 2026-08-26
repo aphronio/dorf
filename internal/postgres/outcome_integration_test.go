@@ -227,43 +227,9 @@ func TestPostgresOutcomeAndMessageAdmissionSerializeAtProposalBoundary(t *testin
 	}
 }
 
-func TestPostgresOutcomeFirstWriteWinsAndLeavesProposalAuthorityUntouched(t *testing.T) {
-	_, store, _ := testDatabase(t)
-	job, proposal := preparePublishedOutcomeJob(t, store, "first-write")
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	receipt := coding.Outcome{
-		JobID: job.ID, Kind: coding.OutcomeAccepted, ObservedState: "closed",
-		ObservedMerged: true, MergeCommitOID: strings.Repeat("b", 40), ObservedAt: now,
-	}
-	stored, created, err := store.RecordOutcome(context.Background(), receipt)
-	if err != nil || !created || stored.Kind != coding.OutcomeAccepted || stored.MergeCommitOID != receipt.MergeCommitOID {
-		t.Fatalf("stored=%#v created=%t err=%v", stored, created, err)
-	}
-	repeated := receipt
-	repeated.ObservedAt = now.Add(time.Hour)
-	got, created, err := store.RecordOutcome(context.Background(), repeated)
-	if err != nil || created || got != stored {
-		t.Fatalf("repeat=%#v created=%t err=%v", got, created, err)
-	}
-	contradictory := receipt
-	contradictory.MergeCommitOID = strings.Repeat("c", 40)
-	if _, _, err := store.RecordOutcome(context.Background(), contradictory); err == nil || !strings.Contains(err.Error(), "immutable accepted outcome authority") {
-		t.Fatalf("contradictory same-kind authority error=%v", err)
-	}
-	conflict := receipt
-	conflict.Kind, conflict.ObservedMerged, conflict.MergeCommitOID = coding.OutcomeRejected, false, ""
-	if _, _, err := store.RecordOutcome(context.Background(), conflict); err == nil || !strings.Contains(err.Error(), "immutable accepted outcome authority") {
-		t.Fatalf("conflicting outcome error=%v", err)
-	}
-	proposalAfter, err := store.Proposal(context.Background(), job.ID)
-	if err != nil || proposalAfter == nil || proposalAfter.ProposedRevision != proposal.ProposedRevision || proposalAfter.Number != proposal.Number {
-		t.Fatalf("proposal changed after outcome: %#v err=%v", proposalAfter, err)
-	}
-}
-
 func TestPostgresConcurrentConflictingOutcomesSerializeToOneReceipt(t *testing.T) {
 	_, store, _ := testDatabase(t)
-	job, _ := preparePublishedOutcomeJob(t, store, "concurrent")
+	job, proposal := preparePublishedOutcomeJob(t, store, "concurrent")
 	base := coding.Outcome{JobID: job.ID, ObservedState: "closed", ObservedAt: time.Now().UTC()}
 	accepted := base
 	accepted.Kind, accepted.ObservedMerged, accepted.MergeCommitOID = coding.OutcomeAccepted, true, strings.Repeat("c", 40)
@@ -294,6 +260,38 @@ func TestPostgresConcurrentConflictingOutcomesSerializeToOneReceipt(t *testing.T
 	stored, err := store.Outcome(context.Background(), job.ID)
 	if err != nil || stored == nil || successes != 1 || conflicts != 1 {
 		t.Fatalf("stored=%#v successes=%d conflicts=%d err=%v", stored, successes, conflicts, err)
+	}
+	repeated := *stored
+	repeated.ObservedAt = repeated.ObservedAt.Add(time.Hour)
+	got, created, err := store.RecordOutcome(context.Background(), repeated)
+	if err != nil || created || got != *stored {
+		t.Fatalf("repeat=%#v created=%t err=%v", got, created, err)
+	}
+	contradictory := accepted
+	if stored.Kind == coding.OutcomeAccepted {
+		contradictory = rejected
+	}
+	if _, _, err := store.RecordOutcome(context.Background(), contradictory); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("conflicting outcome error=%v", err)
+	}
+	acceptedAuthorityJobID := job.ID
+	if stored.Kind != coding.OutcomeAccepted {
+		acceptedJob, _ := preparePublishedOutcomeJob(t, store, "accepted-authority")
+		acceptedAuthorityJobID = acceptedJob.ID
+		accepted.JobID = acceptedAuthorityJobID
+		if _, created, err := store.RecordOutcome(context.Background(), accepted); err != nil || !created {
+			t.Fatalf("accepted authority setup created=%t err=%v", created, err)
+		}
+	}
+	sameKindConflict := accepted
+	sameKindConflict.JobID = acceptedAuthorityJobID
+	sameKindConflict.MergeCommitOID = strings.Repeat("d", 40)
+	if _, _, err := store.RecordOutcome(context.Background(), sameKindConflict); err == nil || !strings.Contains(err.Error(), "immutable accepted outcome authority") {
+		t.Fatalf("same-kind accepted authority error=%v", err)
+	}
+	proposalAfter, err := store.Proposal(context.Background(), job.ID)
+	if err != nil || proposalAfter == nil || *proposalAfter != proposal {
+		t.Fatalf("proposal changed after outcome: %#v err=%v", proposalAfter, err)
 	}
 }
 

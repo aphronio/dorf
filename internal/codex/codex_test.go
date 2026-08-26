@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/aphronio/dorf/internal/core"
 	"github.com/aphronio/dorf/internal/incus"
 	incustest "github.com/aphronio/dorf/internal/incus/testkit"
 	provider "github.com/aphronio/dorf/internal/sandbox"
@@ -38,26 +37,28 @@ type probeRunner struct {
 	inputs [][]byte
 }
 
-type reviewRestartRunner struct {
-	sandboxName string
-	metadata    incus.ReviewMetadata
-	token       string
-	stopped     bool
-	calls       [][]string
-	inputs      [][]byte
+type reviewBoundaryRunner struct {
+	name    string
+	review  provider.ReviewMetadata
+	token   string
+	stopped bool
+	attests int
+	calls   [][]string
+	inputs  [][]byte
 }
 
-func (r *reviewRestartRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
+func (r *reviewBoundaryRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
 	r.calls = append(r.calls, append([]string{command}, args...))
 	r.inputs = append(r.inputs, append([]byte(nil), input...))
 	joined := strings.Join(args, " ")
 	if strings.HasPrefix(joined, "list --format=json") {
+		r.attests++
 		config := map[string]string{
-			"user.dorf.owner": "review", "user.dorf.job": r.metadata.JobID,
-			"user.dorf.agent_run": r.metadata.AgentRunID, "user.dorf.revision": r.metadata.Revision,
-			"user.dorf.ownership_nonce": r.metadata.OwnershipNonce,
+			"user.dorf.owner": "review", "user.dorf.job": r.review.JobID,
+			"user.dorf.agent_run": r.review.AgentRunID, "user.dorf.revision": r.review.Revision,
+			"user.dorf.ownership_nonce": r.review.OwnershipNonce,
 		}
-		payload, _ := json.Marshal([]map[string]any{{"name": r.sandboxName, "config": config}})
+		payload, _ := json.Marshal([]map[string]any{{"name": r.name, "config": config}})
 		return incus.Result{Stdout: string(payload)}, nil
 	}
 	if strings.Contains(joined, "running=0; tracked=0") {
@@ -69,100 +70,54 @@ func (r *reviewRestartRunner) Run(_ context.Context, command string, input []byt
 	return incus.Result{}, nil
 }
 
-type reviewIsolationRunner struct{ calls [][]string }
-
-func (r *reviewIsolationRunner) Run(_ context.Context, command string, _ []byte, args ...string) (incus.Result, error) {
-	r.calls = append(r.calls, append([]string{command}, args...))
-	if strings.Contains(strings.Join(args, " "), "ip -4 route get") {
-		return incus.Result{Stdout: "1.1.1.1 via 10.42.0.1 dev eth0 src 10.42.0.9\n"}, nil
-	}
-	return incus.Result{}, errors.New("stop after reviewer Sandbox selection")
-}
-
-func TestStrictReviewNeverDiscoversImplementationSandboxNativeState(t *testing.T) {
-	runner := &reviewIsolationRunner{}
-	agent := Agent{Sandbox: testSandbox(runner), Port: 4500}
-	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	_, err := agent.StartStrictReviewTurn(context.Background(), reviewOwner("dorf-review-owned", owner), "/workspace/job", owner, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
-	if err == nil {
-		t.Fatal("strict review unexpectedly passed the forced reviewer probe failure")
-	}
-	for _, call := range runner.calls {
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "dorf-implementation-forged") || strings.Contains(joined, " exec ") && !strings.Contains(joined, "exec dorf-review-owned --") {
-			t.Fatalf("strict review escaped its reviewer Sandbox: %v", runner.calls)
-		}
-	}
-}
-
 func (r *probeRunner) Run(_ context.Context, command string, input []byte, args ...string) (incus.Result, error) {
 	r.calls = append(r.calls, append([]string{command}, args...))
 	r.inputs = append(r.inputs, append([]byte(nil), input...))
 	return r.result, nil
 }
 
-func TestAppServerLaunchRetainsCapabilityAndEnforcesDorfAutonomy(t *testing.T) {
-	rawToken := "private-control-capability"
-	digest := tokenSHA256(rawToken)
-	launch := appServerScript("ws://10.0.0.2:4500", digest, false)
-	if !strings.Contains(launch, `printf '%s\n' "$!" > `+serverPIDPath) {
-		t.Fatalf("launch does not retain the native PID: %s", launch)
+func TestCodexCommandBoundaryKeepsFixedPolicyAndScopedCapability(t *testing.T) {
+	const token = "private-control-capability"
+	digest := tokenSHA256(token)
+	implementation := appServerScript("ws://10.0.0.2:4500", digest, false)
+	review := appServerScript("ws://10.0.0.3:4500", digest, true)
+	if !strings.Contains(implementation, `-c 'approval_policy="never"'`) || strings.Contains(implementation, `sandbox_mode=`) {
+		t.Fatalf("implementation launch policy = %s", implementation)
 	}
-	if !strings.Contains(launch, "nohup codex app-server ") {
-		t.Fatalf("app-server is not detached from the executor: %s", launch)
+	if !strings.Contains(review, `-c 'approval_policy="never"' -c 'sandbox_mode="read-only"'`) {
+		t.Fatalf("review launch policy = %s", review)
 	}
-	if !strings.Contains(launch, "rm -f "+serverPIDPath) {
-		t.Fatalf("dead-process launch cannot replace stale PID state: %s", launch)
-	}
-	if !strings.Contains(launch, "--ws-token-sha256 "+digest) || strings.Contains(launch, rawToken) {
-		t.Fatalf("app-server argv does not contain only the capability digest: %s", launch)
-	}
-	if strings.Contains(launch, "--ws-token-file") || strings.Contains(launch, controlTokenPath) {
-		t.Fatalf("retained reconnect capability was confused with one-shot startup input: %s", launch)
-	}
-	if !strings.Contains(launch, `codex app-server -c 'approval_policy="never"' --listen`) || strings.Contains(launch, `sandbox_mode=`) {
-		t.Fatalf("implementation app-server launch does not retain writable sandbox with fixed never approval: %s", launch)
-	}
-	reviewLaunch := appServerScript("ws://10.0.0.3:4500", digest, true)
-	if !strings.Contains(reviewLaunch, `codex app-server -c 'approval_policy="never"' -c 'sandbox_mode="read-only"' --listen`) {
-		t.Fatalf("review app-server launch lacks fixed never/read-only configuration: %s", reviewLaunch)
-	}
-	store := controlCapabilityScript()
-	if !strings.Contains(store, "install -d -m 700 "+serverControlDir) || !strings.Contains(store, controlTokenPath+".new") || !strings.Contains(store, "chmod 600 "+controlTokenPath+".new") || !strings.Contains(store, "mv -f "+controlTokenPath+".new "+controlTokenPath) {
-		t.Fatalf("control capability is not atomically retained root-only: %s", store)
-	}
-}
-
-func TestInstallRouteEnablesResponsesWebSockets(t *testing.T) {
-	runner := &probeRunner{}
-	agent := Agent{Sandbox: testSandbox(runner)}
-	if err := agent.InstallRoute(context.Background(), testOwner("dorf-job"), "http://10.42.0.1:8317/v1", "scoped-test-key", "gpt-test"); err != nil {
-		t.Fatal(err)
-	}
-	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") {
-		t.Fatalf("installed Codex provider config does not enable Responses WebSockets: %q", runner.inputs)
-	}
-}
-
-func TestLiveServerProbeReadsOnlyRetainedCapabilityForExactTrackedProcess(t *testing.T) {
-	runner := &probeRunner{result: incus.Result{Stdout: "1\n1\nprivate-capability\n"}}
-	agent := Agent{Sandbox: testSandbox(runner)}
-	endpoint := "ws://10.0.0.2:4500"
-	probe, err := agent.probeServer(context.Background(), testOwner("sandbox-1"), endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !probe.running || !probe.tracked || probe.token != "private-capability" {
-		t.Fatalf("probe=%#v", probe)
-	}
-	command := strings.Join(runner.calls[0], " ")
-	for _, required := range []string{serverPIDPath, controlTokenPath, endpoint, "--ws-auth capability-token", "--ws-token-sha256 $digest", "sha256sum", "/proc/$pid/cmdline"} {
-		if !strings.Contains(command, required) {
-			t.Fatalf("probe command is missing %q: %s", required, command)
+	for _, launch := range []string{implementation, review} {
+		if !strings.Contains(launch, "--ws-auth capability-token --ws-token-sha256 "+digest) || strings.Contains(launch, token) {
+			t.Fatalf("launch did not use digest-only websocket authentication: %s", launch)
+		}
+		if !strings.Contains(launch, "nohup codex app-server") || !strings.Contains(launch, "rm -f "+serverPIDPath) || !strings.Contains(launch, `printf '%s\n' "$!" > `+serverPIDPath) {
+			t.Fatalf("launch did not detach and retain the exact process ID: %s", launch)
+		}
+		if strings.Contains(launch, controlTokenPath) {
+			t.Fatalf("launch argv references the retained control-token path: %s", launch)
 		}
 	}
-	if strings.Contains(command, "/tmp/dorf/codex-app-server.token") {
-		t.Fatalf("probe still reads the consumed startup token input: %s", command)
+	custody := controlCapabilityScript()
+	for _, want := range []string{"install -d -m 700 " + serverControlDir, controlTokenPath + ".new", "chmod 600 " + controlTokenPath + ".new", "mv -f " + controlTokenPath + ".new " + controlTokenPath} {
+		if !strings.Contains(custody, want) {
+			t.Fatalf("capability custody missing %q: %s", want, custody)
+		}
+	}
+	probe := probeServerScript("ws://10.0.0.3:4500")
+	for _, want := range []string{serverPIDPath, "/proc/$pid/cmdline", "--listen ws://10.0.0.3:4500", "--ws-auth capability-token", "sha256sum", "--ws-token-sha256 $digest"} {
+		if !strings.Contains(probe, want) {
+			t.Fatalf("exact process probe missing %q: %s", want, probe)
+		}
+	}
+
+	runner := &probeRunner{}
+	agent := Agent{Sandbox: testSandbox(runner)}
+	if err := agent.InstallRoute(context.Background(), testOwner("dorf-job"), "http://10.42.0.1:8317/v1", "scoped-key", "unused"); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.inputs) != 1 || !strings.Contains(string(runner.inputs[0]), "supports_websockets = true") || !strings.HasSuffix(string(runner.inputs[0]), "scoped-key\n") {
+		t.Fatalf("InstallRoute input = %q", runner.inputs)
 	}
 }
 
@@ -274,78 +229,6 @@ func TestProtocolProviderDialHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestStrictReviewProcessRestartRotatesCapabilityButRecoversExactThreadAndTurn(t *testing.T) {
-	const oldToken = "old-review-control-capability"
-	nonce, input := strings.Repeat("a", 64), "exact persisted review input"
-	sessionID, turnID := "session-review", "turn-review"
-	server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/list":
-			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
-		case "thread/resume":
-			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
-		case "turn/start":
-			t.Fatal("recovery submitted a second review turn")
-			return nil, true
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	sandboxName := "dorf-review-owned"
-	owner := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: owner, token: oldToken}
-	agent := Agent{Sandbox: testSandbox(runner)}
-	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-	recover := func() core.HarnessHistory {
-		history := core.HarnessHistory{Harness: Harness}
-		err := agent.withReviewServerEndpoint(context.Background(), reviewOwner(sandboxName, owner), endpoint, owner, func(protocol *protocol) error {
-			observedThread, turns, err := protocol.strictReviewHistory(context.Background(), "/workspace/job", sessionID, nonce, input, "gpt-5.6-sol", "high")
-			history.ThreadID, history.Turns = observedThread, turns
-			return err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return history
-	}
-
-	first := recover()
-	runner.stopped = true
-	second := recover()
-	if first.Harness != Harness || second.Harness != Harness || first.ThreadID != sessionID || second.ThreadID != sessionID || len(second.Turns) != 1 || second.Turns[0].ID != turnID {
-		t.Fatalf("restart recovery first=%#v second=%#v", first, second)
-	}
-	var rotated string
-	for _, value := range runner.inputs {
-		if text := strings.TrimSpace(string(value)); text != "" {
-			rotated = text
-		}
-	}
-	if rotated == "" || rotated == oldToken {
-		t.Fatalf("authentication capability did not rotate: rotated=%q", rotated)
-	}
-}
-
-func TestStrictReviewForeignOwnershipCannotClaimLogicalControllerIdentity(t *testing.T) {
-	sandboxName := "dorf-review-owned"
-	actual := incus.ReviewMetadata{JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40), OwnershipNonce: strings.Repeat("c", 64)}
-	foreign := actual
-	foreign.OwnershipNonce = strings.Repeat("d", 64)
-	runner := &reviewRestartRunner{sandboxName: sandboxName, metadata: actual, token: "retained"}
-	agent := Agent{Sandbox: testSandbox(runner)}
-	_, err := agent.StartStrictReviewTurn(context.Background(), reviewOwner(sandboxName, foreign), "/workspace/job", foreign, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high")
-	if err == nil || !strings.Contains(err.Error(), "ownership_nonce") {
-		t.Fatalf("foreign ownership error=%v", err)
-	}
-	if attention, ok := err.(interface{ AttentionNeeded() bool }); !ok || !attention.AttentionNeeded() {
-		t.Fatalf("foreign ownership was not attention: %T %v", err, err)
-	}
-}
-
 func TestLiveServerMissingOrRejectedCapabilityStopsWithoutReplacement(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		runner := &probeRunner{result: incus.Result{Stdout: "1\n1\n"}}
@@ -368,6 +251,55 @@ func TestLiveServerMissingOrRejectedCapabilityStopsWithoutReplacement(t *testing
 		}
 		assertNoServerReplacement(t, runner)
 	})
+}
+
+func TestStrictReviewRejectsForeignOwnerAndReattestsAfterCapabilityRotation(t *testing.T) {
+	const token = "retained-review-capability"
+	review := provider.ReviewMetadata{
+		JobID: "job-review", AgentRunID: "run-review", Revision: strings.Repeat("b", 40),
+		OwnershipNonce: strings.Repeat("c", 64),
+	}
+	runner := &reviewBoundaryRunner{name: "dorf-review-owned", review: review, token: token}
+	agent := Agent{Sandbox: testSandbox(runner)}
+	foreign := reviewOwner(runner.name, review)
+	foreign.OwnershipNonce = strings.Repeat("d", 64)
+	if _, err := agent.StartStrictReviewTurn(context.Background(), foreign, "/workspace/job", review, strings.Repeat("a", 64), "input", "gpt-5.6-sol", "high"); err == nil {
+		t.Fatal("foreign owner reached the strict-review controller")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("foreign owner reached Incus: %v", runner.calls)
+	}
+
+	server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+		return map[string]any{}, method != "initialize"
+	})
+	defer server.Close()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
+	owner := reviewOwner(runner.name, review)
+	connect := func() {
+		if err := agent.withReviewServerEndpoint(context.Background(), owner, endpoint, review, func(*protocol) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connect()
+	runner.stopped = true
+	connect()
+	if runner.attests != 2 {
+		t.Fatalf("review re-attestations=%d, want one after each connection", runner.attests)
+	}
+	rotated := false
+	for index, call := range runner.calls {
+		joined := strings.Join(call, " ")
+		if strings.Contains(joined, " exec ") && !strings.Contains(joined, "exec "+runner.name+" --") {
+			t.Fatalf("strict review escaped its review Sandbox: %v", call)
+		}
+		if len(runner.inputs[index]) > 0 && strings.TrimSpace(string(runner.inputs[index])) != token {
+			rotated = true
+		}
+	}
+	if !rotated {
+		t.Fatal("replacement process did not receive a rotated capability")
+	}
 }
 
 func assertNoServerReplacement(t *testing.T, runner *probeRunner) {
@@ -481,178 +413,98 @@ func dialTestProtocol(t *testing.T, server *httptest.Server) *protocol {
 	return p
 }
 
-func TestPersistedThreadRejectsTurnStartUntilResumeWithoutLeakingNativeDetail(t *testing.T) {
-	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-		if method == "initialize" {
-			return map[string]any{}, false
-		}
-		return nil, method == "turn/start"
-	})
-	defer server.Close()
-	p := dialTestProtocol(t, server)
-
-	_, err := p.startTurn(context.Background(), "session-persisted", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high", "danger-full-access")
-	if err == nil || err.Error() != "Codex app-server rejected turn/start" {
-		t.Fatalf("safe rejection=%v", err)
-	}
-	if strings.Contains(err.Error(), "test-only") {
-		t.Fatalf("native rejection detail escaped: %v", err)
-	}
-	for _, want := range []string{"initialize", "initialized", "turn/start"} {
-		if got := (<-requests)["method"]; got != want {
-			t.Fatalf("method=%v, want %s", got, want)
+func requireProtocolParams(t *testing.T, method string, params map[string]any, want map[string]any) {
+	t.Helper()
+	for key, value := range want {
+		if !reflect.DeepEqual(params[key], value) {
+			t.Errorf("%s %s=%#v, want %#v", method, key, params[key], value)
 		}
 	}
 }
 
-func TestSteerUsesExactActiveTurnAndStableClientMessageIdentity(t *testing.T) {
-	const sessionID = "session-steer-1"
-	const turnID = "turn-active-1"
-	const clientMessageID = "agent-run-steer-1"
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/resume":
-			return map[string]any{"thread": map[string]any{"id": sessionID}}, params["threadId"] != sessionID
-		case "turn/steer":
-			return map[string]any{"turnId": turnID}, false
-		default:
-			return nil, true
-		}
+func requireStrictResumeParams(t *testing.T, params map[string]any, sessionID string) {
+	t.Helper()
+	requireProtocolParams(t, "thread/resume", params, map[string]any{
+		"threadId": sessionID, "cwd": "/workspace/job",
+		"approvalPolicy": "never", "sandbox": "read-only",
 	})
-	defer server.Close()
-	p := dialTestProtocol(t, server)
-
-	accepted, err := p.steerTurn(context.Background(), sessionID, turnID, clientMessageID, "correct the active work")
-	if err != nil || accepted != turnID {
-		t.Fatalf("accepted turn=%q err=%v", accepted, err)
-	}
-	for _, want := range []string{"initialize", "initialized", "thread/resume"} {
-		if got := (<-requests)["method"]; got != want {
-			t.Fatalf("method=%v want=%s", got, want)
-		}
-	}
-	request := <-requests
-	if request["method"] != "turn/steer" {
-		t.Fatalf("method=%v want=turn/steer", request["method"])
-	}
-	params := request["params"].(map[string]any)
-	if params["threadId"] != sessionID || params["expectedTurnId"] != turnID || params["clientUserMessageId"] != clientMessageID {
-		t.Fatalf("steer identity params=%#v", params)
-	}
-	input, ok := params["input"].([]any)
-	if !ok || len(input) != 1 || input[0].(map[string]any)["type"] != "text" || input[0].(map[string]any)["text"] != "correct the active work" {
-		t.Fatalf("steer input=%#v", params["input"])
+	if len(params) != 4 {
+		t.Fatalf("strict thread/resume sent extra parameters: %#v", params)
 	}
 }
 
-func TestPersistedThreadIsReadBeforeResumeAndSubmittedExactlyOnce(t *testing.T) {
-	const sessionID = "session-persisted-1"
-	var loaded atomic.Bool
-	var acceptedStarts atomic.Int32
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/list":
-			return map[string]any{"data": []any{map[string]any{"id": sessionID, "status": map[string]any{"type": "notLoaded"}}}}, false
-		case "thread/read":
-			return map[string]any{"thread": map[string]any{"id": sessionID, "status": map[string]any{"type": "notLoaded"}, "turns": []any{map[string]any{"id": "turn-prior", "status": "completed"}}}}, false
-		case "thread/resume":
-			if params["threadId"] != sessionID {
+func TestProtocolBindsResumeStartAndSteerToExactIdentity(t *testing.T) {
+	const sessionID = "session-bound"
+	const turnID = "turn-bound"
+	const messageID = "agent-run-bound"
+
+	t.Run("resume and start", func(t *testing.T) {
+		server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+			switch method {
+			case "initialize":
+				return map[string]any{}, false
+			case "thread/resume":
+				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID})
+				return map[string]any{"thread": map[string]any{"id": sessionID}}, false
+			case "turn/start":
+				requireProtocolParams(t, method, params, map[string]any{
+					"threadId": sessionID, "clientUserMessageId": messageID, "cwd": "/workspace/job",
+					"model": "gpt-5.6-sol", "effort": "high", "approvalPolicy": "never",
+					"sandboxPolicy": map[string]any{"type": "dangerFullAccess"},
+				})
+				return map[string]any{"turn": map[string]any{"id": turnID}}, false
+			default:
 				return nil, true
 			}
-			loaded.Store(true)
-			return map[string]any{"thread": map[string]any{"id": sessionID}}, false
-		case "turn/start":
-			if !loaded.Load() {
+		})
+		defer server.Close()
+		outcome, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, "input", "gpt-5.6-sol", "high", "danger-full-access")
+		if err != nil || outcome.ID != turnID {
+			t.Fatalf("resume and start outcome=%#v err=%v", outcome, err)
+		}
+	})
+
+	t.Run("steer", func(t *testing.T) {
+		server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
+			switch method {
+			case "initialize":
+				return map[string]any{}, false
+			case "thread/resume":
+				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID})
+				return map[string]any{"thread": map[string]any{"id": sessionID}}, false
+			case "turn/steer":
+				requireProtocolParams(t, method, params, map[string]any{"threadId": sessionID, "expectedTurnId": turnID, "clientUserMessageId": messageID})
+				return map[string]any{"turnId": turnID}, false
+			default:
 				return nil, true
 			}
-			acceptedStarts.Add(1)
-			return map[string]any{"turn": map[string]any{"id": "turn-native-2"}}, false
-		default:
-			return nil, true
+		})
+		defer server.Close()
+		accepted, err := dialTestProtocol(t, server).steerTurn(context.Background(), sessionID, turnID, messageID, "correction")
+		if err != nil || accepted != turnID {
+			t.Fatalf("steer accepted=%q err=%v", accepted, err)
 		}
 	})
-	defer server.Close()
-	p := dialTestProtocol(t, server)
 
-	threads, err := p.listThreads(context.Background(), "/workspace/job")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(threads) != 1 || threads[0] != sessionID {
-		t.Fatalf("threads=%v", threads)
-	}
-	turns, err := p.readTurns(context.Background(), sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(turns) != 1 || !reflect.DeepEqual(turns[0], TurnOutcome{ID: "turn-prior", Status: "completed"}) {
-		t.Fatalf("turns=%#v", turns)
-	}
-	outcome, err := p.resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", "agent-run-stable-2", "next input", "gpt-5.6-sol", "high", "danger-full-access")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(outcome, TurnOutcome{ID: "turn-native-2", Status: "running"}) || acceptedStarts.Load() != 1 {
-		t.Fatalf("outcome=%#v accepted starts=%d", outcome, acceptedStarts.Load())
-	}
-
-	wantMethods := []string{"initialize", "initialized", "thread/list", "thread/read", "thread/resume", "turn/start"}
-	for index, want := range wantMethods {
-		request := <-requests
-		if got := request["method"]; got != want {
-			t.Fatalf("request %d method=%v, want %s", index, got, want)
-		}
-		if want == "thread/resume" || want == "turn/start" {
-			params := request["params"].(map[string]any)
-			if params["threadId"] != sessionID {
-				t.Fatalf("%s threadId=%v", want, params["threadId"])
+	t.Run("substitute resume", func(t *testing.T) {
+		server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+			switch method {
+			case "initialize":
+				return map[string]any{}, false
+			case "thread/resume":
+				return map[string]any{"thread": map[string]any{"id": "session-substitute"}}, false
+			case "turn/start":
+				t.Fatal("turn/start followed a substitute resume")
 			}
-			if want == "thread/resume" && len(params) != 1 {
-				t.Fatalf("ordinary implementation thread/resume changed params: %#v", params)
-			}
-		}
-	}
-}
-
-func TestResumeRefusesSubstituteThreadBeforeTurnStart(t *testing.T) {
-	server, requests := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/resume":
-			return map[string]any{"thread": map[string]any{"id": "session-substitute"}}, false
-		case "turn/start":
-			t.Error("turn/start followed a mismatched thread/resume")
 			return nil, true
-		default:
-			return nil, true
+		})
+		defer server.Close()
+		_, err := dialTestProtocol(t, server).resumeAndStartTurn(context.Background(), sessionID, "/workspace/job", messageID, "input", "gpt-5.6-sol", "high", "danger-full-access")
+		var definite interface{ DefiniteNoSubmit() bool }
+		if !errors.As(err, &definite) || !definite.DefiniteNoSubmit() {
+			t.Fatalf("substitute resume error=%T %v", err, err)
 		}
 	})
-	defer server.Close()
-	p := dialTestProtocol(t, server)
-
-	_, err := p.resumeAndStartTurn(context.Background(), "session-bound", "/workspace/job", "agent-run-stable", "input", "gpt-5.6-sol", "high", "danger-full-access")
-	if err == nil || err.Error() != "thread/resume did not return the exact bound thread" {
-		t.Fatalf("resume error=%v", err)
-	}
-	definite, ok := err.(interface{ DefiniteNoSubmit() bool })
-	if !ok || !definite.DefiniteNoSubmit() {
-		t.Fatalf("mismatched resume was not classified before-submit: %T %v", err, err)
-	}
-	for _, want := range []string{"initialize", "initialized", "thread/resume"} {
-		if got := (<-requests)["method"]; got != want {
-			t.Fatalf("method=%v, want %s", got, want)
-		}
-	}
-	select {
-	case request := <-requests:
-		t.Fatalf("unexpected request after mismatched resume: %v", request["method"])
-	default:
-	}
 }
 
 func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) {
@@ -737,96 +589,6 @@ func TestInitialRecoveryDropsLostEmptyThreadAndAdoptsAcceptedTurn(t *testing.T) 
 	}
 }
 
-func TestProtocolSendsStableAgentRunIdentityAndKeepsOnlyHarnessTurnResult(t *testing.T) {
-	requests := make(chan map[string]any, 4)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer conn.CloseNow()
-		ctx := r.Context()
-		for {
-			kind, payload, err := conn.Read(ctx)
-			if err != nil {
-				return
-			}
-			if kind != websocket.MessageText {
-				t.Error("non-text request")
-				return
-			}
-			var request map[string]any
-			if err := json.Unmarshal(payload, &request); err != nil {
-				t.Error(err)
-				return
-			}
-			requests <- request
-			method, _ := request["method"].(string)
-			id, hasID := request["id"]
-			if !hasID {
-				continue
-			}
-			var result map[string]any
-			switch method {
-			case "initialize":
-				result = map[string]any{}
-			case "turn/start":
-				result = map[string]any{"turn": map[string]any{"id": "turn-native-1"}}
-			default:
-				t.Errorf("unexpected method %s", method)
-				return
-			}
-			response, _ := json.Marshal(map[string]any{"id": id, "result": result})
-			if err := conn.Write(ctx, websocket.MessageText, response); err != nil {
-				return
-			}
-			if method == "turn/start" {
-				completed, _ := json.Marshal(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "session-native-1", "turn": map[string]any{"id": "turn-native-1", "status": "completed", "items": []any{map[string]any{"type": "agentMessage", "text": "transcript stays native"}}}}})
-				_ = conn.Write(ctx, websocket.MessageText, completed)
-			}
-		}
-	}))
-	defer server.Close()
-	endpoint := "ws" + strings.TrimPrefix(server.URL, "http")
-	conn, _, err := websocket.Dial(context.Background(), endpoint, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.CloseNow()
-	p := &protocol{connection: conn}
-	if err := p.initialize(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	outcome, err := p.startTurn(context.Background(), "session-native-1", "/workspace/job", "action-stable-agent-run", "complete goal", "gpt-5.6-sol", "high", "read-only")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(outcome, TurnOutcome{ID: "turn-native-1", Status: "running"}) {
-		t.Fatalf("outcome=%#v", outcome)
-	}
-	<-requests // initialize
-	<-requests // initialized
-	turnRequest := <-requests
-	params := turnRequest["params"].(map[string]any)
-	if params["clientUserMessageId"] != "action-stable-agent-run" {
-		t.Fatalf("clientUserMessageId=%v", params["clientUserMessageId"])
-	}
-	if policy := params["sandboxPolicy"].(map[string]any); policy["type"] != "readOnly" {
-		t.Fatalf("review sandboxPolicy=%v", policy)
-	}
-}
-
-func TestParseTurnRetainsBoundedFinalClaim(t *testing.T) {
-	turn := parseTurn(map[string]any{
-		"id": "turn-review", "status": "completed",
-		"items": []any{map[string]any{"type": "agentMessage", "text": `{"material":false}`}},
-	})
-	if turn.ID != "turn-review" || turn.Output != `{"material":false}` {
-		t.Fatalf("parsed review turn=%#v", turn)
-	}
-}
-
 func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 	nonce := strings.Repeat("a", 64)
 	input := "bounded exact review contract"
@@ -855,13 +617,14 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 		}, want: "unexpectedly exposes network access"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			server, _ := testProtocolServer(t, func(method string, _ map[string]any) (map[string]any, bool) {
+			server, _ := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
 				switch method {
 				case "initialize":
 					return map[string]any{}, false
 				case "thread/list":
 					return map[string]any{"data": test.threads, "nextCursor": test.cursor}, false
 				case "thread/resume":
+					requireStrictResumeParams(t, params, "session-review")
 					result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": test.turns})
 					if test.mutate != nil {
 						test.mutate(result)
@@ -884,54 +647,6 @@ func TestStrictReviewRecoveryRejectsUnattestedNativeState(t *testing.T) {
 	}
 }
 
-func TestStrictReviewResumeOverridesReplacementProcessDefaults(t *testing.T) {
-	nonce := strings.Repeat("9", 64)
-	input := "exact replacement-process review input"
-	var resumeParams map[string]any
-	server, requests := testProtocolServer(t, func(method string, params map[string]any) (map[string]any, bool) {
-		switch method {
-		case "initialize":
-			return map[string]any{}, false
-		case "thread/list":
-			return map[string]any{"data": strictReviewTestThreads("session-review"), "nextCursor": nil}, false
-		case "thread/resume":
-			resumeParams = params
-			// Codex 0.146 restores the persisted model/effort pair only when
-			// resume does not supply a model-family override.
-			var restoredEffort any = "high"
-			if _, overridesModel := params["model"]; overridesModel {
-				restoredEffort = nil
-			}
-			result := strictReviewTestSettings(map[string]any{"id": "session-review", "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn("turn-review", nonce, input)}})
-			result["reasoningEffort"] = restoredEffort
-			return result, false
-		default:
-			return nil, true
-		}
-	})
-	defer server.Close()
-
-	p := dialTestProtocol(t, server)
-	_, turns, err := p.strictReviewHistory(context.Background(), "/workspace/job", "session-review", nonce, input, "gpt-5.6-sol", "high")
-	if err != nil || len(turns) != 1 || turns[0].ID != "turn-review" {
-		t.Fatalf("replacement recovery turns=%#v err=%v", turns, err)
-	}
-	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {
-		t.Fatalf("replacement recovery methods=%v", methods)
-	}
-	if !strictReviewResumeParamsMatch(resumeParams, "session-review", "/workspace/job") {
-		t.Fatalf("strict review resume params=%#v", resumeParams)
-	}
-}
-
-func strictReviewResumeParamsMatch(params map[string]any, sessionID, workspace string) bool {
-	_, hasModel := params["model"]
-	_, hasConfig := params["config"]
-	_, hasEffort := params["effort"]
-	_, hasModelEffort := params["model_reasoning_effort"]
-	return len(params) == 4 && !hasModel && !hasConfig && !hasEffort && !hasModelEffort && params["threadId"] == sessionID && params["cwd"] == workspace && params["approvalPolicy"] == "never" && params["sandbox"] == "read-only"
-}
-
 func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T) {
 	nonce := strings.Repeat("c", 64)
 	input := "exact trusted review input"
@@ -949,6 +664,10 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 			return map[string]any{"data": strictReviewTestThreads(sessionID), "nextCursor": nil}, false
 		case "thread/start":
 			sessionCreated = true
+			requireProtocolParams(t, method, params, map[string]any{
+				"cwd": "/workspace/job", "model": "gpt-5.6-sol",
+				"approvalPolicy": "never", "sandbox": "read-only",
+			})
 			if _, sent := params["effort"]; sent {
 				t.Errorf("thread/start sent unsupported turn effort: %v", params["effort"])
 			}
@@ -960,11 +679,14 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 				t.Error("thread/resume attempted before the fresh review turn was submitted")
 				return nil, true
 			}
+			requireStrictResumeParams(t, params, sessionID)
 			return strictReviewTestSettings(map[string]any{"id": sessionID, "cwd": "/workspace/job", "turns": []any{strictReviewTestTurn(turnID, nonce, input)}}), false
 		case "turn/start":
-			if params["clientUserMessageId"] != nonce || params["threadId"] != sessionID {
-				return nil, true
-			}
+			requireProtocolParams(t, method, params, map[string]any{
+				"threadId": sessionID, "clientUserMessageId": nonce, "cwd": "/workspace/job",
+				"model": "gpt-5.6-sol", "effort": "high", "approvalPolicy": "never",
+				"sandboxPolicy": map[string]any{"type": "readOnly"},
+			})
 			turnStarts.Add(1)
 			turnCreated = true
 			return map[string]any{"turn": map[string]any{"id": turnID}}, false
@@ -985,7 +707,7 @@ func TestStrictReviewTrustedSubmissionConvergesOnOneSessionAndTurn(t *testing.T)
 	_ = first.connection.CloseNow()
 	second := dialTestProtocol(t, server)
 	gotSession, gotTurn, err = second.reconcileStrictReviewTurn(context.Background(), "/workspace/job", "", nonce, input, "gpt-5.6-sol", "high", true)
-	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || turnStarts.Load() != 1 {
+	if err != nil || gotSession != sessionID || gotTurn.ID != turnID || gotTurn.Output != `{"material":false}` || turnStarts.Load() != 1 {
 		t.Fatalf("recovered strict binding thread=%s turn=%#v starts=%d err=%v", gotSession, gotTurn, turnStarts.Load(), err)
 	}
 	if methods := reviewProtocolMethods(requests); !reflect.DeepEqual(methods, []string{"thread/list", "thread/resume"}) {

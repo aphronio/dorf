@@ -4,7 +4,7 @@ sqlc = "1.31.1"
 "github:earendil-works/absurd" = { version = "0.5.0", asset_pattern = "absurdctl" }
 
 [env]
-DORF_TEST_DATABASE_URL = "${DORF_TEST_DATABASE_URL:-postgresql://postgres:postgres@127.0.0.1:55432/dorf_test?sslmode=disable}"
+DORF_TEST_DATABASE_URL = { default = "postgresql://postgres:postgres@127.0.0.1:55432/dorf_test?sslmode=disable" }
 
 [tasks."db:init"]
 description = "Initialize the disposable development database"
@@ -41,6 +41,14 @@ run = "go run ./cmd/dorf-brand-terminal"
 [tasks."brand:check"]
 description = "Fail when the generated terminal brand lockup is stale"
 run = "go run ./cmd/dorf-brand-terminal --check"
+
+[tasks."test:fast"]
+description = "Run Go tests without PostgreSQL-backed cases"
+run = "DORF_TEST_DATABASE_URL= go test ./..."
+
+[tasks."test:postgres"]
+description = "Run PostgreSQL-backed package tests without the Go test cache"
+run = "go test -count=1 ./internal/postgres ./cmd/dorf"
 
 [tasks."integration:compose-vm"]
 description = "Refresh or run the disposable Ubuntu Compose deployment proof"
