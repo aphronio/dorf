@@ -161,7 +161,7 @@ where e.id=$1`, enrollment.ID).Scan(&storedEnrollment, &storedCredential); err !
 		t.Fatal(err)
 	}
 	expiredCredential := mustControlCredential(t)
-	if _, err := db.ExecContext(ctx, `update dorf.control_enrollments set expires_at=created_at+interval '1 millisecond' where id=$1`, expiredEnrollment.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.control_enrollments set created_at=created_at-interval '2 seconds',expires_at=created_at-interval '1 second' where id=$1`, expiredEnrollment.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := service.Redeem(ctx, expiredEnrollment.Token, "expired-enrollment-"+expiredEnrollment.ID, expiredCredential); !errors.Is(err, controlauth.ErrEnrollmentUnavailable) {
@@ -177,7 +177,7 @@ where e.id=$1`, enrollment.ID).Scan(&storedEnrollment, &storedCredential); err !
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.control_enrollments set expires_at=created_at+interval '1 millisecond' where id=$1`, credentialEnrollment.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.control_enrollments set created_at=created_at-interval '2 seconds',expires_at=created_at-interval '1 second' where id=$1`, credentialEnrollment.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Authenticate(ctx, shortCredential); err != nil {
@@ -187,7 +187,7 @@ where e.id=$1`, enrollment.ID).Scan(&storedEnrollment, &storedCredential); err !
 	if err != nil || created || replayed != shortClient {
 		t.Fatalf("expired consumed enrollment replay=(%#v,%t,%v), want same Client and created=false", replayed, created, err)
 	}
-	if _, err := db.ExecContext(ctx, `update dorf.control_clients set credential_expires_at=created_at+interval '1 millisecond' where id=$1`, shortClient.ID); err != nil {
+	if _, err := db.ExecContext(ctx, `update dorf.control_clients set created_at=created_at-interval '2 seconds',credential_expires_at=created_at-interval '1 second' where id=$1`, shortClient.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Authenticate(ctx, shortCredential); !errors.Is(err, controlauth.ErrUnauthenticated) {
